@@ -21,8 +21,6 @@ export const DASHBOARD_DEBUG_ANIMATIONS_KEY = "symphony-plus-plus.dashboard.debu
 
 export const REPO_WORKSTREAM_MOTION_MS = 360;
 
-export const DASHBOARD_POLL_INTERVAL_MS = 7000;
-
 export const DASHBOARD_RECONNECT_GRACE_MS = 5 * 60 * 1000;
 
 export const CARD_DETAIL_LOADING_HOLD_MS = 220;
@@ -40,8 +38,6 @@ const DEFAULT_DASHBOARD_API_BASE = "/api/v1/sympp/operator";
 const OPERATOR_BOOTSTRAP_PARAM = "operator_bootstrap";
 
 export const LOCAL_OPERATOR_AUTH_REQUIRED_MESSAGE = "Local operator session needs reconnect. Use Reconnect after Symphony++ is reachable.";
-
-export const PR_SYNC_INTERVAL_MS = 60_000;
 
 export const COMMENT_BODY_MAX_LENGTH = 4000;
 

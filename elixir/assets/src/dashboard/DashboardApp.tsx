@@ -2,7 +2,7 @@ import type { ArchitectHandoffPayload, ContextComment, CopyArchitectHandoff, Cre
 import type { NewRequestForm } from "@/components/dashboard/new-request-dialog";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { CardDetailSelection, DASHBOARD_POLL_INTERVAL_MS, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, DashboardRuntimeConfig, PR_SYNC_INTERVAL_MS, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, dashboardCaughtMessage, dashboardMutationWorkRequest, dashboardRuntimeConfig, ensureDashboardRuntimeConfig, isReconnectableLocalOperatorError, jsonHeaders, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, reconnectLocalOperatorSession, shouldSkipDashboardLoad, withLocalOperatorReconnect } from "./runtime";
+import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, DashboardRuntimeConfig, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, dashboardCaughtMessage, dashboardMutationWorkRequest, dashboardRuntimeConfig, ensureDashboardRuntimeConfig, isReconnectableLocalOperatorError, jsonHeaders, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, reconnectLocalOperatorSession, shouldSkipDashboardLoad, withLocalOperatorReconnect } from "./runtime";
 import { DashboardShell } from "./dashboard-shell";
 import { SoloSessions } from "./solo-sessions";
 import { WorkstreamsPane } from "./workspace-tabs";
@@ -38,8 +38,6 @@ function useDashboardController() {
   const connectionIssueRef = useRef<DashboardConnectionIssue | null>(null);
   const loadInFlightRef = useRef(false);
   const mutationVersionRef = useRef(0);
-  const prSyncInFlightRef = useRef(false);
-  const lastPrSyncAtRef = useRef(0);
   const setDashboard = useCallback((nextDashboard: DashboardPayload | null) => {
     const nextFingerprint = dashboardContentFingerprint(nextDashboard);
     if (dashboardFingerprintRef.current === nextFingerprint) return;
@@ -278,32 +276,6 @@ function useDashboardController() {
     return payload.comment;
   }, [refreshAfterMutation]);
 
-  const syncPullRequests = useCallback(async () => {
-    if (prSyncInFlightRef.current) return;
-    prSyncInFlightRef.current = true;
-
-    try {
-      await withLocalOperatorReconnect(async () => {
-        const headers = await mutationHeaders();
-        const response = await operatorFetch(operatorApiUrl("/github/sync-prs"), {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ mode: "auto" }),
-        });
-        const payload = (await readDashboardApiResponse(response, "GitHub PR sync unavailable")) as DashboardMutationPayload;
-        await refreshAfterMutation(payload);
-      });
-    } catch (caught) {
-      recordConnectionFailure(
-        dashboardCaughtMessage(caught, "GitHub PR sync unavailable"),
-        false,
-        isReconnectableLocalOperatorError(caught),
-      );
-    } finally {
-      prSyncInFlightRef.current = false;
-    }
-  }, [recordConnectionFailure, refreshAfterMutation]);
-
   const copyArchitectHandoff = useCallback<CopyArchitectHandoff>(async (workRequestId, cachedHandoff) => {
     let handoff = cachedHandoff || null;
     let refreshPayload: DashboardMutationPayload | undefined;
@@ -438,28 +410,6 @@ function useDashboardController() {
       cancelled = true;
     };
   }, [loadDashboard]);
-
-  useEffect(() => {
-    lastPrSyncAtRef.current = Date.now();
-  }, []);
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (document.visibilityState !== "visible" || loadInFlightRef.current || prSyncInFlightRef.current) {
-        return;
-      }
-
-      const now = Date.now();
-      if (canMutateOperatorActions && now - lastPrSyncAtRef.current >= PR_SYNC_INTERVAL_MS) {
-        lastPrSyncAtRef.current = now;
-        void syncPullRequests();
-      } else {
-        void loadDashboard("silent");
-      }
-    }, DASHBOARD_POLL_INTERVAL_MS);
-
-    return () => window.clearInterval(interval);
-  }, [canMutateOperatorActions, loadDashboard, syncPullRequests]);
 
   useEffect(() => {
     writeDashboardUiStateValue("workspaceTab", workspaceTab);

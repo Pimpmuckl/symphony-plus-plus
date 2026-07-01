@@ -609,7 +609,6 @@ export type DashboardPayload = {
     total_count?: number;
   };
 };
-
 export type DashboardMutationRefresh = {
   dashboard?: boolean;
   work_request_id?: string;
@@ -618,7 +617,6 @@ export type DashboardMutationRefresh = {
   comment_target_kind?: string | null;
   comment_target_id?: string | null;
 };
-
 export type DashboardMutationPayload = {
   ok?: boolean;
   dashboard?: DashboardPayload;

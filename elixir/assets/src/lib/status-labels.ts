@@ -2,17 +2,22 @@ export function formatStatus(status?: string | null) {
   return status ? status.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) : "Unknown";
 }
 
+const STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  merge_ready: "Ready For Merge",
+  ready_to_finish: "Ready To Finish",
+  in_progress: "Active",
+  needs_attention: "Needs Attention",
+  started_paused: "Started / Paused",
+  completed: "Completed",
+  merging: "Merging",
+  ready_for_merge: "Merge Ready",
+  ready_for_human_merge: "Merge Ready",
+  ready_for_architect_merge: "Merge Ready",
+  merging_into_phase: "Merging",
+  ci_waiting: "CI Waiting",
+};
+
 export function statusLabel(status?: string | null) {
-  if (status === "active") return "Active";
-  if (status === "merge_ready") return "Ready For Merge";
-  if (status === "ready_to_finish") return "Ready To Finish";
-  if (status === "in_progress") return "Active";
-  if (status === "needs_attention") return "Needs Attention";
-  if (status === "started_paused") return "Started / Paused";
-  if (status === "completed") return "Completed";
-  if (status === "merging") return "Merging";
-  if (status === "ready_for_merge" || status === "ready_for_human_merge" || status === "ready_for_architect_merge") return "Merge Ready";
-  if (status === "merging_into_phase") return "Merging";
-  if (status === "ci_waiting") return "CI Waiting";
-  return formatStatus(status);
+  return status ? STATUS_LABELS[status] ?? formatStatus(status) : formatStatus(status);
 }
