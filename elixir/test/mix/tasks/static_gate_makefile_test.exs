@@ -23,11 +23,15 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
     assert makefile =~ "SLOW_TEST_PARTITIONS ?= 8"
     assert makefile =~ "SLOW_TEST_MAX_CASES ?= 4"
 
-    assert target(makefile, "ci-test") =~
+    assert target(makefile, "ci-test") == "ci-prepare ci-test-run\n"
+
+    assert target(makefile, "ci-test-run") =~
              "$(call run_ci_step,test,$(MIX) test --exclude ci_slow $(CI_TEST_PARTITION_FLAGS))"
 
     assert target(makefile, "ci-slow") =~
-             "$(call run_ci_step,test-slow,$(MIX) test --exclude test --include ci_slow $(CI_SLOW_TEST_PARTITION_FLAGS) $(CI_SLOW_TEST_MAX_CASES_FLAGS))"
+             "ci-prepare\n\t$(call run_ci_step,test-slow,$(MIX) test --exclude test --include ci_slow $(CI_SLOW_TEST_PARTITION_FLAGS) $(CI_SLOW_TEST_MAX_CASES_FLAGS))"
+
+    refute makefile =~ "ci-slow-run"
 
     assert target(makefile, "ci-dialyzer") =~
              "ci-prepare\n\t$(call run_ci_step,dialyzer-plt,$(MIX) dialyzer --plt)\n\t$(call run_ci_step,dialyzer,$(MIX) dialyzer $(CI_DIALYZER_FLAGS))"
@@ -37,10 +41,14 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
     assert target(makefile, "all") == "ci-fast\n"
   end
 
-  test "GitHub make-all shards ExUnit gates across native partitions" do
+  test "GitHub make-all keeps single gates plain and pairs fast ExUnit gates" do
     workflow = File.read!(Path.join([@repo_root, ".github", "workflows", "make-all.yml"]))
+    [single_gates, rest] = String.split(workflow, "  parallel-gates:\n", parts: 2)
+    [parallel_gates, make_all] = String.split(rest, "  make-all:\n", parts: 2)
 
-    assert workflow =~ "needs:\n      - gates"
+    assert workflow =~ "needs:\n      - single-gates\n      - parallel-gates"
+    assert make_all =~ "needs.single-gates.result"
+    assert make_all =~ "needs.parallel-gates.result"
     refute workflow =~ "- slow-tests"
     assert workflow =~ "target: ci-static"
     assert workflow =~ "target: ci-dialyzer"
@@ -55,13 +63,28 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
     assert workflow =~ "SLOW_TEST_PARTITIONS: ${{ matrix.partitions }}"
     assert workflow =~ "MIX_TEST_PARTITION: ${{ matrix.partition }}"
 
-    for partition <- 1..9 do
-      assert workflow =~ "target: ci-test\n            partition: #{partition}\n            partitions: 9"
+    refute single_gates =~ "parallel:"
+    assert parallel_gates =~ "parallel:"
+    refute workflow =~ "matrix.mode"
+    assert parallel_gates =~ "make ci-prepare"
+    assert parallel_gates =~ "cp -a _build \"_p/${{ matrix.gate_id }}/b${{ matrix.partition_1 }}\""
+    assert parallel_gates =~ "run: make ci-test-run"
+    assert parallel_gates =~ "MIX_BUILD_PATH: _p/${{ matrix.gate_id }}/b${{ matrix.partition_1 }}"
+    assert parallel_gates =~ "TMPDIR: /tmp/spp-tmp-${{ matrix.gate_id }}-${{ matrix.partition_1 }}"
+
+    for {left, right} <- [{1, 2}, {3, 4}, {5, 6}, {7, 8}] do
+      assert parallel_gates =~
+               "partitions: 9\n            partition_1: #{left}\n            partition_2: #{right}"
     end
 
+    assert single_gates =~ "target: ci-test\n            partition: 9\n            partitions: 9"
+
     for partition <- 1..8 do
-      assert workflow =~ "target: ci-slow\n            partition: #{partition}\n            partitions: 8"
+      assert single_gates =~
+               "target: ci-slow\n            partition: #{partition}\n            partitions: 8"
     end
+
+    refute workflow =~ "ci-slow-run"
   end
 
   defp target(makefile, target) do
