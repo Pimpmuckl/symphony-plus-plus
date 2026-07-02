@@ -54,9 +54,11 @@ defmodule SymphonyElixir.MixProject do
         "test/support/snapshot_support.exs",
         "test/support/test_support.exs",
         "test/support/work_package_factory.exs",
-        "test/symphony_elixir/symphony_plus_plus/dashboard/api_case.exs"
+        "test/symphony_elixir/symphony_plus_plus/dashboard/api_case.exs",
+        "test/symphony_elixir/symphony_plus_plus/work_packages_case.exs"
       ],
       dialyzer: [
+        plt_core_path: "_build/dialyzer",
         plt_add_apps: [:mix]
       ],
       cli: cli(),
