@@ -229,6 +229,13 @@ function Test-LauncherVersion {
   }
 }
 
+function Invoke-CheckedLauncher([string[]]$LauncherArgs, [string]$Description) {
+  Invoke-Launcher -LauncherArgs $LauncherArgs
+  if ($script:LauncherExitCode -ne 0) {
+    throw "$Description failed with exit code $($script:LauncherExitCode)."
+  }
+}
+
 function Test-HasDatabaseArg([string[]]$InputArgs) {
   foreach ($arg in $InputArgs) {
     if ($arg -eq "--database" -or $arg.StartsWith("--database=")) {
@@ -254,9 +261,7 @@ $mise = if ([string]::IsNullOrWhiteSpace($env:SYMPP_MISE)) { "mise" } else { $en
 $launcher = if ([string]::IsNullOrWhiteSpace($env:SYMPP_LAUNCHER)) { Resolve-SymppDefaultLauncher $elixirDir $mise } else { $env:SYMPP_LAUNCHER.Trim().ToLowerInvariant() }
 Set-SymppWindowsNativeTargetEnvironment
 $defaultMixBuildRoot = Resolve-SymppDefaultMixBuildRoot $repoRoot $launcher "solo"
-if (-not $ValidateOnly) {
-  Set-SymppDefaultMixBuildRoot $repoRoot $launcher "solo"
-}
+Set-SymppDefaultMixBuildRoot $repoRoot $launcher "solo"
 
 $script:FinalExitCode = 0
 
@@ -274,6 +279,9 @@ try {
       throw "Selected Symphony++ Solo Session launcher failed validation with exit code $validationExitCode."
     }
 
+    Invoke-CheckedLauncher -LauncherArgs @("deps.get", "--check-locked") -Description "mix deps.get --check-locked"
+    Invoke-CheckedLauncher -LauncherArgs @("sympp.solo", "--help") -Description "mix sympp.solo --help"
+
     Write-Host "Symphony++ Solo Session wrapper validation passed."
     Write-Host "  repoRoot: $repoRoot"
     Write-Host "  elixirDir: $elixirDir"
@@ -281,6 +289,7 @@ try {
     Write-Host "  mixBuildRoot: $defaultMixBuildRoot"
     $script:FinalExitCode = 0
   } else {
+    Invoke-CheckedLauncher -LauncherArgs @("deps.get", "--check-locked") -Description "mix deps.get --check-locked"
     $soloCommandArgs = @("sympp.solo") + $resolvedSoloArgs
     if (-not (Test-HasDatabaseArg -InputArgs $resolvedSoloArgs)) {
       if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_DATABASE)) {
