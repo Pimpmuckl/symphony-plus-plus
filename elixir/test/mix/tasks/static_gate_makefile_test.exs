@@ -19,8 +19,8 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
     assert target(makefile, "ci-static") =~ "ci-prepare\n\t$(call run_ci_step,static,$(MIX) static)"
     assert target(makefile, "ci-fast") =~ "ci-prepare\n\t$(call run_ci_step,static,$(MIX) static)"
     assert target(makefile, "ci-fast") =~ "$(call run_ci_step,test,$(MIX) test --exclude ci_slow)"
-    assert makefile =~ "FAST_TEST_PARTITIONS ?= 12"
-    assert makefile =~ "SLOW_TEST_PARTITIONS ?= 8"
+    assert makefile =~ "FAST_TEST_PARTITIONS ?= 9"
+    assert makefile =~ "SLOW_TEST_PARTITIONS ?= 6"
 
     assert target(makefile, "ci-test") =~
              "$(call run_ci_step,test,$(MIX) test --exclude ci_slow $(CI_TEST_PARTITION_FLAGS))"
@@ -54,12 +54,12 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
     assert workflow =~ "SLOW_TEST_PARTITIONS: ${{ matrix.partitions }}"
     assert workflow =~ "MIX_TEST_PARTITION: ${{ matrix.partition }}"
 
-    for partition <- 1..12 do
-      assert workflow =~ "target: ci-test\n            partition: #{partition}\n            partitions: 12"
+    for partition <- 1..9 do
+      assert workflow =~ "target: ci-test\n            partition: #{partition}\n            partitions: 9"
     end
 
-    for partition <- 1..8 do
-      assert workflow =~ "target: ci-slow\n            partition: #{partition}\n            partitions: 8"
+    for partition <- 1..6 do
+      assert workflow =~ "target: ci-slow\n            partition: #{partition}\n            partitions: 6"
     end
   end
 

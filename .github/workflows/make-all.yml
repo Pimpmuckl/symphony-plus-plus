@@ -18,86 +18,66 @@ jobs:
             target: ci-static
             partition: ""
             partitions: ""
-          - name: test 1/12
+          - name: test 1/9
             target: ci-test
             partition: 1
-            partitions: 12
-          - name: test 2/12
+            partitions: 9
+          - name: test 2/9
             target: ci-test
             partition: 2
-            partitions: 12
-          - name: test 3/12
+            partitions: 9
+          - name: test 3/9
             target: ci-test
             partition: 3
-            partitions: 12
-          - name: test 4/12
+            partitions: 9
+          - name: test 4/9
             target: ci-test
             partition: 4
-            partitions: 12
-          - name: test 5/12
+            partitions: 9
+          - name: test 5/9
             target: ci-test
             partition: 5
-            partitions: 12
-          - name: test 6/12
+            partitions: 9
+          - name: test 6/9
             target: ci-test
             partition: 6
-            partitions: 12
-          - name: test 7/12
+            partitions: 9
+          - name: test 7/9
             target: ci-test
             partition: 7
-            partitions: 12
-          - name: test 8/12
+            partitions: 9
+          - name: test 8/9
             target: ci-test
             partition: 8
-            partitions: 12
-          - name: test 9/12
+            partitions: 9
+          - name: test 9/9
             target: ci-test
             partition: 9
-            partitions: 12
-          - name: test 10/12
-            target: ci-test
-            partition: 10
-            partitions: 12
-          - name: test 11/12
-            target: ci-test
-            partition: 11
-            partitions: 12
-          - name: test 12/12
-            target: ci-test
-            partition: 12
-            partitions: 12
-          - name: slow test 1/8
+            partitions: 9
+          - name: slow test 1/6
             target: ci-slow
             partition: 1
-            partitions: 8
-          - name: slow test 2/8
+            partitions: 6
+          - name: slow test 2/6
             target: ci-slow
             partition: 2
-            partitions: 8
-          - name: slow test 3/8
+            partitions: 6
+          - name: slow test 3/6
             target: ci-slow
             partition: 3
-            partitions: 8
-          - name: slow test 4/8
+            partitions: 6
+          - name: slow test 4/6
             target: ci-slow
             partition: 4
-            partitions: 8
-          - name: slow test 5/8
+            partitions: 6
+          - name: slow test 5/6
             target: ci-slow
             partition: 5
-            partitions: 8
-          - name: slow test 6/8
+            partitions: 6
+          - name: slow test 6/6
             target: ci-slow
             partition: 6
-            partitions: 8
-          - name: slow test 7/8
-            target: ci-slow
-            partition: 7
-            partitions: 8
-          - name: slow test 8/8
-            target: ci-slow
-            partition: 8
-            partitions: 8
+            partitions: 6
           - name: dialyzer
             target: ci-dialyzer
             partition: ""
