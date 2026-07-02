@@ -1,4 +1,4 @@
-.PHONY: help all setup deps build static fmt fmt-check lint hygiene assets-check test test-fast test-slow coverage ci ci-prepare ci-test-prepare ci-fast ci-static ci-test ci-test-partition ci-slow ci-slow-partition ci-dialyzer ci-coverage ci-hygiene ci-full dialyzer e2e
+.PHONY: help all setup deps build static fmt fmt-check lint hygiene assets-check test test-fast test-slow coverage ci ci-prepare ci-fast ci-static ci-test ci-slow ci-dialyzer ci-coverage ci-hygiene ci-full dialyzer e2e
 
 MIX ?= mix
 QUIET ?= 1
@@ -14,10 +14,8 @@ CI_DIALYZER_FLAGS ?= --format short --no-compile --no-check
 
 ifeq ($(OS),Windows_NT)
 GATE_RUN_ID := $(or $(GATE_RUN_ID),$(shell powershell.exe -NoProfile -Command "([guid]::NewGuid().ToString('N')).Substring(0, 12)"))
-TEST_COMPILE_CMD := set MIX_ENV=test&& $(MIX) compile
 else
 GATE_RUN_ID := $(or $(GATE_RUN_ID),$(shell date +%Y%m%d%H%M%S))
-TEST_COMPILE_CMD := MIX_ENV=test $(MIX) compile
 endif
 
 GATE_LOG_DIR ?= $(GATE_LOG_ROOT)/$(GATE_RUN_ID)
@@ -109,20 +107,13 @@ ci-prepare:
 	$(call run_ci_step,setup,$(MIX) setup)
 	$(call run_ci_step,build,$(MIX) build)
 
-ci-test-prepare: ci-prepare
-	$(call run_ci_step,test-compile,$(TEST_COMPILE_CMD))
-
 ci-static: ci-prepare
 	$(call run_ci_step,static,$(MIX) static)
 
-ci-test: ci-test-prepare ci-test-partition
-
-ci-test-partition:
+ci-test: ci-prepare
 	$(call run_ci_step,test,$(MIX) test --exclude ci_slow $(CI_TEST_PARTITION_FLAGS))
 
-ci-slow: ci-test-prepare ci-slow-partition
-
-ci-slow-partition:
+ci-slow: ci-prepare
 	$(call run_ci_step,test-slow,$(MIX) test --exclude test --include ci_slow $(CI_SLOW_TEST_PARTITION_FLAGS) $(CI_SLOW_TEST_MAX_CASES_FLAGS))
 
 ci-dialyzer: ci-prepare

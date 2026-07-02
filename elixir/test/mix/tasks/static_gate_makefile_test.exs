@@ -22,20 +22,11 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
     assert makefile =~ "FAST_TEST_PARTITIONS ?= 9"
     assert makefile =~ "SLOW_TEST_PARTITIONS ?= 8"
     assert makefile =~ "SLOW_TEST_MAX_CASES ?= 4"
-    assert makefile =~ "TEST_COMPILE_CMD := MIX_ENV=test $(MIX) compile"
-    assert makefile =~ "TEST_COMPILE_CMD := set MIX_ENV=test&& $(MIX) compile"
 
-    assert target(makefile, "ci-test-prepare") =~
-             "ci-prepare\n\t$(call run_ci_step,test-compile,$(TEST_COMPILE_CMD))"
-
-    assert target(makefile, "ci-test") == "ci-test-prepare ci-test-partition\n"
-
-    assert target(makefile, "ci-test-partition") =~
+    assert target(makefile, "ci-test") =~
              "$(call run_ci_step,test,$(MIX) test --exclude ci_slow $(CI_TEST_PARTITION_FLAGS))"
 
-    assert target(makefile, "ci-slow") == "ci-test-prepare ci-slow-partition\n"
-
-    assert target(makefile, "ci-slow-partition") =~
+    assert target(makefile, "ci-slow") =~
              "$(call run_ci_step,test-slow,$(MIX) test --exclude test --include ci_slow $(CI_SLOW_TEST_PARTITION_FLAGS) $(CI_SLOW_TEST_MAX_CASES_FLAGS))"
 
     assert target(makefile, "ci-dialyzer") =~
@@ -49,51 +40,27 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
   test "GitHub make-all shards ExUnit gates across native partitions" do
     workflow = File.read!(Path.join([@repo_root, ".github", "workflows", "make-all.yml"]))
 
-    assert workflow =~ "needs:\n      - static\n      - test-groups\n      - dialyzer"
-    assert workflow =~ "strategy:"
-    assert workflow =~ "matrix:"
-    refute workflow =~ "target: ci-test\n"
-    refute workflow =~ "target: ci-slow\n"
-    assert workflow =~ "name: test 1-3/9"
-    assert workflow =~ "name: test 4-6/9"
-    assert workflow =~ "name: test 7-9/9"
-    assert workflow =~ "name: slow test 1-4/8"
-    assert workflow =~ "name: slow test 5-8/8"
-    assert workflow =~ "parallel:"
-    assert workflow =~ "run: make ci-static"
-    assert workflow =~ "run: make ci-dialyzer"
-    assert workflow =~ "run: make ci-test-prepare"
-    assert workflow =~ "target: ci-test-partition"
-    assert workflow =~ "target: ci-slow-partition"
+    assert workflow =~ "needs:\n      - gates"
+    refute workflow =~ "- slow-tests"
+    assert workflow =~ "target: ci-static"
+    assert workflow =~ "target: ci-dialyzer"
     assert workflow =~ "run: make ${{ matrix.target }}"
     assert workflow =~ "hashFiles('elixir/mix.exs')"
     assert workflow =~ "name: Cache dialyzer PLTs"
+    assert workflow =~ "if: ${{ matrix.target == 'ci-dialyzer' }}"
     assert workflow =~ "key: ${{ runner.os }}-dialyzer-"
     assert workflow =~ "elixir/_build/dialyzer"
     assert workflow =~ "elixir/_build/*/dialyxir_*.plt.hash"
-    assert workflow =~ ~s(needs['test-groups'].result)
+    assert workflow =~ "FAST_TEST_PARTITIONS: ${{ matrix.partitions }}"
+    assert workflow =~ "SLOW_TEST_PARTITIONS: ${{ matrix.partitions }}"
+    assert workflow =~ "MIX_TEST_PARTITION: ${{ matrix.partition }}"
 
-    assert workflow =~
-             ~s(label: test\n            partitions: "9"\n            gate_prefix: fast\n            partition_1: "1")
+    for partition <- 1..9 do
+      assert workflow =~ "target: ci-test\n            partition: #{partition}\n            partitions: 9"
+    end
 
-    assert workflow =~
-             ~s(label: test\n            partitions: "9"\n            gate_prefix: fast\n            partition_1: "4")
-
-    assert workflow =~
-             ~s(label: test\n            partitions: "9"\n            gate_prefix: fast\n            partition_1: "7")
-
-    assert workflow =~
-             ~s(label: slow test\n            partitions: "8"\n            gate_prefix: slow\n            partition_1: "1")
-
-    assert workflow =~
-             ~s(label: slow test\n            partitions: "8"\n            gate_prefix: slow\n            partition_1: "5")
-
-    for partition <- 1..4 do
-      assert workflow =~
-               "MIX_TEST_PARTITION: ${{ matrix.partition_#{partition} }}"
-
-      assert workflow =~
-               "GATE_RUN_ID: ${{ matrix.gate_prefix }}-${{ matrix.partition_#{partition} }}"
+    for partition <- 1..8 do
+      assert workflow =~ "target: ci-slow\n            partition: #{partition}\n            partitions: 8"
     end
   end
 
