@@ -284,6 +284,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageDiagnosticTest do
       end
     end
   end
+end
+
+defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageDiagnosticCacheSelectionTest do
+  use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
   test "lifecycle diagnostic ignores selected and non-selected cache hints" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
@@ -602,6 +606,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageDiagnosticTest do
       end
     end
   end
+end
+
+defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageDiagnosticProcessScanTest do
+  use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
   test "lifecycle diagnostic performs live process scan when package versions differ" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
@@ -848,6 +856,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageDiagnosticTest do
       end
     end
   end
+end
+
+defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageDiagnosticHintScopeTest do
+  use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
   test "lifecycle diagnostic scopes hinted installed default cache from opt-in local cache" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
@@ -1027,6 +1039,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageDiagnosticTest do
       end
     end
   end
+end
+
+defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageDiagnosticOptInPrecedenceTest do
+  use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
   test "lifecycle diagnostic keeps opt-in local precedence marketplace scoped" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
@@ -1201,6 +1217,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageDiagnosticTest do
       end
     end
   end
+end
+
+defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageDiagnosticProcessScopeTest do
+  use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
   test "lifecycle diagnostic does not scope live process scan from default-only cache hint" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
