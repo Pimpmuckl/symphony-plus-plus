@@ -147,6 +147,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase do
             echo Mix 1.99.0 test
             exit /b 0
           )
+          if "%~1"=="deps.get" if "%~2"=="--check-locked" (
+            exit /b 0
+          )
+          if "%~1"=="sympp.solo" if "%~2"=="--help" (
+            exit /b 0
+          )
           echo unexpected mix args: %*
           exit /b 2
           """
@@ -155,6 +161,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase do
           #!/usr/bin/env sh
           if [ "$1" = "--version" ]; then
             echo "Mix 1.99.0 test"
+            exit 0
+          fi
+          if [ "$1" = "deps.get" ] && [ "$2" = "--check-locked" ]; then
+            exit 0
+          fi
+          if [ "$1" = "sympp.solo" ] && [ "$2" = "--help" ]; then
             exit 0
           fi
           echo "unexpected mix args: $*" >&2

@@ -271,6 +271,80 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherSourceDiscoveryTest do
     end
   end
 
+  test "Solo wrapper validates and prepares locked deps before running Solo task" do
+    powershell = System.find_executable("pwsh")
+    temp_codex_home = unique_temp_path("sympp-plugin-solo-deps")
+
+    if powershell do
+      fake_mix = fake_mix_executable(temp_codex_home)
+      write_minimal_marketplace_source(temp_codex_home)
+      mcp_cache_root = plugin_cache_path(temp_codex_home, ["1.0.0"], "symphony-plus-plus-mcp")
+      fake_mix_log = Path.join(temp_codex_home, "fake-mix.log")
+      sympp_home = Path.join(temp_codex_home, "sympp-home")
+
+      try do
+        script_path = write_cached_script(mcp_cache_root, @mcp_plugin_solo_script_path)
+
+        {validate_output, validate_status} =
+          System.cmd(
+            powershell,
+            ["-NoProfile", "-File", script_path, "-ValidateOnly"],
+            cd: Path.dirname(Path.dirname(script_path)),
+            stderr_to_stdout: true,
+            env: [
+              {"SYMPP_FAKE_MIX_LOG", fake_mix_log},
+              {"SYMPP_HOME", sympp_home},
+              {"SYMPP_LAUNCHER", "direct"},
+              {"SYMPP_MIX", fake_mix},
+              {"SYMPP_REPO_ROOT", ""},
+              {"SYMPP_SOURCE_FALLBACK", "1"}
+            ]
+          )
+
+        assert validate_status == 0, validate_output
+        assert File.dir?(Path.join(sympp_home, "build/solo/direct"))
+
+        {solo_output, solo_status} =
+          System.cmd(
+            powershell,
+            ["-NoProfile", "-File", script_path, "list", "--repo", "demo"],
+            cd: Path.dirname(Path.dirname(script_path)),
+            stderr_to_stdout: true,
+            env: [
+              {"SYMPP_FAKE_MIX_LOG", fake_mix_log},
+              {"SYMPP_HOME", sympp_home},
+              {"SYMPP_LAUNCHER", "direct"},
+              {"SYMPP_MIX", fake_mix},
+              {"SYMPP_REPO_ROOT", ""},
+              {"SYMPP_SOURCE_FALLBACK", "1"}
+            ]
+          )
+
+        assert solo_status == 0, solo_output
+
+        fake_mix_calls =
+          fake_mix_log
+          |> File.read!()
+          |> String.split("\n", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.map(&String.replace(&1, "\"", ""))
+          |> Enum.filter(
+            &(String.contains?(&1, "deps.get") or &1 == "sympp.solo --help" or
+                String.starts_with?(&1, "sympp.solo "))
+          )
+
+        assert [
+                 "deps.get --check-locked",
+                 "sympp.solo --help",
+                 "deps.get --check-locked",
+                 "sympp.solo list --repo demo"
+               ] = fake_mix_calls
+      after
+        File.rm_rf!(temp_codex_home)
+      end
+    end
+  end
+
   defp write_cached_script(cache_root, source_script_path) do
     target = Path.join([cache_root, "scripts", Path.basename(source_script_path)])
     File.mkdir_p!(Path.dirname(target))
@@ -419,6 +493,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherSourceDiscoveryTest do
       if "%~1"=="sympp.mcp" (
         exit /b 0
       )
+      if "%~1"=="sympp.solo" (
+        exit /b 0
+      )
       echo unexpected mix args: %*
       exit /b 2
       """
@@ -444,6 +521,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherSourceDiscoveryTest do
       if [ "$1" = "sympp.mcp" ]; then
         exit 0
       fi
+      if [ "$1" = "sympp.solo" ]; then
+        exit 0
+      fi
       echo "unexpected mix args: $*" >&2
       exit 2
       """
@@ -459,6 +539,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherSourceDiscoveryTest do
         echo Mix 1.98.0 mise
         exit /b 0
       )
+      if "%~1"=="exec" if "%~2"=="--" if "%~3"=="mix" if "%~4"=="deps.get" if "%~5"=="--check-locked" (
+        exit /b 0
+      )
+      if "%~1"=="exec" if "%~2"=="--" if "%~3"=="mix" if "%~4"=="sympp.solo" if "%~5"=="--help" (
+        exit /b 0
+      )
       echo unexpected mise args: %*
       exit /b 2
       """
@@ -470,6 +556,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherSourceDiscoveryTest do
       fi
       if [ "$1" = "exec" ] && [ "$2" = "--" ] && [ "$3" = "mix" ] && [ "$4" = "--version" ]; then
         echo "Mix 1.98.0 mise"
+        exit 0
+      fi
+      if [ "$1" = "exec" ] && [ "$2" = "--" ] && [ "$3" = "mix" ] && [ "$4" = "deps.get" ] && [ "$5" = "--check-locked" ]; then
+        exit 0
+      fi
+      if [ "$1" = "exec" ] && [ "$2" = "--" ] && [ "$3" = "mix" ] && [ "$4" = "sympp.solo" ] && [ "$5" = "--help" ]; then
         exit 0
       fi
       echo "unexpected mise args: $*" >&2
