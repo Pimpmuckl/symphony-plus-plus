@@ -2,6 +2,7 @@ Code.require_file("plugin_lifecycle_diagnostic_case_test.exs", __DIR__)
 
 defmodule SymphonyElixir.SymphonyPlusPlus.PluginLifecycleDiagnosticTest do
   use SymphonyElixir.SymphonyPlusPlus.PluginLifecycleDiagnosticCase
+  @moduletag :ci_slow
 
   test "lifecycle doctor ignores stale cache hints when marketplace source is not verified" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")

@@ -2,6 +2,7 @@ Code.require_file("plugin_launcher_artifact_selection_case_test.exs", __DIR__)
 
 defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionSourceFallbackTest do
   use SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionCase
+  @moduletag :ci_slow
 
   test "source checkout MCP launcher ignores artifacts unless explicitly opted in" do
     powershell = System.find_executable("pwsh")

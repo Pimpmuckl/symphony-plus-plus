@@ -3,6 +3,8 @@ Code.require_file("codex_skill_package_case_test.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageDiagnosticHintScopeTest do
   use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
+  @moduletag :ci_slow
+
   test "lifecycle diagnostic scopes hinted installed default cache from opt-in local cache" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
     temp_codex_home = Path.join(System.tmp_dir!(), "sympp-plugin-diagnostic-local-only-#{System.unique_integer([:positive])}")

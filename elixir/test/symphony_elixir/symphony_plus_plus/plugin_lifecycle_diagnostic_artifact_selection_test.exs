@@ -3,6 +3,8 @@ Code.require_file("plugin_lifecycle_diagnostic_case_test.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.PluginLifecycleDiagnosticArtifactSelectionTest do
   use SymphonyElixir.SymphonyPlusPlus.PluginLifecycleDiagnosticCase
 
+  @moduletag :ci_slow
+
   test "lifecycle doctor accepts matching-contract artifacts with stale source revision" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
     temp_codex_home = unique_temp_path("sympp-plugin-doctor-artifact-filter")

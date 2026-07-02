@@ -5,9 +5,11 @@ QUIET ?= 1
 MAKEFLAGS += --no-print-directory
 GATE_LOG_ROOT ?= _build/make-logs
 FAST_TEST_PARTITIONS ?= 9
-SLOW_TEST_PARTITIONS ?= 6
+SLOW_TEST_PARTITIONS ?= 8
+SLOW_TEST_MAX_CASES ?= 4
 CI_TEST_PARTITION_FLAGS := $(if $(MIX_TEST_PARTITION),--partitions $(FAST_TEST_PARTITIONS),)
 CI_SLOW_TEST_PARTITION_FLAGS := $(if $(MIX_TEST_PARTITION),--partitions $(SLOW_TEST_PARTITIONS),)
+CI_SLOW_TEST_MAX_CASES_FLAGS := --max-cases $(SLOW_TEST_MAX_CASES)
 CI_DIALYZER_FLAGS ?= --format short --no-compile --no-check
 
 ifeq ($(OS),Windows_NT)
@@ -112,7 +114,7 @@ ci-test: ci-prepare
 	$(call run_ci_step,test,$(MIX) test --exclude ci_slow $(CI_TEST_PARTITION_FLAGS))
 
 ci-slow: ci-prepare
-	$(call run_ci_step,test-slow,$(MIX) test --exclude test --include ci_slow $(CI_SLOW_TEST_PARTITION_FLAGS))
+	$(call run_ci_step,test-slow,$(MIX) test --exclude test --include ci_slow $(CI_SLOW_TEST_PARTITION_FLAGS) $(CI_SLOW_TEST_MAX_CASES_FLAGS))
 
 ci-dialyzer: ci-prepare
 	$(call run_ci_step,dialyzer-plt,$(MIX) dialyzer --plt)

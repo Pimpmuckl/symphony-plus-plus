@@ -20,13 +20,14 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
     assert target(makefile, "ci-fast") =~ "ci-prepare\n\t$(call run_ci_step,static,$(MIX) static)"
     assert target(makefile, "ci-fast") =~ "$(call run_ci_step,test,$(MIX) test --exclude ci_slow)"
     assert makefile =~ "FAST_TEST_PARTITIONS ?= 9"
-    assert makefile =~ "SLOW_TEST_PARTITIONS ?= 6"
+    assert makefile =~ "SLOW_TEST_PARTITIONS ?= 8"
+    assert makefile =~ "SLOW_TEST_MAX_CASES ?= 4"
 
     assert target(makefile, "ci-test") =~
              "$(call run_ci_step,test,$(MIX) test --exclude ci_slow $(CI_TEST_PARTITION_FLAGS))"
 
     assert target(makefile, "ci-slow") =~
-             "$(call run_ci_step,test-slow,$(MIX) test --exclude test --include ci_slow $(CI_SLOW_TEST_PARTITION_FLAGS))"
+             "$(call run_ci_step,test-slow,$(MIX) test --exclude test --include ci_slow $(CI_SLOW_TEST_PARTITION_FLAGS) $(CI_SLOW_TEST_MAX_CASES_FLAGS))"
 
     assert target(makefile, "ci-dialyzer") =~
              "ci-prepare\n\t$(call run_ci_step,dialyzer-plt,$(MIX) dialyzer --plt)\n\t$(call run_ci_step,dialyzer,$(MIX) dialyzer $(CI_DIALYZER_FLAGS))"
@@ -58,8 +59,8 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
       assert workflow =~ "target: ci-test\n            partition: #{partition}\n            partitions: 9"
     end
 
-    for partition <- 1..6 do
-      assert workflow =~ "target: ci-slow\n            partition: #{partition}\n            partitions: 6"
+    for partition <- 1..8 do
+      assert workflow =~ "target: ci-slow\n            partition: #{partition}\n            partitions: 8"
     end
   end
 

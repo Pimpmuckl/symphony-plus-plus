@@ -3,6 +3,8 @@ Code.require_file("codex_skill_package_case_test.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageDiagnosticVersionedHintTest do
   use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
+  @moduletag :ci_slow
+
   test "lifecycle diagnostic ignores valid versioned cache hints when local cache has no source hint" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
     temp_codex_home = Path.join(System.tmp_dir!(), "sympp-plugin-versioned-source-hint-#{System.unique_integer([:positive])}")

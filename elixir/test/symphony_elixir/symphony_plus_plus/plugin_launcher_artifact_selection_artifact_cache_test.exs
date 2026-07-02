@@ -2,6 +2,7 @@ Code.require_file("plugin_launcher_artifact_selection_case_test.exs", __DIR__)
 
 defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionArtifactCacheTest do
   use SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionCase
+  @moduletag :ci_slow
 
   test "installed MCP launcher accepts wrapper artifact without workflow file" do
     powershell = System.find_executable("pwsh")

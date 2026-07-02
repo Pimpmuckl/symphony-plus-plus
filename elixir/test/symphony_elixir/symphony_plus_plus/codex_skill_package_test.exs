@@ -604,6 +604,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     refute serialized =~ "worker-secret"
   end
 
+  @tag :ci_slow
   test "lifecycle diagnostic explains default skill visible but MCP companion not enabled" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
     temp_codex_home = Path.join(System.tmp_dir!(), "sympp-plugin-readiness-default-only-#{System.unique_integer([:positive])}")
@@ -697,6 +698,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     end
   end
 
+  @tag :ci_slow
   test "lifecycle diagnostic self-test covers enable command TOML mutation shapes" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
 
@@ -718,6 +720,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     end
   end
 
+  @tag :ci_slow
   test "HTTP MCP smoke self-test covers source revision validation" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
 

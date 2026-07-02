@@ -2,6 +2,7 @@ Code.require_file("plugin_lifecycle_diagnostic_case_test.exs", __DIR__)
 
 defmodule SymphonyElixir.SymphonyPlusPlus.PluginLifecycleDiagnosticArtifactRejectionTest do
   use SymphonyElixir.SymphonyPlusPlus.PluginLifecycleDiagnosticCase
+  @moduletag :ci_slow
 
   test "lifecycle doctor reports direct stdio artifact launch block" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")

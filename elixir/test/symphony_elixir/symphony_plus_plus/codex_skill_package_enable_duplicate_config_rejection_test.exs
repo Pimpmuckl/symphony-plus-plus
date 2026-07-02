@@ -1,21 +1,21 @@
 Code.require_file("codex_skill_package_case_test.exs", __DIR__)
 
-defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageEnableConfigRejectionTest do
+defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageEnableDuplicateConfigRejectionTest do
   use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
   @moduletag :ci_slow
 
-  test "enable command refuses unsupported inline-table enabled shapes without config mutation" do
+  test "diagnostic rejects duplicate companion enabled keys before enable command" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
+    temp_codex_home = Path.join(System.tmp_dir!(), "sympp-plugin-enable-duplicate-enabled-#{System.unique_integer([:positive])}")
 
     config = """
-    [plugins]
-    "symphony-plus-plus-mcp@jonat-local" = { note = { enabled = false } }
+    [plugins."symphony-plus-plus-mcp@jonat-local"]
+    enabled = false
+    enabled = true
     """
 
     if powershell do
-      temp_codex_home = unique_temp_path("sympp-plugin-enable-unsupported-inline")
-
       try do
         write_activation_cache(temp_codex_home, "jonat-local")
         File.mkdir_p!(temp_codex_home)
@@ -32,7 +32,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageEnableConfigRejection
               temp_codex_home,
               "-MarketplaceName",
               "jonat-local",
-              "-SkipProcessScan",
               "-Json"
             ],
             stderr_to_stdout: true
@@ -67,7 +66,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageEnableConfigRejection
           )
 
         assert status != 0
-        assert normalize_prose(output) =~ "Target plugin inline table contains no supported enabled = true/false entry"
+        assert normalize_prose(output) =~ "multiple enabled entries"
         assert normalize_newlines(File.read!(Path.join(temp_codex_home, "config.toml"))) == normalize_newlines(config)
         assert config_backups(temp_codex_home) == []
       after
