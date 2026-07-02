@@ -7,7 +7,7 @@ on:
       - main
 
 jobs:
-  gates:
+  single-gates:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     strategy:
@@ -18,38 +18,6 @@ jobs:
             target: ci-static
             partition: ""
             partitions: ""
-          - name: test 1/9
-            target: ci-test
-            partition: 1
-            partitions: 9
-          - name: test 2/9
-            target: ci-test
-            partition: 2
-            partitions: 9
-          - name: test 3/9
-            target: ci-test
-            partition: 3
-            partitions: 9
-          - name: test 4/9
-            target: ci-test
-            partition: 4
-            partitions: 9
-          - name: test 5/9
-            target: ci-test
-            partition: 5
-            partitions: 9
-          - name: test 6/9
-            target: ci-test
-            partition: 6
-            partitions: 9
-          - name: test 7/9
-            target: ci-test
-            partition: 7
-            partitions: 9
-          - name: test 8/9
-            target: ci-test
-            partition: 8
-            partitions: 9
           - name: test 9/9
             target: ci-test
             partition: 9
@@ -136,16 +104,111 @@ jobs:
           SLOW_TEST_PARTITIONS: ${{ matrix.partitions }}
           MIX_TEST_PARTITION: ${{ matrix.partition }}
 
+  parallel-gates:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: test 1-2/9
+            partitions: 9
+            partition_1: 1
+            partition_2: 2
+            gate_id: fast-1-2
+          - name: test 3-4/9
+            partitions: 9
+            partition_1: 3
+            partition_2: 4
+            gate_id: fast-3-4
+          - name: test 5-6/9
+            partitions: 9
+            partition_1: 5
+            partition_2: 6
+            gate_id: fast-5-6
+          - name: test 7-8/9
+            partitions: 9
+            partition_1: 7
+            partition_2: 8
+            gate_id: fast-7-8
+    defaults:
+      run:
+        working-directory: elixir
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - name: Set up mise tools
+        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
+        with:
+          install: true
+          cache: true
+          working_directory: elixir
+
+      - name: Cache deps and build
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            elixir/deps
+            elixir/_build
+          key: ${{ runner.os }}-mix-${{ hashFiles('elixir/mise.toml') }}-${{ hashFiles('elixir/mix.exs') }}-${{ hashFiles('elixir/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-${{ hashFiles('elixir/mise.toml') }}-${{ hashFiles('elixir/mix.exs') }}-
+            ${{ runner.os }}-mix-${{ hashFiles('elixir/mise.toml') }}-
+
+      - name: Prepare ${{ matrix.name }} build copies
+        run: |
+          make ci-prepare
+          rm -rf "_p/${{ matrix.gate_id }}"
+          mkdir -p "_p/${{ matrix.gate_id }}"
+          cp -a _build "_p/${{ matrix.gate_id }}/b${{ matrix.partition_1 }}"
+          cp -a _build "_p/${{ matrix.gate_id }}/b${{ matrix.partition_2 }}"
+          mkdir -p "/tmp/spp-mix-${{ matrix.gate_id }}-${{ matrix.partition_1 }}" "/tmp/spp-mix-${{ matrix.gate_id }}-${{ matrix.partition_2 }}"
+          mkdir -p "/tmp/spp-tmp-${{ matrix.gate_id }}-${{ matrix.partition_1 }}" "/tmp/spp-tmp-${{ matrix.gate_id }}-${{ matrix.partition_2 }}"
+        env:
+          GATE_RUN_ID: ${{ matrix.gate_id }}-prepare
+
+      - parallel:
+          - name: test ${{ matrix.partition_1 }}/${{ matrix.partitions }}
+            run: make ci-test-run
+            env:
+              FAST_TEST_PARTITIONS: ${{ matrix.partitions }}
+              MIX_TEST_PARTITION: ${{ matrix.partition_1 }}
+              MIX_BUILD_PATH: _p/${{ matrix.gate_id }}/b${{ matrix.partition_1 }}
+              MIX_HOME: /tmp/spp-mix-${{ matrix.gate_id }}-${{ matrix.partition_1 }}
+              TMPDIR: /tmp/spp-tmp-${{ matrix.gate_id }}-${{ matrix.partition_1 }}
+              GATE_LOG_ROOT: _p/${{ matrix.gate_id }}/l
+              GATE_RUN_ID: ${{ matrix.gate_id }}-${{ matrix.partition_1 }}
+              ELIXIR_ERL_OPTIONS: "+S 2:2"
+
+          - name: test ${{ matrix.partition_2 }}/${{ matrix.partitions }}
+            run: make ci-test-run
+            env:
+              FAST_TEST_PARTITIONS: ${{ matrix.partitions }}
+              MIX_TEST_PARTITION: ${{ matrix.partition_2 }}
+              MIX_BUILD_PATH: _p/${{ matrix.gate_id }}/b${{ matrix.partition_2 }}
+              MIX_HOME: /tmp/spp-mix-${{ matrix.gate_id }}-${{ matrix.partition_2 }}
+              TMPDIR: /tmp/spp-tmp-${{ matrix.gate_id }}-${{ matrix.partition_2 }}
+              GATE_LOG_ROOT: _p/${{ matrix.gate_id }}/l
+              GATE_RUN_ID: ${{ matrix.gate_id }}-${{ matrix.partition_2 }}
+              ELIXIR_ERL_OPTIONS: "+S 2:2"
+
   make-all:
     runs-on: ubuntu-latest
     needs:
-      - gates
+      - single-gates
+      - parallel-gates
     if: ${{ always() }}
     steps:
       - name: Verify split gates
         run: |
-          if [ "${{ needs.gates.result }}" != "success" ]; then
-            echo "split gate result: ${{ needs.gates.result }}"
+          if [ "${{ needs.single-gates.result }}" != "success" ]; then
+            echo "single gate result: ${{ needs.single-gates.result }}"
+            exit 1
+          fi
+          if [ "${{ needs.parallel-gates.result }}" != "success" ]; then
+            echo "parallel gate result: ${{ needs.parallel-gates.result }}"
             exit 1
           fi
           echo "make-all split gates passed"

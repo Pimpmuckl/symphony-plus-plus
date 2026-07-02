@@ -1,4 +1,4 @@
-.PHONY: help all setup deps build static fmt fmt-check lint hygiene assets-check test test-fast test-slow coverage ci ci-prepare ci-fast ci-static ci-test ci-slow ci-dialyzer ci-coverage ci-hygiene ci-full dialyzer e2e
+.PHONY: help all setup deps build static fmt fmt-check lint hygiene assets-check test test-fast test-slow coverage ci ci-prepare ci-fast ci-static ci-test ci-test-run ci-slow ci-dialyzer ci-coverage ci-hygiene ci-full dialyzer e2e
 
 MIX ?= mix
 QUIET ?= 1
@@ -110,7 +110,9 @@ ci-prepare:
 ci-static: ci-prepare
 	$(call run_ci_step,static,$(MIX) static)
 
-ci-test: ci-prepare
+ci-test: ci-prepare ci-test-run
+
+ci-test-run:
 	$(call run_ci_step,test,$(MIX) test --exclude ci_slow $(CI_TEST_PARTITION_FLAGS))
 
 ci-slow: ci-prepare
