@@ -150,6 +150,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageEnableTest do
       end
     end
   end
+end
+
+defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageEnableConfigRejectionTest do
+  use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
+
+  @moduletag :ci_slow
 
   test "enable command refuses unsupported inline-table enabled shapes without config mutation" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
@@ -291,6 +297,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageEnableTest do
       end
     end
   end
+end
+
+defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageEnableHomeSafetyTest do
+  use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
+
+  @moduletag :ci_slow
 
   test "enable command refuses default Codex home" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")

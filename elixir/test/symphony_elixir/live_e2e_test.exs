@@ -541,8 +541,6 @@ defmodule SymphonyElixir.LiveE2ETest do
     cleanup.()
   end
 
-  defp cleanup_live_worker_setup(_worker_setup), do: :ok
-
   defp restart_orchestrator_if_needed do
     if is_nil(Process.whereis(SymphonyElixir.Orchestrator)) do
       case Supervisor.restart_child(SymphonyElixir.Supervisor, SymphonyElixir.Orchestrator) do

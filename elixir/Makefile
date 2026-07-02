@@ -4,8 +4,11 @@ MIX ?= mix
 QUIET ?= 1
 MAKEFLAGS += --no-print-directory
 GATE_LOG_ROOT ?= _build/make-logs
-FAST_TEST_PARTITIONS ?= 4
+FAST_TEST_PARTITIONS ?= 12
+SLOW_TEST_PARTITIONS ?= 8
 CI_TEST_PARTITION_FLAGS := $(if $(MIX_TEST_PARTITION),--partitions $(FAST_TEST_PARTITIONS),)
+CI_SLOW_TEST_PARTITION_FLAGS := $(if $(MIX_TEST_PARTITION),--partitions $(SLOW_TEST_PARTITIONS),)
+CI_DIALYZER_FLAGS ?= --format short --no-compile --no-check
 
 ifeq ($(OS),Windows_NT)
 GATE_RUN_ID := $(or $(GATE_RUN_ID),$(shell powershell.exe -NoProfile -Command "([guid]::NewGuid().ToString('N')).Substring(0, 12)"))
@@ -109,10 +112,11 @@ ci-test: ci-prepare
 	$(call run_ci_step,test,$(MIX) test --exclude ci_slow $(CI_TEST_PARTITION_FLAGS))
 
 ci-slow: ci-prepare
-	$(call run_ci_step,test-slow,$(MIX) test --only ci_slow)
+	$(call run_ci_step,test-slow,$(MIX) test --exclude test --include ci_slow $(CI_SLOW_TEST_PARTITION_FLAGS))
 
 ci-dialyzer: ci-prepare
-	$(call run_ci_step,dialyzer,$(MIX) dialyzer --format short)
+	$(call run_ci_step,dialyzer-plt,$(MIX) dialyzer --plt)
+	$(call run_ci_step,dialyzer,$(MIX) dialyzer $(CI_DIALYZER_FLAGS))
 
 ci-coverage: ci-prepare
 	$(call run_ci_step,coverage,$(MIX) test --cover)
@@ -128,7 +132,8 @@ ci-fast: ci-prepare
 ci-full: ci-prepare
 	$(call run_ci_step,static,$(MIX) static)
 	$(call run_ci_step,coverage,$(MIX) test --cover)
-	$(call run_ci_step,dialyzer,$(MIX) dialyzer --format short)
+	$(call run_ci_step,dialyzer-plt,$(MIX) dialyzer --plt)
+	$(call run_ci_step,dialyzer,$(MIX) dialyzer $(CI_DIALYZER_FLAGS))
 	$(call run_ci_step,hygiene,$(MIX) hygiene)
 
 ci: ci-fast

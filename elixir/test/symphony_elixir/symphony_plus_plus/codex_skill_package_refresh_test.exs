@@ -200,6 +200,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshTest do
       end
     end
   end
+end
+
+defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshInstallValidationTest do
+  use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
   @tag :ci_slow
   @tag timeout: 120_000
@@ -257,6 +261,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshTest do
       end
     end
   end
+end
+
+defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshGeneratedCacheTest do
+  use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
   @tag :ci_slow
   test "refresh script prunes generated local cache and overlays manifest-version cache" do
@@ -384,6 +392,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshTest do
       end
     end
   end
+end
+
+defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshMarketplaceTest do
+  use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
   @tag :ci_slow
   test "refresh script rejects unresolved marketplace source paths" do
@@ -684,6 +696,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshTest do
       end
     end
   end
+end
+
+defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshContractTest do
+  use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
+
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   test "template skill mirrors installable skill metadata" do
     skill = File.read!(@skill_path)
