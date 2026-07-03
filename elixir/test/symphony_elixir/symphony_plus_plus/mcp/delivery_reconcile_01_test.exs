@@ -236,14 +236,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
              ["symphony-plus-plus:symphony-worker", "symphony-work-package"]
            ]
 
-    assert payload["worker_bootstrap"]["launch_prompt"] =~ "symphony-plus-plus-mcp:symphony-worker"
-    assert payload["worker_bootstrap"]["launch_prompt"] =~ "symphony-plus-plus:symphony-worker"
-    assert payload["worker_bootstrap"]["launch_prompt"] =~ "symphony-plus-plus-mcp:symphony-work-package"
-    assert payload["worker_bootstrap"]["launch_prompt"] =~ "symphony-work-package"
-    assert payload["worker_bootstrap"]["launch_prompt"] =~ "claim_local_assignment"
-    assert payload["worker_bootstrap"]["launch_prompt"] =~ "[REDACTED]"
+    refute Map.has_key?(payload["worker_bootstrap"], "launch_prompt")
+    refute Map.has_key?(payload["worker_bootstrap"], "prompt")
     refute Map.has_key?(payload["worker_bootstrap"], "legacy_private_handoff")
-    refute payload["worker_bootstrap"]["launch_prompt"] =~ secret_title_token
     refute serialized_response =~ "raw_secret_value"
     refute serialized_response =~ "secret_hash"
     refute serialized_response =~ secret_title_token

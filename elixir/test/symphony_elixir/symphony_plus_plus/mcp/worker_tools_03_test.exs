@@ -113,7 +113,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
 
     headless_review_response = attach_tool(repo, session, "submit_review_package", headless_review_args)
 
-    assert get_in(headless_review_response, ["result", "structuredContent", "progress_event", "payload", "head_sha"]) == "abc123"
+    assert response_progress_payload(repo, headless_review_response)["head_sha"] == "abc123"
 
     missing_acceptance_response =
       MCPHarness.request(
@@ -133,8 +133,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
         "reviews" => []
       })
 
-    assert get_in(trimmed_review_response, ["result", "structuredContent", "progress_event", "payload", "tests"]) == ["mix test"]
-    assert get_in(trimmed_review_response, ["result", "structuredContent", "progress_event", "payload", "artifacts"]) == ["review-log.txt"]
+    trimmed_review_payload = response_progress_payload(repo, trimmed_review_response)
+    assert trimmed_review_payload["tests"] == ["mix test"]
+    assert trimmed_review_payload["artifacts"] == ["review-log.txt"]
 
     explicit_key_review_args = %{
       "summary" => "Explicit idempotency key review",
@@ -225,9 +226,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
         "reviews" => [%{"lane" => " Brief ", "verdict" => " Green ", "note" => "typo"}]
       })
 
-    assert get_in(extra_review_key_response, ["result", "structuredContent", "progress_event", "payload", "reviews"]) == [
-             %{"lane" => "brief", "verdict" => "green"}
-           ]
+    assert response_progress_payload(repo, extra_review_key_response)["reviews"] == [%{"lane" => "brief", "verdict" => "green"}]
 
     duplicate_review_lane_response =
       MCPHarness.request(
@@ -856,7 +855,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
         "lane" => "review-suite normal"
       })
 
-    payload = get_in(result, ["result", "structuredContent", "progress_event", "payload"])
+    payload = response_progress_payload(repo, result)
     assert payload["suite"] == "review-suite"
     assert payload["profile"] == "normal"
     assert payload["lane"] == "normal"

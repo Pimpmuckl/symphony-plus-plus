@@ -8940,7 +8940,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              "context" => context,
              "idempotency_key" => idempotency_key
            }) do
-      {:ok, tool_result(%{"guidance_request" => guidance_request_payload(guidance_request)})}
+      {:ok, read_tool_result(%{"guidance_request" => guidance_request_payload(guidance_request)})}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "create_guidance_request", "reason" => reason}}
       {:error, reason} -> worker_error(reason, "create_guidance_request")
@@ -9132,7 +9132,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     with {:ok, session} <- scoped_session(repo, session, arguments),
          {:ok, guidance_request} <-
            GuidanceRequestService.get_for_assignment(repo, session.assignment, guidance_request_id) do
-      {:ok, tool_result(%{"guidance_request" => guidance_request_payload(guidance_request)})}
+      {:ok, read_tool_result(%{"guidance_request" => guidance_request_payload(guidance_request)})}
     else
       {:error, :not_found} -> not_found_error("read_guidance_request")
       {:error, {:authorization_policy_denied, %Decision{reason_code: "scope_mismatch"}}} -> not_found_error("read_guidance_request")
@@ -9153,7 +9153,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            GuidanceRequestService.get_visible_to_architect(repo, guidance_request_id, filters),
          :ok <- authorize_guidance_request_for_session(repo, session, :guidance_request_read, guidance_request),
          :ok <- require_guidance_request_work_package(guidance_request, work_package_id) do
-      {:ok, tool_result(%{"guidance_request" => guidance_request_payload(guidance_request), "scope" => scope})}
+      {:ok, read_tool_result(%{"guidance_request" => guidance_request_payload(guidance_request), "scope" => scope})}
     else
       {:error, :not_found} -> not_found_error("read_guidance_request")
       {:error, reason} -> architect_error(reason, "read_guidance_request")
@@ -14492,8 +14492,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp agent_tool_result(payload) do
+    payload = compact_tool_payload(payload)
     agent_tool_result(payload, WorkerContext.encode_tool_payload(payload))
   end
+
+  defp read_tool_result(payload), do: agent_tool_result(payload, WorkerContext.encode_tool_payload(payload))
 
   defp agent_tool_result(payload, agent_text) when is_binary(agent_text) do
     %{
@@ -14557,7 +14560,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
        ])}
 
   defp compact_tool_entry("progress_event", key, value),
-    do: {key, compact_status_payload(value, ["id", "status", "summary", "idempotency_key", "payload"])}
+    do: {key, compact_status_payload(value, ["id", "status", "summary", "idempotency_key"])}
 
   defp compact_tool_entry("guidance_request", key, value),
     do:
@@ -14567,14 +14570,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          "work_package_id",
          "summary",
          "question",
-         "context",
          "status",
          "requested_by",
-         "answer",
          "answered_by",
          "human_info_reason",
          "recommended_language",
-         "decision_prompt",
          "blocker_id"
        ])}
 
@@ -14582,7 +14582,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     do: {key, compact_status_payload(value, ["id", "status", "sequence"])}
 
   defp compact_tool_entry("decision_log_entry", key, value),
-    do: {key, compact_status_payload(value, ["id", "sequence", "source_type", "source_id", "decision", "rationale", "scope_impact", "created_by"])}
+    do: {key, compact_status_payload(value, ["id", "sequence", "source_type", "source_id", "decision", "created_by"])}
 
   defp compact_tool_entry("product_plan_node", key, value),
     do: {key, compact_status_payload(value, ["id", "work_request_id", "parent_id", "position", "completion_mark"])}
@@ -14654,9 +14654,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          "arguments",
          "preferred_skill_set",
          "supported_skill_sets",
-         "required_skills",
-         "launch_prompt",
-         "prompt"
+         "required_skills"
        ])}
 
   defp compact_tool_entry("worker_grant", key, value),

@@ -47,7 +47,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
         "idempotency_key" => "p7-003-post-approval-blocker"
       })
 
-    assert get_in(blocker_response, ["result", "structuredContent", "progress_event", "payload", "active"]) == true
+    blocker_payload = response_progress_payload(repo, blocker_response)
+    assert blocker_payload["active"] == true
 
     renewed_architect_session = renew_phase_architect_session(repo, anchor, architect_capabilities)
 
@@ -63,7 +64,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
     assert get_in(approval_replay_response, ["result", "structuredContent", "approval", "id"]) ==
              get_in(approval_response, ["result", "structuredContent", "approval", "id"])
 
-    blocker_id = get_in(blocker_response, ["result", "structuredContent", "progress_event", "payload", "blocker_id"])
+    blocker_id = blocker_payload["blocker_id"]
 
     resolve_response =
       mcp_tool(repo, worker_session, "resolve_blocker", %{
@@ -73,7 +74,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
         "idempotency_key" => "p7-003-post-approval-blocker-resolved"
       })
 
-    assert get_in(resolve_response, ["result", "structuredContent", "progress_event", "payload", "active"]) == false
+    assert response_progress_payload(repo, resolve_response)["active"] == false
 
     [
       {"blocked", "implementing"},

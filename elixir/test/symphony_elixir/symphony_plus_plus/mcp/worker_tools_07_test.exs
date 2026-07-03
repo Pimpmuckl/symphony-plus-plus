@@ -29,7 +29,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
         "idempotency_key" => "docs-scope-note"
       })
 
-    refute Map.has_key?(get_in(scope_response, ["result", "structuredContent", "progress_event", "payload"]), "recommendation_artifact_id")
+    refute Map.has_key?(response_progress_payload(repo, scope_response), "recommendation_artifact_id")
 
     attach_tool(repo, session, "append_progress", %{
       "summary" => "Docs validation passed",

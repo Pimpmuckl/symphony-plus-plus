@@ -545,7 +545,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     {anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-TOON", [
         "read:work_request",
-        "read:guidance_request"
+        "read:guidance_request",
+        "write:guidance_request"
       ])
 
     work_request =

@@ -248,7 +248,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
         "idempotency_key" => "arch-policy-blocker-resolved"
       })
 
-    assert get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event", "payload", "active"]) == false
+    resolve_event_id = get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event", "id"])
+    refute Map.has_key?(get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event"]), "payload")
+    assert repo.get!(ProgressEvent, resolve_event_id).payload["active"] == false
 
     anchor_blocker_id = "arch-policy-anchor-blocker"
 
@@ -280,7 +282,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
     assert get_in(default_scope_response, ["result", "structuredContent", "progress_event", "idempotency_key"]) ==
              ["resolve_blocker", handoff_session.assignment.work_package_id, "arch-policy-anchor-blocker-resolved"] |> Enum.join(":")
 
-    assert get_in(default_scope_response, ["result", "structuredContent", "progress_event", "payload", "active"]) == false
+    default_scope_event_id = get_in(default_scope_response, ["result", "structuredContent", "progress_event", "id"])
+    refute Map.has_key?(get_in(default_scope_response, ["result", "structuredContent", "progress_event"]), "payload")
+    assert repo.get!(ProgressEvent, default_scope_event_id).payload["active"] == false
   end
 
   test "local operator WorkRequest note tools append comments and decisions with redacted provenance", %{repo: repo} do
@@ -361,14 +365,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
     assert get_in(decision_response, ["result", "structuredContent", "decision_log_entry", "source_type"]) == "operator"
     assert get_in(decision_response, ["result", "structuredContent", "decision_log_entry", "source_id"]) == "[REDACTED]"
     assert get_in(decision_response, ["result", "structuredContent", "decision_log_entry", "decision"]) == "Mirror result from [REDACTED]"
-    assert get_in(decision_response, ["result", "structuredContent", "decision_log_entry", "rationale"]) == "Related WR needs context from [REDACTED]"
-    assert get_in(decision_response, ["result", "structuredContent", "decision_log_entry", "scope_impact"]) == "Comment-only, no dispatch using [REDACTED]"
+    refute Map.has_key?(get_in(decision_response, ["result", "structuredContent", "decision_log_entry"]), "rationale")
+    refute Map.has_key?(get_in(decision_response, ["result", "structuredContent", "decision_log_entry"]), "scope_impact")
     assert get_in(decision_response, ["result", "structuredContent", "decision_log_entry", "created_by"]) == "operator [REDACTED]"
 
     assert {:ok, [decision]} = WorkRequestRepository.list_decisions(repo, work_request.id)
     assert decision.source_type == "operator"
     assert decision.source_id == "[REDACTED]"
     assert decision.decision == "Mirror result from [REDACTED]"
+    assert decision.rationale == "Related WR needs context from [REDACTED]"
+    assert decision.scope_impact == "Comment-only, no dispatch using [REDACTED]"
     assert decision.created_by == "operator [REDACTED]"
 
     dispatch_response =

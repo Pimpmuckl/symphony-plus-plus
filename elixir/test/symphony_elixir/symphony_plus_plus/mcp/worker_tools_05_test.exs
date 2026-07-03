@@ -523,8 +523,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       })
 
     assert get_in(result_response, ["result", "structuredContent", "progress_event", "status"]) == "review_suite_passed"
-    assert get_in(result_response, ["result", "structuredContent", "progress_event", "payload", "type"]) == "review_suite_result"
-    assert get_in(result_response, ["result", "structuredContent", "progress_event", "payload", "status"]) == "passed"
+    result_payload = response_progress_payload(repo, result_response)
+    assert result_payload["type"] == "review_suite_result"
+    assert result_payload["status"] == "passed"
 
     assert {:ok, artifacts} = PlanningRepository.list_artifacts(repo, package.id)
     assert Enum.any?(artifacts, &(&1.kind == "review_suite" and &1.path == "review-suite-result.json"))
@@ -792,13 +793,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       })
 
     assert get_in(approval_response, ["result", "structuredContent", "allowed_file_globs"]) == ["elixir/lib/**", "docs/**"]
-    assert get_in(approval_response, ["result", "structuredContent", "progress_event", "payload", "approved"]) == true
     approval_event_id = get_in(approval_response, ["result", "structuredContent", "progress_event", "id"])
+    refute Map.has_key?(get_in(approval_response, ["result", "structuredContent", "progress_event"]), "payload")
     approval_event = repo.get!(ProgressEvent, approval_event_id)
     assert approval_event.actor_id == "architect-1"
     assert approval_event.actor_type == "architect"
     assert approval_event.access_grant_id == architect_assignment.grant_id
     assert approval_event.payload["source_tool"] == "approve_scope_expansion"
+    assert approval_event.payload["approved"] == true
     assert approval_event.payload["request_id"] == request_id
     refute inspect(approval_event.payload) =~ architect_work_key.secret
     refute inspect(approval_response) =~ architect_work_key.secret

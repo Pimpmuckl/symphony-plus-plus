@@ -136,6 +136,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
     response
   end
 
+  def response_progress_payload(repo, response) do
+    event_id = get_in(response, ["result", "structuredContent", "progress_event", "id"])
+    refute Map.has_key?(get_in(response, ["result", "structuredContent", "progress_event"]), "payload")
+    repo.get!(ProgressEvent, event_id).payload
+  end
+
   def tool_result_text(response) do
     get_in(response, ["result", "content", Access.at(0), "text"])
   end
