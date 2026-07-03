@@ -88,12 +88,12 @@ calls should omit values the bound WorkPackage already carries:
   when those facts changed. Pass explicit PR identity or `recovery` only for
   manual evidence repair.
 
-For Review Suite evidence, call `attach_review_suite_result(round_id)` when
-local Review Suite state is available. The server infers suite, profile,
-lane, head SHA, status, verdict, summary, and anchor for a passing round.
-Verbose fields remain a fallback when the round cannot be resolved; `suite`
-must still identify Review Suite. Omit `round_id` when using verbose fallback
-fields because a present `round_id` selects the local-round resolution path.
+For Review Suite evidence, prefer `mark_ready(review_suite_round_id)` when the
+package is otherwise ready. The server attaches the passing local Review Suite
+round before readiness checks. Use `attach_review_suite_result(round_id)` only
+when recording review evidence before the finish call. Verbose fields remain a
+fallback when the round cannot be resolved; `suite` must still identify Review
+Suite.
 
 Retained explicit-id operations and their reasons:
 

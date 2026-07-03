@@ -3728,7 +3728,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, forbidden_file_globs} <- required_string_array(arguments, "forbidden_file_globs"),
          {:ok, acceptance_criteria} <- required_string_array(arguments, "acceptance_criteria"),
          {:ok, validation_steps} <- required_string_array(arguments, "validation_steps"),
-         {:ok, review_lanes} <- required_string_array(arguments, "review_lanes"),
+         {:ok, review_lanes} <- optional_string_list_argument(arguments, "review_lanes"),
          {:ok, stop_conditions} <- required_string_array(arguments, "stop_conditions"),
          {:ok, branch_pattern} <- optional_string_argument(arguments, "branch_pattern"),
          :ok <- require_supported_branch_pattern(branch_pattern),
@@ -9048,8 +9048,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp worker_tool("mark_ready", arguments, %__MODULE__{config: config, session: session}) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          :ok <- require_worker_assignment(session.assignment),
+         {:ok, review_suite_result} <- mark_ready_review_suite_result(arguments, session),
          {:ok, blocker_closeout_plan} <- prepare_scoped_blocker_closeout(config.repo, session, [Session.work_package_id(session)], arguments, "mark_ready"),
-         {:ok, {work_package, blocker_closeout, warnings}} <- mark_ready_transaction(config.repo, session, blocker_closeout_plan) do
+         {:ok, {work_package, blocker_closeout, warnings}} <- mark_ready_transaction(config.repo, session, blocker_closeout_plan, review_suite_result) do
       {:ok,
        ToolResult.tool_result(
          %{"work_package" => work_package_payload(work_package), "ready" => true, "blocker_closeout" => blocker_closeout}
@@ -9824,11 +9825,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end)
   end
 
-  defp mark_ready_transaction(repo, %Session{} = session, blocker_closeout_plan) do
+  defp mark_ready_transaction(repo, %Session{} = session, blocker_closeout_plan, review_suite_result) do
     repo
     |> run_worker_transaction(fn ->
       with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
            :ok <- lock_work_package(repo, Session.work_package_id(session)),
+           {:ok, _review_suite_result} <-
+             maybe_attach_mark_ready_review_suite_result(repo, session, review_suite_result),
            {:ok, blocker_closeout} <- apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan),
            {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
            {:ok, readiness_warnings} <- readiness_gates(repo, state),
@@ -9838,6 +9841,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         {:ok, {work_package, blocker_closeout, readiness_warnings}}
       end
     end)
+  end
+
+  defp mark_ready_review_suite_result(arguments, %Session{} = session) do
+    with {:ok, round_id} <- optional_string_argument(arguments, "review_suite_round_id") do
+      mark_ready_review_suite_result_for_round(round_id, session)
+    end
+  end
+
+  defp mark_ready_review_suite_result_for_round(nil, %Session{}), do: {:ok, nil}
+
+  defp mark_ready_review_suite_result_for_round(round_id, %Session{} = session) do
+    with {:ok, arguments, payload} <- review_suite_result_arguments(%{"round_id" => round_id}, session),
+         :ok <- require_passing_review_suite_result(Map.get(payload, "status"), Map.get(payload, "verdict")) do
+      {:ok, {arguments, payload}}
+    end
+  end
+
+  defp maybe_attach_mark_ready_review_suite_result(_repo, %Session{}, nil), do: {:ok, nil}
+
+  defp maybe_attach_mark_ready_review_suite_result(repo, %Session{} = session, {arguments, payload}) do
+    case attach_review_suite_result_transaction_body(repo, session, arguments, payload) do
+      {:error, _code, _message, _data} = error -> error
+      result -> {:ok, result}
+    end
   end
 
   defp escalate_guidance_request_transaction(
@@ -12144,12 +12171,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     }
   end
 
-  defp readiness_failure_reason("review_lanes_complete", state, required_lanes) do
+  defp readiness_failure_reason("review_lanes_complete", _state, required_lanes) do
     "review_lanes_complete"
     |> readiness_failure_reason()
     |> Map.merge(%{
-      "required_lanes" => redacted_review_lanes(required_lanes),
-      "latest_attached_review_round" => latest_review_suite_round_summary(state)
+      "required_lanes" => redacted_review_lanes(required_lanes)
     })
     |> drop_nil_values()
   end
@@ -12170,7 +12196,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp readiness_failure_message("review_artifacts_attached"), do: "Current-head review artifacts are missing."
 
   defp readiness_failure_message("review_lanes_complete"),
-    do: "Required review profiles are not satisfied by a current-head passing review. Passing verdict aliases include green, clean, passed, pass, success, and approved."
+    do: "Required Review Suite profile is not passing for the current head."
 
   defp readiness_failure_message("findings_documented"), do: "Investigation findings are missing."
   defp readiness_failure_message("recommendation_artifact_recorded"), do: "Investigation recommendation artifact is missing."
@@ -12236,6 +12262,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     readiness_head_sha = review_head_sha_for_readiness(state)
 
     merge_required?(state.work_package) and required_review_lanes != [] and
+      not review_suite_result_lanes_present?(state, required_review_lanes) and
       current_head_review_package_events(state.progress_events, readiness_head_sha) == []
   end
 
@@ -12314,31 +12341,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
     payloads != [] and
       Enum.all?(required_lanes, &ReviewProfiles.review_suite_payloads_satisfy_required_profile?(payloads, &1))
-  end
-
-  defp latest_review_suite_round_summary(state) do
-    readiness_head_sha = review_head_sha_for_readiness(state)
-
-    event =
-      MetadataProjection.latest_review_suite_result_event(state.progress_events, state.work_package.id, readiness_head_sha) ||
-        MetadataProjection.latest_review_suite_result_event(state.progress_events, state.work_package.id, :any_head)
-
-    case event do
-      %ProgressEvent{payload: payload} when is_map(payload) ->
-        %{
-          "round_id" => Map.get(payload, "round_id"),
-          "review_suite_id" => Map.get(payload, "review_suite_id"),
-          "lane" => Map.get(payload, "lane"),
-          "profile" => Map.get(payload, "profile"),
-          "status" => Map.get(payload, "status"),
-          "verdict" => Map.get(payload, "verdict"),
-          "head_sha" => Map.get(payload, "head_sha")
-        }
-        |> drop_nil_values()
-
-      _event ->
-        nil
-    end
   end
 
   defp drop_nil_values(map) do

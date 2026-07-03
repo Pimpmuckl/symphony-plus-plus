@@ -57,8 +57,9 @@ Bound workers should omit values the current WorkPackage already supplies.
 `add_comment(body)` and `list_comments()` default to the current WorkPackage.
 `attach_branch(head_sha)` infers a literal WorkPackage branch pattern; pass
 `branch` only for templated or absent patterns. Review Suite evidence should use
-`attach_review_suite_result(round_id)` when local Review Suite state is
-available.
+`mark_ready(review_suite_round_id)` when the package is otherwise ready; use
+`attach_review_suite_result(round_id)` only when recording review evidence before
+the finish call.
 
 `sync_pr()` only refreshes the already attached PR when state changed after
 attachment or the attach call did not include current-state metadata required by

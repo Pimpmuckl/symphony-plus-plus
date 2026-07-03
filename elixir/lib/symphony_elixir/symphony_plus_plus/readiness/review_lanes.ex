@@ -4,7 +4,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes do
   import Ecto.Query, only: [from: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
@@ -12,21 +11,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes do
   @spec required(module() | nil, WorkPackage.t()) ::
           {:ok, {[String.t()], [map()]}} | {:error, {:storage_failed, String.t()}}
   def required(repo, %WorkPackage{} = work_package) when is_atom(repo) and not is_nil(repo) do
-    with {:ok, slice_lanes} <- linked_planned_slice_review_lanes(repo, work_package.id) do
-      {:ok, required_from_planned_slice_lanes(work_package, slice_lanes)}
+    with {:ok, linked_lanes} <- linked_planned_slice_review_lanes(repo, work_package.id) do
+      {:ok, required_from_linked_planned_slice_lanes(work_package, linked_lanes)}
     end
   end
 
   def required(_repo, %WorkPackage{} = work_package), do: {:ok, {policy_required(work_package), []}}
 
-  @spec required_from_planned_slice_lanes(WorkPackage.t(), [String.t()] | nil) :: {[String.t()], [map()]}
-  def required_from_planned_slice_lanes(%WorkPackage{} = work_package, slice_lanes) do
-    policy_lanes = policy_required(work_package)
+  defp required_from_linked_planned_slice_lanes(work_package, {:one, slice_lanes}) do
+    required_from_planned_slice_lanes(work_package, slice_lanes)
+  end
 
-    case ReviewProfiles.normalize_profiles(slice_lanes || []) do
-      [] -> {policy_lanes, []}
-      planned_slice_lanes -> {planned_slice_lanes, warnings(policy_lanes, planned_slice_lanes)}
-    end
+  defp required_from_linked_planned_slice_lanes(work_package, :missing_or_ambiguous) do
+    {policy_required(work_package), []}
+  end
+
+  @spec required_from_planned_slice_lanes(WorkPackage.t(), [String.t()] | nil) :: {[String.t()], [map()]}
+  def required_from_planned_slice_lanes(%WorkPackage{}, slice_lanes) do
+    {ReviewProfiles.normalize_review_suite_profiles(slice_lanes || []), []}
   end
 
   @spec policy_required(WorkPackage.t()) :: [String.t()]
@@ -53,29 +55,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes do
       )
 
     case planned_slices do
-      [%PlannedSlice{review_lanes: review_lanes}] -> {:ok, review_lanes || []}
-      _missing_or_ambiguous -> {:ok, []}
+      [%PlannedSlice{review_lanes: review_lanes}] -> {:ok, {:one, review_lanes || []}}
+      _missing_or_ambiguous -> {:ok, :missing_or_ambiguous}
     end
   rescue
     error in Exqlite.Error -> {:error, {:storage_failed, Exception.message(error)}}
   end
 
-  defp linked_planned_slice_review_lanes(_repo, _work_package_id), do: {:ok, []}
-
-  defp warnings(policy_lanes, planned_slice_lanes) do
-    if MapSet.new(policy_lanes) == MapSet.new(planned_slice_lanes) do
-      []
-    else
-      [
-        %{
-          "code" => "review_lanes_differ",
-          "message" => "Using planned-slice review profiles.",
-          "policy_lanes" => redacted_lanes(policy_lanes),
-          "required_lanes" => redacted_lanes(planned_slice_lanes)
-        }
-      ]
-    end
-  end
-
-  defp redacted_lanes(lanes), do: Redactor.redact_output(lanes)
+  defp linked_planned_slice_review_lanes(_repo, _work_package_id), do: {:ok, :missing_or_ambiguous}
 end

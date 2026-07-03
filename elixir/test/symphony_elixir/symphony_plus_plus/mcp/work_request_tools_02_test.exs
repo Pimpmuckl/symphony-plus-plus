@@ -1269,7 +1269,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       "forbidden_file_globs" => [],
       "acceptance_criteria" => ["MCP planned-slice mutation succeeds."],
       "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
-      "review_lanes" => ["brief", "raw_secret_review_lane", "normal"],
+      "review_lanes" => ["brief", "normal"],
       "stop_conditions" => ["Stop before dispatch."]
     }
 

@@ -69,9 +69,10 @@ Before ready:
    current.
 6. Call `mark_ready()` only after acceptance criteria, tests, required review
    profile evidence, progress, findings, branch/PR evidence, and blockers are
-   settled. Do not add lifecycle calls only to restate existing evidence. If
-   active blockers must be resolved or kept active during the finish
-   transition, pass `blocker_closeout`.
+   settled. Pass `review_suite_round_id` when a passing local Review Suite
+   round should be attached during closeout. Do not add lifecycle calls only to
+   restate existing evidence. If active blockers must be resolved or kept
+   active during the finish transition, pass `blocker_closeout`.
 
 Final output:
 - PR URL and final head SHA.

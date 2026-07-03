@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, SoloTools}
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{Node, SliceLink}
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
@@ -538,7 +539,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   end
 
   def worker_tool_input_schema("mark_ready") do
-    schema(%{"blocker_closeout" => blocker_closeout_schema()}, [])
+    schema(
+      %{
+        "blocker_closeout" => blocker_closeout_schema(),
+        "review_suite_round_id" => described_string_schema("Optional passing local Review Suite round id to attach before readiness checks.")
+      },
+      []
+    )
   end
 
   def worker_tool_input_schema("update_task_plan") do
@@ -974,7 +981,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         "forbidden_file_globs" => string_array_schema(),
         "acceptance_criteria" => string_array_schema(),
         "validation_steps" => string_array_schema(),
-        "review_lanes" => string_array_schema(),
+        "review_lanes" => review_suite_profile_array_schema(),
         "stop_conditions" => string_array_schema(),
         "branch_pattern" => described_string_schema("Optional exact branch or {{placeholder}} template. Git wildcard patterns such as `*` are not supported.")
       },
@@ -987,7 +994,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         "forbidden_file_globs",
         "acceptance_criteria",
         "validation_steps",
-        "review_lanes",
         "stop_conditions"
       ]
     )
@@ -1462,6 +1468,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp nonempty_string_array_schema, do: %{"type" => "array", "minItems" => 1, "items" => nonblank_string_schema()}
   defp string_array_schema, do: %{"type" => "array", "items" => nonblank_string_schema()}
   defp described_string_array_schema(description), do: Map.put(string_array_schema(), "description", description)
+  defp review_suite_profile_array_schema, do: %{"type" => "array", "items" => string_enum_schema(ReviewProfiles.review_suite_profiles())}
   defp nonempty_object_array_schema, do: %{"type" => "array", "minItems" => 1, "items" => object_schema()}
 
   defp changed_files_schema,

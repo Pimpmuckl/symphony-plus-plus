@@ -926,8 +926,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              "forbidden_file_globs",
              "acceptance_criteria",
              "validation_steps",
-             "review_lanes",
              "stop_conditions"
+           ]
+
+    assert get_in(tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "review_lanes", "items", "enum"]) == [
+             "brief",
+             "normal",
+             "deep",
+             "emergency"
            ]
 
     assert get_in(tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "work_request_id", "description"]) =~

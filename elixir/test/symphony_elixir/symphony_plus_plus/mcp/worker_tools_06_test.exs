@@ -1015,6 +1015,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                  WorkPackageFactory.attrs(id: package_id, kind: "mcp", status: "ci_waiting")
                )
 
+      require_review_lanes!(repo, package, ["normal"])
       append_done_plan(repo, package.id)
       assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
       assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-#{index}")
@@ -1050,6 +1051,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                WorkPackageFactory.attrs(id: "SYMPP-REVIEW-NORMAL-FOR-BRIEF", kind: "quick_fix", status: "ci_waiting")
              )
 
+    require_review_lanes!(repo, package, ["brief"])
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -1082,6 +1084,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                WorkPackageFactory.attrs(id: "SYMPP-REVIEW-EXACT-FAIL-BLOCKS", kind: "quick_fix", status: "ci_waiting")
              )
 
+    require_review_lanes!(repo, package, ["brief"])
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -1117,6 +1120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                WorkPackageFactory.attrs(id: "SYMPP-REVIEW-STRONGER-FAIL-BLOCKS", kind: "quick_fix", status: "ci_waiting")
              )
 
+    require_review_lanes!(repo, package, ["normal"])
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -1152,6 +1156,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                WorkPackageFactory.attrs(id: "SYMPP-REVIEW-DEEP-BEATS-BRIEF-FAIL", kind: "quick_fix", status: "ci_waiting")
              )
 
+    require_review_lanes!(repo, package, ["brief"])
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -1218,6 +1223,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                WorkPackageFactory.attrs(id: "SYMPP-REVIEW-SUITE-MINIMAL", kind: "mcp", status: "ci_waiting", policy_template: "mcp_review_suite_artifact")
              )
 
+    require_review_lanes!(repo, package, ["normal"])
     append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
@@ -1245,8 +1251,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     assert "review_suite_result" in get_in(missing_response, ["error", "data", "missing"])
     assert "review_lanes_complete" in get_in(missing_response, ["error", "data", "missing"])
 
-    result_response = attach_tool(repo, session, "attach_review_suite_result", %{"round_id" => "rvw_minimal_clean"})
-    payload = response_progress_payload(repo, result_response)
+    ready_response =
+      MCPHarness.request(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "ready-after-minimal-round",
+          "method" => "tools/call",
+          "params" => %{"name" => "mark_ready", "arguments" => %{"review_suite_round_id" => "rvw_minimal_clean"}}
+        },
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
+
+    assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, package.id)
+
+    payload =
+      progress_events
+      |> Enum.find_value(fn event ->
+        case event.payload do
+          %{"source_tool" => "attach_review_suite_result"} = payload -> payload
+          _payload -> nil
+        end
+      end)
 
     assert payload["work_package_id"] == package.id
     assert payload["head_sha"] == head_sha
@@ -1260,15 +1288,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     assert payload["profile"] == "deep"
     assert payload["base_branch"] == package.base_branch
     assert payload["branch"] == branch
-
-    ready_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-after-minimal-round", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
   end
 
   test "minimal Review Suite round id accepts review green status aliases", %{repo: repo} do
@@ -1504,6 +1523,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                WorkPackageFactory.attrs(id: "SYMPP-REVIEW-SUITE-EXACT-FAIL", kind: "quick_fix", status: "ci_waiting")
              )
 
+    require_review_lanes!(repo, package, ["brief"])
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -1586,6 +1606,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                WorkPackageFactory.attrs(id: "SYMPP-REVIEW-SUITE-STRONGER-FAIL", kind: "quick_fix", status: "ci_waiting")
              )
 
+    require_review_lanes!(repo, package, ["deep"])
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -1668,6 +1689,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                WorkPackageFactory.attrs(id: "SYMPP-REVIEW-SUITE-WEAKER-PASS-STRONGER-FAIL", kind: "quick_fix", status: "ci_waiting")
              )
 
+    require_review_lanes!(repo, package, ["normal"])
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -2253,6 +2275,43 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
       repo: repo,
       session: session
     )
+  end
+
+  defp require_review_lanes!(repo, package, lanes) do
+    work_request_id = "WR-#{package.id}"
+    planned_slice_id = "WRS-#{package.id}"
+    now = DateTime.utc_now()
+
+    create_work_request!(
+      repo,
+      id: work_request_id,
+      status: "ready_for_slicing",
+      repo: package.repo,
+      base_branch: package.base_branch
+    )
+
+    repo.insert!(%SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice{
+      id: planned_slice_id,
+      work_request_id: work_request_id,
+      sequence: 1,
+      title: "Require Review Suite profile",
+      goal: "Test readiness behavior for an explicitly planned Review Suite profile.",
+      work_package_kind: package.kind,
+      target_base_branch: package.base_branch,
+      branch_pattern: package.branch_pattern || "agent/#{package.id}/worker",
+      owned_file_globs: ["elixir/lib/**"],
+      forbidden_file_globs: [],
+      acceptance_criteria: ["Review evidence satisfies the planned profile."],
+      validation_steps: ["mix test"],
+      review_lanes: lanes,
+      stop_conditions: ["Stop before unrelated work."],
+      status: "dispatched",
+      work_package_id: package.id,
+      inserted_at: now,
+      updated_at: now
+    })
+
+    :ok
   end
 
   defp restore_review_suite_state_dir(nil), do: Application.delete_env(:symphony_elixir, :sympp_review_suite_state_dir)

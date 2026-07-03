@@ -113,7 +113,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     tool_schemas = Map.new(contract["tool_schemas"], &{&1["name"], &1})
 
     assert "blocker_closeout" in get_in(tool_schemas, ["set_status", "optional_arguments"])
-    assert get_in(tool_schemas, ["mark_ready", "optional_arguments"]) == ["blocker_closeout"]
+    assert get_in(tool_schemas, ["mark_ready", "optional_arguments"]) == ["blocker_closeout", "review_suite_round_id"]
     assert get_in(tool_schemas, ["attach_review_suite_result", "happy_path_arguments"]) == ["round_id"]
 
     assert get_in(tool_schemas, ["attach_branch", "worker_required_arguments_by_branch_pattern", "literal"]) == ["head_sha"]

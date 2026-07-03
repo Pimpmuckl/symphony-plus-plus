@@ -84,10 +84,12 @@ S++ explicitly gives scoped context.
   `merge_state` when they changed; use explicit `url`/`number` or `recovery`
   only when repairing missing attachment evidence.
 - `submit_review_package(summary, tests, artifacts)` after branch metadata is
-  current; include required review verdicts when Review Suite evidence will not
+  current; include review verdicts only when Review Suite evidence will not
   supply them.
-- `attach_review_suite_result(round_id)` for passing local Review Suite
-  evidence; verbose fields remain fallback when no local round can be resolved.
+- Prefer `mark_ready(review_suite_round_id)` when the package is otherwise
+  ready and you have a passing local Review Suite round. Use
+  `attach_review_suite_result(round_id)` only when recording review evidence
+  before the finish call.
 
 Run the required Review Suite profile. If unavailable, use the package-approved
 provider and record review progress. After material changes, rerun the same

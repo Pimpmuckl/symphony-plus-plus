@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewProfiles do
   @passing_statuses ["passed", "pass", "green", "success"]
   @passing_verdicts ["green", "clean", "passed", "pass", "success", "approved"]
   @profile_order ["brief", "normal", "deep"]
+  @review_suite_profiles ["brief", "normal", "deep", "emergency"]
   @profile_aliases %{
     "github" => "github",
     "github review" => "github",
@@ -33,6 +34,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewProfiles do
   @spec passing_verdicts() :: [String.t()]
   def passing_verdicts, do: @passing_verdicts
 
+  @spec review_suite_profiles() :: [String.t()]
+  def review_suite_profiles, do: @review_suite_profiles
+
   @spec passing_status?(term()) :: boolean()
   def passing_status?(status), do: normalize_status(status) in @passing_statuses
 
@@ -50,6 +54,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewProfiles do
   end
 
   def normalize_profiles(_profiles), do: []
+
+  @spec normalize_review_suite_profiles(term()) :: [String.t()]
+  def normalize_review_suite_profiles(nil), do: []
+
+  def normalize_review_suite_profiles(profiles) when is_list(profiles) do
+    profiles
+    |> Enum.map(&normalize_review_suite_profile/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  def normalize_review_suite_profiles(_profiles), do: []
+
+  @spec normalize_review_suite_profile(term()) :: String.t() | nil
+  def normalize_review_suite_profile(profile) do
+    case normalize_profile(profile) do
+      profile when profile in @review_suite_profiles -> profile
+      _profile -> nil
+    end
+  end
 
   @spec normalize_profile(term()) :: String.t() | nil
   def normalize_profile(profile) when is_binary(profile) do

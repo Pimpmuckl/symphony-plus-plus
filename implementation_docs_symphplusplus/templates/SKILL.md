@@ -80,8 +80,10 @@ other compact labels plain.
   `recovery` only for repair.
 - Submit review evidence with `submit_review_package(summary, tests, artifacts)`
   after branch metadata is current.
-- Attach passing local Review Suite evidence with
-  `attach_review_suite_result(round_id)`.
+- Prefer `mark_ready(review_suite_round_id)` when the package is otherwise
+  ready and a passing local Review Suite round is available. Use
+  `attach_review_suite_result(round_id)` only when recording review evidence
+  before the finish call.
 - If Review Suite is installed, run the current orchestrator with the required
   profile: `review.py --mode brief|normal|deep|emergency`.
 - If Review Suite is not installed, use the package-approved review provider

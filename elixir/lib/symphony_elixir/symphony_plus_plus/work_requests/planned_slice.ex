@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
 
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
   alias SymphonyElixir.SymphonyPlusPlus.Id
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.StringList
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -134,6 +135,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
     |> validate_inclusion(:work_package_kind, WorkPackage.planned_slice_kinds())
     |> validate_inclusion(:status, @statuses)
     |> validate_branch_pattern()
+    |> validate_review_lanes()
+    |> canonicalize_review_lanes()
   end
 
   defp validate_create_status(changeset) do
@@ -154,6 +157,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
       end
     end)
   end
+
+  defp validate_review_lanes(changeset) do
+    validate_change(changeset, :review_lanes, fn :review_lanes, lanes ->
+      if Enum.all?(lanes, &ReviewProfiles.normalize_review_suite_profile/1) do
+        []
+      else
+        [review_lanes: "must be one of: #{Enum.join(ReviewProfiles.review_suite_profiles(), ", ")}"]
+      end
+    end)
+  end
+
+  defp canonicalize_review_lanes(%Ecto.Changeset{valid?: true} = changeset) do
+    update_change(changeset, :review_lanes, &ReviewProfiles.normalize_review_suite_profiles/1)
+  end
+
+  defp canonicalize_review_lanes(changeset), do: changeset
 
   defp put_new_list_values(attrs) do
     Enum.reduce(@list_fields, attrs, fn field, acc -> put_new_value(acc, Atom.to_string(field), []) end)
