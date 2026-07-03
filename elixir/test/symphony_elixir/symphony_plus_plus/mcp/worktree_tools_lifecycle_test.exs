@@ -172,9 +172,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
       assert comparable_path(prepare_payload["worktree"]["target_repo_root"]) == comparable_path(fixture.repo_root)
       assert prepare_payload["worker_launch"]["workspace_path"] == prepare_payload["worktree"]["path"]
       assert prepare_payload["worker_launch"]["instruction"] =~ "Use this worktree only"
-      assert prepare_payload["audit_event"]["payload"]["source_tool"] == "prepare_work_package_worktree"
-      assert prepare_payload["audit_event"]["payload"]["worktree_path"] == "[REDACTED]"
-      assert prepare_payload["audit_event"]["payload"]["target_repo_root"] == "[REDACTED]"
+      assert is_binary(prepare_payload["audit_event"]["id"])
+      refute Map.has_key?(prepare_payload["audit_event"], "payload")
       assert File.dir?(prepare_payload["worktree"]["path"])
 
       same_origin_cleanup_response =
@@ -250,9 +249,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
       assert cleanup_payload["worktree"]["status"] == "cleaned"
       assert cleanup_payload["audit_event"]["summary"] == "Success removing worktree. Subagent can be closed now."
       assert cleanup_payload["work_package"]["worktree_path"] == nil
-      assert cleanup_payload["audit_event"]["payload"]["source_tool"] == "cleanup_work_package_worktree"
-      assert cleanup_payload["audit_event"]["payload"]["worktree_path"] == "[REDACTED]"
-      assert cleanup_payload["audit_event"]["payload"]["target_repo_root"] == "[REDACTED]"
+      assert is_binary(cleanup_payload["audit_event"]["id"])
+      refute Map.has_key?(cleanup_payload["audit_event"], "payload")
       refute File.exists?(prepare_payload["worktree"]["path"])
       assert %ClaimLease{status: "released", release_reason: "work_request_runtime_cleanup"} = repo.get!(ClaimLease, cleanup_claim_lease.id)
       refute repo.get(SessionBinding, cleanup_binding.id)
@@ -317,8 +315,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
       stale_cleanup_payload = get_in(stale_cleanup_response, ["result", "structuredContent"])
       assert stale_cleanup_payload["worktree"]["status"] == "stale_record_cleared"
       assert stale_cleanup_payload["work_package"]["worktree_path"] == nil
-      assert stale_cleanup_payload["audit_event"]["payload"]["source_tool"] == "cleanup_work_package_worktree"
-      assert stale_cleanup_payload["audit_event"]["payload"]["status"] == "stale_record_cleared"
+      assert is_binary(stale_cleanup_payload["audit_event"]["id"])
+      refute Map.has_key?(stale_cleanup_payload["audit_event"], "payload")
       assert %ClaimLease{status: "paused"} = repo.get!(ClaimLease, paused_stale_cleanup_claim_lease.id)
     after
       restore_env("CODEX_HOME", previous_codex_home)
@@ -342,5 +340,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeToolsLifecycleTest do
              "cleanup_work_package_worktree",
              "cleanup_work_package_worktree"
            ]
+
+    assert %{
+             "source_tool" => "prepare_work_package_worktree",
+             "worktree_path" => "[REDACTED]",
+             "target_repo_root" => "[REDACTED]"
+           } = Enum.find(events, &(&1.payload["source_tool"] == "prepare_work_package_worktree")).payload
+
+    assert %{
+             "source_tool" => "cleanup_work_package_worktree",
+             "worktree_path" => "[REDACTED]",
+             "target_repo_root" => "[REDACTED]"
+           } = Enum.find(events, &(&1.payload["source_tool"] == "cleanup_work_package_worktree" and &1.status == "cleaned")).payload
+
+    assert %{
+             "source_tool" => "cleanup_work_package_worktree",
+             "status" => "stale_record_cleared"
+           } =
+             Enum.find(
+               events,
+               &(&1.payload["source_tool"] == "cleanup_work_package_worktree" and &1.status == "stale_record_cleared")
+             ).payload
   end
 end

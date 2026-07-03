@@ -400,16 +400,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
           "dispatch:work_request"
         ])
 
+      evidence = typed_delivery_evidence(repo, work_request, outcome, suffix)
+
       response =
         mcp_tool(repo, session, "record_planned_slice_delivery", %{
           "work_request_id" => work_request.id,
           "planned_slice_id" => planned_slice.id,
           "outcome" => outcome,
           "idempotency_key" => "typed-delivery-#{String.downcase(suffix)}",
-          "evidence" => typed_delivery_evidence(repo, work_request, outcome, suffix)
+          "evidence" => evidence
         })
 
       assert get_in(response, ["result", "structuredContent", "planned_slice_delivery", "outcome"]) == outcome
+
+      if outcome == "superseded" do
+        assert get_in(response, ["result", "structuredContent", "planned_slice_delivery", "successor_work_package_id"]) ==
+                 get_in(evidence, ["superseded", "successor_work_package_id"])
+      end
+
       assert repo.get!(WorkPackage, work_package.id).status == expected_package_status
     end
 
@@ -1896,9 +1904,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
                )
              )
 
+    assert {:ok, approved_successor} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, successor.id, "planned")
+
+    successor_work_package =
+      [
+        id: "WP-MCP-DELIVERY-SUCCESSOR-#{suffix}",
+        title: approved_successor.title,
+        kind: approved_successor.work_package_kind,
+        repo: work_request.repo,
+        base_branch: approved_successor.target_base_branch,
+        branch_pattern: approved_successor.branch_pattern,
+        product_description: work_request.human_description,
+        allowed_file_globs: approved_successor.owned_file_globs,
+        acceptance_criteria: approved_successor.acceptance_criteria,
+        status: "ready_for_worker"
+      ]
+      |> WorkPackageFactory.attrs()
+      |> then(&WorkPackageRepository.create(repo, &1))
+      |> case do
+        {:ok, work_package} -> work_package
+        {:error, reason} -> flunk("failed to create successor WorkPackage: #{inspect(reason)}")
+      end
+
+    assert {:ok, dispatched_successor} =
+             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_successor.id, "approved", successor_work_package.id)
+
     %{
       "superseded" => %{
-        "successor_planned_slice_id" => successor.id,
+        "successor_planned_slice_id" => dispatched_successor.id,
+        "successor_work_package_id" => successor_work_package.id,
         "superseded_reason" => "Recut into a narrower planned slice."
       }
     }

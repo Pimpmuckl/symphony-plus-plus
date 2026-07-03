@@ -14591,7 +14591,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     do: {key, compact_status_payload(value, ["id", "work_request_id", "planned_slice_id", "product_tree_node_id", "position"])}
 
   defp compact_tool_entry("planned_slice_delivery", key, value),
-    do: {key, compact_status_payload(value, ["id", "work_request_id", "planned_slice_id", "outcome", "recorded_by", "pr_url", "successor_planned_slice_id"])}
+    do:
+      {key,
+       compact_status_payload(value, [
+         "id",
+         "work_request_id",
+         "planned_slice_id",
+         "outcome",
+         "recorded_by",
+         "pr_url",
+         "successor_planned_slice_id",
+         "successor_work_package_id"
+       ])}
 
   defp compact_tool_entry("delivery_board", key, value), do: {key, compact_status_payload(value, ["counts"])}
 
