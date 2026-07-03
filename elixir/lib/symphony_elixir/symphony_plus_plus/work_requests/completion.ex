@@ -514,8 +514,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
         {:ok, nil} -> {:cont, {:ok, deleted_ids}}
         {:ok, deleted_id} -> {:cont, {:ok, [deleted_id | deleted_ids]}}
         {:error, :not_completed} -> {:cont, {:ok, deleted_ids}}
-        {:error, :active_runtime} -> {:cont, {:ok, deleted_ids}}
-        {:error, reason} -> {:halt, {:error, reason}}
+        {:error, reason} -> maybe_skip_archived_cleanup_error(reason, deleted_ids)
       end
     end)
     |> case do
@@ -828,7 +827,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   defp closeout_worktree_cleanup_error({:constraint_failed, _constraint} = reason), do: reason
   defp closeout_worktree_cleanup_error({:storage_failed, _message} = reason), do: reason
   defp closeout_worktree_cleanup_error(%Ecto.Changeset{} = reason), do: reason
-  defp closeout_worktree_cleanup_error(_reason), do: :active_runtime
+  defp closeout_worktree_cleanup_error(reason), do: reason
+
+  defp maybe_skip_archived_cleanup_error(reason, deleted_ids) do
+    if hard_archived_cleanup_error?(reason) do
+      {:halt, {:error, reason}}
+    else
+      {:cont, {:ok, deleted_ids}}
+    end
+  end
+
+  defp hard_archived_cleanup_error?(:database_busy), do: true
+  defp hard_archived_cleanup_error?({:constraint_failed, _constraint}), do: true
+  defp hard_archived_cleanup_error?({:storage_failed, _message}), do: true
+  defp hard_archived_cleanup_error?(%Ecto.Changeset{}), do: true
+  defp hard_archived_cleanup_error?(_reason), do: false
 
   defp archive_update_result({1, _rows}, repo, id) do
     with {:ok, %WorkRequest{} = current} <- Repository.get(repo, id) do
