@@ -372,8 +372,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
              })
 
     reconcile_response = mcp_tool(repo, session, "reconcile_work_request", %{"apply" => true})
-    assert get_in(reconcile_response, ["result", "structuredContent", "reconciliation", "applied_count"]) == 1
-    assert get_in(reconcile_response, ["result", "structuredContent", "delivery_board", "counts", "delivered"]) == 1
+    assert get_in(reconcile_response, ["result", "structuredContent", "next_action"]) == "sliced"
+    assert is_map(get_in(reconcile_response, ["result", "structuredContent", "delivery_board", "counts"]))
+    refute Map.has_key?(get_in(reconcile_response, ["result", "structuredContent", "delivery_board"]), "slices")
     assert repo.get!(WorkPackage, work_package_id).status == "merged"
   end
 
@@ -1048,9 +1049,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     question_id = get_in(ask_payload, ["clarification_question", "id"])
     assert is_binary(question_id)
     assert get_in(ask_payload, ["clarification_question", "status"]) == "open"
-    assert get_in(ask_payload, ["clarification_question", "asked_by_agent_run_id"]) == "[REDACTED]"
-    assert get_in(ask_payload, ["clarification_question", "decision_prompt", "tl_dr"]) == "Choose whether to continue."
-    assert get_in(ask_payload, ["clarification_question", "decision_prompt", "options", Access.at(0), "answer"]) == "Continue without [REDACTED]."
+    refute Map.has_key?(ask_payload["clarification_question"], "asked_by_agent_run_id")
+    refute Map.has_key?(ask_payload["clarification_question"], "decision_prompt")
     assert MapSet.new(Map.keys(ask_payload["work_request"])) == MapSet.new(["id", "status", "updated_at"])
     refute inspect(ask_response) =~ "raw_secret_value"
 
@@ -1087,7 +1087,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     answer_payload = get_in(answer_response, ["result", "structuredContent"])
     assert get_in(answer_payload, ["clarification_question", "status"]) == "answered"
-    assert get_in(answer_payload, ["clarification_question", "answered_by"]) == "architect-1"
+    refute Map.has_key?(answer_payload["clarification_question"], "answered_by")
     refute inspect(answer_response) =~ "raw_secret_value"
 
     close_ask_response =
@@ -1132,8 +1132,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     combined_payload = get_in(combined_response, ["result", "structuredContent"])
     assert get_in(combined_payload, ["clarification_question", "status"]) == "answered"
+    assert is_binary(get_in(combined_payload, ["decision_log_entry", "id"]))
     assert get_in(combined_payload, ["decision_log_entry", "source_id"]) == combined_question_id
-    assert get_in(combined_payload, ["decision_log_entry", "created_by"]) == "architect-1"
 
     decision_response =
       mcp_tool(repo, session, "record_work_request_decision", %{
@@ -1147,6 +1147,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       })
 
     decision_payload = get_in(decision_response, ["result", "structuredContent"])
+    assert is_binary(get_in(decision_payload, ["decision_log_entry", "id"]))
     assert get_in(decision_payload, ["decision_log_entry", "source_id"]) == "comment-1"
     assert decision_payload["status"] == %{"work_request_status" => "clarifying"}
     refute inspect(decision_response) =~ "raw_secret_value"
@@ -1337,10 +1338,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert add_payload["scope"] == %{"repo" => anchor.repo, "base_branch" => anchor.base_branch}
     assert add_payload["work_request"]["status"] == "ready_for_slicing"
     assert get_in(add_payload, ["planned_slice", "status"]) == "planned"
-    assert get_in(add_payload, ["planned_slice", "owned_file_globs"]) == ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"]
-    assert get_in(add_payload, ["planned_slice", "forbidden_file_globs"]) == []
-    assert get_in(add_payload, ["planned_slice", "branch_pattern"]) == nil
-    assert get_in(add_payload, ["planned_slice", "review_lanes"]) == ["brief", "[REDACTED]", "normal"]
+    refute Map.has_key?(add_payload["planned_slice"], "owned_file_globs")
+    refute Map.has_key?(add_payload["planned_slice"], "acceptance_criteria")
+    refute Map.has_key?(add_payload["planned_slice"], "review_lanes")
     assert add_payload["status"] == %{"work_request_status" => "ready_for_slicing", "planned_slice_status" => "planned"}
     refute inspect(add_response) =~ "raw_secret_value"
 
@@ -1383,7 +1383,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     skip_payload = get_in(skip_response, ["result", "structuredContent"])
     assert get_in(skip_payload, ["planned_slice", "status"]) == "skipped"
-    assert get_in(skip_payload, ["planned_slice", "branch_pattern"]) == "agent/SYMPP-V2-WR-015/skipped"
+    refute Map.has_key?(skip_payload["planned_slice"], "branch_pattern")
 
     mark_response =
       mcp_tool(repo, session, "mark_work_request_sliced", %{
@@ -1444,10 +1444,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     product_tree_node_id = get_in(node_payload, ["product_plan_node", "id"])
 
     assert is_binary(product_tree_node_id)
-    assert get_in(node_payload, ["product_plan_node", "title"]) == "Backend product layer"
-    assert get_in(node_payload, ["product_tree", "mode"]) == "product_tree"
-    assert get_in(node_payload, ["product_tree", "root_node_ids"]) == [product_tree_node_id]
-    assert get_in(node_payload, ["product_tree", "latest_revision", "revision_number"]) == 1
+    refute Map.has_key?(node_payload["product_plan_node"], "title")
+    refute Map.has_key?(node_payload, "product_tree")
     assert node_payload["scope"] == %{"repo" => anchor.repo, "base_branch" => anchor.base_branch}
 
     positioned_node_response =
@@ -1458,7 +1456,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       })
 
     assert get_in(positioned_node_response, ["result", "structuredContent", "product_plan_node", "position"]) == 2
-    assert get_in(positioned_node_response, ["result", "structuredContent", "product_tree", "latest_revision", "revision_number"]) == 2
+    refute Map.has_key?(get_in(positioned_node_response, ["result", "structuredContent"]), "product_tree")
 
     child_response =
       mcp_tool(repo, session, "upsert_work_request_product_plan_node_content", %{
@@ -1476,7 +1474,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       })
 
     assert get_in(nested_child_response, ["result", "structuredContent", "product_plan_node", "parent_id"]) == product_tree_node_id
-    assert get_in(nested_child_response, ["result", "structuredContent", "product_tree", "latest_revision", "revision_number"]) == 4
+    refute Map.has_key?(get_in(nested_child_response, ["result", "structuredContent"]), "product_tree")
 
     root_child_response =
       mcp_tool(repo, session, "move_work_request_product_plan_node", %{
@@ -1486,8 +1484,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       })
 
     assert get_in(root_child_response, ["result", "structuredContent", "product_plan_node", "parent_id"]) == nil
-    assert Enum.sort(get_in(root_child_response, ["result", "structuredContent", "product_tree", "root_node_ids"])) == Enum.sort([product_tree_node_id, child_node_id])
-    assert get_in(root_child_response, ["result", "structuredContent", "product_tree", "latest_revision", "revision_number"]) == 5
+    refute Map.has_key?(get_in(root_child_response, ["result", "structuredContent"]), "product_tree")
 
     nested_again_response =
       mcp_tool(repo, session, "move_work_request_product_plan_node", %{
@@ -1515,8 +1512,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       })
 
     assert get_in(explicit_root_response, ["result", "structuredContent", "product_plan_node", "parent_id"]) == nil
-    assert Enum.sort(get_in(explicit_root_response, ["result", "structuredContent", "product_tree", "root_node_ids"])) == Enum.sort([product_tree_node_id, child_node_id])
-    assert get_in(explicit_root_response, ["result", "structuredContent", "product_tree", "latest_revision", "revision_number"]) == 8
+    refute Map.has_key?(get_in(explicit_root_response, ["result", "structuredContent"]), "product_tree")
 
     move_response =
       mcp_tool(repo, session, "move_work_request_planned_slice_to_product_node", %{
@@ -1533,11 +1529,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert link_payload["product_tree_node_id"] == product_tree_node_id
     assert link_payload["position"] == 3
     assert get_in(move_payload, ["status", "slice_product_tree_location"]) == "product_plan_node"
-    assert get_in(move_payload, ["product_tree", "latest_revision", "revision_number"]) == 9
-
-    moved_nodes_by_id = Map.new(move_payload["product_tree"]["nodes"], &{&1["id"], &1})
-    assert moved_nodes_by_id[product_tree_node_id]["slice_ids"] == [planned_slice.id]
-    assert get_in(move_payload, ["product_tree", "root_slice_ids"]) == []
+    refute Map.has_key?(move_payload, "product_tree")
 
     approve_response =
       mcp_tool(repo, session, "approve_work_request_planned_slice", %{
@@ -1647,8 +1639,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     assert direct_payload["product_tree_slice_link"] == nil
     assert get_in(direct_payload, ["status", "slice_product_tree_location"]) == "direct"
-    assert get_in(direct_payload, ["product_tree", "root_slice_ids"]) == [planned_slice.id]
-    assert get_in(direct_payload, ["product_tree", "latest_revision", "revision_number"]) == 10
+    refute Map.has_key?(direct_payload, "product_tree")
+
+    direct_read_response =
+      mcp_tool(repo, session, "read_work_request_product_tree", %{
+        "work_request_id" => work_request.id,
+        "view" => "nodes_with_slice_refs"
+      })
+
+    assert get_in(direct_read_response, ["result", "structuredContent", "product_tree", "root_slice_ids"]) == [planned_slice.id]
   end
 
   test "architect WorkRequest product tree tools require authoring status", %{repo: repo} do

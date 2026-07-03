@@ -154,7 +154,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
     assert repo.get(SessionBinding, non_worker_binding.id)
     assert repo.get(SessionBinding, other_binding.id)
 
-    event_payload = get_in(cleanup_payload, ["audit_event", "payload"])
+    assert is_binary(get_in(cleanup_payload, ["audit_event", "id"]))
+
+    event_payload =
+      repo.all(ProgressEvent)
+      |> Enum.map(& &1.payload)
+      |> Enum.find(&(&1["source_tool"] == "cleanup_work_request_planned_slice_runtime"))
+
     assert event_payload["source_tool"] == "cleanup_work_request_planned_slice_runtime"
     assert event_payload["work_request_id"] == work_request.id
     assert event_payload["planned_slice_id"] == planned_slice.id

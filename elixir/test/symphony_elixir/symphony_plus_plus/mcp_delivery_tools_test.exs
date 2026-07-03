@@ -118,11 +118,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     closeout_payload = get_in(closeout_response, ["result", "structuredContent"])
 
     assert closeout_payload["planned_slice_delivery"]["outcome"] == "completed_no_pr"
-    assert closeout_payload["planned_slice_delivery"]["no_pr_evidence"] =~ "[REDACTED]"
-    refute closeout_payload["planned_slice_delivery"]["no_pr_evidence"] =~ evidence_query_value
-    assert get_in(closeout_payload, ["delivery_board", "counts", "completed_no_pr"]) == 1
+    refute Map.has_key?(closeout_payload["planned_slice_delivery"], "no_pr_evidence")
+    refute inspect(closeout_response) =~ evidence_query_value
 
-    assert get_in(closeout_payload, [
+    read_closed_response =
+      mcp_tool(repo, session, "read_work_request_delivery_board", %{
+        "work_request_id" => work_request.id
+      })
+
+    assert get_in(read_closed_response, [
+             "result",
+             "structuredContent",
+             "delivery_board",
+             "counts",
+             "completed_no_pr"
+           ]) == 1
+
+    assert get_in(read_closed_response, [
+             "result",
+             "structuredContent",
              "delivery_board",
              "slices",
              Access.at(0),
@@ -138,8 +152,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       "no_pr_evidence"
     ]
 
-    assert get_in(closeout_payload, delivery_evidence_path) =~ "[REDACTED]"
-    refute get_in(closeout_payload, delivery_evidence_path) =~ evidence_query_value
+    assert get_in(read_closed_response, ["result", "structuredContent" | delivery_evidence_path]) =~ "[REDACTED]"
+    refute get_in(read_closed_response, ["result", "structuredContent" | delivery_evidence_path]) =~ evidence_query_value
     assert repo.get!(WorkPackage, linked_package.id).status == "closed"
 
     replay_response = record_delivery(repo, session, closeout_args)
@@ -147,12 +161,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert get_in(replay_response, ["result", "structuredContent", "planned_slice_delivery", "id"]) ==
              closeout_payload["planned_slice_delivery"]["id"]
 
-    read_after_closeout =
-      mcp_tool(repo, session, "read_work_request_delivery_board", %{
-        "work_request_id" => work_request.id
-      })
-
-    refute get_in(read_after_closeout, ["result", "structuredContent" | delivery_evidence_path]) =~
+    refute get_in(read_closed_response, ["result", "structuredContent" | delivery_evidence_path]) =~
              evidence_query_value
 
     assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 1
@@ -240,9 +249,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     closeout_payload = get_in(closeout_response, ["result", "structuredContent"])
     assert closeout_payload["planned_slice_delivery"]["outcome"] == "completed_no_pr"
-    assert get_in(closeout_payload, ["delivery_board", "counts", "completed_no_pr"]) == 1
 
-    assert get_in(closeout_payload, [
+    read_closed_response =
+      mcp_tool(repo, session, "read_work_request_delivery_board", %{
+        "work_request_id" => work_request.id
+      })
+
+    assert get_in(read_closed_response, [
+             "result",
+             "structuredContent",
+             "delivery_board",
+             "counts",
+             "completed_no_pr"
+           ]) == 1
+
+    assert get_in(read_closed_response, [
+             "result",
+             "structuredContent",
              "delivery_board",
              "slices",
              Access.at(0),
@@ -424,6 +447,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert get_in(apply_payload, ["reconciliation", "mode"]) == "apply"
     assert get_in(apply_payload, ["reconciliation", "applied_count"]) == 1
     assert get_in(apply_payload, ["delivery_board", "counts", "delivered"]) == 1
+    refute Map.has_key?(apply_payload["delivery_board"], "slices")
     assert repo.get!(WorkPackage, linked_package.id).status == "merged"
     assert repo.get!(AccessGrant, minted.grant.id).revoked_at
   end
@@ -804,25 +828,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     assert closeout_payload["planned_slice_delivery"]["outcome"] == "completed_no_pr"
 
-    assert get_in(closeout_payload, [
-             "delivery_board",
-             "slices",
-             Access.at(0),
-             "work_package",
-             "id"
-           ]) == linked_package.id
-
-    assert get_in(closeout_payload, [
-             "delivery_board",
-             "slices",
-             Access.at(0),
-             "work_package",
-             "base_branch"
-           ]) == delivery_base
-
     assert repo.get!(AccessGrant, minted.grant.id).revoked_at
 
-    assert repo.get!(WorkPackage, linked_package.id).status == "closed"
+    closed_package = repo.get!(WorkPackage, linked_package.id)
+    assert closed_package.status == "closed"
+    assert closed_package.base_branch == delivery_base
 
     closeout_event =
       Enum.find(
@@ -1201,7 +1211,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert get_in(response, ["error", "data", "reason"]) ==
              "successor_work_package_slice_mismatch"
 
-    success_response =
+    _success_response =
       record_delivery(
         repo,
         session,
@@ -1215,17 +1225,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         )
       )
 
-    assert get_in(success_response, [
-             "result",
-             "structuredContent",
-             "delivery_board",
-             "slices",
-             Access.at(0),
-             "successor",
-             "work_package",
-             "id"
-           ]) ==
-             successor_package.id
+    assert [delivery] =
+             PlannedSliceDelivery
+             |> repo.all()
+             |> Enum.filter(&(&1.planned_slice_id == planned_slice.id))
+
+    assert delivery.successor_work_package_id == successor_package.id
   end
 
   test "superseded closeout returns structured error for duplicate successor package links", %{
