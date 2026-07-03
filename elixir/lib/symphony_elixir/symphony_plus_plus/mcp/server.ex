@@ -8,7 +8,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Assignment
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
-  alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.ActorResolver
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
@@ -34,7 +33,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Auth,
-    ClaimToolText,
     Config,
     CurrentWorkRequest,
     HandleStateStore,
@@ -43,9 +41,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     LocalTrustedTools,
     PlannedSliceWorkerRevoke,
     Repository,
+    Response,
     Session,
     SoloTools,
-    ToolCatalog
+    ToolCatalog,
+    ToolResult
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
@@ -241,10 +241,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   def handle_state(payloads, %__MODULE__{} = server) when is_list(payloads) do
     cond do
       payloads == [] ->
-        {error_response(nil, -32_600, "Invalid Request", %{"reason" => "empty_batch"}), server}
+        {Response.error(nil, -32_600, "Invalid Request", %{"reason" => "empty_batch"}), server}
 
       Enum.any?(payloads, &initialize_request?/1) ->
-        {error_response(nil, -32_600, "Invalid Request", %{"reason" => "initialize_must_be_standalone"}), server}
+        {Response.error(nil, -32_600, "Invalid Request", %{"reason" => "initialize_must_be_standalone"}), server}
 
       true ->
         handle_batch(payloads, server)
@@ -300,12 +300,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     do: {nil, dispatch_notification(params_result, "tools/call", server)}
 
   defp do_handle([], %__MODULE__{}) do
-    error_response(nil, -32_600, "Invalid Request", %{"reason" => "empty_batch"})
+    Response.error(nil, -32_600, "Invalid Request", %{"reason" => "empty_batch"})
   end
 
   defp do_handle(payloads, %__MODULE__{} = server) when is_list(payloads) do
     if Enum.any?(payloads, &initialize_request?/1) do
-      error_response(nil, -32_600, "Invalid Request", %{"reason" => "initialize_must_be_standalone"})
+      Response.error(nil, -32_600, "Invalid Request", %{"reason" => "initialize_must_be_standalone"})
     else
       handle_batch(payloads, server)
       |> elem(0)
@@ -313,21 +313,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp do_handle(%{"id" => id}, %__MODULE__{}) when invalid_request_id(id) do
-    error_response(nil, -32_600, "Invalid Request", %{"reason" => "invalid_request_id"})
+    Response.error(nil, -32_600, "Invalid Request", %{"reason" => "invalid_request_id"})
   end
 
   defp do_handle(%{"jsonrpc" => "2.0", "id" => id}, %__MODULE__{}) when invalid_request_id(id) do
-    error_response(nil, -32_600, "Invalid Request", %{"reason" => "invalid_request_id"})
+    Response.error(nil, -32_600, "Invalid Request", %{"reason" => "invalid_request_id"})
   end
 
   defp do_handle(%{"jsonrpc" => "2.0", "id" => id, "method" => method}, %__MODULE__{initialized: false})
        when is_binary(method) and method != "initialize" and valid_request_id(id) do
-    error_response(id, -32_000, "Server error", %{"reason" => "server_not_initialized"})
+    Response.error(id, -32_000, "Server error", %{"reason" => "server_not_initialized"})
   end
 
   defp do_handle(%{"jsonrpc" => "2.0", "id" => id, "method" => "initialize"}, %__MODULE__{initialized: true})
        when valid_request_id(id) do
-    error_response(id, -32_600, "Invalid Request", %{"reason" => "already_initialized"})
+    Response.error(id, -32_600, "Invalid Request", %{"reason" => "already_initialized"})
   end
 
   defp do_handle(%{"jsonrpc" => "2.0", "id" => id, "method" => method} = request, %__MODULE__{} = server)
@@ -338,49 +338,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp do_handle(%{"jsonrpc" => "2.0", "id" => _id, "method" => method}, %__MODULE__{}) when is_binary(method) do
-    error_response(nil, -32_600, "Invalid Request", %{"reason" => "invalid_request_id"})
+    Response.error(nil, -32_600, "Invalid Request", %{"reason" => "invalid_request_id"})
   end
 
   defp do_handle(%{"jsonrpc" => "2.0", "id" => id, "method" => _method}, %__MODULE__{}) when valid_request_id(id) do
-    error_response(id, -32_600, "Invalid Request", %{"reason" => "invalid_method"})
+    Response.error(id, -32_600, "Invalid Request", %{"reason" => "invalid_method"})
   end
 
   defp do_handle(%{"jsonrpc" => "2.0", "method" => "initialize"}, %__MODULE__{}) do
-    error_response(nil, -32_600, "Invalid Request", %{"reason" => "initialize_requires_id"})
+    Response.error(nil, -32_600, "Invalid Request", %{"reason" => "initialize_requires_id"})
   end
 
   defp do_handle(%{"jsonrpc" => "2.0", "method" => method} = notification, %__MODULE__{}) when is_binary(method) do
     if Map.has_key?(notification, "id") do
-      error_response(nil, -32_600, "Invalid Request", %{"reason" => "invalid_request_id"})
+      Response.error(nil, -32_600, "Invalid Request", %{"reason" => "invalid_request_id"})
     end
   end
 
   defp do_handle(%{"jsonrpc" => "2.0", "id" => id}, %__MODULE__{}) when valid_request_id(id) do
-    error_response(id, -32_600, "Invalid Request", %{"reason" => "missing_method"})
+    Response.error(id, -32_600, "Invalid Request", %{"reason" => "missing_method"})
   end
 
   defp do_handle(%{"jsonrpc" => version, "id" => id}, %__MODULE__{}) when version != "2.0" and valid_request_id(id) do
-    error_response(id, -32_600, "Invalid Request", %{"reason" => "invalid_jsonrpc_version"})
+    Response.error(id, -32_600, "Invalid Request", %{"reason" => "invalid_jsonrpc_version"})
   end
 
   defp do_handle(%{"jsonrpc" => version}, %__MODULE__{}) when version != "2.0" do
-    error_response(nil, -32_600, "Invalid Request", %{"reason" => "invalid_jsonrpc_version"})
+    Response.error(nil, -32_600, "Invalid Request", %{"reason" => "invalid_jsonrpc_version"})
   end
 
   defp do_handle(%{"id" => id, "method" => method}, %__MODULE__{}) when is_binary(method) do
-    error_response(id, -32_600, "Invalid Request", %{"reason" => "invalid_jsonrpc_version"})
+    Response.error(id, -32_600, "Invalid Request", %{"reason" => "invalid_jsonrpc_version"})
   end
 
   defp do_handle(%{"id" => id, "method" => _method}, %__MODULE__{}) when valid_request_id(id) do
-    error_response(id, -32_600, "Invalid Request", %{"reason" => "invalid_method"})
+    Response.error(id, -32_600, "Invalid Request", %{"reason" => "invalid_method"})
   end
 
   defp do_handle(%{"id" => id}, %__MODULE__{}) do
-    error_response(id, -32_600, "Invalid Request", %{"reason" => "missing_method"})
+    Response.error(id, -32_600, "Invalid Request", %{"reason" => "missing_method"})
   end
 
   defp do_handle(_payload, %__MODULE__{}) do
-    error_response(nil, -32_600, "Invalid Request", %{"reason" => "request_must_be_object"})
+    Response.error(nil, -32_600, "Invalid Request", %{"reason" => "request_must_be_object"})
   end
 
   defp handle_batch(payloads, %__MODULE__{} = server) do
@@ -528,7 +528,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       arguments when arguments == %{} ->
         result = health(server)
 
-        {:ok, tool_result(result)}
+        {:ok, ToolResult.tool_result(result)}
 
       _arguments ->
         {:error, -32_602, "Invalid params", %{"tool" => @health_tool, "reason" => "invalid_tool_arguments"}}
@@ -547,7 +547,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch("tools/call", %{"name" => @local_assignment_claim_tool} = params, %__MODULE__{} = server) do
     case claim_local_assignment(params, server) do
       {:ok, result, session} ->
-        {:ok, claim_tool_result(result), %{server | session: session, session_refresh_required: false}}
+        {:ok, ToolResult.claim_tool_result(result), %{server | session: session, session_refresh_required: false}}
 
       {:error, code, message, data} ->
         {:error, code, message, data}
@@ -557,7 +557,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch("tools/call", %{"name" => @local_architect_assignment_claim_tool} = params, %__MODULE__{} = server) do
     case claim_local_architect_assignment(params, server) do
       {:ok, result, session} ->
-        {:ok, claim_tool_result(result), %{server | session: session, session_refresh_required: false}}
+        {:ok, ToolResult.claim_tool_result(result), %{server | session: session, session_refresh_required: false}}
 
       {:error, code, message, data} ->
         {:error, code, message, data}
@@ -567,7 +567,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch("tools/call", %{"name" => @assignment_release_tool} = params, %__MODULE__{} = server) do
     with {:ok, arguments} <- prepare_assignment_release_tool_call(server, params),
          {:ok, result, updated_server} <- release_current_assignment(arguments, server) do
-      {:ok, release_tool_result(result), updated_server}
+      {:ok, ToolResult.release_tool_result(result), updated_server}
     else
       {:error, code, message, data} -> {:error, code, message, data}
       {:tool_error, reason} -> invalid_params_error(@assignment_release_tool, reason)
@@ -691,13 +691,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       "mode" => Atom.to_string(config.mode)
     }
 
-    {:ok, json_resource(@version_resource, payload)}
+    {:ok, Response.json_resource(@version_resource, payload)}
   end
 
   defp dispatch("resources/read", %{"uri" => @assignment_resource}, %__MODULE__{config: config, session: session}) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          :ok <- require_assignment_introspection(session.assignment) do
-      {:ok, json_resource(@assignment_resource, Session.public_assignment(session))}
+      {:ok, Response.json_resource(@assignment_resource, Session.public_assignment(session))}
     else
       {:error, :unsupported_grant_role} -> auth_error({:unauthorized, :unsupported_grant_role}, @assignment_resource)
       {:error, reason} -> auth_error(reason, @assignment_resource)
@@ -1523,10 +1523,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp virtual_resource_result(uri, markdown, state, file_name, opts) do
     if Keyword.get(opts, :agent_text?, false) do
       with {:ok, toon} <- WorkerContext.encode_virtual_file(state, file_name, uri: uri) do
-        {:ok, agent_text_resource(uri, markdown, toon, "text/markdown")}
+        {:ok, Response.agent_text_resource(uri, markdown, toon, "text/markdown", @agent_text_mime_type)}
       end
     else
-      {:ok, text_resource(uri, markdown, "text/markdown")}
+      {:ok, Response.text_resource(uri, markdown, "text/markdown")}
     end
   end
 
@@ -1552,35 +1552,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, arguments} ->
         case release_current_assignment(arguments, server) do
           {:ok, result, updated_server} ->
-            {response(id, release_tool_result(result)), updated_server}
+            {Response.response(id, ToolResult.release_tool_result(result)), updated_server}
 
           {:tool_error, reason} ->
             {:error, code, message, data} = invalid_params_error(@assignment_release_tool, reason)
-            {error_response(id, code, message, data), server}
+            {Response.error(id, code, message, data), server}
         end
 
       {:error, code, message, data} ->
-        {error_response(id, code, message, data), server}
+        {Response.error(id, code, message, data), server}
     end
   end
 
   defp handle_session_claim_tool(@local_assignment_claim_tool, params, id, %__MODULE__{} = server) do
     case claim_local_assignment(params, server) do
       {:ok, result, session} ->
-        {response(id, claim_tool_result(result)), %{server | session: session, session_refresh_required: false}}
+        {
+          Response.response(id, ToolResult.claim_tool_result(result)),
+          %{server | session: session, session_refresh_required: false}
+        }
 
       {:error, code, message, data} ->
-        {error_response(id, code, message, data), server}
+        {Response.error(id, code, message, data), server}
     end
   end
 
   defp handle_session_claim_tool(@local_architect_assignment_claim_tool, params, id, %__MODULE__{} = server) do
     case claim_local_architect_assignment(params, server) do
       {:ok, result, session} ->
-        {response(id, claim_tool_result(result)), %{server | session: session, session_refresh_required: false}}
+        {
+          Response.response(id, ToolResult.claim_tool_result(result)),
+          %{server | session: session, session_refresh_required: false}
+        }
 
       {:error, code, message, data} ->
-        {error_response(id, code, message, data), server}
+        {Response.error(id, code, message, data), server}
     end
   end
 
@@ -2860,7 +2866,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       effective_claimed_by = requested_claimed_by || ArchitectHandoff.claimed_by()
       payload = create_work_request_handoff_payload(server, work_request, effective_claimed_by)
 
-      {:ok, architect_agent_tool_result(payload, :create_work_request_handoff)}
+      {:ok, ToolResult.architect_agent_tool_result(payload, :create_work_request_handoff)}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "create_work_request", "reason" => reason}}
       {:error, reason} -> create_work_request_error(reason)
@@ -3011,7 +3017,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              "author_name" => Redactor.redact_text(created_by)
            }) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "comment" => comment_payload(comment),
          "work_request" => work_request_mutation_payload(work_request),
          "provenance" => local_operator_note_provenance(created_by)
@@ -3038,7 +3044,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              local_operator_decision_attrs(decision, rationale, scope_impact, created_by, source_id)
            ) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(work_request),
          "decision_log_entry" => decision_log_entry_payload(decision_record),
          "provenance" => local_operator_note_provenance(created_by, source_id),
@@ -3074,7 +3080,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp local_trusted_list_comments_tool(arguments, %__MODULE__{config: config}) do
     case LocalTrustedTools.list_comments(config.repo, arguments, &comment_payload/1) do
-      {:ok, payload} -> {:ok, tool_result(payload)}
+      {:ok, payload} -> {:ok, ToolResult.tool_result(payload)}
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "list_comments", "reason" => reason}}
       {:error, :not_found} -> not_found_error("list_comments")
       {:error, reason} -> architect_error(reason, "list_comments")
@@ -3089,7 +3095,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       cards = work_request_cards(work_requests)
 
       {:ok,
-       agent_tool_result(%{
+       ToolResult.agent_tool_result(%{
          "work_requests" => cards,
          "total_count" => length(cards),
          "scope" => %{"visibility" => "local_ledger"},
@@ -3118,7 +3124,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       cards = work_request_cards(work_requests)
 
       {:ok,
-       agent_tool_result(%{
+       ToolResult.agent_tool_result(%{
          "work_requests" => cards,
          "total_count" => length(cards),
          "scope" => scope,
@@ -3136,7 +3142,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, work_request, _filters} <- local_trusted_work_request_read_scope(config.repo, work_request_id),
          {:ok, payload} <- work_request_detail_payload(config.repo, work_request, []) do
       payload = Map.put(payload, "scope", redacted_work_request_scope(work_request))
-      {:ok, architect_agent_tool_result(payload, :work_request_read)}
+      {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_read)}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request", "reason" => reason}}
       {:error, :not_found} -> not_found_error("read_work_request")
@@ -3159,7 +3165,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            ),
          {:ok, payload} <- work_request_detail_payload(config.repo, work_request, []) do
       payload = Map.put(payload, "scope", scope)
-      {:ok, architect_agent_tool_result(payload, :work_request_read)}
+      {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_read)}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request", "reason" => reason}}
       {:error, :not_found} -> not_found_error("read_work_request")
@@ -3248,7 +3254,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              })
          },
          {:ok, event} <- PlanningRepository.append_audit_progress_event_for_work_package(config.repo, session.assignment, work_package_id, attrs) do
-      {:ok, tool_result(%{"progress_event" => progress_event_payload(event)})}
+      {:ok, ToolResult.tool_result(%{"progress_event" => progress_event_payload(event)})}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "resolve_blocker", "reason" => reason}}
       {:error, reason} -> architect_error(reason, "resolve_blocker")
@@ -3277,7 +3283,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         "scope" => scope
       }
 
-      {:ok, architect_agent_tool_result(payload, :work_request_delivery_board)}
+      {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_delivery_board)}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request_delivery_board", "reason" => reason}}
       {:error, :not_found} -> not_found_error("read_work_request_delivery_board")
@@ -3297,7 +3303,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         "scope" => redacted_work_request_scope(work_request)
       }
 
-      {:ok, architect_agent_tool_result(payload, :work_request_delivery_board)}
+      {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_delivery_board)}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request_delivery_board", "reason" => reason}}
       {:error, :not_found} -> not_found_error("read_work_request_delivery_board")
@@ -3326,7 +3332,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              work_package_contexts: work_package_contexts
            ) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(work_request),
          "reconciliation" => reconciliation_payload(reconciliation),
          "delivery_board" => delivery_board_payload(Map.fetch!(reconciliation, :delivery_board)),
@@ -3380,7 +3386,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, planned_slices} <- WorkRequestService.list_planned_slices(config.repo, work_request_id),
          {:ok, delivery_board} <- scoped_delivery_board(config.repo, work_request, planned_slices, filters) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(work_request),
          "planned_slice_delivery" => planned_slice_delivery_payload(delivery),
          "blocker_closeout" => blocker_closeout,
@@ -3417,7 +3423,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         "filters" => guidance_request_filter_payload(status, work_package_id, work_request_id)
       }
 
-      {:ok, architect_agent_tool_result(payload, :guidance_request_list)}
+      {:ok, ToolResult.architect_agent_tool_result(payload, :guidance_request_list)}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "list_guidance_requests", "reason" => reason}}
       {:error, :not_found} -> not_found_error("list_guidance_requests")
@@ -3440,7 +3446,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              "answered_at" => DateTime.utc_now(:microsecond)
            }) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "guidance_request" => guidance_request_payload(guidance_request),
          "scope" => scope,
          "status" => %{"guidance_request_status" => guidance_request.status}
@@ -3467,7 +3473,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              recommended_language,
              decision_prompt
            ) do
-      {:ok, tool_result(result)}
+      {:ok, ToolResult.tool_result(result)}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "escalate_guidance_request", "reason" => reason}}
       {:error, :not_found} -> not_found_error("escalate_guidance_request")
@@ -3484,7 +3490,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, "set_work_request_status"),
          {:ok, updated_work_request} <- WorkRequestService.update_status(config.repo, work_request_id, current_status, next_status) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(updated_work_request),
          "scope" => scope,
          "status" => %{
@@ -3529,7 +3535,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            ),
          {:ok, updated_work_request} <- scoped_work_request(config.repo, work_request_id, filters) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(updated_work_request),
          "clarification_question" => clarification_question_payload(question_record),
          "scope" => scope,
@@ -3562,7 +3568,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            }),
          {:ok, updated_work_request} <- scoped_work_request(config.repo, work_request_id, filters) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(updated_work_request),
          "clarification_question" => clarification_question_payload(question_record),
          "scope" => scope,
@@ -3622,7 +3628,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            }),
          {:ok, updated_work_request} <- scoped_work_request(config.repo, work_request_id, filters) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(updated_work_request),
          "clarification_question" => clarification_question_payload(question_record),
          "decision_log_entry" => decision_log_entry_payload(decision_record),
@@ -3651,7 +3657,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, question_record} <- WorkRequestService.close_question(config.repo, question_id, expected_question_status),
          {:ok, updated_work_request} <- scoped_work_request(config.repo, work_request_id, filters) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(updated_work_request),
          "clarification_question" => clarification_question_payload(question_record),
          "scope" => scope,
@@ -3697,7 +3703,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            ),
          {:ok, updated_work_request} <- scoped_work_request(config.repo, work_request_id, filters) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(updated_work_request),
          "decision_log_entry" => decision_log_entry_payload(decision_record),
          "scope" => scope,
@@ -3756,7 +3762,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              fn -> add_planned_slice_and_reload_work_request(config.repo, work_request_id, attrs, filters) end
            ) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(updated_work_request),
          "planned_slice" => planned_slice_payload(planned_slice),
          "scope" => scope,
@@ -3916,7 +3922,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              ProductTree.move_slice_link(config.repo, attrs)
            end) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(work_request),
          "product_tree_slice_link" => product_tree_slice_link_payload(slice_link),
          "product_tree" => json_safe_payload(detail.product_tree),
@@ -3964,7 +3970,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, "mark_work_request_sliced"),
          {:ok, updated_work_request} <- WorkRequestService.mark_sliced(config.repo, work_request_id, current_status) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(updated_work_request),
          "scope" => scope,
          "status" => %{
@@ -3996,7 +4002,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          :ok <- require_approved_dispatch_planned_slice(planned_slice),
          {:ok, handoff_opts, dispatch_opts} <- dispatch_planned_slice_bootstrap_opts(config, claimed_by),
          {:ok, dispatch} <- PlannedSliceDispatch.dispatch(config.repo, work_request_id, planned_slice_id, handoff_opts, dispatch_opts) do
-      {:ok, tool_result(dispatch_work_request_planned_slice_payload(dispatch, scope))}
+      {:ok, ToolResult.tool_result(dispatch_work_request_planned_slice_payload(dispatch, scope))}
     else
       {:tool_error, reason} -> invalid_params_error("dispatch_work_request_planned_slice", reason)
       {:error, :not_found} -> not_found_error("dispatch_work_request_planned_slice")
@@ -4023,7 +4029,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              }
            ),
          {:ok, audit_event} <- append_worktree_lifecycle_audit(config.repo, session, work_package_id, "prepare_work_package_worktree", result) do
-      {:ok, tool_result(worktree_lifecycle_payload(result, scope, audit_event))}
+      {:ok, ToolResult.tool_result(worktree_lifecycle_payload(result, scope, audit_event))}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "prepare_work_package_worktree", "reason" => reason}}
       {:error, :not_found} -> not_found_error("prepare_work_package_worktree")
@@ -4046,7 +4052,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            ),
          {:ok, _runtime_cleanup} <- cleanup_worktree_runtime(config.repo, session, work_package),
          {:ok, audit_event} <- maybe_append_cleanup_worktree_audit(config.repo, session, work_package_id, result) do
-      {:ok, tool_result(worktree_lifecycle_payload(result, scope, audit_event))}
+      {:ok, ToolResult.tool_result(worktree_lifecycle_payload(result, scope, audit_event))}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "cleanup_work_package_worktree", "reason" => reason}}
       {:error, :not_found} -> not_found_error("cleanup_work_package_worktree")
@@ -4060,7 +4066,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          :ok <- require_architect_child_status_scope(config.repo, session, work_package_id),
          {:ok, summary} <- PlanningRepository.get_status_summary(config.repo, work_package_id) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_package" => work_package_payload(summary.work_package),
          "plan_version" => plan_version(summary.plan_nodes),
          "finding_count" => summary.finding_count,
@@ -4077,7 +4083,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     with {:ok, session} <- architect_session(config.repo, session, "create:child_work_package"),
          {:ok, package} <- required_object(arguments, "package"),
          {:ok, work_package} <- create_child_work_package_transaction(config.repo, session, package) do
-      {:ok, tool_result(%{"work_package" => child_work_package_payload(work_package)})}
+      {:ok, ToolResult.tool_result(%{"work_package" => child_work_package_payload(work_package)})}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "create_child_work_package", "reason" => reason}}
       {:error, reason} -> architect_error(reason, "create_child_work_package")
@@ -4089,7 +4095,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, template} <- optional_object_argument(arguments, "template"),
          {:ok, payload} <- mint_child_worker_key(config, session, work_package_id, template) do
-      {:ok, tool_result(payload)}
+      {:ok, ToolResult.tool_result(payload)}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "mint_child_worker_key", "reason" => reason}}
       {:error, reason} -> architect_error(reason, "mint_child_worker_key")
@@ -4101,7 +4107,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, grant_id} <- required_revoke_child_worker_string(arguments, "grant_id"),
          {:ok, reason} <- required_revoke_child_worker_string(arguments, "reason"),
          {:ok, payload} <- revoke_child_worker_key_transaction(config.repo, session, grant_id, reason) do
-      {:ok, tool_result(payload)}
+      {:ok, ToolResult.tool_result(payload)}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "revoke_child_worker_key", "reason" => reason}}
       {:error, reason} -> architect_error(reason, "revoke_child_worker_key")
@@ -4125,7 +4131,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              allowed_file_globs,
              rationale
            ) do
-      {:ok, tool_result(result)}
+      {:ok, ToolResult.tool_result(result)}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "approve_scope_expansion", "reason" => reason}}
       {:error, reason} -> architect_error(reason, "approve_scope_expansion")
@@ -4138,7 +4144,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          :ok <- require_architect_phase_scope(config.repo, session, phase_id),
          {:ok, grant} <- require_architect_phase_board_grant(config.repo, session, phase_id),
          {:ok, board} <- Dashboard.phase_board_for_grant(config.repo, phase_id, grant) do
-      {:ok, tool_result(json_safe_payload(board))}
+      {:ok, ToolResult.tool_result(json_safe_payload(board))}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_phase_board", "reason" => reason}}
       {:error, reason} -> architect_error(reason, "read_phase_board")
@@ -4152,7 +4158,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, request_id} <- optional_request_id(arguments, "request_id"),
          {:ok, result} <-
            approve_child_ready_state_transaction(config.repo, session, work_package_id, rationale, request_id) do
-      {:ok, tool_result(result)}
+      {:ok, ToolResult.tool_result(result)}
     else
       {:tool_error, reason} ->
         {:error, -32_602, "Invalid params", %{"tool" => "approve_child_ready_state", "reason" => reason}}
@@ -4170,7 +4176,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, merge_artifact} <- required_object(arguments, "merge_artifact"),
          {:ok, result} <- merge_child_into_phase_transaction(config.repo, session, work_package_id, merge_artifact) do
-      {:ok, tool_result(result)}
+      {:ok, ToolResult.tool_result(result)}
     else
       {:tool_error, reason} ->
         {:error, -32_602, "Invalid params", %{"tool" => "merge_child_into_phase", "reason" => reason}}
@@ -4223,7 +4229,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              )
            end) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(work_request),
          "planned_slice" => planned_slice_payload(planned_slice),
          "work_package" => child_work_package_payload(Map.fetch!(cleanup, :work_package)),
@@ -4279,7 +4285,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
                filters
              )
            end) do
-      {:ok, tool_result(Map.put(payload, "scope", scope))}
+      {:ok, ToolResult.tool_result(Map.put(payload, "scope", scope))}
     else
       {:tool_error, reason} ->
         planned_slice_worker_revoke_tool_error(reason)
@@ -4315,7 +4321,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              Keyword.merge(repo_scope_opts, view: view)
            ) do
       payload = Map.put(payload, "scope", scope)
-      {:ok, architect_agent_tool_result(payload, :work_request_product_tree)}
+      {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_product_tree)}
     end
   end
 
@@ -4354,7 +4360,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              end
            ) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "work_request" => work_request_mutation_payload(updated_work_request),
          "planned_slice" => planned_slice_payload(planned_slice),
          "scope" => scope,
@@ -5485,7 +5491,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp product_plan_node_tool_result(work_request, product_tree_node, blocker_closeout, detail, scope) do
-    tool_result(%{
+    ToolResult.tool_result(%{
       "work_request" => work_request_mutation_payload(work_request),
       "product_plan_node" => product_tree_node_payload(product_tree_node),
       "blocker_closeout" => blocker_closeout,
@@ -8833,7 +8839,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp worker_tool("get_current_assignment", _arguments, %__MODULE__{config: config, session: session}) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          :ok <- require_assignment_introspection(session.assignment) do
-      {:ok, agent_tool_result(%{"assignment" => Session.public_assignment(session)})}
+      {:ok, ToolResult.agent_tool_result(%{"assignment" => Session.public_assignment(session)})}
     else
       {:error, reason} -> worker_error(reason, "get_current_assignment")
     end
@@ -8877,7 +8883,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          :ok <- reject_ready_status(status),
          {:ok, blocker_closeout_plan} <- maybe_prepare_work_package_status_blocker_closeout(config.repo, session, status, arguments),
          {:ok, {work_package, blocker_closeout}} <- set_status_transaction(config.repo, session, expected_status, status, reason, blocker_closeout_plan) do
-      {:ok, tool_result(%{"work_package" => work_package_payload(work_package), "blocker_closeout" => blocker_closeout})}
+      {:ok, ToolResult.tool_result(%{"work_package" => work_package_payload(work_package), "blocker_closeout" => blocker_closeout})}
     else
       {:tool_error, reason} -> invalid_params_error("set_status", reason)
       {:error, _code, _message, _data} = error -> error
@@ -8940,7 +8946,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              "context" => context,
              "idempotency_key" => idempotency_key
            }) do
-      {:ok, read_tool_result(%{"guidance_request" => guidance_request_payload(guidance_request)})}
+      {:ok, ToolResult.read_tool_result(%{"guidance_request" => guidance_request_payload(guidance_request)})}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "create_guidance_request", "reason" => reason}}
       {:error, reason} -> worker_error(reason, "create_guidance_request")
@@ -9045,7 +9051,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, blocker_closeout_plan} <- prepare_scoped_blocker_closeout(config.repo, session, [Session.work_package_id(session)], arguments, "mark_ready"),
          {:ok, {work_package, blocker_closeout, warnings}} <- mark_ready_transaction(config.repo, session, blocker_closeout_plan) do
       {:ok,
-       tool_result(
+       ToolResult.tool_result(
          %{"work_package" => work_package_payload(work_package), "ready" => true, "blocker_closeout" => blocker_closeout}
          |> maybe_put_readiness_warnings(warnings)
        )}
@@ -9088,7 +9094,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            "caller_supplied_id" => Map.has_key?(arguments, "id")
          },
          {:ok, finding} <- append_authenticated_idempotent_finding(repo, session, finding_id, attrs) do
-      {:ok, agent_tool_result(%{"finding" => %{"id" => finding.id, "title" => finding.title, "severity" => finding.severity}})}
+      {:ok, ToolResult.agent_tool_result(%{"finding" => %{"id" => finding.id, "title" => finding.title, "severity" => finding.severity}})}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "append_finding", "reason" => reason}}
       {:error, reason} -> worker_error(reason, "append_finding")
@@ -9132,7 +9138,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     with {:ok, session} <- scoped_session(repo, session, arguments),
          {:ok, guidance_request} <-
            GuidanceRequestService.get_for_assignment(repo, session.assignment, guidance_request_id) do
-      {:ok, read_tool_result(%{"guidance_request" => guidance_request_payload(guidance_request)})}
+      {:ok, ToolResult.read_tool_result(%{"guidance_request" => guidance_request_payload(guidance_request)})}
     else
       {:error, :not_found} -> not_found_error("read_guidance_request")
       {:error, {:authorization_policy_denied, %Decision{reason_code: "scope_mismatch"}}} -> not_found_error("read_guidance_request")
@@ -9153,7 +9159,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            GuidanceRequestService.get_visible_to_architect(repo, guidance_request_id, filters),
          :ok <- authorize_guidance_request_for_session(repo, session, :guidance_request_read, guidance_request),
          :ok <- require_guidance_request_work_package(guidance_request, work_package_id) do
-      {:ok, read_tool_result(%{"guidance_request" => guidance_request_payload(guidance_request), "scope" => scope})}
+      {:ok, ToolResult.read_tool_result(%{"guidance_request" => guidance_request_payload(guidance_request), "scope" => scope})}
     else
       {:error, :not_found} -> not_found_error("read_guidance_request")
       {:error, reason} -> architect_error(reason, "read_guidance_request")
@@ -10561,7 +10567,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, state} <- PlanningRepository.get_render_state(repo, work_package_id),
          {:ok, markdown} <- PlanningRenderer.render_state(state, file_name),
          {:ok, toon} <- WorkerContext.encode_virtual_file(state, file_name, uri: uri) do
-      {:ok, agent_tool_result(%{"uri" => uri, "text" => markdown}, toon)}
+      {:ok, ToolResult.agent_tool_result(%{"uri" => uri, "text" => markdown}, toon)}
     else
       {:error, reason} -> worker_error(reason, "read_#{file_name}")
     end
@@ -10587,7 +10593,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       toon = WorkerContext.encode_tool_payload(virtual_payload)
 
       {:ok,
-       agent_tool_result(
+       ToolResult.agent_tool_result(
          Map.put(virtual_payload, "text", markdown),
          toon
        )}
@@ -10602,7 +10608,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, plan_nodes, version} <-
            apply_plan_update(repo, session.assignment, work_package_id, expected_version, arguments) do
       {:ok,
-       agent_tool_result(%{
+       ToolResult.agent_tool_result(%{
          "plan_nodes" => Enum.map(plan_nodes, &plan_node_payload/1),
          "version" => version
        })}
@@ -11094,7 +11100,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
     case run_worker_transaction(repo, transaction_fun) do
       {:ok, event} ->
-        {:ok, agent_tool_result(%{"progress_event" => progress_event_payload(event)})}
+        {:ok, ToolResult.agent_tool_result(%{"progress_event" => progress_event_payload(event)})}
 
       {:tool_error, reason} ->
         {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
@@ -11292,7 +11298,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp replay_matching_progress_event(_repo, %Session{} = _session, %ProgressEvent{} = event, attrs, tool) do
     if progress_replay_matches?(event, attrs) do
-      {:ok, agent_tool_result(%{"progress_event" => progress_event_payload(event)})}
+      {:ok, ToolResult.agent_tool_result(%{"progress_event" => progress_event_payload(event)})}
     else
       {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => "idempotency_conflict"}}
     end
@@ -13200,7 +13206,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              },
              comment_create_opts(source_type, target_kind)
            ) do
-      {:ok, tool_result(%{"comment" => comment_payload(comment)})}
+      {:ok, ToolResult.tool_result(%{"comment" => comment_payload(comment)})}
     end
   end
 
@@ -13208,7 +13214,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     with {:ok, target_kind, target_id} <- comment_target_arguments(arguments, session, source_type),
          {:ok, comments} <- CommentService.list_for_assignment(repo, session.assignment, target_kind, target_id) do
       {:ok,
-       tool_result(%{
+       ToolResult.tool_result(%{
          "comments" => Enum.map(comments, &comment_payload/1),
          "target" => %{"kind" => target_kind, "id" => target_id}
        })}
@@ -13223,7 +13229,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              "resolved_source_type" => Atom.to_string(source_type),
              "resolution_note" => optional_argument(arguments, "resolution_note", nil)
            }) do
-      {:ok, tool_result(%{"comment" => comment_payload(resolved)})}
+      {:ok, ToolResult.tool_result(%{"comment" => comment_payload(resolved)})}
     end
   end
 
@@ -14401,19 +14407,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     {:error, -32_004, "Not found", %{"tool" => tool, "reason" => "not_found"}}
   end
 
-  defp tool_result(payload) do
-    payload = compact_tool_payload(payload)
-
-    %{
-      "content" => [%{"type" => "text", "text" => WorkerContext.encode_tool_payload(payload)}],
-      "structuredContent" => payload,
-      "isError" => false
-    }
-  end
-
-  defp claim_tool_result(payload), do: agent_tool_result(payload, ClaimToolText.claim(payload))
-  defp release_tool_result(payload), do: agent_tool_result(payload, ClaimToolText.release(payload))
-
   defp require_current_session_claim_for_bound_call(%__MODULE__{} = server, method, params) do
     if bound_session_call?(server, method, params) do
       require_current_session_claim(server)
@@ -14489,229 +14482,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
        "claim_lease_reason" => reason_text(reason),
        "action" => action
      }, updated_server}
-  end
-
-  defp agent_tool_result(payload) do
-    payload = compact_tool_payload(payload)
-    agent_tool_result(payload, WorkerContext.encode_tool_payload(payload))
-  end
-
-  defp read_tool_result(payload), do: agent_tool_result(payload, WorkerContext.encode_tool_payload(payload))
-
-  defp agent_tool_result(payload, agent_text) when is_binary(agent_text) do
-    %{
-      "content" => [%{"type" => "text", "text" => agent_text}],
-      "structuredContent" => payload,
-      "isError" => false
-    }
-  end
-
-  defp architect_agent_tool_result(payload, kind) do
-    agent_tool_result(payload, ArchitectContext.encode_tool_payload(payload, kind))
-  end
-
-  defp compact_tool_payload(%{} = payload) do
-    payload
-    |> compact_tool_payload_entries()
-    |> put_next_action()
-  end
-
-  defp compact_tool_payload(payload), do: payload
-
-  defp compact_tool_payload_entries(%{} = payload) do
-    payload
-    |> Map.drop(["product_tree", :product_tree])
-    |> Enum.map(fn {key, value} -> compact_tool_entry(to_string(key), key, value) end)
-    |> Map.new()
-  end
-
-  defp compact_tool_entry("work_request", key, value), do: {key, compact_status_payload(value, ["id", "status", "updated_at"])}
-
-  defp compact_tool_entry("planned_slice", key, value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "id",
-         "work_request_id",
-         "status",
-         "work_package_id",
-         "delivery_repo",
-         "target_base_branch",
-         "dispatched_at",
-         "updated_at"
-       ])}
-
-  defp compact_tool_entry("work_package", key, value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "id",
-         "kind",
-         "status",
-         "repo",
-         "base_branch",
-         "phase_id",
-         "parent_id",
-         "title",
-         "branch_pattern",
-         "worktree_path",
-         "inserted_at",
-         "updated_at"
-       ])}
-
-  defp compact_tool_entry("progress_event", key, value),
-    do: {key, compact_status_payload(value, ["id", "status", "summary", "idempotency_key"])}
-
-  defp compact_tool_entry("guidance_request", key, value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "id",
-         "work_package_id",
-         "summary",
-         "question",
-         "status",
-         "requested_by",
-         "answered_by",
-         "human_info_reason",
-         "recommended_language",
-         "blocker_id"
-       ])}
-
-  defp compact_tool_entry("clarification_question", key, value),
-    do: {key, compact_status_payload(value, ["id", "status", "sequence"])}
-
-  defp compact_tool_entry("decision_log_entry", key, value),
-    do: {key, compact_status_payload(value, ["id", "sequence", "source_type", "source_id", "decision", "created_by"])}
-
-  defp compact_tool_entry("product_plan_node", key, value),
-    do: {key, compact_status_payload(value, ["id", "work_request_id", "parent_id", "position", "completion_mark"])}
-
-  defp compact_tool_entry("product_tree_slice_link", key, value),
-    do: {key, compact_status_payload(value, ["id", "work_request_id", "planned_slice_id", "product_tree_node_id", "position"])}
-
-  defp compact_tool_entry("planned_slice_delivery", key, value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "id",
-         "work_request_id",
-         "planned_slice_id",
-         "outcome",
-         "recorded_by",
-         "pr_url",
-         "successor_planned_slice_id",
-         "successor_work_package_id"
-       ])}
-
-  defp compact_tool_entry("delivery_board", key, value), do: {key, compact_status_payload(value, ["counts"])}
-
-  defp compact_tool_entry("audit_event", key, value),
-    do: {key, compact_status_payload(value, ["id", "status", "summary", "idempotency_key"])}
-
-  defp compact_tool_entry("reconciliation", key, value) when is_map(value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "mode",
-         "applied?",
-         "changed?",
-         "proposed_count",
-         "applied_count",
-         "recorded_delivery_count",
-         "missing_delivery_count",
-         "results"
-       ])}
-
-  defp compact_tool_entry("runtime_cleanup", key, value) when is_map(value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "status",
-         "reason",
-         "reason_code",
-         "work_package_id",
-         "revoked_worker_grant_ids",
-         "released_claim_lease_ids",
-         "cleared_session_binding_ids",
-         "cleared_mcp_session_binding_ids",
-         "reason_codes"
-       ])}
-
-  defp compact_tool_entry("worker_bootstrap", key, value) when is_map(value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "type",
-         "mode",
-         "work_package_id",
-         "branch",
-         "worktree_path",
-         "coordinates",
-         "claim",
-         "ledger",
-         "required_runtime_arguments",
-         "arguments",
-         "preferred_skill_set",
-         "supported_skill_sets",
-         "required_skills"
-       ])}
-
-  defp compact_tool_entry("worker_grant", key, value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "id",
-         "grant_role",
-         "work_package_id",
-         "capabilities",
-         "expires_at",
-         "secret_in_response",
-         "worker_bootstrap"
-       ])}
-
-  defp compact_tool_entry(_name, key, value), do: {key, compact_tool_value(value)}
-
-  defp compact_tool_value(%{} = value), do: compact_tool_payload_entries(value)
-  defp compact_tool_value(values) when is_list(values), do: Enum.map(values, &compact_tool_value/1)
-  defp compact_tool_value(value), do: value
-
-  defp compact_status_payload(%{} = value, keys) do
-    value
-    |> json_safe_payload()
-    |> Map.take(keys)
-    |> drop_nil_values()
-  end
-
-  defp compact_status_payload(value, _keys), do: value
-
-  defp put_next_action(%{} = payload) do
-    Map.put_new_lazy(payload, "next_action", fn -> next_action(payload) end)
-  end
-
-  defp next_action(%{"status" => %{} = status}) do
-    cond do
-      present?(Map.get(status, "current_status")) -> Map.get(status, "current_status")
-      present?(Map.get(status, "work_request_status")) -> Map.get(status, "work_request_status")
-      present?(Map.get(status, "planned_slice_status")) -> Map.get(status, "planned_slice_status")
-      present?(Map.get(status, "guidance_request_status")) -> Map.get(status, "guidance_request_status")
-      true -> "inspect_status"
-    end
-  end
-
-  defp next_action(%{"planned_slice_delivery" => %{"outcome" => outcome}}) when is_binary(outcome), do: outcome
-  defp next_action(%{"work_package" => %{"status" => status}}) when is_binary(status), do: status
-  defp next_action(%{"work_request" => %{"status" => status}}) when is_binary(status), do: status
-  defp next_action(_payload), do: "done"
-
-  defp present?(nil), do: false
-  defp present?(""), do: false
-  defp present?(_value), do: true
-
-  defp json_safe_payload(payload) do
-    payload
-    |> Jason.encode!()
-    |> Jason.decode!()
   end
 
   defp plan_node_payload(%PlanNode{} = plan_node) do
@@ -14822,47 +14592,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp live_expires_at?(nil, %DateTime{}), do: true
   defp live_expires_at?(%DateTime{} = expires_at, %DateTime{} = now), do: DateTime.compare(expires_at, now) == :gt
 
-  defp json_resource(uri, payload) do
-    %{
-      "contents" => [
-        %{
-          "uri" => uri,
-          "mimeType" => "application/json",
-          "text" => Jason.encode!(payload)
-        }
-      ]
-    }
-  end
-
-  defp text_resource(uri, text, mime_type) do
-    %{
-      "contents" => [
-        %{
-          "uri" => uri,
-          "mimeType" => mime_type,
-          "text" => text
-        }
-      ]
-    }
-  end
-
-  defp agent_text_resource(uri, markdown, toon, mime_type) do
-    %{
-      "contents" => [
-        %{
-          "uri" => uri,
-          "mimeType" => mime_type,
-          "text" => markdown
-        },
-        %{
-          "uri" => uri,
-          "mimeType" => @agent_text_mime_type,
-          "text" => toon
-        }
-      ]
-    }
-  end
-
   defp auth_error(:unauthorized, resource) do
     {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}
   end
@@ -14885,7 +14614,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_text(reason), do: inspect(reason)
 
-  defp response(id, result), do: %{"jsonrpc" => "2.0", "id" => id, "result" => result}
+  defp json_safe_payload(payload) do
+    payload
+    |> Jason.encode!()
+    |> Jason.decode!()
+  end
 
   defp request_params(%{"params" => params}) when is_map(params) or is_list(params), do: {:ok, params}
 
@@ -14900,7 +14633,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp dispatch_request({:error, code, message, data}, _method, id, %__MODULE__{}) do
-    error_response(id, code, message, data)
+    Response.error(id, code, message, data)
   end
 
   defp dispatch_request_state({:ok, params}, method, id, %__MODULE__{} = server) do
@@ -14908,22 +14641,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, server} ->
         case dispatch(method, params, server) do
           {:ok, result} ->
-            {response(id, result), server}
+            {Response.response(id, result), server}
 
           {:ok, result, %__MODULE__{} = updated_server} ->
-            {response(id, result), updated_server}
+            {Response.response(id, result), updated_server}
 
           {:error, code, message, data} ->
-            {error_response(id, code, message, data), server}
+            {Response.error(id, code, message, data), server}
         end
 
       {:error, code, message, data, %__MODULE__{} = updated_server} ->
-        {error_response(id, code, message, data), updated_server}
+        {Response.error(id, code, message, data), updated_server}
     end
   end
 
   defp dispatch_request_state({:error, code, message, data}, _method, id, %__MODULE__{} = server) do
-    {error_response(id, code, message, data), server}
+    {Response.error(id, code, message, data), server}
   end
 
   defp dispatch_notification({:ok, params}, method, %__MODULE__{} = server) do
@@ -14953,10 +14686,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp handle_batch_item(payload, %__MODULE__{} = server) when is_map(payload), do: handle_state(payload, server)
 
   defp handle_batch_item(_payload, %__MODULE__{} = server) do
-    {error_response(nil, -32_600, "Invalid Request", %{"reason" => "request_must_be_object"}), server}
-  end
-
-  defp error_response(id, code, message, data) do
-    %{"jsonrpc" => "2.0", "id" => id, "error" => %{"code" => code, "message" => message, "data" => data}}
+    {Response.error(nil, -32_600, "Invalid Request", %{"reason" => "request_must_be_object"}), server}
   end
 end
