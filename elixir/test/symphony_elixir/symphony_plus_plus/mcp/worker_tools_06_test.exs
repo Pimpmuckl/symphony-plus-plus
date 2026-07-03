@@ -52,7 +52,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
         }
       })
 
-    path_sync_payload = get_in(path_sync_response, ["result", "structuredContent", "progress_event", "payload"])
+    path_sync_payload = response_progress_payload(repo, path_sync_response)
     assert path_sync_payload["changed_files_available"] == true
     assert path_sync_payload["changed_files_count"] == 7
     assert length(path_sync_payload["changed_files"]) == 7
@@ -70,7 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
         }
       })
 
-    count_only_payload = get_in(count_only_sync_response, ["result", "structuredContent", "progress_event", "payload"])
+    count_only_payload = response_progress_payload(repo, count_only_sync_response)
     assert count_only_payload["changed_files_available"] == false
     assert count_only_payload["changed_files_count"] == 7
 
@@ -131,7 +131,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
       })
 
     assert get_in(approval_response, ["result", "structuredContent", "allowed_file_globs"]) == ["docs/**"]
-    payload = get_in(approval_response, ["result", "structuredContent", "progress_event", "payload"])
+    event_id = get_in(approval_response, ["result", "structuredContent", "progress_event", "id"])
+    refute Map.has_key?(get_in(approval_response, ["result", "structuredContent", "progress_event"]), "payload")
+    payload = repo.get!(ProgressEvent, event_id).payload
     assert payload["previous_allowed_file_globs"] == ["**"]
     assert payload["allowed_file_globs"] == ["docs/**"]
 
@@ -992,8 +994,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
         "verdict" => "clean"
       })
 
-    assert get_in(suite_response, ["result", "structuredContent", "progress_event", "payload", "status"]) == "passed"
-    assert get_in(suite_response, ["result", "structuredContent", "progress_event", "payload", "verdict"]) == "clean"
+    suite_payload = response_progress_payload(repo, suite_response)
+    assert suite_payload["status"] == "passed"
+    assert suite_payload["verdict"] == "clean"
 
     assert {:ok, promoted_after_suite} = WorkPackageRepository.get(repo, suite_package.id)
     assert promoted_after_suite.status == "reviewing"
@@ -1243,7 +1246,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     assert "review_lanes_complete" in get_in(missing_response, ["error", "data", "missing"])
 
     result_response = attach_tool(repo, session, "attach_review_suite_result", %{"round_id" => "rvw_minimal_clean"})
-    payload = get_in(result_response, ["result", "structuredContent", "progress_event", "payload"])
+    payload = response_progress_payload(repo, result_response)
 
     assert payload["work_package_id"] == package.id
     assert payload["head_sha"] == head_sha
@@ -1286,7 +1289,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     attach_tool(repo, session, "attach_branch", %{"branch" => branch, "head_sha" => head_sha})
 
     response = attach_tool(repo, session, "attach_review_suite_result", %{"round_id" => "rvw_minimal_success"})
-    payload = get_in(response, ["result", "structuredContent", "progress_event", "payload"])
+    payload = response_progress_payload(repo, response)
 
     assert payload["status"] == "passed"
     assert payload["profile"] == "normal"
@@ -1311,7 +1314,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     attach_tool(repo, session, "attach_branch", %{"branch" => branch, "head_sha" => head_sha})
 
     response = attach_tool(repo, session, "attach_review_suite_result", %{"round_id" => "review_t1"})
-    payload = get_in(response, ["result", "structuredContent", "progress_event", "payload"])
+    payload = response_progress_payload(repo, response)
 
     assert payload["round_id"] == "review_t1"
     assert payload["review_suite_id"] == "rvw_actual_round"

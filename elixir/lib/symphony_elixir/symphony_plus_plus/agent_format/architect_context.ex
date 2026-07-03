@@ -41,7 +41,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
   defp work_request_read_payload(payload) do
     %{
       "agent_context" => "work_request_read",
-      "source_of_truth" => "structuredContent",
       "decision_log_semantics" => "rationale_not_lifecycle_truth",
       "work_request" => payload |> map_value("work_request") |> compact_work_request(),
       "scope" => payload |> map_value("scope") |> primitive_map(),
@@ -57,7 +56,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
 
     %{
       "agent_context" => "work_request_product_tree",
-      "source_of_truth" => "structuredContent.product_tree",
       "work_request" => payload |> map_value("work_request") |> compact_work_request(),
       "scope" => payload |> map_value("scope") |> primitive_map(),
       "view" => text_value(map_value(payload, "view")),
@@ -76,7 +74,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
 
     %{
       "agent_context" => "work_request_delivery_board",
-      "source_of_truth" => "structuredContent.delivery_board",
       "work_request" => payload |> map_value("work_request") |> compact_mutation_work_request(),
       "scope" => payload |> map_value("scope") |> primitive_map(),
       "counts" => board |> map_value("counts") |> primitive_map(),
@@ -87,7 +84,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
   defp guidance_request_list_payload(payload) do
     %{
       "agent_context" => "guidance_request_list",
-      "source_of_truth" => "structuredContent.guidance_requests",
       "total_count" => map_value(payload, "total_count"),
       "scope" => payload |> map_value("scope") |> primitive_map(),
       "filters" => payload |> map_value("filters") |> primitive_map(),
@@ -100,7 +96,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
 
     %{
       "agent_context" => "create_work_request_handoff",
-      "source_of_truth" => "structuredContent.architect_handoff",
       "status" => text_value(map_value(payload, "status")),
       "work_request" => payload |> map_value("work_request") |> compact_work_request(),
       "claim" => payload |> map_value("claim") |> claim_row(),
@@ -119,7 +114,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
 
     %{
       "agent_context" => "architect_handoff_reference",
-      "source_of_truth" => "architect_handoff",
       "work_request_id" => exact_text_value(map_value(reference_identifiers, "work_request_id")),
       "repo" => exact_text_value(map_value(reference_identifiers, "repo")),
       "base_branch" => exact_text_value(map_value(reference_identifiers, "base_branch")),

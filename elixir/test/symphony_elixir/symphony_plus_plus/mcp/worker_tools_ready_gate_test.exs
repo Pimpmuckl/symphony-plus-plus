@@ -104,8 +104,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
         session: session
       )
 
-    assert get_in(blocker_response, ["result", "structuredContent", "progress_event", "payload", "active"]) == true
-    assert get_in(blocker_response, ["result", "structuredContent", "progress_event", "payload", "blocker_id"]) == "blocker-1"
+    blocker_payload = response_progress_payload(repo, blocker_response)
+    assert blocker_payload["active"] == true
+    assert blocker_payload["blocker_id"] == "blocker-1"
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-READY-BLOCKER/worker", "head_sha" => "abc125"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/125", "head_sha" => "abc125"})
@@ -164,7 +165,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
         session: session
       )
 
-    assert get_in(resolved_response, ["result", "structuredContent", "progress_event", "payload", "active"]) == false
+    assert response_progress_payload(repo, resolved_response)["active"] == false
 
     ready_response =
       MCPHarness.request(

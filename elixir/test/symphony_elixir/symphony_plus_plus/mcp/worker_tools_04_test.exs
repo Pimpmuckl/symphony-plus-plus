@@ -260,7 +260,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
 
     response = MCPHarness.request(sync_request, repo: repo, session: session)
 
-    payload = get_in(response, ["result", "structuredContent", "progress_event", "payload"])
+    payload = response_progress_payload(repo, response)
 
     assert payload["repository"] == "nextide/symphony-plus-plus"
     assert payload["number"] == 42
@@ -318,7 +318,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     attach_tool(repo, session, "attach_pr", %{"number" => 42, "head_sha" => "compact-head"})
 
     response = attach_tool(repo, session, "sync_pr", %{})
-    payload = get_in(response, ["result", "structuredContent", "progress_event", "payload"])
+    payload = response_progress_payload(repo, response)
 
     assert payload["repository"] == "nextide/symphony-plus-plus"
     assert payload["number"] == 42
@@ -334,9 +334,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         "idempotency_key" => "compact-refresh-with-checks"
       })
 
-    assert get_in(refreshed, ["result", "structuredContent", "progress_event", "payload", "check_summary"]) == %{"conclusion" => "success"}
-    assert get_in(refreshed, ["result", "structuredContent", "progress_event", "payload", "changed_files_available"]) == false
-    assert get_in(refreshed, ["result", "structuredContent", "progress_event", "payload", "changed_files_count_available"]) == false
+    refreshed_payload = response_progress_payload(repo, refreshed)
+    assert refreshed_payload["check_summary"] == %{"conclusion" => "success"}
+    assert refreshed_payload["changed_files_available"] == false
+    assert refreshed_payload["changed_files_count_available"] == false
   end
 
   test "sync_pr compact refresh drops stale state when the head changes", %{repo: repo} do
@@ -374,7 +375,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         "idempotency_key" => "compact-refresh-head-b-identity-only"
       })
 
-    payload = get_in(refreshed, ["result", "structuredContent", "progress_event", "payload"])
+    payload = response_progress_payload(repo, refreshed)
 
     assert payload["head_sha"] == "head-b"
     assert payload["base_branch"] == nil
@@ -420,7 +421,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         "idempotency_key" => "compact-refresh-prefix-head"
       })
 
-    payload = get_in(refreshed, ["result", "structuredContent", "progress_event", "payload"])
+    payload = response_progress_payload(repo, refreshed)
 
     assert payload["head_sha"] == "abcdef12"
     assert payload["changed_files"] == [%{"path" => "elixir/lib/current.ex"}]
@@ -453,7 +454,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         "idempotency_key" => "compact-refresh-blank-repository"
       })
 
-    assert get_in(blank_repository, ["result", "structuredContent", "progress_event", "payload", "repository"]) == "nextide/symphony-plus-plus"
+    assert response_progress_payload(repo, blank_repository)["repository"] == "nextide/symphony-plus-plus"
 
     blank_number =
       attach_tool(repo, session, "sync_pr", %{
@@ -462,7 +463,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         "idempotency_key" => "compact-refresh-blank-number"
       })
 
-    assert get_in(blank_number, ["result", "structuredContent", "progress_event", "payload", "number"]) == 42
+    assert response_progress_payload(repo, blank_number)["number"] == 42
 
     blank_url =
       attach_tool(repo, session, "sync_pr", %{
@@ -470,7 +471,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         "idempotency_key" => "compact-refresh-blank-url"
       })
 
-    assert get_in(blank_url, ["result", "structuredContent", "progress_event", "payload", "url"]) ==
+    assert response_progress_payload(repo, blank_url)["url"] ==
              "https://github.com/nextide/symphony-plus-plus/pull/42"
 
     blank_metadata_fields =
@@ -480,8 +481,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         "idempotency_key" => "compact-refresh-blank-metadata-fields"
       })
 
-    assert get_in(blank_metadata_fields, ["result", "structuredContent", "progress_event", "payload", "head_sha"]) == "compact-head"
-    assert get_in(blank_metadata_fields, ["result", "structuredContent", "progress_event", "payload", "branch"]) == nil
+    blank_metadata_payload = response_progress_payload(repo, blank_metadata_fields)
+    assert blank_metadata_payload["head_sha"] == "compact-head"
+    assert blank_metadata_payload["branch"] == nil
   end
 
   test "sync_pr compact refresh preserves earlier synced current state", %{repo: repo} do
@@ -513,7 +515,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         "idempotency_key" => "compact-refresh-review"
       })
 
-    payload = get_in(response, ["result", "structuredContent", "progress_event", "payload"])
+    payload = response_progress_payload(repo, response)
     assert payload["check_summary"] == %{"conclusion" => "success"}
     assert payload["review_state"] == %{"decision" => "approved"}
   end
@@ -547,7 +549,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
 
     response = attach_tool(repo, session, "sync_pr", recovery_arguments)
 
-    payload = get_in(response, ["result", "structuredContent", "progress_event", "payload"])
+    payload = response_progress_payload(repo, response)
     assert payload["repository"] == "nextide/symphony-plus-plus"
     assert payload["number"] == 42
     assert payload["head_sha"] == "recovery-head"
@@ -562,7 +564,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         "idempotency_key" => "recovery-followup-compact"
       })
 
-    compact_payload = get_in(compact_refresh, ["result", "structuredContent", "progress_event", "payload"])
+    compact_payload = response_progress_payload(repo, compact_refresh)
     assert compact_payload["number"] == 42
     assert compact_payload["check_summary"] == %{"conclusion" => "success"}
     assert compact_payload["review_state"] == %{"decision" => "approved"}
@@ -778,7 +780,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     explicit_repository =
       attach_tool(repo, session, "attach_pr", %{"number" => "42", "repository" => "nextide/symphony-plus-plus", "head_sha" => "head-a"})
 
-    assert get_in(explicit_repository, ["result", "structuredContent", "progress_event", "payload", "url"]) ==
+    assert response_progress_payload(repo, explicit_repository)["url"] ==
              "https://github.com/nextide/symphony-plus-plus/pull/42"
 
     url_package =
@@ -797,7 +799,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     url_response =
       attach_tool(repo, url_session, "attach_pr", %{"url" => "https://github.com/nextide/symphony-plus-plus/pull/43", "head_sha" => "head-a"})
 
-    assert get_in(url_response, ["result", "structuredContent", "progress_event", "payload", "number"]) == 43
+    assert response_progress_payload(repo, url_response)["number"] == 43
   end
 
   test "attach_pr idempotency replay accepts legacy URL-only payload shape", %{repo: repo} do
@@ -953,7 +955,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         session: session
       )
 
-    assert get_in(explicit_repair, ["result", "structuredContent", "progress_event", "payload", "number"]) == 42
+    assert response_progress_payload(repo, explicit_repair)["number"] == 42
 
     explicit_compact =
       attach_tool(repo, session, "sync_pr", %{
@@ -961,7 +963,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         "idempotency_key" => "explicit-repair-followup-compact"
       })
 
-    assert get_in(explicit_compact, ["result", "structuredContent", "progress_event", "payload", "number"]) == 42
+    assert response_progress_payload(repo, explicit_compact)["number"] == 42
 
     attach_tool(repo, session, "attach_pr", %{"number" => 42, "head_sha" => "abc123"})
 
@@ -983,7 +985,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         session: session
       )
 
-    assert get_in(cased_ref, ["result", "structuredContent", "progress_event", "payload", "repository"]) == "NextIDE/Symphony-Plus-Plus"
+    assert response_progress_payload(repo, cased_ref)["repository"] == "NextIDE/Symphony-Plus-Plus"
 
     mixed_number_recovery =
       MCPHarness.request(
@@ -1004,7 +1006,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         session: session
       )
 
-    assert get_in(mixed_number_recovery, ["result", "structuredContent", "progress_event", "payload", "number"]) == 42
+    assert response_progress_payload(repo, mixed_number_recovery)["number"] == 42
 
     mismatch =
       MCPHarness.request(
@@ -1046,7 +1048,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         session: session
       )
 
-    assert get_in(top_level_head, ["result", "structuredContent", "progress_event", "payload", "head_sha"]) == "abc123"
+    assert response_progress_payload(repo, top_level_head)["head_sha"] == "abc123"
   end
 
   test "sync_pr resolves URL-only attached PRs by chronology", %{repo: repo} do
@@ -1084,7 +1086,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         "metadata" => %{"head_sha" => "head-a", "branch" => "agent/SYMPP-P6-001/github-pr-attachment-sync"}
       })
 
-    assert get_in(response, ["result", "structuredContent", "progress_event", "payload", "number"]) == 43
+    assert response_progress_payload(repo, response)["number"] == 43
   end
 
   test "sync_pr resolves PR numbers from standard metadata when package repo is short", %{repo: repo} do
@@ -1111,7 +1113,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         }
       })
 
-    payload = get_in(response, ["result", "structuredContent", "progress_event", "payload"])
+    payload = response_progress_payload(repo, response)
 
     assert payload["repository"] == "nextide/symphony-plus-plus"
     assert payload["number"] == 43
@@ -1127,7 +1129,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         "idempotency_key" => "number-only-from-attach"
       })
 
-    assert get_in(attached_ref_response, ["result", "structuredContent", "progress_event", "payload", "repository"]) ==
+    assert response_progress_payload(repo, attached_ref_response)["repository"] ==
              "nextide/symphony-plus-plus"
   end
 

@@ -292,6 +292,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
       })
 
     assert get_in(answer_response, ["result", "structuredContent", "guidance_request", "status"]) == "answered"
+    refute Map.has_key?(get_in(answer_response, ["result", "structuredContent", "guidance_request"]), "answer")
+
+    worker_read_response = mcp_tool(repo, worker_session, "read_guidance_request", %{"guidance_request_id" => guidance_request_id})
+
+    assert get_in(worker_read_response, ["result", "structuredContent", "guidance_request", "answer"]) ==
+             "Abandon the failed dispatch and continue with the recut slice."
   end
 
   test "WorkRequest architect guidance accepts local checkout repo scope aliases", %{repo: repo} do
@@ -432,8 +438,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
         }
       })
 
-    assert get_in(escalation_response, ["result", "structuredContent", "guidance_request", "decision_prompt", "tl_dr"]) ==
-             "Choose the package behavior."
+    refute Map.has_key?(get_in(escalation_response, ["result", "structuredContent", "guidance_request"]), "decision_prompt")
 
     blocker = get_in(escalation_response, ["result", "structuredContent", "blocker"])
     assert blocker["active"] == true

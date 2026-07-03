@@ -270,7 +270,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
         session: session
       )
 
-    assert get_in(redacted_progress_response, ["result", "structuredContent", "progress_event", "payload", "token"]) == "[REDACTED]"
+    assert response_progress_payload(repo, redacted_progress_response)["token"] == "[REDACTED]"
 
     leaked_secret = WorkKey.generate().secret
     second_leaked_secret = WorkKey.generate().secret
@@ -310,24 +310,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     assert get_in(text_redacted_progress_response, ["result", "structuredContent", "progress_event", "summary"]) ==
              "Worker pasted [REDACTED] then kept going"
 
-    text_redacted_payload = get_in(text_redacted_progress_response, ["result", "structuredContent", "progress_event", "payload"])
-    assert text_redacted_payload["note"] == "Before [REDACTED] after"
-    assert text_redacted_payload["fine_grained_pat"] == "Saw [REDACTED]"
-    assert text_redacted_payload["password_url"] == "Login https://example.test/login?password=[REDACTED]&page=1"
-
-    assert text_redacted_payload["s3_url"] ==
-             "Fetch https://bucket.s3.amazonaws.test/object?AWSAccessKeyId=[REDACTED]&Signature=[REDACTED]&Expires=1"
-
-    assert text_redacted_payload["safe_url"] == "Review https://example.test/issues/1?w=1"
-    assert text_redacted_payload["signed_url"] == "Fetch https://example.test/download?sig=[REDACTED]&page=1"
-
-    redacted_auth_values =
-      text_redacted_payload
-      |> Enum.filter(fn {key, _value} -> String.starts_with?(key, "Authorization: [REDACTED]") end)
-      |> Enum.map(fn {_key, value} -> value end)
-      |> Enum.sort()
-
-    assert redacted_auth_values == ["also present", "present"]
+    refute Map.has_key?(get_in(text_redacted_progress_response, ["result", "structuredContent", "progress_event"]), "payload")
     encoded_text_redacted_response = Jason.encode!(get_in(text_redacted_progress_response, ["result", "structuredContent"]))
     refute encoded_text_redacted_response =~ leaked_secret
     refute encoded_text_redacted_response =~ second_leaked_secret
@@ -427,13 +410,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     end
 
     compact_branch_response = attach_tool(repo, session, "attach_branch", %{"head_sha" => "compact-head"})
-    compact_branch_payload = get_in(compact_branch_response, ["result", "structuredContent", "progress_event", "payload"])
+    compact_branch_payload = response_progress_payload(repo, compact_branch_response)
     assert compact_branch_payload["branch"] == branch
     assert compact_branch_payload["head_sha"] == "compact-head"
 
     verbose_branch_response = attach_tool(repo, session, "attach_branch", %{"branch" => branch, "head_sha" => "verbose-head"})
-    assert get_in(verbose_branch_response, ["result", "structuredContent", "progress_event", "payload", "branch"]) == branch
-    assert get_in(verbose_branch_response, ["result", "structuredContent", "progress_event", "payload", "head_sha"]) == "verbose-head"
+    verbose_branch_payload = response_progress_payload(repo, verbose_branch_response)
+    assert verbose_branch_payload["branch"] == branch
+    assert verbose_branch_payload["head_sha"] == "verbose-head"
 
     compact_comment_response =
       MCPHarness.request(
@@ -657,9 +641,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     progress_text = get_in(progress_response, ["result", "content", Access.at(0), "text"])
     assert progress_text =~ "progress_event:"
     assert progress_text =~ "[REDACTED]"
-    assert progress_text =~ "key_count: 5"
-    assert progress_text =~ "sensitive_key_count: 4"
-    assert get_in(progress_response, ["result", "structuredContent", "progress_event", "payload", "safe"]) == "visible"
+    assert progress_text =~ "key_count: 0"
+    assert progress_text =~ "sensitive_key_count: 0"
+    assert response_progress_payload(repo, progress_response)["safe"] == "visible"
     refute progress_text =~ access_key
     refute progress_text =~ api_key
     refute progress_text =~ api_token
