@@ -78,13 +78,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              delivery,
              delivery_closeout_opts(attrs)
            ),
-         :ok <- validate_linked_worktree_cleanup(repo, planned_slice),
          {:ok, delivery} <-
            repo.transaction(fn ->
              record_in_transaction(repo, work_request_id, planned_slice_id, attrs)
            end)
-           |> normalize_transaction_result(),
-         {:ok, _cleanup} <- cleanup_linked_worktree(repo, planned_slice) do
+           |> normalize_transaction_result() do
+      best_effort_cleanup_linked_worktree(repo, planned_slice, delivery)
       {:ok, delivery}
     end
   rescue
@@ -686,32 +685,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   defp progress_history_statuses(%{status: status}) when is_binary(status), do: [status]
   defp progress_history_statuses(_event), do: []
 
-  defp validate_linked_worktree_cleanup(_repo, %PlannedSlice{work_package_id: work_package_id})
+  defp best_effort_cleanup_linked_worktree(_repo, %PlannedSlice{work_package_id: work_package_id}, %PlannedSliceDelivery{})
        when not is_binary(work_package_id), do: :ok
 
-  defp validate_linked_worktree_cleanup(_repo, %PlannedSlice{work_package_id: ""}), do: :ok
+  defp best_effort_cleanup_linked_worktree(_repo, %PlannedSlice{work_package_id: ""}, %PlannedSliceDelivery{}), do: :ok
 
-  defp validate_linked_worktree_cleanup(repo, %PlannedSlice{work_package_id: work_package_id}) do
-    case WorkPackageService.validate_worktree_cleanup(repo, work_package_id) do
-      {:ok, _cleanup} -> :ok
-      {:error, reason} -> {:error, closeout_worktree_cleanup_error(reason)}
-    end
-  end
-
-  defp cleanup_linked_worktree(_repo, %PlannedSlice{work_package_id: work_package_id})
-       when not is_binary(work_package_id), do: {:ok, nil}
-
-  defp cleanup_linked_worktree(_repo, %PlannedSlice{work_package_id: ""}), do: {:ok, nil}
-
-  defp cleanup_linked_worktree(repo, %PlannedSlice{work_package_id: work_package_id}) do
-    cleanup_linked_worktree(repo, work_package_id)
-  end
-
-  defp cleanup_linked_worktree(repo, work_package_id) do
+  defp best_effort_cleanup_linked_worktree(
+         repo,
+         %PlannedSlice{work_package_id: work_package_id},
+         %PlannedSliceDelivery{} = delivery
+       ) do
     case WorkPackageService.cleanup_worktree(repo, work_package_id) do
-      {:ok, cleanup} -> {:ok, cleanup}
-      {:error, reason} -> {:error, closeout_worktree_cleanup_error(reason)}
+      {:ok, _cleanup} -> :ok
+      {:error, reason} -> audit_worktree_cleanup_failure(repo, work_package_id, delivery, reason)
     end
+  end
+
+  defp audit_worktree_cleanup_failure(repo, work_package_id, %PlannedSliceDelivery{} = delivery, reason) do
+    PlanningRepository.append_progress_event(repo, %{
+      work_package_id: work_package_id,
+      status: "worktree_cleanup_failed",
+      summary: "Worktree cleanup failed: #{inspect(closeout_worktree_cleanup_error(reason))}",
+      idempotency_key: "#{closeout_idempotency_key(delivery)}:worktree_cleanup",
+      payload: %{
+        type: "work_request_delivery_worktree_cleanup",
+        source_tool: "record_planned_slice_delivery",
+        delivery_id: delivery.id,
+        outcome: delivery.outcome,
+        reason: inspect(closeout_worktree_cleanup_error(reason))
+      }
+    })
+
+    :ok
   end
 
   defp closeout_worktree_cleanup_error(:database_busy), do: :database_busy
@@ -719,7 +724,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   defp closeout_worktree_cleanup_error({:constraint_failed, _constraint} = reason), do: reason
   defp closeout_worktree_cleanup_error({:storage_failed, _message} = reason), do: reason
   defp closeout_worktree_cleanup_error(%Ecto.Changeset{} = reason), do: reason
-  defp closeout_worktree_cleanup_error(_reason), do: :active_runtime
+  defp closeout_worktree_cleanup_error(reason), do: reason
 
   defp reject_non_recoverable_abandoned_runtime_context(context) do
     reject_non_recoverable_runtime_context(context, recoverable_recut_runtime_reason_codes())

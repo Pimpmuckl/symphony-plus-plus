@@ -221,6 +221,59 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     refute "linked_package_active_after_delivery" in after_closeout.attention_reason_codes
   end
 
+  test "PR merged closeout records delivery when linked worktree path is invalid", %{repo: repo} do
+    {work_request, planned_slice, linked_package} =
+      linked_slice!(
+        repo,
+        work_request_id: "WR-DELIVERY-INVALID-WORKTREE",
+        work_package_id: "wp_ik4563eit3v5lguw",
+        status: "ready_for_merge"
+      )
+
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-closeout-invalid-worktree")
+    codex_home = Path.join(fixture.root, "codex-home")
+    invalid_worktree_path = Path.join([codex_home, "worktrees", "spp_worktrees", "invalid-recorded-worktree"])
+    File.mkdir_p!(Path.dirname(invalid_worktree_path))
+    File.write!(invalid_worktree_path, "not a directory")
+
+    previous_codex_home = System.get_env("CODEX_HOME")
+
+    try do
+      System.put_env("CODEX_HOME", codex_home)
+
+      assert {:ok, _updated_package} =
+               WorkPackageRepository.update(repo, linked_package.id, %{
+                 worktree_path: invalid_worktree_path,
+                 worktree_target_repo_root: fixture.repo_root
+               })
+
+      attrs =
+        delivery_attrs(%{
+          outcome: "pr_merged",
+          idempotency_key: "delivery-pr-merged-invalid-worktree",
+          pr_url: "https://github.com/nextide/symphony-plus-plus/pull/456",
+          pr_number: 456,
+          pr_repository: "nextide/symphony-plus-plus",
+          pr_merged_at: ~U[2026-05-24 12:58:00.000000Z],
+          merge_commit_sha: "abc456"
+        })
+
+      assert {:ok, delivery} = Service.record_planned_slice_delivery(repo, work_request.id, planned_slice.id, attrs)
+      assert delivery.outcome == "pr_merged"
+      assert repo.get!(WorkPackage, linked_package.id).status == "merged"
+
+      cleanup_event =
+        repo.all(ProgressEvent)
+        |> Enum.find(&(&1.payload["type"] == "work_request_delivery_worktree_cleanup"))
+
+      assert cleanup_event.status == "worktree_cleanup_failed"
+      assert cleanup_event.payload["reason"] == ":invalid_worktree_path"
+      assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 1
+    after
+      restore_env("CODEX_HOME", previous_codex_home)
+    end
+  end
+
   test "PR merged recovery closeout still rejects paused claim lease", %{repo: repo} do
     {work_request, planned_slice, linked_package} = linked_slice!(repo, status: "ready_for_worker")
 
