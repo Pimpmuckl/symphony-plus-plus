@@ -6,7 +6,7 @@ import { GuidanceDialog } from "@/components/dashboard/guidance-dialog";
 import { NewRequestDialog } from "@/components/dashboard/new-request-dialog";
 import type { NewRequestForm } from "@/components/dashboard/new-request-dialog";
 import type * as React from "react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { architectHandoffEligibleRequest } from "@/lib/operational-state";
@@ -122,14 +122,10 @@ export function DashboardShell({
   const { hideEmptyWorkstreams, showWorkstreamContextBar } = displayPreferences;
   const localOperatorReconnectIssue = isLocalOperatorAuthRequiredMessage(error) || connectionIssue?.reconnectableLocalSession === true;
   const dashboardAlertMessage = error || (localOperatorReconnectIssue ? connectionIssue?.message || LOCAL_OPERATOR_AUTH_REQUIRED_MESSAGE : null);
-  const [openTopPanel, setOpenTopPanel] = useState<TopPanelKey | null>(readStoredTopPanel);
+  const [visibleTopPanel, setOpenTopPanel] = useAutoClosingTopPanel(guidanceItems.length, blockerItems.length, dashboard !== null);
   const headerRef = useRef<HTMLElement | null>(null);
 
   useDashboardScrollbarOffset(headerRef, loading);
-
-  useEffect(() => {
-    writeDashboardUiStateValue("topPanel", openTopPanel);
-  }, [openTopPanel]);
 
   if (loading) {
     return (
@@ -163,7 +159,7 @@ export function DashboardShell({
               <AttentionBarControls
                 guidanceItems={guidanceItems}
                 blockerItems={blockerItems}
-                openPanel={openTopPanel}
+                openPanel={visibleTopPanel}
                 onToggle={setOpenTopPanel}
                 updateAnimations={updateAnimations}
               />
@@ -199,7 +195,7 @@ export function DashboardShell({
           </div>
           <div className="dashboard-top-panel-shell mx-auto max-w-[1500px] px-4 sm:px-6 lg:px-8">
             <StatusRail
-              openPanel={openTopPanel}
+              openPanel={visibleTopPanel}
               guidanceItems={guidanceItems}
               blockerItems={blockerItems}
               onSelectGuidance={onSelectGuidance}
@@ -289,6 +285,44 @@ export function DashboardShell({
       </main>
     </TooltipProvider>
   );
+}
+
+type TopPanelCounts = {
+  blockers: number;
+  guidance: number;
+  ready: boolean;
+};
+
+export function shouldAutoCloseTopPanel(openPanel: TopPanelKey | null, previous: TopPanelCounts, current: TopPanelCounts) {
+  if (!previous.ready || !current.ready) return false;
+  return (openPanel === "guidance" && previous.guidance > 0 && current.guidance === 0) || (openPanel === "blockers" && previous.blockers > 0 && current.blockers === 0);
+}
+
+function useAutoClosingTopPanel(guidanceCount: number, blockerCount: number, ready: boolean) {
+  const currentCounts = { blockers: blockerCount, guidance: guidanceCount, ready };
+  const [topPanelState, setTopPanelState] = useState(() => ({
+    counts: currentCounts,
+    openPanel: readStoredTopPanel(),
+  }));
+  const visibleTopPanel = shouldAutoCloseTopPanel(topPanelState.openPanel, topPanelState.counts, currentCounts) ? null : topPanelState.openPanel;
+
+  if (visibleTopPanel !== topPanelState.openPanel || !sameTopPanelCounts(topPanelState.counts, currentCounts)) {
+    setTopPanelState({ counts: currentCounts, openPanel: visibleTopPanel });
+  }
+
+  useEffect(() => {
+    writeDashboardUiStateValue("topPanel", visibleTopPanel);
+  }, [visibleTopPanel]);
+
+  const setOpenTopPanel = useCallback((openPanel: TopPanelKey | null) => {
+    setTopPanelState((state) => (state.openPanel === openPanel ? state : { ...state, openPanel }));
+  }, []);
+
+  return [visibleTopPanel, setOpenTopPanel] as const;
+}
+
+function sameTopPanelCounts(left: TopPanelCounts, right: TopPanelCounts) {
+  return left.blockers === right.blockers && left.guidance === right.guidance && left.ready === right.ready;
 }
 
 function useDashboardScrollbarOffset(headerRef: React.RefObject<HTMLElement | null>, loading: boolean) {
