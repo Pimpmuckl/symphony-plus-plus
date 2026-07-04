@@ -45,6 +45,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     Response,
     Session,
     SoloTools,
+    Surface,
     ToolCatalog,
     ToolResult
   }
@@ -88,10 +89,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   @protocol_version "2025-03-26"
   @health_tool ToolCatalog.health_tool()
-  @agent_text_mime_type "text/vnd.toon"
   @solo_tools ToolCatalog.solo_tools()
   @assignment_release_tool ToolCatalog.assignment_release_tool()
-  @bootstrap_tools ToolCatalog.bootstrap_tools()
   @local_operator_tools ToolCatalog.local_operator_tools()
   @local_trusted_work_request_read_tools [
     "list_work_requests",
@@ -507,7 +506,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp dispatch("tools/list", params, %__MODULE__{} = server) when is_map(params) do
-    case tool_specs_for_server(server) do
+    case Surface.tool_specs_for_server(server) do
       {:ok, tools} -> {:ok, %{"tools" => tools}}
       {:error, reason} -> worker_error(reason, "tools/list")
     end
@@ -616,7 +615,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp dispatch("tools/call", %{"name" => "list_comments"} = params, %__MODULE__{} = server) do
-    if local_trusted_tools_enabled?(server) do
+    if Surface.local_trusted_tools_enabled?(server) do
       case prepare_local_trusted_list_comments_tool_call(server, params) do
         {:ok, arguments} -> local_trusted_list_comments_tool(arguments, server)
         {:error, code, message, data} -> {:error, code, message, data}
@@ -668,8 +667,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp dispatch("resources/list", params, %__MODULE__{config: config, session: session}) when is_map(params) do
-    case assignment_resources(session, config.repo) do
-      {:ok, resources} -> {:ok, %{"resources" => base_resource_specs() ++ resources}}
+    case Surface.resource_specs_for_session(session, config.repo) do
+      {:ok, resources} -> {:ok, %{"resources" => resources}}
       {:error, code, message, data} -> {:error, code, message, data}
     end
   end
@@ -702,9 +701,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          config: config,
          session: session
        }) do
-    case work_package_resource_id(rest) do
+    case Surface.work_package_resource_id(rest) do
       {:ok, work_package_id, file_name} ->
-        read_work_package_virtual_resource(config.repo, session, work_package_id, file_name, uri)
+        Surface.read_work_package_virtual_resource(config.repo, session, work_package_id, file_name, uri)
 
       :error ->
         {:error, -32_602, "Invalid params", %{"resource" => uri, "reason" => "invalid_work_package_resource_uri"}}
@@ -761,105 +760,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp normalize_optional_value(nil), do: nil
   defp normalize_optional_value(value), do: value
 
-  defp tool_specs_for_session(%Config{} = config, nil) do
-    {:ok, unbound_tool_specs(config)}
-  end
-
-  defp tool_specs_for_session(%Config{repo: repo} = config, session) do
-    with :ok <- prepare_mcp_repository(repo) do
-      session
-      |> Auth.require_session(repo)
-      |> tool_specs_for_session_result(config)
-    end
-  end
-
-  defp tool_specs_for_session_result({:ok, %Session{assignment: %{grant_role: "architect"}} = session}, %Config{}) do
-    {:ok, architect_session_tool_specs(session)}
-  end
-
-  defp tool_specs_for_session_result({:ok, %Session{assignment: %{grant_role: "worker"}} = session}, %Config{repo: repo}),
-    do: {:ok, worker_session_tool_specs(repo, session)}
-
-  defp tool_specs_for_session_result({:ok, %Session{}}, %Config{}), do: {:error, {:unauthorized, :unsupported_grant_role}}
-
-  defp tool_specs_for_session_result({:error, {:service_unavailable, _reason} = reason}, %Config{}), do: {:error, reason}
-
-  defp tool_specs_for_session_result({:error, _reason}, %Config{} = config) do
-    {:ok, claimable_tool_specs(config)}
-  end
-
-  defp claimable_tool_specs(%Config{} = config), do: ToolCatalog.claimable_tool_specs(config)
-  defp unbound_tool_specs(%Config{} = config), do: ToolCatalog.unbound_tool_specs_for_config(config)
-
-  defp architect_session_tool_specs(%Session{} = session) do
-    ToolCatalog.architect_session_tool_specs(current_work_request?: CurrentWorkRequest.single_scope?(session))
-  end
-
-  defp worker_session_tool_specs(repo, %Session{} = session) do
-    ToolCatalog.worker_session_tool_specs()
-    |> maybe_advertise_compact_attach_branch(repo, session)
-  end
-
-  defp maybe_advertise_compact_attach_branch(specs, repo, %Session{} = session) do
-    if compact_attach_branch_available?(repo, session) do
-      map_tool_spec(specs, "attach_branch", &put_in(&1, ["inputSchema", "required"], ["head_sha"]))
-    else
-      specs
-    end
-  end
-
-  defp compact_attach_branch_available?(repo, %Session{} = session) do
-    with {:ok, %WorkPackage{} = work_package} <- WorkPackageRepository.get(repo, Session.work_package_id(session)),
-         branch when is_binary(branch) <- normalize_optional_value(work_package.branch_pattern) do
-      not local_branch_template_pattern?(branch)
-    else
-      _missing_or_template -> false
-    end
-  end
-
-  defp map_tool_spec(specs, name, fun) do
-    Enum.map(specs, fn
-      %{"name" => ^name} = spec -> fun.(spec)
-      spec -> spec
-    end)
-  end
-
-  defp tool_specs_for_server(%__MODULE__{session_refresh_required: true, config: config} = server) do
-    {:ok, dedupe_tool_specs(claimable_tool_specs(config) ++ local_trusted_tool_specs(server))}
-  end
-
-  defp tool_specs_for_server(%__MODULE__{config: config, session: session} = server) do
-    with {:ok, specs} <- tool_specs_for_session(config, session) do
-      {:ok, dedupe_tool_specs(advertised_tool_specs(specs, server) ++ local_trusted_tool_specs(server))}
-    end
-  end
-
-  defp advertised_tool_specs(specs, %__MODULE__{} = server) do
-    if local_trusted_tools_enabled?(server) do
-      specs
-    else
-      hide_trusted_local_tool_specs(specs)
-    end
-  end
-
-  defp hide_trusted_local_tool_specs(specs) do
-    Enum.reject(specs, &(&1["name"] in @bootstrap_tools))
-  end
-
-  defp dedupe_tool_specs(specs) do
-    Enum.uniq_by(specs, & &1["name"])
-  end
-
-  defp local_trusted_tool_specs(%__MODULE__{} = server) do
-    if local_trusted_tools_enabled?(server) do
-      LocalTrustedTools.tool_specs(server.config)
-    else
-      []
-    end
-  end
-
-  defp local_trusted_tools_enabled?(%__MODULE__{} = server), do: LocalTrustedTools.enabled?(server)
-
   defp solo_tool_input_schema(name), do: ToolCatalog.solo_tool_input_schema(name)
   defp bootstrap_tool_input_schema(name), do: ToolCatalog.bootstrap_tool_input_schema(name)
   defp local_operator_tool_input_schema(name), do: ToolCatalog.local_operator_tool_input_schema(name)
@@ -867,138 +767,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp assignment_release_tool_input_schema, do: ToolCatalog.assignment_release_tool_input_schema()
   defp worker_tool_input_schema(name), do: ToolCatalog.worker_tool_input_schema(name)
   defp architect_tool_input_schema(name), do: ToolCatalog.architect_tool_input_schema(name)
-
-  defp work_package_resource_id(rest) when is_binary(rest) do
-    case String.split(rest, "/", parts: 2) do
-      [work_package_id, resource_path] ->
-        if String.trim(work_package_id) != "" and valid_resource_path?(resource_path) do
-          {:ok, work_package_id, resource_path}
-        else
-          :error
-        end
-
-      _parts ->
-        :error
-    end
-  end
-
-  defp valid_resource_path?(resource_path) when is_binary(resource_path) do
-    String.trim(resource_path) != "" and not String.contains?(resource_path, "/")
-  end
-
-  defp assignment_resources(nil, _repo), do: {:ok, []}
-
-  defp assignment_resources(%Session{} = session, repo) do
-    case Auth.require_session(session, repo) do
-      {:ok, %Session{} = session} ->
-        assignment_resources_for_session(session)
-
-      {:error, {:service_unavailable, reason}} ->
-        service_error(reason, @assignment_resource)
-
-      {:error, _reason} ->
-        {:ok, []}
-    end
-  end
-
-  defp assignment_resources(_session, _repo), do: {:ok, []}
-
-  defp assignment_resources_for_session(%Session{assignment: %{grant_role: "worker"}} = session) do
-    case require_worker_assignment(session.assignment) do
-      :ok -> listed_assignment_resources(session)
-      {:error, _reason} -> {:ok, []}
-    end
-  end
-
-  defp assignment_resources_for_session(%Session{assignment: %{grant_role: "architect"}} = session) do
-    case require_assignment_introspection(session.assignment) do
-      :ok -> listed_current_assignment_resource(session)
-      {:error, _reason} -> {:ok, []}
-    end
-  end
-
-  defp assignment_resources_for_session(%Session{}), do: {:ok, []}
-
-  defp listed_assignment_resources(%Session{} = session) do
-    work_package_id = Session.work_package_id(session)
-
-    with {:ok, assignment_resources} <- listed_current_assignment_resource(session) do
-      {:ok, assignment_resources ++ work_package_resources(work_package_id)}
-    end
-  end
-
-  defp listed_current_assignment_resource(%Session{}) do
-    {:ok, current_assignment_resource_specs()}
-  end
-
-  defp work_package_resources(work_package_id) do
-    Enum.map(PlanningRenderer.virtual_files(), fn file_name ->
-      %{
-        "uri" => "sympp://work-packages/#{work_package_id}/#{file_name}",
-        "name" => file_name,
-        "mimeType" => "text/markdown"
-      }
-    end)
-  end
-
-  defp base_resource_specs do
-    [
-      %{
-        "uri" => @version_resource,
-        "name" => "Symphony++ version",
-        "mimeType" => "application/json"
-      }
-    ]
-  end
-
-  defp current_assignment_resource_specs do
-    [
-      %{
-        "uri" => @assignment_resource,
-        "name" => "Current Symphony++ assignment",
-        "mimeType" => "application/json"
-      }
-    ]
-  end
-
-  defp read_virtual_resource(repo, work_package_id, file_name, uri, opts) do
-    with true <- file_name in PlanningRenderer.virtual_files(),
-         {:ok, state} <- PlanningRepository.get_render_state(repo, work_package_id),
-         {:ok, markdown} <- PlanningRenderer.render_state(state, file_name),
-         {:ok, resource} <- virtual_resource_result(uri, markdown, state, file_name, opts) do
-      {:ok, resource}
-    else
-      false -> {:error, -32_601, "Method not found", %{"resource" => uri, "reason" => "unknown_virtual_file"}}
-      {:error, reason} -> service_error(reason, uri)
-    end
-  end
-
-  defp virtual_resource_result(uri, markdown, state, file_name, opts) do
-    if Keyword.get(opts, :agent_text?, false) do
-      with {:ok, toon} <- WorkerContext.encode_virtual_file(state, file_name, uri: uri) do
-        {:ok, Response.agent_text_resource(uri, markdown, toon, "text/markdown", @agent_text_mime_type)}
-      end
-    else
-      {:ok, Response.text_resource(uri, markdown, "text/markdown")}
-    end
-  end
-
-  defp read_work_package_virtual_resource(repo, session, work_package_id, file_name, uri) do
-    resource_type = resource_type_for_virtual_file(file_name)
-    action = action_for_virtual_file(file_name)
-
-    with {:ok, session} <- Auth.require_session(session, repo),
-         {:ok, actor} <- actor_for_package_resource(repo, session, resource_type, work_package_id),
-         :ok <- PlanningService.authorize_package_action(repo, actor, action, work_package_id, resource_type) do
-      read_virtual_resource(repo, work_package_id, file_name, uri, agent_text?: worker_session?(session))
-    else
-      {:error, {:authorization_policy_denied, %Decision{} = decision}} -> MCPError.from_decision(decision, uri)
-      {:error, reason} -> auth_error(reason, uri)
-    end
-  end
-
-  defp worker_session?(%Session{assignment: %{grant_role: "worker"}}), do: true
-  defp worker_session?(%Session{}), do: false
 
   defp handle_assignment_release_tool(params, id, %__MODULE__{} = server) do
     case prepare_assignment_release_tool_call(server, params) do
@@ -5549,15 +5317,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp progress_tool_policy("resolve_blocker"), do: {:blocker_resolve, :blocker}
   defp progress_tool_policy("set_status"), do: {:work_package_update, :work_package}
   defp progress_tool_policy(_tool), do: {:progress_append, :progress}
-
-  defp action_for_virtual_file("task_plan.md"), do: :task_plan_read
-  defp action_for_virtual_file(_file_name), do: :work_package_read
-
-  defp resource_type_for_virtual_file("task_plan.md"), do: :task_plan
-  defp resource_type_for_virtual_file("findings.md"), do: :finding
-  defp resource_type_for_virtual_file("progress.md"), do: :progress
-  defp resource_type_for_virtual_file("review_suite.md"), do: :review_evidence
-  defp resource_type_for_virtual_file(_file_name), do: :work_package
 
   defp authorize_guidance_request_for_session(repo, %Session{} = session, action, %GuidanceRequest{} = guidance_request) do
     GuidanceRequestService.authorize_for_assignment(repo, session.assignment, action, guidance_request)
