@@ -211,6 +211,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
     %{"id" => work_package.id, "kind" => work_package.kind, "status" => work_package.status}
   end
 
+  @spec reconciliation_payload(map()) :: map()
+  def reconciliation_payload(reconciliation) when is_map(reconciliation) do
+    reconciliation
+    |> Map.drop([:delivery_board, "delivery_board"])
+    |> json_safe_payload()
+    |> Redactor.redact_output()
+  end
+
   @spec child_work_package_payload(WorkPackage.t()) :: map()
   def child_work_package_payload(%WorkPackage{} = work_package) do
     work_package
