@@ -28,6 +28,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   @bootstrap_tools ToolCatalog.bootstrap_tools()
   @version_resource "sympp://health/version"
 
+  @spec tool_specs_for_server(map()) :: {:ok, [map()]} | {:error, term()}
   def tool_specs_for_server(%{session_refresh_required: true, config: %Config{} = config} = server) do
     {:ok, dedupe_tool_specs(claimable_tool_specs(config) ++ local_trusted_tool_specs(server))}
   end
@@ -38,14 +39,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     end
   end
 
+  @spec local_trusted_tools_enabled?(map()) :: boolean()
   def local_trusted_tools_enabled?(server), do: LocalTrustedTools.enabled?(server)
 
+  @spec resource_specs_for_session(Session.t() | nil | term(), module()) ::
+          {:ok, [map()]} | {:error, integer(), String.t(), map()}
   def resource_specs_for_session(session, repo) do
     with {:ok, resources} <- assignment_resources(session, repo) do
       {:ok, base_resource_specs() ++ resources}
     end
   end
 
+  @spec work_package_resource_id(binary()) :: {:ok, String.t(), String.t()} | :error
   def work_package_resource_id(rest) when is_binary(rest) do
     case String.split(rest, "/", parts: 2) do
       [work_package_id, resource_path] ->
@@ -60,6 +65,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     end
   end
 
+  @spec read_work_package_virtual_resource(module(), Session.t() | nil | term(), String.t(), String.t(), String.t()) ::
+          {:ok, map()} | {:error, integer(), String.t(), map()}
   def read_work_package_virtual_resource(repo, session, work_package_id, file_name, uri) do
     resource_type = resource_type_for_virtual_file(file_name)
     action = action_for_virtual_file(file_name)
@@ -298,7 +305,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   end
 
   defp normalize_optional_value(nil), do: nil
-  defp normalize_optional_value(value), do: value
 
   defp auth_error(:unauthorized, resource) do
     {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}
@@ -310,15 +316,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
 
   defp auth_error({:service_unavailable, reason}, resource), do: service_error(reason, resource)
 
-  defp auth_error(:forbidden, resource) do
-    {:error, -32_003, "Forbidden", %{"resource" => resource, "reason" => "outside_session_scope"}}
-  end
-
   defp service_error(_reason, resource) do
     {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
   end
 
-  defp reason_text(reason) when is_binary(reason), do: reason
   defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp reason_text(reason), do: inspect(reason)
 end
