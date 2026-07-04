@@ -4895,9 +4895,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
        "tool" => tool,
        "reason" => reason,
        "reason_code" => reason,
-       "decision_reason" => "precondition_denied"
+       "decision_reason" => "precondition_denied",
+       "next_action" => precondition_next_action(tool, reason)
      }}
   end
+
+  defp precondition_next_action("record_planned_slice_delivery", "active_runtime"),
+    do: "release_worker_or_retry_after_stale"
+
+  defp precondition_next_action("record_planned_slice_delivery", _reason),
+    do: "retry_record_planned_slice_delivery"
+
+  defp precondition_next_action(_tool, _reason), do: "retry_after_runtime_state_changes"
 
   defp append_worktree_lifecycle_audit(repo, %Session{} = session, work_package_id, source_tool, result) do
     PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, work_package_id, %{
@@ -7361,25 +7370,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          %WorkPackage{} = work_package,
          %AccessGrant{} = grant,
          %ProgressEvent{} = event,
-         reason
+         _reason
        ) do
     reason_codes = PlannedSliceWorkerRevoke.reason_codes(previous_work_package_status, work_package.status)
 
     %{
-      "work_request" => work_request_mutation_payload(work_request),
-      "planned_slice" => planned_slice_payload(planned_slice),
-      "work_package" => child_work_package_payload(work_package),
-      "revoked_worker_grant" => revoked_child_worker_grant_payload(grant),
+      "planned_slice" => %{"id" => planned_slice.id, "work_request_id" => work_request.id, "status" => planned_slice.status},
+      "work_package" => work_package_payload(work_package),
+      "revoked_worker_grant" => %{"id" => grant.id, "work_package_id" => grant.work_package_id},
       "closeout_affordance" => %{
         "status" => "revoked",
-        "reason" => PlannedSliceWorkerRevoke.redacted_reason(reason),
-        "active_runtime_guard_bypassed" => false,
-        "lifecycle_state" => "recycled",
         "previous_work_package_status" => previous_work_package_status,
         "work_package_status" => work_package.status,
         "reason_codes" => reason_codes
       },
-      "revocation_event" => progress_event_payload(event)
+      "audit_event" => progress_event_payload(event),
+      "next_action" => "retry_record_planned_slice_delivery"
     }
   end
 

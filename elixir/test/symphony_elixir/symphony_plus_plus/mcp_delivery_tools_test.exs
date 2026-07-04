@@ -872,6 +872,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert get_in(revoke_response, ["result", "structuredContent", "revoked_worker_grant", "id"]) ==
              minted.grant.id
 
+    assert get_in(revoke_response, ["result", "structuredContent", "next_action"]) ==
+             "retry_record_planned_slice_delivery"
+
+    refute get_in(revoke_response, ["result", "structuredContent", "work_request"])
+    refute get_in(revoke_response, ["result", "structuredContent", "revocation_event"])
+
     closeout_response =
       record_delivery(
         repo,

@@ -70,6 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
 
     active_response = mcp_tool(repo, session, "record_planned_slice_delivery", closeout_args)
     assert get_in(active_response, ["error", "data", "reason"]) == "active_runtime"
+    assert get_in(active_response, ["error", "data", "next_action"]) == "release_worker_or_retry_after_stale"
 
     revoke_response =
       mcp_tool(repo, session, "revoke_planned_slice_worker_key", %{
@@ -83,6 +84,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
     assert revoke_payload["work_package"]["id"] == linked_package.id
     assert revoke_payload["work_package"]["status"] == "blocked"
     assert revoke_payload["revoked_worker_grant"]["id"] == minted.grant.id
+    assert revoke_payload["next_action"] == "retry_record_planned_slice_delivery"
 
     assert revoke_payload["closeout_affordance"]["reason_codes"] == [
              "worker_recycled",
@@ -92,8 +94,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
 
     assert revoke_payload["closeout_affordance"]["previous_work_package_status"] == "implementing"
     assert revoke_payload["closeout_affordance"]["work_package_status"] == "blocked"
-    assert get_in(revoke_payload, ["revocation_event", "payload", "previous_work_package_status"]) == "implementing"
-    assert get_in(revoke_payload, ["revocation_event", "payload", "work_package_status"]) == "blocked"
+    assert is_binary(get_in(revoke_payload, ["audit_event", "id"]))
+    refute Map.has_key?(revoke_payload, "revocation_event")
     assert repo.get!(AccessGrant, minted.grant.id).revoked_at
     assert repo.get!(WorkPackage, linked_package.id).status == "blocked"
 
@@ -133,6 +135,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
 
     active_response = mcp_tool(repo, session, "record_planned_slice_delivery", closeout_args)
     assert get_in(active_response, ["error", "data", "reason"]) == "active_runtime"
+    assert get_in(active_response, ["error", "data", "next_action"]) == "release_worker_or_retry_after_stale"
 
     cleanup_response =
       mcp_tool(repo, session, "cleanup_work_request_planned_slice_runtime", cleanup_args(work_request, planned_slice, successor_slice.id))
