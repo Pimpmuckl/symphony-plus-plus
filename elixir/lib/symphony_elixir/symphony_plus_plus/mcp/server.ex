@@ -1949,8 +1949,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:tool_error, reason} ->
         invalid_params_error("add_work_request_planned_slice", reason)
 
-      {:error, %Ecto.Changeset{}} ->
-        {:error, -32_602, "Invalid params", %{"tool" => "add_work_request_planned_slice", "reason" => "invalid_planned_slice"}}
+      {:error, %Ecto.Changeset{} = changeset} ->
+        changeset_invalid_params_error("add_work_request_planned_slice", "invalid_planned_slice", changeset)
 
       {:error, :not_found} ->
         not_found_error("add_work_request_planned_slice")
@@ -1990,7 +1990,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, product_plan_node_tool_result(work_request, product_tree_node, blocker_closeout, detail, scope)}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, %Ecto.Changeset{}} -> invalid_params_error(tool, "invalid_product_plan_node")
+      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_product_plan_node", changeset)
       {:error, :not_found} -> not_found_error(tool)
       {:error, reason} -> architect_error(reason, tool)
     end
@@ -2023,7 +2023,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, product_plan_node_tool_result(work_request, product_tree_node, blocker_closeout, detail, scope)}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, %Ecto.Changeset{}} -> invalid_params_error(tool, "invalid_product_plan_node")
+      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_product_plan_node", changeset)
       {:error, :not_found} -> not_found_error(tool)
       {:error, reason} -> architect_error(reason, tool)
     end
@@ -2063,7 +2063,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, product_plan_node_tool_result(work_request, product_tree_node, blocker_closeout, detail, scope)}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, %Ecto.Changeset{}} -> invalid_params_error(tool, "invalid_product_plan_node")
+      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_product_plan_node", changeset)
       {:error, :not_found} -> not_found_error(tool)
       {:error, reason} -> architect_error(reason, tool)
     end
@@ -2108,7 +2108,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
        })}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, %Ecto.Changeset{}} -> invalid_params_error(tool, "invalid_product_tree_slice_link")
+      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_product_tree_slice_link", changeset)
       {:error, :not_found} -> not_found_error(tool)
       {:error, reason} -> architect_error(reason, tool)
     end
@@ -2638,8 +2638,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp dispatch_work_request_planned_slice_error(reason), do: architect_error(reason, "dispatch_work_request_planned_slice")
 
-  defp record_planned_slice_delivery_error(%Ecto.Changeset{}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "record_planned_slice_delivery", "reason" => "invalid_planned_slice_delivery"}}
+  defp record_planned_slice_delivery_error(%Ecto.Changeset{} = changeset) do
+    changeset_invalid_params_error("record_planned_slice_delivery", "invalid_planned_slice_delivery", changeset)
   end
 
   defp record_planned_slice_delivery_error(reason)
@@ -6557,8 +6557,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp drop_nil_values(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
 
-  defp create_work_request_error(%Ecto.Changeset{}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "create_work_request", "reason" => "invalid_work_request"}}
+  defp create_work_request_error(%Ecto.Changeset{} = changeset) do
+    changeset_invalid_params_error("create_work_request", "invalid_work_request", changeset)
   end
 
   defp create_work_request_error(:id_already_exists) do
@@ -6864,6 +6864,69 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp invalid_params_error(tool, reason) do
     {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
+  end
+
+  defp changeset_invalid_params_error(tool, reason, %Ecto.Changeset{} = changeset) do
+    data =
+      case changeset_validation_errors(changeset) do
+        [] -> %{"tool" => tool, "reason" => reason_text(reason)}
+        errors -> %{"tool" => tool, "reason" => reason_text(reason), "validation_errors" => errors}
+      end
+
+    {:error, -32_602, "Invalid params", data}
+  end
+
+  defp changeset_validation_errors(%Ecto.Changeset{errors: errors}) do
+    Enum.map(errors, fn {field, error} -> changeset_validation_error(field, error) end)
+  end
+
+  defp changeset_validation_error(field, {message, opts}) do
+    field = Atom.to_string(field)
+
+    %{
+      "field" => field,
+      "message" => changeset_validation_message(field, message, opts),
+      "reason" => changeset_validation_reason(field, opts)
+    }
+    |> maybe_put_allowed_values(field, opts)
+  end
+
+  defp changeset_validation_message("review_lanes", _message, _opts) do
+    "must be Review Suite profiles only; GitHub review lanes do not belong here"
+  end
+
+  defp changeset_validation_message(_field, message, opts) do
+    Regex.replace(~r/%{(count|number)}/, message, fn _match, key ->
+      opts
+      |> Keyword.get(changeset_message_key(key))
+      |> to_string()
+    end)
+  end
+
+  defp changeset_message_key("count"), do: :count
+  defp changeset_message_key("number"), do: :number
+
+  defp changeset_validation_reason("review_lanes", _opts), do: "invalid_review_lanes"
+
+  defp changeset_validation_reason(_field, opts) do
+    case Keyword.get(opts, :validation) do
+      :required -> "required"
+      :inclusion -> "invalid_value"
+      :number -> "invalid_number"
+      validation when is_atom(validation) -> Atom.to_string(validation)
+      _validation -> "invalid"
+    end
+  end
+
+  defp maybe_put_allowed_values(detail, "review_lanes", _opts) do
+    Map.put(detail, "allowed_values", ReviewProfiles.review_suite_profiles())
+  end
+
+  defp maybe_put_allowed_values(detail, _field, opts) do
+    case Keyword.get(opts, :enum) do
+      values when is_list(values) -> Map.put(detail, "allowed_values", Enum.map(values, &reason_text/1))
+      _values -> detail
+    end
   end
 
   defp scope_validation_details(errors) when is_list(errors), do: Enum.map(errors, &scope_validation_detail/1)

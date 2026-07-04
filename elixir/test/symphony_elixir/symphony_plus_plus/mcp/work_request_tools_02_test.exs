@@ -1288,6 +1288,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     assert get_in(changeset_error_response, ["error", "code"]) == -32_602
     assert get_in(changeset_error_response, ["error", "data", "reason"]) == "invalid_planned_slice"
+    validation_errors = get_in(changeset_error_response, ["error", "data", "validation_errors"])
+
+    assert %{
+             "field" => "review_lanes",
+             "message" => "must be Review Suite profiles only; GitHub review lanes do not belong here",
+             "reason" => "invalid_review_lanes",
+             "allowed_values" => ["brief", "normal", "deep", "emergency"]
+           } = Enum.find(validation_errors, &(&1["field"] == "review_lanes"))
+
+    assert %{
+             "field" => "work_package_kind",
+             "message" => "is invalid",
+             "reason" => "invalid_value",
+             "allowed_values" => ["quick_fix", "hotfix", "docs", "investigation", "adapter", "mcp", "skill", "hooks"]
+           } = Enum.find(validation_errors, &(&1["field"] == "work_package_kind"))
+
     refute inspect(changeset_error_response) =~ "raw_secret_value"
     assert {:ok, []} = WorkRequestRepository.list_planned_slices(repo, work_request.id)
 
