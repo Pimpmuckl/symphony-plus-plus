@@ -23,13 +23,11 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
-  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service, as: SoloSessionService
   alias SymphonyElixir.SymphonyPlusPlus.TrackerAdapter
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -38,8 +36,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixirWeb.Endpoint
+  alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
   alias SymphonyElixirWeb.SymppDashboardApi.ScopeProjection
 
   import Ecto.Query, only: [from: 2]
@@ -58,9 +56,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   @local_operator_nonmergeable_terminal_package_statuses ["merged_into_phase", "closed", "abandoned"]
   @local_operator_noncloseable_terminal_package_statuses ["merged", "merged_into_phase", "abandoned"]
   @local_operator_hideable_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
-  @architect_handoff_anchor_id_prefix "SYMPP-WR-ARCH-"
-  @architect_handoff_anchor_id_like @architect_handoff_anchor_id_prefix <> "%"
-  @architect_handoff_anchor_kind "delegation"
 
   @spec authorize_board_browser(Conn.t(), term()) :: Conn.t()
   def authorize_board_browser(conn, _opts) do
@@ -634,7 +629,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   @spec operator_dashboard(Conn.t(), map()) :: Conn.t()
   def operator_dashboard(conn, _params) do
     send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_dashboard, fn repo ->
-      with {:ok, payload} <- operator_dashboard_payload(repo) do
+      with {:ok, payload} <- LocalOperatorDashboard.operator_dashboard_payload(repo) do
         json(conn, payload)
       end
     end)
@@ -712,10 +707,10 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   @spec operator_create_work_request(Conn.t(), map()) :: Conn.t()
   def operator_create_work_request(conn, params) do
     send_local_operator_response(conn, :work_request_update, Target.ledger(), :operator_create_work_request, fn repo ->
-      attrs = work_request_attrs(params)
+      attrs = LocalOperatorDashboard.work_request_attrs(params)
 
       with {:ok, work_request} <- WorkRequestService.create(repo, attrs),
-           {:ok, detail} <- operator_work_request_detail_payload(repo, work_request.id) do
+           {:ok, detail} <- LocalOperatorDashboard.operator_work_request_detail_payload(repo, work_request.id) do
         conn
         |> put_status(201)
         |> json(mutation_success_payload(%{work_request: detail}, %{work_request_id: work_request.id}))
@@ -726,9 +721,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   @spec operator_update_settings(Conn.t(), map()) :: Conn.t()
   def operator_update_settings(conn, params) do
     send_local_operator_response(conn, :dangerous_override, Target.ledger(), :operator_update_settings, fn repo ->
-      with {:ok, settings} <- OperatorSettingsRepository.update(repo, operator_settings_attrs(params)),
-           :ok <- run_operator_retention(repo, settings, force: true) do
-        json(conn, mutation_success_payload(%{settings: operator_settings_payload(settings)}))
+      with {:ok, settings} <- OperatorSettingsRepository.update(repo, LocalOperatorDashboard.operator_settings_attrs(params)),
+           :ok <- LocalOperatorDashboard.run_operator_retention(repo, settings, force: true) do
+        json(conn, mutation_success_payload(%{settings: LocalOperatorDashboard.operator_settings_payload(settings)}))
       end
     end)
   end
@@ -742,7 +737,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       :operator_archive_work_request,
       fn repo ->
         with {:ok, work_request} <- WorkRequestService.archive(repo, work_request_id) do
-          json(conn, mutation_success_payload(%{work_request: work_request_mutation_payload(work_request)}, %{work_request_id: work_request.id}))
+          json(conn, mutation_success_payload(%{work_request: LocalOperatorDashboard.work_request_mutation_payload(work_request)}, %{work_request_id: work_request.id}))
         end
       end
     )
@@ -757,7 +752,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       :operator_restore_work_request,
       fn repo ->
         with {:ok, work_request} <- WorkRequestService.restore(repo, work_request_id) do
-          json(conn, mutation_success_payload(%{work_request: archived_work_request_payload(work_request)}, %{work_request_id: work_request.id}))
+          json(conn, mutation_success_payload(%{work_request: LocalOperatorDashboard.archived_work_request_payload(work_request)}, %{work_request_id: work_request.id}))
         end
       end
     )
@@ -773,7 +768,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       fn repo ->
         with {:ok, "completed"} <- local_operator_work_request_state(params),
              {:ok, work_request} <- WorkRequestService.force_complete(repo, work_request_id) do
-          json(conn, mutation_success_payload(%{work_request: work_request_mutation_payload(work_request)}, %{dashboard: false, work_request_id: work_request.id}))
+          json(conn, mutation_success_payload(%{work_request: LocalOperatorDashboard.work_request_mutation_payload(work_request)}, %{dashboard: false, work_request_id: work_request.id}))
         end
       end
     )
@@ -1113,276 +1108,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     |> Conn.fetch_session()
     |> active_local_operator_session?()
   end
-
-  defp operator_dashboard_payload(repo) do
-    with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo),
-         {:ok, settings} <- OperatorSettingsRepository.get(repo),
-         :ok <- run_operator_retention(repo, settings),
-         {:ok, settings} <- OperatorSettingsRepository.get(repo),
-         {:ok, linked_work_package_id_sets} <- linked_work_package_id_sets(repo),
-         {:ok, architect_handoff_anchor_work_package_ids} <- architect_handoff_anchor_work_package_ids(repo),
-         {:ok, settings} <- dedupe_hidden_work_package_ids_for_local_operator(repo, settings),
-         {:ok, expired_unlinked_work_package_ids} <-
-           expired_unlinked_work_package_ids_for_local_operator(repo, settings, linked_work_package_id_sets.active),
-         hidden_work_package_ids =
-           settings
-           |> effective_hidden_work_package_ids(linked_work_package_id_sets.active)
-           |> MapSet.union(expired_unlinked_work_package_ids)
-           |> MapSet.union(linked_work_package_id_sets.archived_only)
-           |> MapSet.union(architect_handoff_anchor_work_package_ids),
-         opts = [repo_identity_catalog: repo_identity_catalog, hidden_work_package_ids: hidden_work_package_ids],
-         {:ok, board} <- Dashboard.operator_board(repo, opts),
-         {:ok, work_requests} <- Dashboard.work_requests(repo, opts),
-         {:ok, archived_work_requests} <- Dashboard.archived_work_requests(repo, opts),
-         {:ok, guidance_requests} <- Dashboard.human_guidance_requests(repo, opts),
-         {:ok, solo_sessions} <- Dashboard.solo_sessions(repo, %{}, opts),
-         {:ok, work_request_details} <-
-           operator_work_request_board_details(repo, Map.get(work_requests, :work_requests, []), repo_identity_catalog) do
-      active_blocking_edges = Map.get(board, :active_blocking_edges, [])
-      board = Map.delete(board, :active_blocking_edges)
-
-      board = hide_local_operator_work_packages(board, hidden_work_package_ids)
-      active_blocking_edges = hide_local_operator_blocking_edges(active_blocking_edges, hidden_work_package_ids)
-
-      {:ok,
-       %{
-         generated_at: DateTime.utc_now(:microsecond) |> DateTime.to_iso8601(),
-         ledger: %{database: dashboard_ledger_database(repo)},
-         active_blocking_edges: active_blocking_edges,
-         board: board,
-         settings: operator_settings_payload(settings),
-         linked_work_package_ids: linked_work_package_id_sets.persisted |> MapSet.to_list() |> Enum.sort(),
-         work_requests: work_requests,
-         archived_work_requests: archived_work_requests,
-         work_request_details: work_request_details,
-         guidance_requests: guidance_requests,
-         solo_sessions: solo_sessions
-       }}
-    end
-  end
-
-  defp hide_local_operator_work_packages(board, hidden_ids) do
-    groups = Map.get(board, :groups, %{})
-
-    groups =
-      Map.new(groups, fn {status, cards} ->
-        {status, Enum.reject(cards, &MapSet.member?(hidden_ids, Map.get(&1, :id)))}
-      end)
-
-    board
-    |> Map.put(:groups, groups)
-    |> Map.put(:visible_count, groups |> Map.values() |> Enum.map(&length/1) |> Enum.sum())
-  end
-
-  defp hide_local_operator_blocking_edges(active_blocking_edges, hidden_ids) do
-    Enum.reject(active_blocking_edges, &MapSet.member?(hidden_ids, Map.get(&1, :work_package_id)))
-  end
-
-  defp effective_hidden_work_package_ids(%OperatorSettings{} = settings, linked_work_package_ids) do
-    settings.hidden_work_package_ids
-    |> MapSet.new()
-    |> MapSet.difference(linked_work_package_ids)
-  end
-
-  defp dedupe_hidden_work_package_ids_for_local_operator(repo, %OperatorSettings{} = settings) do
-    hidden_work_package_ids = Enum.uniq(settings.hidden_work_package_ids)
-
-    if hidden_work_package_ids == settings.hidden_work_package_ids do
-      {:ok, settings}
-    else
-      OperatorSettingsRepository.update(repo, %{"hidden_work_package_ids" => hidden_work_package_ids})
-    end
-  end
-
-  defp expired_unlinked_work_package_ids_for_local_operator(repo, %OperatorSettings{} = settings, linked_work_package_ids) do
-    cutoff = DateTime.add(DateTime.utc_now(:microsecond), -settings.work_request_archive_after_days * 24 * 60 * 60, :second)
-
-    WorkPackage
-    |> expired_terminal_work_package_query(cutoff)
-    |> repo.all()
-    |> MapSet.new(& &1.id)
-    |> MapSet.difference(linked_work_package_ids)
-    |> then(&{:ok, &1})
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp expired_terminal_work_package_query(queryable, cutoff) do
-    from(work_package in queryable,
-      left_join: planned_slice in PlannedSlice,
-      on: planned_slice.work_package_id == work_package.id,
-      left_join: child_work_package in WorkPackage,
-      on: child_work_package.parent_id == work_package.id,
-      where: work_package.status in ^@local_operator_hideable_package_statuses,
-      where: is_nil(work_package.parent_id),
-      where: is_nil(work_package.phase_id),
-      where: is_nil(planned_slice.id),
-      where: is_nil(child_work_package.id),
-      where: work_package.updated_at <= ^cutoff,
-      order_by: [asc: work_package.updated_at, asc: work_package.id]
-    )
-  end
-
-  defp linked_work_package_id_sets(repo) do
-    rows =
-      repo.all(
-        from(planned_slice in PlannedSlice,
-          left_join: work_request in WorkRequest,
-          on: work_request.id == planned_slice.work_request_id,
-          where: not is_nil(planned_slice.work_package_id),
-          select: {planned_slice.work_package_id, work_request.id, work_request.archived_at}
-        )
-      )
-
-    sets =
-      Enum.reduce(rows, %{persisted: MapSet.new(), active: MapSet.new(), archived: MapSet.new()}, fn
-        {work_package_id, nil, _archived_at}, sets ->
-          %{sets | persisted: MapSet.put(sets.persisted, work_package_id)}
-
-        {work_package_id, _work_request_id, nil}, sets ->
-          %{
-            sets
-            | persisted: MapSet.put(sets.persisted, work_package_id),
-              active: MapSet.put(sets.active, work_package_id)
-          }
-
-        {work_package_id, _work_request_id, _archived_at}, sets ->
-          %{
-            sets
-            | persisted: MapSet.put(sets.persisted, work_package_id),
-              archived: MapSet.put(sets.archived, work_package_id)
-          }
-      end)
-
-    {:ok,
-     %{
-       persisted: sets.persisted,
-       active: sets.active,
-       archived_only: MapSet.difference(sets.archived, sets.active)
-     }}
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp architect_handoff_anchor_work_package_ids(repo) do
-    ids =
-      repo.all(
-        from(work_package in WorkPackage,
-          where: work_package.kind == @architect_handoff_anchor_kind,
-          where: like(work_package.id, ^@architect_handoff_anchor_id_like),
-          select: work_package.id
-        )
-      )
-
-    {:ok, MapSet.new(ids)}
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp operator_work_request_detail_payload(repo, work_request_id) when is_binary(work_request_id) do
-    with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo) do
-      Dashboard.work_request_detail(repo, work_request_id, repo_identity_catalog: repo_identity_catalog)
-    end
-  end
-
-  defp operator_work_request_board_details(repo, work_request_cards, repo_identity_catalog) when is_list(work_request_cards) do
-    work_request_ids =
-      work_request_cards
-      |> Enum.map(&Map.get(&1, :id))
-      |> Enum.reject(&is_nil/1)
-
-    Dashboard.work_request_board_details(repo, work_request_ids, repo_identity_catalog: repo_identity_catalog)
-  end
-
-  defp work_request_attrs(params) do
-    %{
-      "title" => text_param(params, "title"),
-      "repo" => text_param(params, "repo"),
-      "base_branch" => text_param(params, "base_branch"),
-      "work_type" => text_param(params, "work_type", "feature"),
-      "human_description" => text_param(params, "human_description"),
-      "desired_dispatch_shape" => text_param(params, "desired_dispatch_shape", "architect_led_feature_branch"),
-      "status" => text_param(params, "status", "ready_for_clarification"),
-      "creator_kind" => text_param(params, "creator_kind", "human"),
-      "creator_name" => text_param(params, "creator_name", @local_operator_actor),
-      "created_via" => text_param(params, "created_via", "cockpit"),
-      "constraints" => constraints_param(params)
-    }
-  end
-
-  defp operator_settings_attrs(params) do
-    %{}
-    |> put_settings_param(params, "work_request_archive_after_days")
-    |> put_settings_param(params, "solo_session_delete_after_days")
-  end
-
-  defp put_settings_param(attrs, params, key) do
-    case Map.fetch(params, key) do
-      {:ok, value} -> Map.put(attrs, key, value)
-      :error -> put_atom_settings_param(attrs, params, key)
-    end
-  end
-
-  defp put_atom_settings_param(attrs, params, key) do
-    atom_key = String.to_existing_atom(key)
-
-    case Map.fetch(params, atom_key) do
-      {:ok, value} -> Map.put(attrs, key, value)
-      :error -> attrs
-    end
-  end
-
-  defp operator_settings_payload(%OperatorSettings{} = settings) do
-    %{
-      work_request_archive_after_days: settings.work_request_archive_after_days,
-      solo_session_delete_after_days: settings.solo_session_delete_after_days,
-      hidden_work_package_ids: settings.hidden_work_package_ids
-    }
-  end
-
-  defp run_operator_retention(repo, %OperatorSettings{} = settings, opts \\ []) do
-    RetentionThrottle.run(repo, settings, &run_operator_retention_pass(repo, settings, &1), opts)
-  end
-
-  defp run_operator_retention_pass(repo, %OperatorSettings{} = settings, now) do
-    with {:ok, _work_request_summary} <-
-           WorkRequestService.retention_pass(repo,
-             archive_after_days: settings.work_request_archive_after_days,
-             delete_after_days: settings.solo_session_delete_after_days
-           ),
-         {:ok, _solo_archived_count} <-
-           SoloSessionService.archive_stale(repo, now, settings.work_request_archive_after_days),
-         {:ok, _solo_deleted_count} <-
-           SoloSessionService.delete_archived(repo, now, settings.solo_session_delete_after_days) do
-      :ok
-    end
-  end
-
-  defp archived_work_request_payload(work_request) do
-    %{
-      id: work_request.id,
-      completed_at: timestamp(work_request.completed_at),
-      archived_at: timestamp(work_request.archived_at),
-      archive_reason: work_request.archive_reason
-    }
-  end
-
-  defp work_request_mutation_payload(%WorkRequest{} = work_request) do
-    %{
-      id: work_request.id,
-      completed_at: timestamp(work_request.completed_at),
-      completion_source: work_request.completion_source,
-      archived_at: timestamp(work_request.archived_at),
-      archive_reason: work_request.archive_reason,
-      operational_state: completed_work_request_mutation_state(work_request)
-    }
-  end
-
-  defp completed_work_request_mutation_state(%WorkRequest{completed_at: %DateTime{}, status: status}) do
-    %{key: "completed", label: "Completed", tone: "success", raw_status: status}
-  end
-
-  defp completed_work_request_mutation_state(%WorkRequest{}), do: nil
 
   defp local_operator_work_request_state(params) do
     case text_param(params, "state") || text_param(params, "status") do
@@ -1743,27 +1468,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp timestamp(%DateTime{} = timestamp), do: DateTime.to_iso8601(timestamp)
   defp timestamp(nil), do: nil
 
-  defp constraints_param(%{"constraints" => constraints}) when is_map(constraints), do: constraints
-  defp constraints_param(%{constraints: constraints}) when is_map(constraints), do: constraints
-
-  defp constraints_param(params) do
-    params
-    |> Map.take(["allowed_paths", "forbidden_paths", "stop_conditions", "compatibility_stance", "validation_expectations", "dependencies_notes"])
-    |> Enum.reject(fn {_key, value} -> blank_param?(value) end)
-    |> Map.new(fn {key, value} -> {key, normalize_constraint_value(value)} end)
-  end
-
-  defp normalize_constraint_value(value) when is_list(value), do: value |> Enum.map(&text_value/1) |> Enum.reject(&(&1 == ""))
-  defp normalize_constraint_value(value) when is_binary(value), do: newline_list(value)
-  defp normalize_constraint_value(value), do: value
-
-  defp newline_list(value) do
-    value
-    |> String.split(["\r\n", "\n"], trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-  end
-
   defp scoped_question(repo, work_request_id, question_id) when is_binary(work_request_id) and is_binary(question_id) do
     with {:ok, questions} <- WorkRequestService.list_questions(repo, work_request_id) do
       case Enum.find(questions, &(&1.id == question_id)) do
@@ -1807,10 +1511,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     end
   end
 
-  defp text_value(value) when is_binary(value), do: String.trim(value)
-  defp text_value(nil), do: ""
-  defp text_value(value), do: to_string(value)
-
   defp github_sync_opts(%{"mode" => "auto"}) do
     [
       client: Application.get_env(:symphony_elixir, :sympp_github_client, DefaultClient),
@@ -1819,11 +1519,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp github_sync_opts(_params), do: []
-
-  defp blank_param?(value) when is_binary(value), do: String.trim(value) == ""
-  defp blank_param?(value) when is_list(value), do: value |> Enum.map(&text_value/1) |> Enum.all?(&(&1 == ""))
-  defp blank_param?(nil), do: true
-  defp blank_param?(_value), do: false
 
   defp architect_handoff_opts(repo) do
     [
