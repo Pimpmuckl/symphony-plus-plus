@@ -1,0 +1,2251 @@
+defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
+  @moduledoc false
+
+  import Ecto.Query, only: [from: 2]
+
+  alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
+  alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
+  alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
+  alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult
+  alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
+  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes
+  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
+  alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewSuiteRounds
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+
+  @complete_plan_statuses ["done", "completed", "skipped"]
+  @finding_replay_retry_attempts 50
+  @review_promotable_work_package_statuses ["ready_for_worker", "claimed", "planning", "implementing"]
+  @scope_guard_gate "scope_guard"
+
+  @type repo :: module()
+  @type mcp_error :: {:error, integer(), String.t(), map()}
+  @type worker_result :: {:ok, term()} | {:tool_error, term()} | {:error, term()} | mcp_error()
+
+  @spec submit_review_package(repo(), Session.t(), map()) :: worker_result()
+  def submit_review_package(repo, %Session{} = session, arguments) do
+    with {:ok, summary} <- required_argument(arguments, "summary"),
+         {:ok, tests} <- required_string_list(arguments, "tests"),
+         {:ok, artifacts} <- required_string_list(arguments, "artifacts"),
+         artifacts = Enum.uniq(artifacts),
+         {:ok, reviews} <- optional_review_list(arguments, "reviews"),
+         {:ok, acceptance_criteria_met} <- optional_boolean(arguments, "acceptance_criteria_met", nil) do
+      submit_review_package_transaction(repo, session, arguments, artifacts, %{
+        "type" => "review_package",
+        "summary" => summary,
+        "tests" => tests,
+        "artifacts" => artifacts,
+        "reviews" => reviews,
+        "acceptance_criteria_met" => acceptance_criteria_met
+      })
+    end
+  end
+
+  @spec attach_review_suite_result(repo(), Session.t(), map()) :: worker_result()
+  def attach_review_suite_result(repo, %Session{} = session, arguments) do
+    with {:ok, arguments, payload} <- review_suite_result_arguments(arguments, session),
+         status = Map.get(payload, "status"),
+         verdict = Map.get(payload, "verdict"),
+         :ok <- require_passing_review_suite_result(status, verdict) do
+      attach_review_suite_result_transaction(repo, session, arguments, payload)
+    end
+  end
+
+  @spec mark_ready(repo(), Session.t(), term(), term(), function()) ::
+          {:ok, {WorkPackage.t(), term(), [term()]}}
+          | {:tool_error, term()}
+          | {:error, term()}
+          | mcp_error()
+  def mark_ready(repo, %Session{} = session, blocker_closeout_plan, review_suite_result, apply_blocker_closeout) do
+    repo
+    |> run_worker_transaction(fn ->
+      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
+           :ok <- lock_work_package(repo, Session.work_package_id(session)),
+           {:ok, _review_suite_result} <-
+             maybe_attach_mark_ready_review_suite_result(repo, session, review_suite_result),
+           {:ok, blocker_closeout} <- apply_blocker_closeout.(repo, session, blocker_closeout_plan),
+           {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
+           {:ok, readiness_warnings} <- readiness_gates(repo, state),
+           ready_status = StateMachine.terminal_readiness_status(state.work_package),
+           :ok <- StateMachine.validate_ready_transition(state.work_package, ready_status, actor(session)),
+           {:ok, work_package} <-
+             WorkPackageRepository.update_status(repo, state.work_package.id, state.work_package.status, ready_status) do
+        {:ok, {work_package, blocker_closeout, readiness_warnings}}
+      end
+    end)
+  end
+
+  @spec mark_ready_review_suite_result(map(), Session.t()) :: {:ok, nil | {map(), map()}} | {:tool_error, term()}
+  def mark_ready_review_suite_result(arguments, %Session{} = session) do
+    with {:ok, round_id} <- optional_string_argument(arguments, "review_suite_round_id") do
+      mark_ready_review_suite_result_for_round(round_id, session)
+    end
+  end
+
+  @spec child_ready_approval_gates(repo(), map()) ::
+          :ok | {:error, {:readiness_failed, [String.t()], [map()]}} | {:error, term()}
+  def child_ready_approval_gates(repo, state) do
+    with {:ok, {required_review_lanes, _warnings}} <- ReviewLanes.required(repo, state.work_package),
+         {:ok, reasons} <- readiness_failure_reasons(repo, state, required_review_lanes) do
+      reasons = Enum.reject(reasons, &(Map.get(&1, "gate") in ["status_ci_waiting", "status_reviewing"]))
+      missing = missing_readiness_gates(reasons)
+
+      if missing == [], do: :ok, else: {:error, {:readiness_failed, missing, reasons}}
+    end
+  end
+
+  @spec maybe_put_readiness_warnings(map(), [term()]) :: map()
+  def maybe_put_readiness_warnings(payload, []), do: payload
+  def maybe_put_readiness_warnings(payload, warnings), do: Map.put(payload, "warnings", warnings)
+
+  defp mark_ready_review_suite_result_for_round(nil, %Session{}), do: {:ok, nil}
+
+  defp mark_ready_review_suite_result_for_round(round_id, %Session{} = session) do
+    with {:ok, arguments, payload} <- review_suite_result_arguments(%{"round_id" => round_id}, session),
+         :ok <- require_passing_review_suite_result(Map.get(payload, "status"), Map.get(payload, "verdict")) do
+      {:ok, {arguments, payload}}
+    end
+  end
+
+  defp maybe_attach_mark_ready_review_suite_result(_repo, %Session{}, nil), do: {:ok, nil}
+
+  defp maybe_attach_mark_ready_review_suite_result(repo, %Session{} = session, {arguments, payload}) do
+    case attach_review_suite_result_transaction_body(repo, session, arguments, payload) do
+      {:error, _code, _message, _data} = error -> error
+      result -> {:ok, result}
+    end
+  end
+
+  defp submit_review_package_transaction(repo, %Session{} = session, arguments, artifacts, payload) do
+    case repo.transaction(fn ->
+           submit_review_package_transaction_body(repo, session, arguments, artifacts, payload)
+         end) do
+      {:ok, result} -> {:ok, result}
+      {:error, {:mcp_error, code, message, data}} -> {:error, code, message, data}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp submit_review_package_transaction_body(repo, %Session{} = session, arguments, artifacts, payload) do
+    work_package_id = Session.work_package_id(session)
+
+    with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
+         :ok <- lock_work_package(repo, work_package_id),
+         {:ok, state} <- PlanningRepository.get_state(repo, work_package_id),
+         {:ok, requested_head_sha} <- optional_head_sha(arguments) do
+      replay_head_sha = requested_head_sha || latest_current_head_sha(state.progress_events)
+      arguments = maybe_put_headless_review_idempotency_key(arguments, requested_head_sha, payload)
+      arguments = maybe_put_review_head_sha(arguments, replay_head_sha)
+      payload = maybe_put_review_head_sha(payload, replay_head_sha)
+
+      submit_or_replay_review_package(
+        repo,
+        session,
+        arguments,
+        artifacts,
+        payload,
+        replay_head_sha,
+        state.work_package,
+        state.progress_events
+      )
+    else
+      {:tool_error, reason} ->
+        repo.rollback({:mcp_error, -32_602, "Invalid params", %{"tool" => "submit_review_package", "reason" => reason}})
+
+      {:error, reason} ->
+        repo.rollback(reason)
+    end
+  end
+
+  defp submit_or_replay_review_package(
+         repo,
+         %Session{} = session,
+         arguments,
+         artifacts,
+         payload,
+         requested_head_sha,
+         work_package,
+         progress_events
+       ) do
+    case replay_existing_metadata_event(repo, session, arguments, "submit_review_package", "review_package_submitted", payload, progress_events) do
+      {:ok, result} ->
+        result
+
+      :not_found ->
+        submit_new_review_package(
+          repo,
+          session,
+          arguments,
+          artifacts,
+          payload,
+          requested_head_sha,
+          work_package,
+          progress_events
+        )
+
+      {:error, code, message, data} ->
+        repo.rollback({:mcp_error, code, message, data})
+    end
+  end
+
+  defp submit_new_review_package(repo, %Session{} = session, arguments, artifacts, payload, requested_head_sha, work_package, progress_events) do
+    case review_package_head_sha(requested_head_sha, progress_events, work_package) do
+      {:ok, head_sha} ->
+        case append_metadata_event(repo, session, arguments, "submit_review_package", "review_package_submitted", payload) do
+          {:ok, result} ->
+            persist_review_artifacts_and_promote_or_rollback(repo, session, artifacts, head_sha, result, work_package)
+
+          {:error, code, message, data} ->
+            repo.rollback({:mcp_error, code, message, data})
+        end
+
+      {:tool_error, reason} ->
+        repo.rollback({:mcp_error, -32_602, "Invalid params", %{"tool" => "submit_review_package", "reason" => reason}})
+    end
+  end
+
+  defp review_package_head_sha(nil, progress_events, %WorkPackage{} = work_package) do
+    case latest_current_head_sha(progress_events) do
+      current_head_sha when is_binary(current_head_sha) -> {:ok, current_head_sha}
+      _missing_head -> missing_review_package_head_sha(work_package)
+    end
+  end
+
+  defp review_package_head_sha(head_sha, progress_events, %WorkPackage{} = work_package) when is_binary(head_sha) do
+    current_head_sha = latest_current_head_sha(progress_events)
+
+    cond do
+      is_binary(current_head_sha) and head_sha == current_head_sha ->
+        {:ok, head_sha}
+
+      is_binary(current_head_sha) and is_binary(head_sha) ->
+        {:tool_error, "stale_head_sha"}
+
+      merge_required?(work_package) ->
+        {:tool_error, "missing_current_head_sha"}
+
+      true ->
+        {:ok, head_sha}
+    end
+  end
+
+  defp missing_review_package_head_sha(%WorkPackage{} = work_package) do
+    if merge_required?(work_package) do
+      {:tool_error, "missing_current_head_sha"}
+    else
+      {:tool_error, "missing_head_sha"}
+    end
+  end
+
+  defp optional_head_sha(arguments) do
+    case Map.fetch(arguments, "head_sha") do
+      :error ->
+        {:ok, nil}
+
+      {:ok, nil} ->
+        {:ok, nil}
+
+      {:ok, head_sha} when is_binary(head_sha) ->
+        case String.trim(head_sha) do
+          "" -> {:ok, nil}
+          trimmed -> {:ok, trimmed}
+        end
+
+      {:ok, _head_sha} ->
+        {:tool_error, "invalid_head_sha"}
+    end
+  end
+
+  defp maybe_put_review_head_sha(map, head_sha) when is_binary(head_sha), do: Map.put(map, "head_sha", head_sha)
+  defp maybe_put_review_head_sha(map, _head_sha), do: map
+
+  defp maybe_put_headless_review_idempotency_key(arguments, nil, payload) do
+    Map.put_new(arguments, "idempotency_key", metadata_idempotency_key(Map.put(payload, "source_tool", "submit_review_package")))
+  end
+
+  defp maybe_put_headless_review_idempotency_key(arguments, _requested_head_sha, _payload), do: arguments
+
+  defp persist_review_artifacts_and_promote_or_rollback(repo, %Session{} = session, artifacts, head_sha, result, %WorkPackage{} = work_package) do
+    with :ok <- append_review_artifacts(repo, session, artifacts, head_sha),
+         :ok <- promote_stale_package_to_reviewing(repo, work_package) do
+      result
+    else
+      {:error, reason} -> repo.rollback(reason)
+    end
+  end
+
+  defp append_review_artifacts(repo, %Session{} = session, artifacts, head_sha) do
+    work_package_id = Session.work_package_id(session)
+
+    case PlanningRepository.list_artifacts(repo, work_package_id) do
+      {:ok, existing_artifacts} ->
+        append_review_artifacts(repo, work_package_id, existing_artifacts, head_sha, artifacts)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp append_review_artifacts(repo, work_package_id, existing_artifacts, head_sha, artifacts) do
+    Enum.reduce_while(artifacts, :ok, fn artifact, :ok ->
+      case append_review_artifact(repo, work_package_id, existing_artifacts, head_sha, artifact) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp append_review_artifact(repo, work_package_id, existing_artifacts, head_sha, artifact) do
+    if persisted_review_artifact?(existing_artifacts, work_package_id, head_sha, artifact) do
+      :ok
+    else
+      attrs = %{
+        "id" => review_artifact_id(work_package_id, head_sha, artifact),
+        "work_package_id" => work_package_id,
+        "path" => artifact,
+        "title" => artifact,
+        "kind" => "review",
+        "uri" => review_artifact_uri(artifact)
+      }
+
+      case PlanningService.append_artifact(repo, attrs) do
+        {:ok, _artifact} -> :ok
+        {:error, :id_already_exists} -> replay_review_artifact(repo, work_package_id, head_sha, artifact)
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp replay_review_artifact(repo, work_package_id, head_sha, artifact) do
+    case PlanningRepository.list_artifacts(repo, work_package_id) do
+      {:ok, artifacts} ->
+        if persisted_review_artifact?(artifacts, work_package_id, head_sha, artifact) do
+          :ok
+        else
+          {:error, :id_already_exists}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp review_artifact_id(work_package_id, head_sha, artifact) do
+    material = [work_package_id, head_sha || "no-head", artifact] |> Enum.join(":")
+    "artifact_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
+  end
+
+  defp review_artifact_uri(artifact) do
+    if String.contains?(artifact, "://"), do: artifact, else: nil
+  end
+
+  defp review_suite_result_arguments(arguments, %Session{} = session) do
+    if review_suite_round_id_argument?(arguments) do
+      resolved_review_suite_result_arguments(arguments, session)
+    else
+      explicit_review_suite_result_arguments(arguments, session)
+    end
+  end
+
+  defp review_suite_round_id_argument?(arguments) do
+    case Map.get(arguments, "round_id") do
+      value when is_binary(value) -> String.trim(value) != ""
+      _value -> false
+    end
+  end
+
+  defp explicit_review_suite_result_arguments(arguments, %Session{} = session) do
+    with {:ok, work_package_id} <- optional_string_argument(arguments, "work_package_id", Session.work_package_id(session)),
+         {:ok, requested_head_sha} <- required_argument(arguments, "head_sha"),
+         {:ok, suite} <- required_argument(arguments, "suite"),
+         {:ok, suite} <- review_suite_argument(suite),
+         {:ok, anchor} <- required_argument(arguments, "anchor"),
+         {:ok, summary} <- required_argument(arguments, "summary"),
+         {:ok, status} <- required_argument(arguments, "status"),
+         {:ok, verdict} <- required_argument(arguments, "verdict") do
+      {:ok, arguments,
+       %{
+         "type" => "review_suite_result",
+         "source_tool" => "attach_review_suite_result",
+         "work_package_id" => work_package_id,
+         "head_sha" => requested_head_sha,
+         "suite" => suite,
+         "anchor" => anchor,
+         "summary" => summary,
+         "status" => normalized_review_suite_status(status),
+         "verdict" => normalized_review_suite_verdict(verdict)
+       }}
+    end
+  end
+
+  defp resolved_review_suite_result_arguments(arguments, %Session{} = session) do
+    with {:ok, work_package_id} <- optional_string_argument(arguments, "work_package_id", Session.work_package_id(session)),
+         {:ok, round_id} <- required_argument(arguments, "round_id"),
+         {:ok, resolved} <-
+           ReviewSuiteRounds.resolve(round_id,
+             lane: Map.get(arguments, "lane"),
+             profile: Map.get(arguments, "profile")
+           ),
+         :ok <- require_review_suite_identity_match(resolved, "work_package_id", work_package_id) do
+      payload =
+        resolved
+        |> Map.merge(%{
+          "type" => "review_suite_result",
+          "source_tool" => "attach_review_suite_result",
+          "work_package_id" => work_package_id
+        })
+        |> Map.update!("status", &normalized_review_suite_status/1)
+        |> Map.update!("verdict", &normalized_review_suite_verdict/1)
+
+      resolved_arguments =
+        arguments
+        |> Map.put("head_sha", Map.fetch!(payload, "head_sha"))
+        |> Map.put_new("summary", Map.fetch!(payload, "summary"))
+
+      {:ok, resolved_arguments, payload}
+    else
+      {:tool_error, reason} -> {:tool_error, reason}
+      {:error, reason} -> {:tool_error, reason}
+    end
+  end
+
+  defp attach_review_suite_result_transaction(repo, %Session{} = session, arguments, payload) do
+    case repo.transaction(fn ->
+           attach_review_suite_result_transaction_body(repo, session, arguments, payload)
+         end) do
+      {:ok, result} -> {:ok, result}
+      {:error, {:mcp_error, code, message, data}} -> {:error, code, message, data}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp attach_review_suite_result_transaction_body(repo, %Session{} = session, arguments, payload) do
+    case replay_existing_review_suite_result(repo, session, arguments, payload) do
+      {:ok, result} ->
+        result
+
+      :new ->
+        append_new_review_suite_result(repo, session, arguments, payload)
+
+      {:error, code, message, data} ->
+        repo.rollback({:mcp_error, code, message, data})
+    end
+  end
+
+  defp replay_existing_review_suite_result(repo, %Session{} = session, arguments, payload) do
+    case PlanningService.require_valid_assignment(repo, session.assignment) do
+      :ok -> replay_existing_review_suite_result_for_valid_assignment(repo, session, arguments, payload)
+      {:error, reason} -> worker_error(reason, "attach_review_suite_result")
+    end
+  end
+
+  defp replay_existing_review_suite_result_for_valid_assignment(repo, %Session{} = session, arguments, payload) do
+    replay_payload = review_suite_payload(payload, arguments, Map.fetch!(payload, "head_sha"))
+
+    case metadata_event_attrs(session, arguments, "attach_review_suite_result", "review_suite_passed", replay_payload) do
+      {:ok, idempotency_key, attrs} -> replay_existing_review_suite_result_event(repo, session, idempotency_key, attrs)
+      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "attach_review_suite_result", "reason" => reason}}
+    end
+  end
+
+  defp replay_existing_review_suite_result_event(repo, %Session{} = session, idempotency_key, attrs) do
+    case existing_progress_event(repo, session, idempotency_key) do
+      {:ok, event} -> replay_progress_event(repo, session, event, attrs, "attach_review_suite_result")
+      {:error, :not_found} -> :new
+      {:error, reason} -> worker_error(reason, "attach_review_suite_result")
+    end
+  end
+
+  defp append_new_review_suite_result(repo, %Session{} = session, arguments, payload) do
+    work_package_id = Session.work_package_id(session)
+    requested_head_sha = Map.fetch!(payload, "head_sha")
+
+    with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
+         :ok <- lock_work_package(repo, work_package_id),
+         {:ok, state} <- PlanningRepository.get_state(repo, work_package_id),
+         {:ok, head_sha} <- review_package_head_sha(requested_head_sha, state.progress_events, state.work_package),
+         :ok <- reject_failed_review_suite_result_override(state.progress_events, work_package_id, head_sha),
+         payload <- review_suite_payload(payload, arguments, head_sha),
+         :ok <- require_review_suite_round_identity(payload, state.work_package, state.progress_events),
+         {:ok, result} <- append_metadata_event(repo, session, arguments, "attach_review_suite_result", "review_suite_passed", payload),
+         :ok <- append_review_suite_artifact(repo, work_package_id, head_sha),
+         :ok <- promote_stale_package_to_reviewing(repo, state.work_package) do
+      result
+    else
+      {:tool_error, {:review_suite_round_identity_mismatch, _field, _expected, _got} = reason} ->
+        {:error, code, message, data} = invalid_params_error("attach_review_suite_result", reason)
+        repo.rollback({:mcp_error, code, message, data})
+
+      {:tool_error, reason} ->
+        repo.rollback({:mcp_error, -32_602, "Invalid params", %{"tool" => "attach_review_suite_result", "reason" => reason}})
+
+      {:error, code, message, data} ->
+        repo.rollback({:mcp_error, code, message, data})
+
+      {:error, reason} ->
+        repo.rollback(reason)
+    end
+  end
+
+  defp review_suite_payload(payload, arguments, head_sha) do
+    payload
+    |> Map.put("head_sha", head_sha)
+    |> maybe_put_review_suite_field(arguments, "lane")
+    |> maybe_put_review_suite_field(arguments, "profile")
+    |> maybe_put_review_suite_field(arguments, "reviewer")
+    |> maybe_put_review_suite_field(arguments, "round_id")
+  end
+
+  defp review_suite_argument(suite) do
+    case ReviewProfiles.normalize_suite(suite) do
+      "review-suite" -> {:ok, "review-suite"}
+      _suite -> {:tool_error, "invalid_review_suite"}
+    end
+  end
+
+  defp maybe_put_review_suite_field(payload, arguments, key) when key in ["lane", "profile"] do
+    value = review_suite_profile_argument(Map.get(arguments, key))
+
+    cond do
+      not is_binary(value) -> payload
+      Map.has_key?(payload, key) -> payload
+      true -> Map.put(payload, key, value)
+    end
+  end
+
+  defp maybe_put_review_suite_field(payload, arguments, key) do
+    case Map.get(arguments, key) do
+      value when is_binary(value) ->
+        value = String.trim(value)
+        if value == "" or Map.has_key?(payload, key), do: payload, else: Map.put(payload, key, value)
+
+      _value ->
+        payload
+    end
+  end
+
+  defp review_suite_profile_argument(value) when is_binary(value) do
+    case ReviewProfiles.normalize_profile(value) do
+      "" -> nil
+      value -> value
+    end
+  end
+
+  defp review_suite_profile_argument(_value), do: nil
+
+  defp require_review_suite_round_identity(%{} = payload, %WorkPackage{} = work_package, progress_events) do
+    with :ok <- require_review_suite_identity_match(payload, "repo", work_package.repo),
+         :ok <- require_review_suite_identity_match(payload, "base_branch", work_package.base_branch) do
+      require_review_suite_identity_match(payload, "branch", latest_current_branch(progress_events))
+    end
+  end
+
+  defp require_review_suite_identity_match(payload, field, expected) do
+    case review_suite_identity_value(payload, field) do
+      nil ->
+        :ok
+
+      got ->
+        if review_suite_identity_matches?(field, got, expected) do
+          :ok
+        else
+          {:tool_error, {:review_suite_round_identity_mismatch, field, expected, got}}
+        end
+    end
+  end
+
+  defp review_suite_identity_matches?("repo", got, expected) do
+    filled_string?(expected) and
+      (repo_scope_name_matches?(got, expected, []) or String.downcase(String.trim(got)) == String.downcase(String.trim(expected)))
+  end
+
+  defp review_suite_identity_matches?(_field, got, expected) do
+    case {normalize_review_suite_ref(got), normalize_review_suite_ref(expected)} do
+      {got, expected} when is_binary(got) and is_binary(expected) -> got == expected
+      _refs -> false
+    end
+  end
+
+  defp normalize_review_suite_ref(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> remove_review_suite_ref_prefix("refs/heads/")
+    |> remove_review_suite_ref_prefix("origin/")
+    |> empty_string_to_nil()
+  end
+
+  defp normalize_review_suite_ref(_value), do: nil
+
+  defp remove_review_suite_ref_prefix(value, prefix) do
+    if String.starts_with?(value, prefix), do: String.replace_prefix(value, prefix, ""), else: value
+  end
+
+  defp empty_string_to_nil(""), do: nil
+  defp empty_string_to_nil(value), do: value
+
+  defp review_suite_identity_value(payload, field) do
+    case Map.get(payload, field) do
+      value when is_binary(value) ->
+        value = String.trim(value)
+        if value == "", do: nil, else: value
+
+      _value ->
+        nil
+    end
+  end
+
+  defp reject_failed_review_suite_result_override(progress_events, work_package_id, head_sha) do
+    failed_result? =
+      progress_events
+      |> MetadataProjection.current_head_review_suite_result_events(work_package_id, head_sha)
+      |> Enum.any?(&failed_review_suite_result_payload?(&1, work_package_id))
+
+    if failed_result? do
+      {:tool_error, "failed_review_suite_result_exists"}
+    else
+      :ok
+    end
+  end
+
+  defp failed_review_suite_result_payload?(%ProgressEvent{payload: payload}, work_package_id) do
+    Map.get(payload, "work_package_id") == work_package_id and
+      not (review_suite_status_passed?(Map.get(payload, "status")) and review_suite_verdict_passed?(Map.get(payload, "verdict")))
+  end
+
+  defp require_passing_review_suite_result(status, verdict) do
+    if review_suite_status_passed?(status) and review_suite_verdict_passed?(verdict) do
+      :ok
+    else
+      normalized_status = normalized_review_suite_status(status)
+      normalized_verdict = normalized_review_suite_verdict(verdict)
+
+      {:tool_error, {:non_passing_review_suite_result, normalized_status, normalized_verdict}}
+    end
+  end
+
+  defp normalized_review_suite_status(status), do: ReviewProfiles.normalize_status(status)
+  defp normalized_review_suite_verdict(verdict), do: ReviewProfiles.normalize_status(verdict)
+  defp review_suite_status_passed?(status), do: ReviewProfiles.passing_status?(status)
+  defp review_suite_verdict_passed?(verdict), do: ReviewProfiles.passing_verdict?(verdict)
+
+  defp append_review_suite_artifact(repo, work_package_id, head_sha) do
+    case PlanningRepository.list_artifacts(repo, work_package_id) do
+      {:ok, artifacts} -> maybe_append_review_suite_artifact(repo, work_package_id, head_sha, artifacts)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp maybe_append_review_suite_artifact(repo, work_package_id, head_sha, artifacts) do
+    if MetadataProjection.persisted_review_suite_artifact?(artifacts, work_package_id, head_sha) do
+      :ok
+    else
+      insert_review_suite_artifact(repo, work_package_id, head_sha)
+    end
+  end
+
+  defp insert_review_suite_artifact(repo, work_package_id, head_sha) do
+    attrs = %{
+      "id" => review_suite_artifact_id(work_package_id, head_sha),
+      "work_package_id" => work_package_id,
+      "path" => "review-suite-result.json",
+      "title" => "Review-suite result",
+      "kind" => "review_suite"
+    }
+
+    case PlanningService.append_artifact(repo, attrs) do
+      {:ok, _artifact} -> :ok
+      {:error, :id_already_exists} -> replay_review_suite_artifact(repo, work_package_id, head_sha)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp replay_review_suite_artifact(repo, work_package_id, head_sha) do
+    case PlanningRepository.list_artifacts(repo, work_package_id) do
+      {:ok, artifacts} -> replay_review_suite_artifact_result(work_package_id, head_sha, artifacts)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp replay_review_suite_artifact_result(work_package_id, head_sha, artifacts) do
+    if MetadataProjection.persisted_review_suite_artifact?(artifacts, work_package_id, head_sha) do
+      :ok
+    else
+      {:error, :id_already_exists}
+    end
+  end
+
+  defp review_suite_artifact_id(work_package_id, head_sha) do
+    material = [work_package_id, head_sha, "review-suite-result.json"] |> Enum.join(":")
+    "artifact_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
+  end
+
+  defp promote_stale_package_to_reviewing(repo, %WorkPackage{status: status} = work_package)
+       when status in @review_promotable_work_package_statuses do
+    promote_package_status_to_reviewing(repo, work_package.id, status, 0)
+  end
+
+  defp promote_stale_package_to_reviewing(_repo, %WorkPackage{}), do: :ok
+
+  defp promote_package_status_to_reviewing(repo, work_package_id, expected_status, attempts) do
+    case WorkPackageRepository.update_status(repo, work_package_id, expected_status, "reviewing") do
+      {:ok, %WorkPackage{}} ->
+        :ok
+
+      {:error, :stale_status} when attempts < 3 ->
+        retry_review_promotion_from_latest_status(repo, work_package_id, attempts + 1)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp retry_review_promotion_from_latest_status(repo, work_package_id, attempts) do
+    case WorkPackageRepository.get(repo, work_package_id) do
+      {:ok, %WorkPackage{status: status}} when status in @review_promotable_work_package_statuses ->
+        promote_package_status_to_reviewing(repo, work_package_id, status, attempts)
+
+      {:ok, %WorkPackage{}} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp readiness_gates(repo, state) do
+    with {:ok, {required_review_lanes, warnings}} <- ReviewLanes.required(repo, state.work_package),
+         {:ok, reasons} <- readiness_failure_reasons(repo, state, required_review_lanes) do
+      missing = missing_readiness_gates(reasons)
+
+      if missing == [], do: {:ok, warnings}, else: {:error, {:readiness_failed, missing, reasons, warnings}}
+    end
+  end
+
+  defp missing_readiness_gates(reasons) do
+    reasons
+    |> Enum.map(&Map.fetch!(&1, "gate"))
+    |> Enum.uniq()
+  end
+
+  defp readiness_failure_reasons(repo, state, required_review_lanes) do
+    with {:ok, phase_child_reasons} <- phase_child_readiness_failure_reasons(repo, state.work_package) do
+      {:ok, base_readiness_failure_reasons(state, required_review_lanes) ++ phase_child_reasons}
+    end
+  end
+
+  defp base_readiness_failure_reasons(state, required_review_lanes) do
+    [
+      {readiness_status_missing?(state.work_package), readiness_status_gate(state.work_package)},
+      {active_blocker?(state.progress_events), "no_active_blockers"},
+      {incomplete_plan?(state), "plan_complete"},
+      {acceptance_missing?(state), "acceptance_criteria_met"},
+      {tests_missing?(state), "tests_passed"},
+      {merge_metadata_missing?(state, "branch"), "branch_attached"},
+      {merge_metadata_missing?(state, "pr"), "pr_attached"},
+      {current_pr_state_missing?(state), "current_pr_state"},
+      {review_suite_result_missing?(state), "review_suite_result"},
+      {ScopeGuard.missing?(state.work_package, state.progress_events), @scope_guard_gate},
+      {review_package_missing?(state, required_review_lanes), "review_package_submitted"},
+      {review_artifacts_missing?(state, required_review_lanes), "review_artifacts_attached"},
+      {review_lanes_missing?(state, required_review_lanes), "review_lanes_complete"},
+      {investigation_findings_missing?(state), "findings_documented"},
+      {investigation_recommendation_missing?(state), "recommendation_artifact_recorded"}
+    ]
+    |> Enum.flat_map(fn
+      {true, @scope_guard_gate} -> ScopeGuard.failure_reasons(state.work_package, state.progress_events)
+      {true, "review_lanes_complete"} -> [readiness_failure_reason("review_lanes_complete", state, required_review_lanes)]
+      {true, gate} -> [readiness_failure_reason(gate)]
+      {false, _gate} -> []
+    end)
+  end
+
+  defp phase_child_readiness_failure_reasons(repo, %WorkPackage{kind: "phase_child"} = child) do
+    with {:ok, phase} <- readiness_phase(repo, child),
+         {:ok, parent} <- readiness_phase_parent(repo, child) do
+      reasons =
+        []
+        |> maybe_add_readiness_reason(phase.status != "active", "phase_active")
+        |> maybe_add_readiness_reason(not readiness_phase_child_scope_ok?(child, parent), "phase_child_scope")
+
+      {:ok, Enum.reverse(reasons)}
+    end
+  end
+
+  defp phase_child_readiness_failure_reasons(_repo, %WorkPackage{}), do: {:ok, []}
+
+  defp readiness_phase(repo, %WorkPackage{phase_id: phase_id}) when is_binary(phase_id) do
+    if filled_string?(phase_id) do
+      case PhaseRepository.get(repo, phase_id) do
+        {:ok, phase} -> {:ok, phase}
+        {:error, :not_found} -> {:ok, %{status: nil}}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:ok, %{status: nil}}
+    end
+  end
+
+  defp readiness_phase(_repo, %WorkPackage{}), do: {:ok, %{status: nil}}
+
+  defp readiness_phase_parent(repo, %WorkPackage{parent_id: parent_id}) when is_binary(parent_id) do
+    if filled_string?(parent_id) do
+      case WorkPackageRepository.get(repo, parent_id) do
+        {:ok, parent} -> {:ok, parent}
+        {:error, :not_found} -> {:ok, nil}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      {:ok, nil}
+    end
+  end
+
+  defp readiness_phase_parent(_repo, %WorkPackage{}), do: {:ok, nil}
+
+  defp readiness_phase_child_scope_ok?(%WorkPackage{} = child, %WorkPackage{} = parent) do
+    child.parent_id == parent.id and child.phase_id == parent.phase_id and child.repo == parent.repo and child.base_branch == parent.base_branch and
+      require_phase_child_file_scope(child, parent) == :ok
+  end
+
+  defp readiness_phase_child_scope_ok?(%WorkPackage{}, _parent), do: false
+
+  defp maybe_add_readiness_reason(reasons, true, gate), do: [readiness_failure_reason(gate) | reasons]
+  defp maybe_add_readiness_reason(reasons, false, _gate), do: reasons
+
+  defp readiness_failure_reason(gate) do
+    %{
+      "gate" => gate,
+      "code" => gate,
+      "message" => readiness_failure_message(gate)
+    }
+  end
+
+  defp readiness_failure_reason("review_lanes_complete", _state, required_lanes) do
+    "review_lanes_complete"
+    |> readiness_failure_reason()
+    |> Map.merge(%{
+      "required_lanes" => redacted_review_lanes(required_lanes)
+    })
+    |> drop_nil_values()
+  end
+
+  defp redacted_review_lanes(lanes), do: Redactor.redact_output(lanes)
+
+  defp readiness_failure_message("status_ci_waiting"), do: "Package must be waiting on validation."
+  defp readiness_failure_message("status_reviewing"), do: "Package must be in review or validation."
+  defp readiness_failure_message("no_active_blockers"), do: "Active blockers must be resolved."
+  defp readiness_failure_message("plan_complete"), do: "Package plan is missing or still has pending items."
+  defp readiness_failure_message("acceptance_criteria_met"), do: "Acceptance criteria evidence is missing."
+  defp readiness_failure_message("tests_passed"), do: "Focused test evidence is missing."
+  defp readiness_failure_message("branch_attached"), do: "Current branch metadata is missing."
+  defp readiness_failure_message("pr_attached"), do: "Current PR metadata is missing."
+  defp readiness_failure_message("current_pr_state"), do: "Current synced PR state is missing."
+  defp readiness_failure_message("review_suite_result"), do: "Current-head Review Suite result is missing."
+  defp readiness_failure_message("review_package_submitted"), do: "Current-head review package is missing."
+  defp readiness_failure_message("review_artifacts_attached"), do: "Current-head review artifacts are missing."
+  defp readiness_failure_message("review_lanes_complete"), do: "Required Review Suite profile is not passing for the current head."
+  defp readiness_failure_message("findings_documented"), do: "Investigation findings are missing."
+  defp readiness_failure_message("recommendation_artifact_recorded"), do: "Investigation recommendation artifact is missing."
+  defp readiness_failure_message("phase_active"), do: "Phase must be active before phase child readiness."
+  defp readiness_failure_message("phase_child_scope"), do: "Phase child must remain inside its parent phase repo, base branch, and file scope."
+  defp readiness_failure_message(_gate), do: "Readiness gate is not satisfied."
+
+  defp merge_metadata_missing?(state, "pr") do
+    current_head_sha = latest_current_head_sha(state.progress_events)
+
+    merge_required?(state.work_package) and pr_required?(state.work_package) and
+      not metadata_present?(state.progress_events, "pr", current_head_sha)
+  end
+
+  defp merge_metadata_missing?(state, metadata_type) do
+    current_head_sha = latest_current_head_sha(state.progress_events)
+
+    merge_required?(state.work_package) and
+      not metadata_present?(state.progress_events, metadata_type, current_head_sha)
+  end
+
+  defp current_pr_state_missing?(state) do
+    current_head_sha = latest_current_head_sha(state.progress_events)
+
+    merge_required?(state.work_package) and pr_required?(state.work_package) and
+      required_gate?(state.work_package, "current_pr_state") and
+      not current_pr_state_present?(state.progress_events, current_head_sha)
+  end
+
+  defp review_suite_result_missing?(state) do
+    required_gate?(state.work_package, "review_suite_result") and
+      not review_suite_result_present?(state.progress_events, state.artifacts, state.work_package.id, review_head_sha_for_readiness(state))
+  end
+
+  defp review_suite_result_present?(_progress_events, _artifacts, _work_package_id, nil), do: false
+
+  defp review_suite_result_present?(progress_events, artifacts, work_package_id, readiness_head_sha) do
+    case MetadataProjection.latest_review_suite_result_event(progress_events, work_package_id, readiness_head_sha) do
+      %ProgressEvent{payload: payload} ->
+        valid_persisted_review_suite_result?(payload, artifacts, work_package_id, readiness_head_sha)
+
+      nil ->
+        false
+    end
+  end
+
+  defp valid_persisted_review_suite_result?(%{"head_sha" => head_sha} = payload, artifacts, work_package_id, readiness_head_sha)
+       when is_binary(head_sha) do
+    MetadataProjection.valid_review_suite_result_payload?(payload, work_package_id, readiness_head_sha) and
+      MetadataProjection.persisted_review_suite_artifact?(artifacts, work_package_id, head_sha)
+  end
+
+  defp valid_persisted_review_suite_result?(_payload, _artifacts, _work_package_id, _readiness_head_sha), do: false
+
+  defp review_package_missing?(state, required_review_lanes) do
+    readiness_head_sha = review_head_sha_for_readiness(state)
+
+    merge_required?(state.work_package) and required_review_lanes != [] and
+      not review_suite_result_lanes_present?(state, required_review_lanes) and
+      current_head_review_package_events(state.progress_events, readiness_head_sha) == []
+  end
+
+  defp review_artifacts_missing?(state, required_review_lanes) do
+    merge_required?(state.work_package) and required_review_lanes != [] and
+      not review_artifacts_present?(state, required_review_lanes)
+  end
+
+  defp review_lanes_missing?(state, required_review_lanes), do: not review_lanes_present?(state, required_review_lanes)
+  defp investigation_findings_missing?(state), do: state.work_package.kind == "investigation" and state.findings == []
+
+  defp investigation_recommendation_missing?(state) do
+    state.work_package.kind == "investigation" and not recommendation_artifact_recorded?(state.artifacts, state.work_package.id)
+  end
+
+  defp merge_required?(%WorkPackage{} = work_package) do
+    work_package.kind in ["hotfix", "adapter", "mcp", "skill", "hooks", "phase_child"]
+  end
+
+  defp review_lanes_present?(_state, []), do: true
+
+  defp review_lanes_present?(state, required_lanes) do
+    if merge_required?(state.work_package) do
+      review_package_lanes_present?(state.progress_events, required_lanes) or
+        review_suite_result_lanes_present?(state, required_lanes)
+    else
+      review_package_lanes_present?(state.progress_events, required_lanes, review_head_sha_for_readiness(state)) or
+        review_suite_result_lanes_present?(state, required_lanes) or
+        progress_review_lanes_present?(state.progress_events, required_lanes)
+    end
+  end
+
+  defp review_package_lanes_present?(progress_events, required_lanes) do
+    review_package_lanes_present?(progress_events, required_lanes, latest_current_head_sha(progress_events))
+  end
+
+  defp review_package_lanes_present?(progress_events, required_lanes, readiness_head_sha) do
+    readiness_head_sha = normalize_review_readiness_head_sha(readiness_head_sha)
+
+    latest_verdicts =
+      case latest_review_package_event(progress_events, readiness_head_sha) do
+        %ProgressEvent{} = event ->
+          event
+          |> review_package_reviews(readiness_head_sha)
+          |> Enum.reduce(%{}, fn review, verdicts ->
+            Map.put(verdicts, ReviewProfiles.normalize_profile(Map.get(review, "lane")), Map.get(review, "verdict"))
+          end)
+
+        nil ->
+          %{}
+      end
+
+    Enum.all?(required_lanes, &ReviewProfiles.profile_verdicts_pass?(&1, latest_verdicts))
+  end
+
+  defp review_suite_result_lanes_present?(state, required_lanes) do
+    readiness_head_sha = review_head_sha_for_readiness(state)
+
+    payloads =
+      state.progress_events
+      |> MetadataProjection.current_head_review_suite_result_events(state.work_package.id, readiness_head_sha)
+      |> Enum.map(& &1.payload)
+      |> Enum.filter(
+        &(MetadataProjection.review_suite_result_payload_in_scope?(&1, state.work_package.id, readiness_head_sha) and
+            MetadataProjection.persisted_review_suite_artifact?(
+              state.artifacts,
+              state.work_package.id,
+              Map.fetch!(&1, "head_sha")
+            ))
+      )
+
+    payloads != [] and Enum.all?(required_lanes, &ReviewProfiles.review_suite_payloads_satisfy_required_profile?(payloads, &1))
+  end
+
+  defp progress_review_lanes_present?(progress_events, required_lanes) do
+    head_boundary_sequence = latest_branch_event_sequence(progress_events)
+
+    Enum.all?(required_lanes, &progress_review_lane_present?(progress_events, head_boundary_sequence, &1))
+  end
+
+  defp progress_review_lane_present?(progress_events, head_boundary_sequence, required_lane) do
+    satisfying_profiles = ReviewProfiles.satisfying_profiles(required_lane)
+
+    latest_statuses =
+      satisfying_profiles
+      |> Enum.map(&{&1, latest_generic_progress_status(progress_events, head_boundary_sequence, ReviewProfiles.statuses(&1))})
+      |> Enum.reject(fn {_profile, status} -> is_nil(status) end)
+
+    latest_statuses != [] and Enum.all?(latest_statuses, fn {profile, status} -> status in ReviewProfiles.green_statuses(profile) end)
+  end
+
+  defp review_artifacts_present?(state, required_review_lanes) do
+    current_head_sha = latest_current_head_sha(state.progress_events)
+    artifact_references = current_head_review_artifact_references(state.progress_events, current_head_sha)
+
+    review_package_artifacts_present =
+      artifact_references != [] and
+        Enum.all?(artifact_references, fn {path, artifact_head_sha} ->
+          persisted_review_artifact?(state.artifacts, state.work_package.id, artifact_head_sha, path)
+        end)
+
+    review_package_artifacts_present or review_suite_result_lanes_present?(state, required_review_lanes)
+  end
+
+  defp current_head_review_artifact_references(progress_events, current_head_sha) do
+    case latest_review_package_event(progress_events, current_head_sha) do
+      %ProgressEvent{} = event -> review_package_artifact_references(event, current_head_sha)
+      nil -> []
+    end
+  end
+
+  defp latest_review_package_event(progress_events, current_head_sha) do
+    progress_events
+    |> current_head_review_package_events(current_head_sha)
+    |> Enum.reverse()
+    |> Enum.find(fn event -> review_package_artifact_paths(event, current_head_sha) != [] end)
+  end
+
+  defp current_head_review_package_events(progress_events, current_head_sha) do
+    Enum.filter(progress_events, fn event ->
+      payload_type?(event, "review_package", "submit_review_package") and current_head_review_package?(event, current_head_sha)
+    end)
+  end
+
+  defp current_head_review_package?(%ProgressEvent{payload: payload}, current_head_sha) when is_map(payload) do
+    review_head_matches?(payload, current_head_sha)
+  end
+
+  defp current_head_review_package?(%ProgressEvent{}, _current_head_sha), do: false
+
+  defp review_head_matches?(payload, :any_head) when is_map(payload) do
+    head_sha = Map.get(payload, "head_sha")
+    is_binary(head_sha) and String.trim(head_sha) != ""
+  end
+
+  defp review_head_matches?(payload, current_head_sha) when is_map(payload) and is_binary(current_head_sha) do
+    Map.get(payload, "head_sha") == current_head_sha
+  end
+
+  defp review_head_matches?(_payload, _current_head_sha), do: false
+
+  defp review_package_artifact_paths(%ProgressEvent{payload: payload}, current_head_sha) when is_map(payload) do
+    artifacts = Map.get(payload, "artifacts")
+
+    if is_list(artifacts) and review_head_matches?(payload, current_head_sha) do
+      Enum.filter(artifacts, &(is_binary(&1) and String.trim(&1) != ""))
+    else
+      []
+    end
+  end
+
+  defp review_package_artifact_paths(%ProgressEvent{}, _current_head_sha), do: []
+
+  defp review_package_artifact_references(%ProgressEvent{payload: payload} = event, current_head_sha) when is_map(payload) do
+    event
+    |> review_package_artifact_paths(current_head_sha)
+    |> Enum.map(&{&1, Map.get(payload, "head_sha")})
+  end
+
+  defp review_package_artifact_references(%ProgressEvent{}, _current_head_sha), do: []
+
+  defp persisted_review_artifact?(artifacts, work_package_id, head_sha, path) do
+    expected_id = review_artifact_id(work_package_id, head_sha, path)
+    Enum.any?(artifacts, &(&1.id == expected_id and &1.kind == "review" and &1.path == path))
+  end
+
+  defp review_package_reviews(%ProgressEvent{payload: payload}, current_head_sha) when is_map(payload) do
+    reviews = Map.get(payload, "reviews")
+
+    cond do
+      not is_list(reviews) -> []
+      not review_head_matches?(payload, current_head_sha) -> []
+      true -> normalize_review_entries(reviews)
+    end
+  end
+
+  defp review_package_reviews(%ProgressEvent{}, _current_head_sha), do: []
+
+  defp normalize_review_entries(reviews) do
+    reviews
+    |> Enum.filter(&usable_review_entry?/1)
+    |> Enum.map(fn review ->
+      %{
+        "lane" => review |> Map.get("lane", "") |> String.trim() |> String.downcase(),
+        "verdict" => review |> Map.get("verdict", "") |> String.trim() |> String.downcase()
+      }
+    end)
+  end
+
+  defp usable_review_entry?(%{"lane" => lane, "verdict" => verdict}) do
+    is_binary(lane) and String.trim(lane) != "" and is_binary(verdict) and String.trim(verdict) != ""
+  end
+
+  defp usable_review_entry?(_review), do: false
+
+  defp latest_current_head_sha(progress_events), do: latest_metadata_head_sha(progress_events, "branch", "attach_branch")
+
+  defp latest_current_branch(progress_events) do
+    progress_events
+    |> Enum.filter(&payload_type?(&1, "branch", "attach_branch"))
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %ProgressEvent{payload: payload} -> review_suite_identity_value(payload || %{}, "branch")
+      _event -> nil
+    end)
+  end
+
+  defp latest_metadata_head_sha(progress_events, type, source_tool) do
+    progress_events
+    |> Enum.filter(&payload_type?(&1, type, source_tool))
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %ProgressEvent{payload: payload} -> latest_metadata_payload_head_sha(payload)
+      _event -> nil
+    end)
+  end
+
+  defp latest_metadata_payload_head_sha(payload) do
+    case Map.get(payload || %{}, "head_sha") do
+      head_sha when is_binary(head_sha) and head_sha != "" -> head_sha
+      _ -> nil
+    end
+  end
+
+  defp active_blocker?(progress_events) do
+    progress_events
+    |> Enum.filter(&blocker_event?/1)
+    |> Enum.reduce(%{}, fn event, blockers ->
+      Map.put(blockers, blocker_id(event), Map.get(event.payload || %{}, "active") == true)
+    end)
+    |> Map.values()
+    |> Enum.any?(& &1)
+  end
+
+  defp blocker_event?(%ProgressEvent{payload: payload}) when is_map(payload) do
+    Map.get(payload, "type") == "blocker" and Map.get(payload, "source_tool") in ["report_blocker", "resolve_blocker"]
+  end
+
+  defp blocker_event?(%ProgressEvent{}), do: false
+
+  defp blocker_id(%ProgressEvent{payload: payload, idempotency_key: idempotency_key, id: id}) do
+    blocker_id = Map.get(payload || %{}, "blocker_id")
+    normalize_blocker_id(blocker_id || idempotency_key || id)
+  end
+
+  defp incomplete_plan?(state) do
+    plan_required?(state.work_package) and (Enum.any?(state.plan_nodes, &(&1.status not in @complete_plan_statuses)) or missing_meaningful_plan?(state))
+  end
+
+  defp missing_meaningful_plan?(%{plan_nodes: []}), do: true
+  defp missing_meaningful_plan?(_state), do: false
+
+  defp readiness_status_missing?(%WorkPackage{} = work_package) do
+    if ci_waiting_required?(work_package) do
+      work_package.status != "ci_waiting"
+    else
+      work_package.status not in ["reviewing", "ci_waiting"]
+    end
+  end
+
+  defp readiness_status_gate(%WorkPackage{} = work_package), do: if(ci_waiting_required?(work_package), do: "status_ci_waiting", else: "status_reviewing")
+  defp ci_waiting_required?(%WorkPackage{} = work_package), do: required_gate?(work_package, "ci_waiting")
+
+  defp plan_required?(%WorkPackage{} = work_package) do
+    case LifecycleService.policy_for(work_package) do
+      {:ok, policy} -> get_in(policy, [:constraints, :planning_depth]) == "package"
+      {:error, _reason} -> true
+    end
+  end
+
+  defp acceptance_missing?(state) do
+    required_gate?(state.work_package, "package_acceptance") and not acceptance_recorded?(state.progress_events)
+  end
+
+  defp tests_missing?(state) do
+    required_gate?(state.work_package, "focused_tests") and not tests_recorded?(state)
+  end
+
+  defp required_gate?(%WorkPackage{} = work_package, gate) do
+    case LifecycleService.policy_for(work_package) do
+      {:ok, policy} -> gate in Map.get(policy, :required_gates, [])
+      {:error, _reason} -> false
+    end
+  end
+
+  defp acceptance_recorded?(progress_events) do
+    current_head_sha = latest_current_head_sha(progress_events)
+
+    case latest_review_package_event(progress_events, current_head_sha) do
+      %ProgressEvent{payload: payload} when is_map(payload) -> Map.get(payload, "acceptance_criteria_met") == true
+      _event -> false
+    end
+  end
+
+  defp tests_recorded?(state) do
+    if merge_required?(state.work_package) do
+      review_package_tests_recorded?(state.progress_events)
+    else
+      review_package_tests_recorded?(state) or progress_status_recorded?(state.progress_events, "tests_passed")
+    end
+  end
+
+  defp review_package_tests_recorded?(progress_events) when is_list(progress_events) do
+    review_package_tests_recorded?(progress_events, latest_current_head_sha(progress_events))
+  end
+
+  defp review_package_tests_recorded?(%{progress_events: progress_events} = state) do
+    review_package_tests_recorded?(progress_events, review_head_sha_for_readiness(state))
+  end
+
+  defp review_package_tests_recorded?(progress_events, readiness_head_sha) do
+    readiness_head_sha = normalize_review_readiness_head_sha(readiness_head_sha)
+
+    case latest_review_package_event(progress_events, readiness_head_sha) do
+      %ProgressEvent{payload: payload} when is_map(payload) ->
+        tests = Map.get(payload, "tests")
+        is_list(tests) and Enum.any?(tests, &(is_binary(&1) and String.trim(&1) != ""))
+
+      _event ->
+        false
+    end
+  end
+
+  defp review_head_sha_for_readiness(%{work_package: %WorkPackage{} = work_package, progress_events: progress_events}) do
+    current_head_sha = latest_current_head_sha(progress_events)
+
+    cond do
+      is_binary(current_head_sha) -> current_head_sha
+      merge_required?(work_package) -> nil
+      true -> :any_head
+    end
+  end
+
+  defp normalize_review_readiness_head_sha(head_sha) when is_binary(head_sha), do: head_sha
+  defp normalize_review_readiness_head_sha(:any_head), do: :any_head
+  defp normalize_review_readiness_head_sha(_head_sha), do: nil
+
+  defp progress_status_recorded?(progress_events, expected_status) do
+    head_boundary_sequence = latest_branch_event_sequence(progress_events)
+    statuses = [expected_status, failed_status(expected_status)]
+
+    latest_generic_progress_status(progress_events, head_boundary_sequence, statuses) == expected_status
+  end
+
+  defp latest_generic_progress_status(progress_events, head_boundary_sequence, statuses) do
+    statuses = MapSet.new(statuses)
+
+    progress_events
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %ProgressEvent{status: status} = event ->
+        status = normalized_status(status)
+
+        if generic_append_progress_event?(event) and progress_after_head_boundary?(event, head_boundary_sequence) and MapSet.member?(statuses, status) do
+          status
+        end
+
+      _event ->
+        nil
+    end)
+  end
+
+  defp failed_status("tests_passed"), do: "tests_failed"
+  defp failed_status(status), do: status <> "_failed"
+
+  defp latest_branch_event_sequence(progress_events) do
+    progress_events
+    |> Enum.reverse()
+    |> Enum.find(&payload_type?(&1, "branch", "attach_branch"))
+    |> case do
+      %ProgressEvent{sequence: sequence} when is_integer(sequence) -> sequence
+      _event -> nil
+    end
+  end
+
+  defp progress_after_head_boundary?(%ProgressEvent{}, nil), do: true
+  defp progress_after_head_boundary?(%ProgressEvent{sequence: sequence}, boundary_sequence) when is_integer(sequence), do: sequence > boundary_sequence
+  defp progress_after_head_boundary?(%ProgressEvent{}, _boundary_sequence), do: false
+  defp normalized_status(status) when is_binary(status), do: status |> String.trim() |> String.downcase()
+  defp normalized_status(_status), do: ""
+  defp pr_required?(%WorkPackage{kind: "investigation"}), do: false
+  defp pr_required?(%WorkPackage{}), do: true
+
+  defp metadata_present?(progress_events, "pr", head_sha) when is_binary(head_sha) do
+    case latest_attached_pr_ref(progress_events) do
+      {:ok, attached_ref} ->
+        Enum.any?(progress_events, fn
+          %ProgressEvent{payload: payload} = event when is_map(payload) ->
+            payload_type?(event, "pr", ["attach_pr", "sync_pr"]) and head_sha_matches?(Map.get(payload, "head_sha"), head_sha) and
+              pr_payload_ref(payload) == attached_ref
+
+          %ProgressEvent{} ->
+            false
+        end)
+
+      {:tool_error, _reason} ->
+        false
+    end
+  end
+
+  defp metadata_present?(progress_events, type, head_sha) when is_binary(head_sha) do
+    Enum.any?(progress_events, fn
+      %ProgressEvent{payload: payload} = event when is_map(payload) ->
+        payload_type?(event, type, metadata_tool(type)) and head_sha_matches?(Map.get(payload, "head_sha"), head_sha)
+
+      %ProgressEvent{} ->
+        false
+    end)
+  end
+
+  defp metadata_present?(_progress_events, _type, _head_sha), do: false
+
+  defp current_pr_state_present?(progress_events, head_sha) when is_binary(head_sha) do
+    case latest_attached_pr_ref_with_ledger_boundary(progress_events) do
+      {:ok, attached_ref, attach_boundary} ->
+        Enum.any?(progress_events, fn
+          %ProgressEvent{payload: payload} = event when is_map(payload) ->
+            current_pr_state_event?(event, attach_boundary) and head_sha_matches?(Map.get(payload, "head_sha"), head_sha) and
+              pr_payload_ref(payload) == attached_ref and current_pr_state_payload?(payload)
+
+          %ProgressEvent{} ->
+            false
+        end)
+
+      {:tool_error, _reason} ->
+        false
+    end
+  end
+
+  defp current_pr_state_present?(_progress_events, _head_sha), do: false
+
+  defp current_pr_state_event?(%ProgressEvent{} = event, {:repair_sync, repair_boundary}) do
+    payload_type?(event, "pr", "sync_pr") and
+      (attach_boundary(event) == repair_boundary or
+         progress_after_pr_attach_boundary?(event, repair_boundary))
+  end
+
+  defp current_pr_state_event?(%ProgressEvent{} = event, attach_boundary) do
+    (payload_type?(event, "pr", "attach_pr") and attach_boundary(event) == attach_boundary) or
+      (payload_type?(event, "pr", "sync_pr") and progress_after_pr_attach_boundary?(event, attach_boundary))
+  end
+
+  defp progress_after_pr_attach_boundary?(%ProgressEvent{} = event, {:sequence, attach_boundary}) do
+    progress_event_sequence_order(event) > attach_boundary
+  end
+
+  defp progress_after_pr_attach_boundary?(%ProgressEvent{} = event, {:chronological, attach_boundary}) do
+    progress_event_chronological_order(event) > attach_boundary
+  end
+
+  defp progress_after_pr_attach_boundary?(%ProgressEvent{}, _attach_boundary), do: false
+
+  defp current_pr_state_payload?(payload) when is_map(payload) do
+    semantic_pr_state?(payload, "check_summary", ["conclusion", "state", "status"]) or
+      semantic_pr_state?(payload, "review_state", ["decision", "state", "status"]) or
+      semantic_pr_state?(payload, "merge_state", ["mergeable_state", "state", "status"]) or
+      semantic_pr_boolean?(payload, "merge_state", ["mergeable", "merged"])
+  end
+
+  defp semantic_pr_state?(payload, key, semantic_keys) do
+    case Map.get(payload, key) do
+      value when is_map(value) ->
+        Enum.any?(semantic_keys, fn semantic_key ->
+          semantic_pr_value?(value, semantic_key)
+        end)
+
+      _value ->
+        false
+    end
+  end
+
+  defp semantic_pr_value(value, key), do: Map.get(value, key) || Map.get(value, String.to_atom(key))
+
+  defp semantic_pr_value?(value, "state") do
+    case semantic_pr_value(value, "state") do
+      state when is_binary(state) ->
+        normalized = state |> String.trim() |> String.downcase()
+        normalized != "" and normalized not in ["open", "closed"]
+
+      _state ->
+        false
+    end
+  end
+
+  defp semantic_pr_value?(value, key), do: value |> semantic_pr_value(key) |> filled_string?()
+
+  defp semantic_pr_boolean?(payload, key, semantic_keys) do
+    case Map.get(payload, key) do
+      value when is_map(value) ->
+        Enum.any?(semantic_keys, fn semantic_key ->
+          is_boolean(Map.get(value, semantic_key)) or is_boolean(Map.get(value, String.to_atom(semantic_key)))
+        end)
+
+      _value ->
+        false
+    end
+  end
+
+  defp latest_attached_pr_ref(progress_events) do
+    case latest_attached_pr_ref_with_ledger_boundary(progress_events) do
+      {:ok, ref, _boundary} -> {:ok, ref}
+      {:tool_error, reason} -> {:tool_error, reason}
+    end
+  end
+
+  defp latest_attached_pr_ref_with_ledger_boundary(progress_events) do
+    progress_events
+    |> chronological_progress_events()
+    |> Enum.reverse()
+    |> Enum.find_value(&attached_or_repaired_pr_ref_with_boundary/1)
+    |> case do
+      nil -> {:tool_error, "missing_attached_pr"}
+      {ref, boundary} -> {:ok, ref, boundary}
+    end
+  end
+
+  defp progress_event_sequence_order(%ProgressEvent{sequence: sequence, created_at: created_at, id: id}) when is_integer(sequence) do
+    {1, sequence, timestamp_sort_value(created_at), id || ""}
+  end
+
+  defp progress_event_sequence_order(%ProgressEvent{created_at: created_at, id: id}) do
+    {0, timestamp_sort_value(created_at), id || ""}
+  end
+
+  defp timestamp_sort_value(%DateTime{} = datetime), do: DateTime.to_unix(datetime, :microsecond)
+  defp timestamp_sort_value(nil), do: -1
+
+  defp attach_boundary(%ProgressEvent{sequence: sequence} = event) when is_integer(sequence) do
+    {:sequence, progress_event_sequence_order(event)}
+  end
+
+  defp attach_boundary(%ProgressEvent{} = event), do: {:chronological, progress_event_chronological_order(event)}
+  defp chronological_progress_events(progress_events), do: Enum.sort_by(progress_events, &progress_event_chronological_order/1)
+
+  defp progress_event_chronological_order(%ProgressEvent{created_at: created_at, sequence: sequence, id: id}) do
+    {timestamp_sort_value(created_at), sequence || 0, id || ""}
+  end
+
+  defp attached_or_repaired_pr_ref_with_boundary(%ProgressEvent{} = event) do
+    attached_pr_ref_with_boundary(event) || repaired_pr_ref_with_boundary(event)
+  end
+
+  defp attached_pr_ref_with_boundary(%ProgressEvent{payload: payload} = event) when is_map(payload) do
+    if payload_type?(event, "pr", "attach_pr"), do: pr_payload_ref_with_sequence(payload, attach_boundary(event))
+  end
+
+  defp attached_pr_ref_with_boundary(_event), do: nil
+
+  defp repaired_pr_ref_with_boundary(%ProgressEvent{payload: payload} = event) when is_map(payload) do
+    if payload_type?(event, "pr", "sync_pr") and Map.get(payload, "attachment_repair") == true do
+      pr_payload_ref_with_sequence(payload, {:repair_sync, attach_boundary(event)})
+    end
+  end
+
+  defp repaired_pr_ref_with_boundary(_event), do: nil
+
+  defp pr_payload_ref_with_sequence(payload, sequence) do
+    case pr_payload_ref(payload) do
+      nil -> nil
+      ref -> {ref, sequence}
+    end
+  end
+
+  defp pr_payload_ref(%{"repository" => repository, "number" => number}) when is_binary(repository) and is_integer(number), do: normalized_pr_ref(repository, number)
+  defp pr_payload_ref(%{"repository" => repository, "number" => number}) when is_binary(repository) and is_binary(number), do: normalized_pr_ref(repository, number)
+
+  defp pr_payload_ref(%{"url" => url}) when is_binary(url) do
+    case PullRequest.parse(%{"url" => url}, nil) do
+      {:ok, ref} -> normalized_pr_ref(ref.repository, ref.number)
+      {:error, _reason} -> legacy_url_ref(url)
+    end
+  end
+
+  defp pr_payload_ref(_payload), do: nil
+
+  defp normalized_pr_ref(repository, number) when is_binary(repository) do
+    {String.downcase(repository), pr_number_argument(number) || number}
+  end
+
+  defp legacy_url_ref(url) do
+    case URI.parse(url) do
+      %URI{host: host} when is_binary(host) -> if String.downcase(host) == "github.com", do: nil, else: {:url, url}
+      _uri -> {:url, url}
+    end
+  rescue
+    _error in URI.Error -> {:url, url}
+  end
+
+  defp pr_number_argument(value) when is_integer(value) and value > 0, do: value
+
+  defp pr_number_argument(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {number, ""} when number > 0 -> number
+      _parse -> nil
+    end
+  end
+
+  defp pr_number_argument(_value), do: nil
+
+  defp metadata_tool("branch"), do: "attach_branch"
+  defp metadata_tool("pr"), do: "attach_pr"
+  defp metadata_tool("review_package"), do: "submit_review_package"
+  defp head_sha_matches?(left, right), do: PullRequest.head_sha_matches?(left, right)
+
+  defp payload_type?(%ProgressEvent{payload: payload}, type, source_tools) when is_map(payload) and is_list(source_tools) do
+    Map.get(payload, "type") == type and Map.get(payload, "source_tool") in source_tools
+  end
+
+  defp payload_type?(%ProgressEvent{payload: payload}, type, source_tool) when is_map(payload) do
+    Map.get(payload, "type") == type and Map.get(payload, "source_tool") == source_tool
+  end
+
+  defp payload_type?(%ProgressEvent{}, _type, _source_tool), do: false
+
+  defp generic_append_progress_event?(%ProgressEvent{payload: payload}) when is_map(payload), do: Map.get(payload, "source_tool") == nil
+  defp generic_append_progress_event?(%ProgressEvent{payload: nil}), do: true
+  defp generic_append_progress_event?(%ProgressEvent{}), do: false
+
+  defp recommendation_artifact_recorded?(artifacts, work_package_id) do
+    artifact_id = recommendation_artifact_id(work_package_id)
+
+    Enum.any?(
+      artifacts,
+      &(&1.id == artifact_id and &1.work_package_id == work_package_id and &1.path == "recommendation.md" and
+          &1.title == "Investigation recommendation" and &1.kind == "recommendation")
+    )
+  end
+
+  defp recommendation_artifact_id(work_package_id) do
+    material = [work_package_id, "recommendation", "recommendation.md"] |> Enum.join(":")
+    "artifact_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
+  end
+
+  defp append_metadata_event(repo, session, arguments, tool, status, payload) do
+    case metadata_event_attrs(session, arguments, tool, status, payload) do
+      {:ok, idempotency_key, attrs} -> append_progress_event_or_replay(repo, session, attrs, idempotency_key, tool)
+      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
+    end
+  end
+
+  defp replay_existing_metadata_event(repo, %Session{} = session, arguments, tool, status, payload, progress_events) do
+    case metadata_event_attrs(session, arguments, tool, status, payload) do
+      {:ok, idempotency_key, attrs} ->
+        case existing_metadata_event(repo, session, idempotency_key, tool, progress_events) do
+          {:ok, event} -> replay_progress_event(repo, session, event, attrs, tool)
+          {:error, :not_found} -> :not_found
+          {:error, reason} -> worker_error(reason, tool)
+        end
+
+      {:tool_error, reason} ->
+        {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
+    end
+  end
+
+  defp existing_metadata_event(_repo, %Session{}, idempotency_key, "submit_review_package", progress_events) when is_list(progress_events) do
+    case Enum.find(progress_events, fn event -> event.idempotency_key == idempotency_key end) do
+      %ProgressEvent{} = event -> {:ok, event}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  defp existing_metadata_event(repo, %Session{} = session, idempotency_key, _tool, _progress_events) do
+    PlanningRepository.get_progress_event_by_idempotency_key(
+      repo,
+      Session.work_package_id(session),
+      idempotency_key,
+      session.assignment.grant_id
+    )
+  end
+
+  defp metadata_event_attrs(%Session{} = session, arguments, tool, status, payload) do
+    payload = Map.put(payload, "source_tool", tool)
+
+    arguments =
+      Map.put_new(arguments, "summary", status)
+      |> Map.put_new("status", status)
+      |> Map.put_new("idempotency_key", metadata_idempotency_key(payload))
+      |> canonical_metadata_event_status(tool, status)
+
+    with {:ok, summary} <- required_argument(arguments, "summary"),
+         {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
+         {:ok, caller_payload} <- optional_payload(arguments),
+         :ok <- validate_metadata_caller_payload(tool, caller_payload) do
+      idempotency_key = scoped_progress_idempotency_key(tool, String.trim(idempotency_key), session)
+
+      {:ok, idempotency_key,
+       %{
+         "summary" => summary,
+         "body" => optional_argument(arguments, "body", nil),
+         "status" => optional_argument(arguments, "status", "recorded"),
+         "idempotency_key" => idempotency_key,
+         "payload" => merge_tool_payload(tool, caller_payload, payload)
+       }}
+    end
+  end
+
+  defp canonical_metadata_event_status(arguments, "attach_review_suite_result", status), do: Map.put(arguments, "status", status)
+  defp canonical_metadata_event_status(arguments, _tool, _status), do: arguments
+  defp validate_metadata_caller_payload("attach_review_suite_result", caller_payload) when map_size(caller_payload) == 0, do: :ok
+  defp validate_metadata_caller_payload("attach_review_suite_result", _caller_payload), do: {:tool_error, "unexpected_payload"}
+  defp validate_metadata_caller_payload(_tool, _caller_payload), do: :ok
+
+  defp append_progress_event_or_replay(repo, %Session{} = session, attrs, idempotency_key, tool) do
+    case existing_progress_event(repo, session, idempotency_key) do
+      {:ok, event} ->
+        replay_progress_event(repo, session, event, attrs, tool)
+
+      {:error, :not_found} ->
+        append_new_progress_event_or_replay(repo, session, attrs, idempotency_key, tool)
+
+      {:error, reason} ->
+        worker_error(reason, tool)
+    end
+  end
+
+  defp append_new_progress_event_or_replay(repo, %Session{} = session, attrs, idempotency_key, tool) do
+    transaction_fun = fn ->
+      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
+           :ok <- reject_ready_evidence_mutation(repo, session, tool) do
+        PlanningService.append_authenticated_progress_event(repo, session.assignment, attrs)
+      end
+    end
+
+    case run_worker_transaction(repo, transaction_fun) do
+      {:ok, event} ->
+        {:ok, ToolResult.agent_tool_result(%{"progress_event" => progress_event_payload(event)})}
+
+      {:tool_error, reason} ->
+        {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
+
+      {:error, :idempotency_key_conflict} ->
+        replay_progress_event_with_retry(
+          repo,
+          session,
+          attrs,
+          idempotency_key,
+          tool,
+          progress_replay_retry_attempts()
+        )
+
+      {:error, reason} ->
+        worker_error(reason, tool)
+    end
+  end
+
+  defp reject_ready_evidence_mutation(repo, %Session{} = session, tool)
+       when tool in ["submit_review_package", "attach_review_suite_result"] do
+    work_package_id = Session.work_package_id(session)
+
+    with :ok <- lock_work_package(repo, work_package_id),
+         {:ok, state} <- PlanningRepository.get_state(repo, work_package_id) do
+      reject_ready_work_package(state.work_package)
+    end
+  end
+
+  defp reject_ready_evidence_mutation(_repo, %Session{}, _tool), do: :ok
+
+  defp reject_ready_work_package(%WorkPackage{kind: "phase_child", status: status}) when status in ["merging_into_phase", "merged_into_phase"] do
+    {:tool_error, "child_under_architect_control"}
+  end
+
+  defp reject_ready_work_package(%WorkPackage{status: status}) when status in ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"],
+    do: {:tool_error, "already_ready"}
+
+  defp reject_ready_work_package(%WorkPackage{}), do: :ok
+
+  defp replay_progress_event_with_retry(repo, %Session{} = session, attrs, idempotency_key, tool, attempts_left) do
+    retry_fun = fn ->
+      replay_progress_event_with_retry(repo, session, attrs, idempotency_key, tool, attempts_left - 1)
+    end
+
+    repo
+    |> replay_progress_event(session, attrs, idempotency_key, tool)
+    |> retry_missing_progress_event(retry_fun, attempts_left)
+  end
+
+  defp replay_progress_event(repo, %Session{} = session, %ProgressEvent{} = event, attrs, tool) do
+    case PlanningService.require_valid_assignment(repo, session.assignment) do
+      :ok -> replay_matching_progress_event(repo, session, event, attrs, tool)
+      {:error, reason} -> worker_error(reason, tool)
+    end
+  end
+
+  defp replay_progress_event(repo, %Session{} = session, attrs, idempotency_key, tool) do
+    case existing_progress_event(repo, session, idempotency_key) do
+      {:ok, event} -> replay_progress_event(repo, session, event, attrs, tool)
+      {:error, reason} -> worker_error(reason, tool)
+    end
+  end
+
+  defp existing_progress_event(repo, %Session{} = session, idempotency_key) do
+    case PlanningRepository.get_progress_event_by_idempotency_key(
+           repo,
+           Session.work_package_id(session),
+           idempotency_key,
+           session.assignment.grant_id
+         ) do
+      {:ok, event} -> {:ok, event}
+      {:error, :not_found} -> existing_work_package_progress_event(repo, session, idempotency_key)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp existing_work_package_progress_event(repo, %Session{} = session, idempotency_key) do
+    existing_work_package_progress_event(repo, Session.work_package_id(session), idempotency_key)
+  end
+
+  defp existing_work_package_progress_event(repo, work_package_id, idempotency_key) do
+    case PlanningRepository.list_progress_events(repo, work_package_id) do
+      {:ok, progress_events} -> matching_progress_event(progress_events, idempotency_key)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp matching_progress_event(progress_events, idempotency_key) do
+    case Enum.find(progress_events, fn event -> event.idempotency_key == idempotency_key end) do
+      %ProgressEvent{} = event -> {:ok, event}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  defp retry_missing_progress_event({:error, _code, _message, %{"reason" => "not_found"}}, retry_fun, attempts_left) when attempts_left > 0 do
+    Process.sleep(5)
+    retry_fun.()
+  end
+
+  defp retry_missing_progress_event(result, _retry_fun, _attempts_left), do: result
+
+  defp replay_matching_progress_event(_repo, %Session{} = _session, %ProgressEvent{} = event, attrs, tool) do
+    if progress_replay_matches?(event, attrs) do
+      {:ok, ToolResult.agent_tool_result(%{"progress_event" => progress_event_payload(event)})}
+    else
+      {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => "idempotency_conflict"}}
+    end
+  end
+
+  defp progress_replay_matches?(%ProgressEvent{} = event, attrs) do
+    normalized_payload = normalized_progress_payload(event, attrs)
+
+    event.summary == Map.get(attrs, "summary") and event.body == Map.get(attrs, "body") and event.status == Map.get(attrs, "status") and
+      progress_payload_replay_matches?(event.payload, normalized_payload)
+  end
+
+  defp progress_payload_replay_matches?(%{"type" => "scope_expansion_request", "source_tool" => "request_scope_expansion"} = existing, normalized) do
+    existing == normalized or legacy_scope_expansion_replay_matches?(existing, normalized)
+  end
+
+  defp progress_payload_replay_matches?(%{"type" => "pr", "source_tool" => "attach_pr"} = existing, %{"type" => "pr", "source_tool" => "attach_pr"} = normalized) do
+    existing == normalized or legacy_attach_pr_replay_matches?(existing, normalized)
+  end
+
+  defp progress_payload_replay_matches?(existing, normalized), do: existing == normalized
+
+  defp legacy_scope_expansion_replay_matches?(existing, normalized) do
+    legacy_normalized =
+      case Map.fetch(existing, "recommendation_artifact_id") do
+        {:ok, artifact_id} -> Map.put(normalized, "recommendation_artifact_id", artifact_id)
+        :error -> Map.delete(normalized, "recommendation_artifact_id")
+      end
+
+    existing == legacy_normalized
+  end
+
+  defp legacy_attach_pr_replay_matches?(existing, normalized), do: existing == Map.take(normalized, ["type", "source_tool", "url", "head_sha"])
+
+  defp normalized_progress_payload(%ProgressEvent{} = event, attrs) do
+    attrs
+    |> Map.merge(%{
+      "id" => "replay_probe",
+      "work_package_id" => event.work_package_id,
+      "sequence" => 1,
+      "created_at" => event.created_at || DateTime.utc_now(:microsecond)
+    })
+    |> ProgressEvent.create_changeset(trusted_audit_metadata: true)
+    |> Ecto.Changeset.apply_changes()
+    |> Map.get(:payload)
+  end
+
+  defp run_worker_transaction(repo, fun) do
+    case repo.transaction(fn -> rollback_worker_transaction_result(repo, fun.()) end) do
+      {:ok, result} -> {:ok, result}
+      {:error, {:tool_error, reason}} -> {:tool_error, reason}
+      {:error, {:mcp_error, code, message, data}} -> {:error, code, message, data}
+      {:error, {:error, reason}} -> {:error, reason}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp rollback_worker_transaction_result(_repo, {:ok, result}), do: result
+  defp rollback_worker_transaction_result(repo, {:tool_error, reason}), do: repo.rollback({:tool_error, reason})
+
+  defp rollback_worker_transaction_result(repo, {:error, code, message, data}) do
+    repo.rollback({:mcp_error, code, message, data})
+  end
+
+  defp rollback_worker_transaction_result(repo, {:error, reason}), do: repo.rollback({:error, reason})
+
+  defp lock_work_package(repo, work_package_id) do
+    query = from(work_package in WorkPackage, where: work_package.id == ^work_package_id)
+
+    case repo.update_all(query, set: [id: work_package_id]) do
+      {1, _rows} -> :ok
+      {0, _rows} -> {:error, :not_found}
+    end
+  end
+
+  defp require_phase_child_file_scope(%WorkPackage{} = child, %WorkPackage{} = anchor) do
+    with {:ok, anchor_globs} <- normalize_child_scope_globs(anchor.allowed_file_globs || []),
+         {:ok, child_globs} <- normalize_child_scope_globs(child.allowed_file_globs || []),
+         :ok <- require_child_file_scope_present(child_globs),
+         :ok <- reject_overbroad_child_globs(child_globs) do
+      require_child_globs_within_anchor(child_globs, anchor_globs)
+    end
+  end
+
+  defp require_child_file_scope_present([]), do: {:tool_error, "missing_allowed_file_globs"}
+  defp require_child_file_scope_present(_globs), do: :ok
+
+  defp reject_overbroad_child_globs(globs) do
+    if Enum.any?(globs, &ScopeGuard.overbroad_glob?/1) do
+      {:tool_error, "overbroad_allowed_file_globs"}
+    else
+      :ok
+    end
+  end
+
+  defp require_child_globs_within_anchor(_child_globs, []), do: :ok
+
+  defp require_child_globs_within_anchor(child_globs, anchor_globs) do
+    if Enum.all?(child_globs, &glob_within_any_anchor?(&1, anchor_globs)) do
+      :ok
+    else
+      {:tool_error, "child_scope_outside_phase"}
+    end
+  end
+
+  defp glob_within_any_anchor?(child_glob, anchor_globs), do: Enum.any?(anchor_globs, &glob_within_anchor?(child_glob, &1))
+
+  defp glob_within_anchor?(child_glob, anchor_glob) do
+    with {:ok, child_segments} <- child_glob_segments(child_glob),
+         {:ok, anchor_segments} <- child_glob_segments(anchor_glob) do
+      glob_segments_within?(child_segments, anchor_segments)
+    else
+      {:tool_error, _reason} -> false
+    end
+  end
+
+  defp child_glob_segments(glob) do
+    glob = normalize_child_glob(glob)
+
+    cond do
+      glob == "" -> {:tool_error, "missing_allowed_file_globs"}
+      traversal_glob?(glob) -> {:tool_error, "path_traversal_allowed_file_globs"}
+      encoded_separator_glob?(glob) -> {:tool_error, "invalid_allowed_file_globs"}
+      true -> {:ok, String.split(glob, "/", trim: true)}
+    end
+  end
+
+  defp glob_segments_within?([], []), do: true
+  defp glob_segments_within?([], _anchor_segments), do: false
+  defp glob_segments_within?(_child_segments, []), do: false
+  defp glob_segments_within?(child_segments, ["**"]), do: not Enum.any?(child_segments, &traversal_segment?/1)
+  defp glob_segments_within?(["**" | child_tail], ["**" | anchor_tail]), do: glob_segments_within?(child_tail, ["**" | anchor_tail])
+
+  defp glob_segments_within?([_child_head | child_tail] = child_segments, ["**" | anchor_tail]) do
+    glob_segments_within?(child_segments, anchor_tail) or glob_segments_within?(child_tail, ["**" | anchor_tail])
+  end
+
+  defp glob_segments_within?(["**" | _child_tail], [_anchor_head | _anchor_tail]), do: false
+
+  defp glob_segments_within?([child_head | child_tail], [anchor_head | anchor_tail]) do
+    segment_within_anchor?(child_head, anchor_head) and glob_segments_within?(child_tail, anchor_tail)
+  end
+
+  defp segment_within_anchor?(child_segment, anchor_segment) do
+    cond do
+      child_segment == anchor_segment -> true
+      anchor_segment == "*" -> child_segment != "**"
+      child_segment == "**" -> false
+      literal_glob?(child_segment) -> ScopeGuard.glob_match?(anchor_segment, child_segment)
+      simple_star_segment_subset?(child_segment, anchor_segment) -> true
+      true -> false
+    end
+  end
+
+  defp literal_glob?(glob), do: not String.contains?(glob, ["*", "?", "["])
+
+  defp simple_star_segment_subset?(child_segment, anchor_segment) do
+    with {:ok, {anchor_prefix, anchor_suffix}} <- simple_star_bounds(anchor_segment),
+         {child_prefix, child_suffix} <- segment_literal_bounds(child_segment) do
+      String.starts_with?(child_prefix, anchor_prefix) and String.ends_with?(child_suffix, anchor_suffix)
+    else
+      :error -> false
+    end
+  end
+
+  defp simple_star_bounds(segment) do
+    cond do
+      String.contains?(segment, ["?", "["]) -> :error
+      segment |> String.graphemes() |> Enum.count(&(&1 == "*")) != 1 -> :error
+      true -> {:ok, segment |> String.split("*", parts: 2) |> List.to_tuple()}
+    end
+  end
+
+  defp segment_literal_bounds(segment) do
+    tokens = segment_tokens(String.graphemes(segment), [])
+
+    prefix =
+      tokens
+      |> Enum.take_while(&match?({:literal, _char}, &1))
+      |> literal_token_string()
+
+    suffix =
+      tokens
+      |> Enum.reverse()
+      |> Enum.take_while(&match?({:literal, _char}, &1))
+      |> Enum.reverse()
+      |> literal_token_string()
+
+    {prefix, suffix}
+  end
+
+  defp segment_tokens([], acc), do: Enum.reverse(acc)
+  defp segment_tokens(["*" | rest], acc), do: segment_tokens(rest, [:wildcard | acc])
+  defp segment_tokens(["?" | rest], acc), do: segment_tokens(rest, [:wildcard | acc])
+
+  defp segment_tokens(["[" | rest], acc) do
+    case drop_character_class(rest, false) do
+      {:ok, rest} -> segment_tokens(rest, [:wildcard | acc])
+      :error -> segment_tokens(rest, [{:literal, "["} | acc])
+    end
+  end
+
+  defp segment_tokens([char | rest], acc), do: segment_tokens(rest, [{:literal, char} | acc])
+  defp drop_character_class([], _has_content?), do: :error
+  defp drop_character_class(["]" | _rest], false), do: :error
+  defp drop_character_class(["]" | rest], true), do: {:ok, rest}
+  defp drop_character_class([_char | rest], _has_content?), do: drop_character_class(rest, true)
+  defp literal_token_string(tokens), do: Enum.map_join(tokens, "", fn {:literal, char} -> char end)
+
+  defp normalize_child_scope_globs(globs) when is_list(globs) do
+    normalized_globs =
+      globs
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map(&normalize_child_glob/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    cond do
+      Enum.any?(normalized_globs, &traversal_glob?/1) -> {:tool_error, "path_traversal_allowed_file_globs"}
+      Enum.any?(normalized_globs, &encoded_separator_glob?/1) -> {:tool_error, "invalid_allowed_file_globs"}
+      true -> {:ok, normalized_globs}
+    end
+  end
+
+  defp normalize_child_scope_globs(_globs), do: {:ok, []}
+
+  defp normalize_child_glob(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.replace("\\", "/")
+    |> String.replace(~r/\A\.\//, "")
+  end
+
+  defp normalize_child_glob(_value), do: ""
+
+  defp traversal_glob?(glob) when is_binary(glob) do
+    glob
+    |> String.split("/", trim: true)
+    |> Enum.any?(&traversal_segment?/1)
+  end
+
+  defp traversal_glob?(_glob), do: false
+
+  defp encoded_separator_glob?(glob) when is_binary(glob) do
+    glob
+    |> String.split("/", trim: true)
+    |> Enum.any?(&encoded_separator_segment?/1)
+  end
+
+  defp encoded_separator_glob?(_glob), do: false
+
+  defp encoded_separator_segment?(segment) when is_binary(segment) do
+    segment
+    |> String.trim()
+    |> String.downcase()
+    |> encoded_separator_segment?(0)
+  end
+
+  defp encoded_separator_segment?(_segment), do: false
+
+  defp encoded_separator_segment?(segment, depth) do
+    cond do
+      String.contains?(segment, ["/", "\\"]) ->
+        true
+
+      depth >= 3 ->
+        false
+
+      true ->
+        decoded_segment = URI.decode(segment)
+        decoded_segment != segment and encoded_separator_segment?(decoded_segment, depth + 1)
+    end
+  rescue
+    ArgumentError -> false
+  end
+
+  defp traversal_segment?(segment) when is_binary(segment) do
+    segment
+    |> String.trim()
+    |> String.downcase()
+    |> traversal_segment?(0)
+  end
+
+  defp traversal_segment?(_segment), do: false
+
+  defp traversal_segment?(segment, depth) do
+    cond do
+      segment in [".", ".."] ->
+        true
+
+      segment |> path_separator_segments() |> Enum.any?(&(&1 in [".", ".."])) ->
+        true
+
+      depth >= 3 ->
+        false
+
+      true ->
+        decoded_segment = segment |> URI.decode() |> String.replace("\\", "/")
+        decoded_segment != segment and traversal_segment?(decoded_segment, depth + 1)
+    end
+  rescue
+    ArgumentError -> false
+  end
+
+  defp path_separator_segments(segment) do
+    segment
+    |> String.replace("\\", "/")
+    |> String.split("/", trim: true)
+  end
+
+  defp required_argument(arguments, key) do
+    case Map.get(arguments, key) do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> {:tool_error, "missing_#{key}"}
+          trimmed -> {:ok, trimmed}
+        end
+
+      _value ->
+        {:tool_error, "missing_#{key}"}
+    end
+  end
+
+  defp required_list(arguments, key) do
+    case Map.get(arguments, key) do
+      [_head | _tail] = value -> {:ok, value}
+      nil -> {:tool_error, "missing_#{key}"}
+      [] -> {:tool_error, "missing_#{key}"}
+      _value -> {:tool_error, "invalid_#{key}"}
+    end
+  end
+
+  defp required_string_list(arguments, key) do
+    with {:ok, values} <- required_list(arguments, key) do
+      if Enum.all?(values, &(is_binary(&1) and String.trim(&1) != "")) do
+        {:ok, Enum.map(values, &String.trim/1)}
+      else
+        {:tool_error, "invalid_#{key}"}
+      end
+    end
+  end
+
+  defp required_review_list(arguments, key) do
+    with {:ok, values} <- required_list(arguments, key) do
+      reviews = normalize_review_entries(values)
+
+      if length(reviews) == length(values) and unique_review_lanes?(reviews) do
+        {:ok, reviews}
+      else
+        {:tool_error, "invalid_#{key}"}
+      end
+    end
+  end
+
+  defp unique_review_lanes?(reviews) do
+    lanes = Enum.map(reviews, fn %{"lane" => lane} -> lane end)
+    Enum.uniq(lanes) == lanes
+  end
+
+  defp optional_review_list(arguments, key) do
+    case Map.get(arguments, key) do
+      nil -> {:ok, []}
+      [] -> {:ok, []}
+      _reviews -> required_review_list(arguments, key)
+    end
+  end
+
+  defp optional_boolean(arguments, key, default) do
+    case Map.fetch(arguments, key) do
+      {:ok, value} when is_boolean(value) -> {:ok, value}
+      {:ok, _value} -> {:tool_error, "invalid_#{key}"}
+      :error -> {:ok, default}
+    end
+  end
+
+  defp optional_string_argument(arguments, key, default \\ nil) do
+    case Map.fetch(arguments, key) do
+      :error ->
+        {:ok, default}
+
+      {:ok, nil} ->
+        {:ok, default}
+
+      {:ok, value} when is_binary(value) ->
+        case String.trim(value) do
+          "" -> {:ok, default}
+          trimmed -> {:ok, trimmed}
+        end
+
+      {:ok, _value} ->
+        {:tool_error, "invalid_#{key}"}
+    end
+  end
+
+  defp optional_argument(arguments, key, default) do
+    case Map.get(arguments, key, default) do
+      value when is_binary(value) -> if String.trim(value) == "", do: default, else: value
+      nil -> default
+      value -> value
+    end
+  end
+
+  defp optional_payload(arguments) do
+    case Map.get(arguments, "payload", %{}) do
+      payload when is_map(payload) -> {:ok, payload}
+      _payload -> {:tool_error, "invalid_payload"}
+    end
+  end
+
+  defp merge_tool_payload("attach_review_suite_result", _caller_payload, tool_payload), do: tool_payload
+
+  defp merge_tool_payload(_tool, caller_payload, tool_payload) when tool_payload == %{} do
+    Map.drop(caller_payload, ["source_tool"])
+  end
+
+  defp merge_tool_payload(_tool, caller_payload, tool_payload), do: Map.merge(caller_payload, tool_payload)
+
+  defp scoped_progress_idempotency_key("submit_review_package", idempotency_key, %Session{} = session) do
+    ["submit_review_package", session.assignment.work_package_id, idempotency_key] |> Enum.join(":")
+  end
+
+  defp scoped_progress_idempotency_key("attach_review_suite_result", idempotency_key, %Session{} = session) do
+    ["attach_review_suite_result", session.assignment.work_package_id, idempotency_key] |> Enum.join(":")
+  end
+
+  defp scoped_progress_idempotency_key(tool, idempotency_key, %Session{}), do: tool <> ":" <> idempotency_key
+
+  defp metadata_idempotency_key(payload), do: "mcp:" <> Map.get(payload, "type", "metadata") <> ":" <> Base.url_encode64(:erlang.term_to_binary(payload), padding: false)
+  defp normalize_blocker_id(value) when is_binary(value), do: String.trim(value)
+  defp normalize_blocker_id(value), do: value
+  defp progress_replay_retry_attempts, do: :symphony_elixir |> Application.get_env(:sympp_finding_replay_retry_attempts, @finding_replay_retry_attempts) |> max(0)
+
+  defp progress_event_payload(%ProgressEvent{} = event) do
+    %{
+      "id" => event.id,
+      "summary" => Redactor.redact_text(event.summary),
+      "status" => Redactor.redact_text(event.status),
+      "idempotency_key" => Redactor.redact_text(event.idempotency_key),
+      "payload" => Redactor.redact_output(event.payload || %{})
+    }
+  end
+
+  defp drop_nil_values(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
+  defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
+
+  defp actor(%Session{} = session) do
+    %{
+      grant_id: session.assignment.grant_id,
+      grant_role: session.assignment.grant_role,
+      capabilities: session.assignment.capabilities,
+      work_package_id: session.assignment.work_package_id
+    }
+  end
+
+  defp repo_scope_name_matches?(repo, repo, _opts) when is_binary(repo), do: true
+
+  defp repo_scope_name_matches?(expected_repo, actual_repo, opts) when is_binary(expected_repo) and is_binary(actual_repo) do
+    RepoIdentity.scope_match?(expected_repo, actual_repo,
+      trusted_remotes: Keyword.get(opts, :repo_scope_trusted_remotes, default_repo_scope_trusted_remotes()),
+      local_path_remotes?: true
+    )
+  end
+
+  defp repo_scope_name_matches?(_expected_repo, _actual_repo, _opts), do: false
+
+  defp default_repo_scope_trusted_remotes do
+    :symphony_elixir
+    |> Application.get_env(:sympp_repo_identity_trusted_remotes, [])
+    |> List.wrap()
+  end
+
+  defp invalid_params_error(tool, {:review_suite_round_identity_mismatch, field, expected, got}) do
+    {:error, -32_602, "Invalid params",
+     %{
+       "tool" => tool,
+       "reason" => "review_suite_round_identity_mismatch",
+       "field" => field,
+       "expected" => expected,
+       "got" => got,
+       "message" => "Local Review Suite round identity does not match the current work package/session."
+     }}
+  end
+
+  defp worker_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
+  defp worker_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
+  defp worker_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
+  defp worker_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
+  defp worker_error(:assignment_mismatch, resource), do: auth_error({:unauthorized, :assignment_mismatch}, resource)
+  defp worker_error(:worker_grant_required, resource), do: auth_error({:unauthorized, :worker_grant_required}, resource)
+  defp worker_error({:authorization_policy_denied, %Decision{} = decision}, resource), do: MCPError.from_decision(decision, resource)
+  defp worker_error(:forbidden, resource), do: auth_error(:forbidden, resource)
+  defp worker_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
+  defp worker_error(:database_busy, tool), do: service_error(:database_busy, tool)
+  defp worker_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
+  defp worker_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
+  defp worker_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
+
+  defp auth_error(:unauthorized, resource), do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}
+  defp auth_error({:unauthorized, reason}, resource), do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => reason_text(reason)}}
+  defp auth_error({:service_unavailable, reason}, resource), do: service_error(reason, resource)
+  defp auth_error(:forbidden, resource), do: {:error, -32_003, "Forbidden", %{"resource" => resource, "reason" => "outside_session_scope"}}
+  defp service_error(_reason, resource), do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
+  defp reason_text(reason) when is_binary(reason), do: reason
+  defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_text(reason), do: inspect(reason)
+end
