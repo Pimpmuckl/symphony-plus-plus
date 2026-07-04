@@ -3,14 +3,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   import Ecto.Query, only: [from: 2]
 
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
@@ -25,7 +23,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @complete_plan_statuses ["done", "completed", "skipped"]
-  @finding_replay_retry_attempts 50
   @review_promotable_work_package_statuses ["ready_for_worker", "claimed", "planning", "implementing"]
   @scope_guard_gate "scope_guard"
 
@@ -202,7 +199,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp submit_new_review_package(repo, %Session{} = session, arguments, artifacts, payload, requested_head_sha, work_package, progress_events) do
     case review_package_head_sha(requested_head_sha, progress_events, work_package) do
       {:ok, head_sha} ->
-        case append_metadata_event(repo, session, arguments, "submit_review_package", "review_package_submitted", payload) do
+        case ProgressEvents.append_metadata(repo, session, arguments, "submit_review_package", "review_package_submitted", payload) do
           {:ok, result} ->
             persist_review_artifacts_and_promote_or_rollback(repo, session, artifacts, head_sha, result, work_package)
 
@@ -271,7 +268,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp maybe_put_review_head_sha(map, _head_sha), do: map
 
   defp maybe_put_headless_review_idempotency_key(arguments, nil, payload) do
-    Map.put_new(arguments, "idempotency_key", metadata_idempotency_key(Map.put(payload, "source_tool", "submit_review_package")))
+    Map.put_new(arguments, "idempotency_key", ProgressEvents.metadata_idempotency_key(Map.put(payload, "source_tool", "submit_review_package")))
   end
 
   defp maybe_put_headless_review_idempotency_key(arguments, _requested_head_sha, _payload), do: arguments
@@ -453,15 +450,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp replay_existing_review_suite_result_for_valid_assignment(repo, %Session{} = session, arguments, payload) do
     replay_payload = review_suite_payload(payload, arguments, Map.fetch!(payload, "head_sha"))
 
-    case metadata_event_attrs(session, arguments, "attach_review_suite_result", "review_suite_passed", replay_payload) do
+    case ProgressEvents.metadata_attrs(session, arguments, "attach_review_suite_result", "review_suite_passed", replay_payload) do
       {:ok, idempotency_key, attrs} -> replay_existing_review_suite_result_event(repo, session, idempotency_key, attrs)
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "attach_review_suite_result", "reason" => reason}}
     end
   end
 
   defp replay_existing_review_suite_result_event(repo, %Session{} = session, idempotency_key, attrs) do
-    case existing_progress_event(repo, session, idempotency_key) do
-      {:ok, event} -> replay_progress_event(repo, session, event, attrs, "attach_review_suite_result")
+    case ProgressEvents.existing(repo, session, idempotency_key) do
+      {:ok, event} -> ProgressEvents.replay_existing(repo, session, event, attrs, "attach_review_suite_result")
       {:error, :not_found} -> :new
       {:error, reason} -> worker_error(reason, "attach_review_suite_result")
     end
@@ -478,7 +475,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
          :ok <- reject_failed_review_suite_result_override(state.progress_events, work_package_id, head_sha),
          payload <- review_suite_payload(payload, arguments, head_sha),
          :ok <- require_review_suite_round_identity(payload, state.work_package, state.progress_events),
-         {:ok, result} <- append_metadata_event(repo, session, arguments, "attach_review_suite_result", "review_suite_passed", payload),
+         {:ok, result} <- ProgressEvents.append_metadata(repo, session, arguments, "attach_review_suite_result", "review_suite_passed", payload),
          :ok <- append_review_suite_artifact(repo, work_package_id, head_sha),
          :ok <- promote_stale_package_to_reviewing(repo, state.work_package) do
       result
@@ -1531,7 +1528,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp generic_append_progress_event?(%ProgressEvent{}), do: false
 
   defp recommendation_artifact_recorded?(artifacts, work_package_id) do
-    artifact_id = recommendation_artifact_id(work_package_id)
+    artifact_id = ProgressEvents.recommendation_artifact_id(work_package_id)
 
     Enum.any?(
       artifacts,
@@ -1540,254 +1537,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     )
   end
 
-  defp recommendation_artifact_id(work_package_id) do
-    material = [work_package_id, "recommendation", "recommendation.md"] |> Enum.join(":")
-    "artifact_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
-  end
-
-  defp append_metadata_event(repo, session, arguments, tool, status, payload) do
-    case metadata_event_attrs(session, arguments, tool, status, payload) do
-      {:ok, idempotency_key, attrs} -> append_progress_event_or_replay(repo, session, attrs, idempotency_key, tool)
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
-    end
-  end
-
   defp replay_existing_metadata_event(repo, %Session{} = session, arguments, tool, status, payload, progress_events) do
-    case metadata_event_attrs(session, arguments, tool, status, payload) do
-      {:ok, idempotency_key, attrs} ->
-        case existing_metadata_event(repo, session, idempotency_key, tool, progress_events) do
-          {:ok, event} -> replay_progress_event(repo, session, event, attrs, tool)
-          {:error, :not_found} -> :not_found
-          {:error, reason} -> worker_error(reason, tool)
-        end
-
-      {:tool_error, reason} ->
-        {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
-    end
-  end
-
-  defp existing_metadata_event(_repo, %Session{}, idempotency_key, "submit_review_package", progress_events) when is_list(progress_events) do
-    case Enum.find(progress_events, fn event -> event.idempotency_key == idempotency_key end) do
-      %ProgressEvent{} = event -> {:ok, event}
-      nil -> {:error, :not_found}
-    end
-  end
-
-  defp existing_metadata_event(repo, %Session{} = session, idempotency_key, _tool, _progress_events) do
-    PlanningRepository.get_progress_event_by_idempotency_key(
-      repo,
-      Session.work_package_id(session),
-      idempotency_key,
-      session.assignment.grant_id
-    )
-  end
-
-  defp metadata_event_attrs(%Session{} = session, arguments, tool, status, payload) do
-    payload = Map.put(payload, "source_tool", tool)
-
-    arguments =
-      Map.put_new(arguments, "summary", status)
-      |> Map.put_new("status", status)
-      |> Map.put_new("idempotency_key", metadata_idempotency_key(payload))
-      |> canonical_metadata_event_status(tool, status)
-
-    with {:ok, summary} <- required_argument(arguments, "summary"),
-         {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
-         {:ok, caller_payload} <- optional_payload(arguments),
-         :ok <- validate_metadata_caller_payload(tool, caller_payload) do
-      idempotency_key = scoped_progress_idempotency_key(tool, String.trim(idempotency_key), session)
-
-      {:ok, idempotency_key,
-       %{
-         "summary" => summary,
-         "body" => optional_argument(arguments, "body", nil),
-         "status" => optional_argument(arguments, "status", "recorded"),
-         "idempotency_key" => idempotency_key,
-         "payload" => merge_tool_payload(tool, caller_payload, payload)
-       }}
-    end
-  end
-
-  defp canonical_metadata_event_status(arguments, "attach_review_suite_result", status), do: Map.put(arguments, "status", status)
-  defp canonical_metadata_event_status(arguments, _tool, _status), do: arguments
-  defp validate_metadata_caller_payload("attach_review_suite_result", caller_payload) when map_size(caller_payload) == 0, do: :ok
-  defp validate_metadata_caller_payload("attach_review_suite_result", _caller_payload), do: {:tool_error, "unexpected_payload"}
-  defp validate_metadata_caller_payload(_tool, _caller_payload), do: :ok
-
-  defp append_progress_event_or_replay(repo, %Session{} = session, attrs, idempotency_key, tool) do
-    case existing_progress_event(repo, session, idempotency_key) do
-      {:ok, event} ->
-        replay_progress_event(repo, session, event, attrs, tool)
-
-      {:error, :not_found} ->
-        append_new_progress_event_or_replay(repo, session, attrs, idempotency_key, tool)
-
-      {:error, reason} ->
-        worker_error(reason, tool)
-    end
-  end
-
-  defp append_new_progress_event_or_replay(repo, %Session{} = session, attrs, idempotency_key, tool) do
-    transaction_fun = fn ->
-      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
-           :ok <- reject_ready_evidence_mutation(repo, session, tool) do
-        PlanningService.append_authenticated_progress_event(repo, session.assignment, attrs)
-      end
-    end
-
-    case run_worker_transaction(repo, transaction_fun) do
-      {:ok, event} ->
-        {:ok, ToolResult.agent_tool_result(%{"progress_event" => progress_event_payload(event)})}
-
-      {:tool_error, reason} ->
-        {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
-
-      {:error, :idempotency_key_conflict} ->
-        replay_progress_event_with_retry(
-          repo,
-          session,
-          attrs,
-          idempotency_key,
-          tool,
-          progress_replay_retry_attempts()
-        )
-
-      {:error, reason} ->
-        worker_error(reason, tool)
-    end
-  end
-
-  defp reject_ready_evidence_mutation(repo, %Session{} = session, tool)
-       when tool in ["submit_review_package", "attach_review_suite_result"] do
-    work_package_id = Session.work_package_id(session)
-
-    with :ok <- lock_work_package(repo, work_package_id),
-         {:ok, state} <- PlanningRepository.get_state(repo, work_package_id) do
-      reject_ready_work_package(state.work_package)
-    end
-  end
-
-  defp reject_ready_evidence_mutation(_repo, %Session{}, _tool), do: :ok
-
-  defp reject_ready_work_package(%WorkPackage{kind: "phase_child", status: status}) when status in ["merging_into_phase", "merged_into_phase"] do
-    {:tool_error, "child_under_architect_control"}
-  end
-
-  defp reject_ready_work_package(%WorkPackage{status: status}) when status in ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"],
-    do: {:tool_error, "already_ready"}
-
-  defp reject_ready_work_package(%WorkPackage{}), do: :ok
-
-  defp replay_progress_event_with_retry(repo, %Session{} = session, attrs, idempotency_key, tool, attempts_left) do
-    retry_fun = fn ->
-      replay_progress_event_with_retry(repo, session, attrs, idempotency_key, tool, attempts_left - 1)
-    end
-
-    repo
-    |> replay_progress_event(session, attrs, idempotency_key, tool)
-    |> retry_missing_progress_event(retry_fun, attempts_left)
-  end
-
-  defp replay_progress_event(repo, %Session{} = session, %ProgressEvent{} = event, attrs, tool) do
-    case PlanningService.require_valid_assignment(repo, session.assignment) do
-      :ok -> replay_matching_progress_event(repo, session, event, attrs, tool)
-      {:error, reason} -> worker_error(reason, tool)
-    end
-  end
-
-  defp replay_progress_event(repo, %Session{} = session, attrs, idempotency_key, tool) do
-    case existing_progress_event(repo, session, idempotency_key) do
-      {:ok, event} -> replay_progress_event(repo, session, event, attrs, tool)
-      {:error, reason} -> worker_error(reason, tool)
-    end
-  end
-
-  defp existing_progress_event(repo, %Session{} = session, idempotency_key) do
-    case PlanningRepository.get_progress_event_by_idempotency_key(
-           repo,
-           Session.work_package_id(session),
-           idempotency_key,
-           session.assignment.grant_id
-         ) do
-      {:ok, event} -> {:ok, event}
-      {:error, :not_found} -> existing_work_package_progress_event(repo, session, idempotency_key)
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp existing_work_package_progress_event(repo, %Session{} = session, idempotency_key) do
-    existing_work_package_progress_event(repo, Session.work_package_id(session), idempotency_key)
-  end
-
-  defp existing_work_package_progress_event(repo, work_package_id, idempotency_key) do
-    case PlanningRepository.list_progress_events(repo, work_package_id) do
-      {:ok, progress_events} -> matching_progress_event(progress_events, idempotency_key)
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp matching_progress_event(progress_events, idempotency_key) do
-    case Enum.find(progress_events, fn event -> event.idempotency_key == idempotency_key end) do
-      %ProgressEvent{} = event -> {:ok, event}
-      nil -> {:error, :not_found}
-    end
-  end
-
-  defp retry_missing_progress_event({:error, _code, _message, %{"reason" => "not_found"}}, retry_fun, attempts_left) when attempts_left > 0 do
-    Process.sleep(5)
-    retry_fun.()
-  end
-
-  defp retry_missing_progress_event(result, _retry_fun, _attempts_left), do: result
-
-  defp replay_matching_progress_event(_repo, %Session{} = _session, %ProgressEvent{} = event, attrs, tool) do
-    if progress_replay_matches?(event, attrs) do
-      {:ok, ToolResult.agent_tool_result(%{"progress_event" => progress_event_payload(event)})}
-    else
-      {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => "idempotency_conflict"}}
-    end
-  end
-
-  defp progress_replay_matches?(%ProgressEvent{} = event, attrs) do
-    normalized_payload = normalized_progress_payload(event, attrs)
-
-    event.summary == Map.get(attrs, "summary") and event.body == Map.get(attrs, "body") and event.status == Map.get(attrs, "status") and
-      progress_payload_replay_matches?(event.payload, normalized_payload)
-  end
-
-  defp progress_payload_replay_matches?(%{"type" => "scope_expansion_request", "source_tool" => "request_scope_expansion"} = existing, normalized) do
-    existing == normalized or legacy_scope_expansion_replay_matches?(existing, normalized)
-  end
-
-  defp progress_payload_replay_matches?(%{"type" => "pr", "source_tool" => "attach_pr"} = existing, %{"type" => "pr", "source_tool" => "attach_pr"} = normalized) do
-    existing == normalized or legacy_attach_pr_replay_matches?(existing, normalized)
-  end
-
-  defp progress_payload_replay_matches?(existing, normalized), do: existing == normalized
-
-  defp legacy_scope_expansion_replay_matches?(existing, normalized) do
-    legacy_normalized =
-      case Map.fetch(existing, "recommendation_artifact_id") do
-        {:ok, artifact_id} -> Map.put(normalized, "recommendation_artifact_id", artifact_id)
-        :error -> Map.delete(normalized, "recommendation_artifact_id")
-      end
-
-    existing == legacy_normalized
-  end
-
-  defp legacy_attach_pr_replay_matches?(existing, normalized), do: existing == Map.take(normalized, ["type", "source_tool", "url", "head_sha"])
-
-  defp normalized_progress_payload(%ProgressEvent{} = event, attrs) do
-    attrs
-    |> Map.merge(%{
-      "id" => "replay_probe",
-      "work_package_id" => event.work_package_id,
-      "sequence" => 1,
-      "created_at" => event.created_at || DateTime.utc_now(:microsecond)
-    })
-    |> ProgressEvent.create_changeset(trusted_audit_metadata: true)
-    |> Ecto.Changeset.apply_changes()
-    |> Map.get(:payload)
+    ProgressEvents.replay_metadata(repo, session, arguments, tool, status, payload, progress_events)
   end
 
   defp run_worker_transaction(repo, fun) do
@@ -2137,54 +1888,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     end
   end
 
-  defp optional_argument(arguments, key, default) do
-    case Map.get(arguments, key, default) do
-      value when is_binary(value) -> if String.trim(value) == "", do: default, else: value
-      nil -> default
-      value -> value
-    end
-  end
-
-  defp optional_payload(arguments) do
-    case Map.get(arguments, "payload", %{}) do
-      payload when is_map(payload) -> {:ok, payload}
-      _payload -> {:tool_error, "invalid_payload"}
-    end
-  end
-
-  defp merge_tool_payload("attach_review_suite_result", _caller_payload, tool_payload), do: tool_payload
-
-  defp merge_tool_payload(_tool, caller_payload, tool_payload) when tool_payload == %{} do
-    Map.drop(caller_payload, ["source_tool"])
-  end
-
-  defp merge_tool_payload(_tool, caller_payload, tool_payload), do: Map.merge(caller_payload, tool_payload)
-
-  defp scoped_progress_idempotency_key("submit_review_package", idempotency_key, %Session{} = session) do
-    ["submit_review_package", session.assignment.work_package_id, idempotency_key] |> Enum.join(":")
-  end
-
-  defp scoped_progress_idempotency_key("attach_review_suite_result", idempotency_key, %Session{} = session) do
-    ["attach_review_suite_result", session.assignment.work_package_id, idempotency_key] |> Enum.join(":")
-  end
-
-  defp scoped_progress_idempotency_key(tool, idempotency_key, %Session{}), do: tool <> ":" <> idempotency_key
-
-  defp metadata_idempotency_key(payload), do: "mcp:" <> Map.get(payload, "type", "metadata") <> ":" <> Base.url_encode64(:erlang.term_to_binary(payload), padding: false)
   defp normalize_blocker_id(value) when is_binary(value), do: String.trim(value)
   defp normalize_blocker_id(value), do: value
-  defp progress_replay_retry_attempts, do: :symphony_elixir |> Application.get_env(:sympp_finding_replay_retry_attempts, @finding_replay_retry_attempts) |> max(0)
-
-  defp progress_event_payload(%ProgressEvent{} = event) do
-    %{
-      "id" => event.id,
-      "summary" => Redactor.redact_text(event.summary),
-      "status" => Redactor.redact_text(event.status),
-      "idempotency_key" => Redactor.redact_text(event.idempotency_key),
-      "payload" => Redactor.redact_output(event.payload || %{})
-    }
-  end
-
   defp drop_nil_values(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
   defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
 
@@ -2226,26 +1931,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
      }}
   end
 
-  defp worker_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
-  defp worker_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
   defp worker_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
   defp worker_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
   defp worker_error(:assignment_mismatch, resource), do: auth_error({:unauthorized, :assignment_mismatch}, resource)
-  defp worker_error(:worker_grant_required, resource), do: auth_error({:unauthorized, :worker_grant_required}, resource)
-  defp worker_error({:authorization_policy_denied, %Decision{} = decision}, resource), do: MCPError.from_decision(decision, resource)
-  defp worker_error(:forbidden, resource), do: auth_error(:forbidden, resource)
-  defp worker_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
   defp worker_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp worker_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
-  defp worker_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp worker_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
-  defp auth_error(:unauthorized, resource), do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}
   defp auth_error({:unauthorized, reason}, resource), do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => reason_text(reason)}}
-  defp auth_error({:service_unavailable, reason}, resource), do: service_error(reason, resource)
-  defp auth_error(:forbidden, resource), do: {:error, -32_003, "Forbidden", %{"resource" => resource, "reason" => "outside_session_scope"}}
   defp service_error(_reason, resource), do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
-  defp reason_text(reason) when is_binary(reason), do: reason
-  defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp reason_text(reason), do: inspect(reason)
+  defp reason_text(reason), do: to_string(reason)
 end

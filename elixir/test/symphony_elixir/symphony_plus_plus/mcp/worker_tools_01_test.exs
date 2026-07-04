@@ -394,6 +394,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     assert Enum.any?(events, &(get_in(&1.payload, ["type"]) == "scope_expansion_request" and get_in(&1.payload, ["approved"]) == false))
   end
 
+  test "progress metadata tools reject non-string required fields", %{repo: repo} do
+    assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-METADATA-ARGS", kind: "mcp"))
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
+    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+
+    numeric_key_response =
+      MCPHarness.request(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "numeric-progress-key",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "append_progress",
+            "arguments" => %{"summary" => "Progress", "idempotency_key" => 123}
+          }
+        },
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(numeric_key_response, ["error", "code"]) == -32_602
+    assert get_in(numeric_key_response, ["error", "data", "reason"]) == "missing_idempotency_key"
+
+    numeric_summary_response =
+      MCPHarness.request(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "numeric-progress-summary",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "append_progress",
+            "arguments" => %{"summary" => 123, "idempotency_key" => "numeric-progress-summary"}
+          }
+        },
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(numeric_summary_response, ["error", "code"]) == -32_602
+    assert get_in(numeric_summary_response, ["error", "data", "reason"]) == "missing_summary"
+  end
+
   test "compact worker metadata calls infer current package targets and keep verbose compatibility", %{repo: repo} do
     branch = "agent/SYMPP-COMPACT-METADATA/worker"
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-COMPACT-METADATA", kind: "mcp", branch_pattern: branch))
