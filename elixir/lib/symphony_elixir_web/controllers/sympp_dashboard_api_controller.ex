@@ -14,33 +14,22 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Policy
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Target
-  alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{DefaultClient, MergeReconciler}
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Service, as: GuidanceRequestService
-  alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
-  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
-  alias SymphonyElixir.SymphonyPlusPlus.TrackerAdapter
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixirWeb.Endpoint
-  alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
+  alias SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions
+  alias SymphonyElixirWeb.SymppDashboardApi.Runtime
   alias SymphonyElixirWeb.SymppDashboardApi.ScopeProjection
 
-  import Ecto.Query, only: [from: 2]
+  alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
 
   @type auth_context :: {:grant, AccessGrant.t()}
   @board_session_key "sympp_board_grant_id"
@@ -50,12 +39,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   @operator_bootstrap_param "operator_bootstrap"
   @operator_bootstrap_config_key :sympp_local_operator_bootstrap_token
   @max_package_sessions 8
-  @access_grant_lazy_migration_columns ["phase_id", "scope_repo", "scope_base_branch", "provenance"]
   @local_operator_actor "local-operator"
-  @local_operator_worker "local-operator-worker"
-  @local_operator_nonmergeable_terminal_package_statuses ["merged_into_phase", "closed", "abandoned"]
-  @local_operator_noncloseable_terminal_package_statuses ["merged", "merged_into_phase", "abandoned"]
-  @local_operator_hideable_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
 
   @spec authorize_board_browser(Conn.t(), term()) :: Conn.t()
   def authorize_board_browser(conn, _opts) do
@@ -406,7 +390,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp package_route_status(work_package_id) do
-    case with_dashboard_repo(fn repo -> WorkPackageRepository.get(repo, work_package_id) end) do
+    case Runtime.with_dashboard_repo(fn repo -> WorkPackageRepository.get(repo, work_package_id) end) do
       {:ok, _work_package} -> :exists
       {:error, :not_found} -> :missing
       {:error, reason} -> {:error, reason}
@@ -687,7 +671,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   @spec operator_sync_github_prs(Conn.t(), map()) :: Conn.t()
   def operator_sync_github_prs(conn, params) do
     send_local_operator_response(conn, :delivery_reconcile_apply, Target.new(:dashboard), :operator_sync_github_prs, fn repo ->
-      with {:ok, sync} <- MergeReconciler.reconcile(repo, github_sync_opts(params)) do
+      with {:ok, sync} <- MergeReconciler.reconcile(repo, LocalOperatorActions.github_sync_opts(params)) do
         json(conn, mutation_success_payload(%{sync: sync}))
       end
     end)
@@ -766,7 +750,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       work_request_target(work_request_id),
       :operator_update_work_request_state,
       fn repo ->
-        with {:ok, "completed"} <- local_operator_work_request_state(params),
+        with {:ok, "completed"} <- LocalOperatorActions.local_operator_work_request_state(params),
              {:ok, work_request} <- WorkRequestService.force_complete(repo, work_request_id) do
           json(conn, mutation_success_payload(%{work_request: LocalOperatorDashboard.work_request_mutation_payload(work_request)}, %{dashboard: false, work_request_id: work_request.id}))
         end
@@ -782,9 +766,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       work_package_target(work_package_id),
       :operator_update_work_package_state,
       fn repo ->
-        with {:ok, action} <- local_operator_work_package_status(params),
+        with {:ok, action} <- LocalOperatorActions.local_operator_work_package_status(params),
              {:ok, work_package} <-
-               change_work_package_for_local_operator(
+               LocalOperatorActions.change_work_package_for_local_operator(
                  repo,
                  normalize_package_route_id(work_package_id),
                  action,
@@ -806,8 +790,20 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       fn repo ->
         work_package_id = normalize_package_route_id(work_package_id)
 
-        with {:ok, event} <- clear_work_package_blocker_for_local_operator(repo, work_package_id, blocker_id, params) do
-          json(conn, mutation_success_payload(%{progress_event: %{id: event.id, blocker_id: blocker_id}}, %{work_package_id: work_package_id}))
+        with {:ok, event} <-
+               LocalOperatorActions.clear_work_package_blocker_for_local_operator(
+                 repo,
+                 work_package_id,
+                 blocker_id,
+                 params
+               ) do
+          json(
+            conn,
+            mutation_success_payload(
+              %{progress_event: %{id: event.id, blocker_id: blocker_id}},
+              %{work_package_id: work_package_id}
+            )
+          )
         end
       end
     )
@@ -823,7 +819,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       fn repo ->
         work_package_id = normalize_package_route_id(work_package_id)
 
-        with {:ok, work_package} <- hide_work_package_for_local_operator(repo, work_package_id) do
+        with {:ok, work_package} <- LocalOperatorActions.hide_work_package_for_local_operator(repo, work_package_id) do
           json(conn, mutation_success_payload(%{work_package_id: work_package.id}, %{work_package_id: work_package.id}))
         end
       end
@@ -833,12 +829,12 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   @spec operator_create_comment(Conn.t(), map()) :: Conn.t()
   def operator_create_comment(conn, params) do
     send_local_operator_response(conn, :comment_add, comment_target(params), :operator_create_comment, fn repo ->
-      with {:ok, comment} <- CommentService.create(repo, local_operator_comment_attrs(params)) do
+      with {:ok, comment} <- CommentService.create(repo, LocalOperatorActions.local_operator_comment_attrs(params)) do
         refresh = %{comment_target_kind: comment.target_kind, comment_target_id: comment.target_id}
 
         conn
         |> put_status(201)
-        |> json(mutation_success_payload(%{comment: comment_payload(comment)}, refresh))
+        |> json(mutation_success_payload(%{comment: LocalOperatorActions.comment_payload(comment)}, refresh))
       end
     end)
   end
@@ -852,10 +848,14 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       :operator_resolve_comment,
       fn repo ->
         with {:ok, comment} <-
-               CommentService.resolve(repo, comment_id, local_operator_comment_resolution_attrs(params)) do
+               CommentService.resolve(
+                 repo,
+                 comment_id,
+                 LocalOperatorActions.local_operator_comment_resolution_attrs(params)
+               ) do
           refresh = %{comment_target_kind: comment.target_kind, comment_target_id: comment.target_id}
 
-          json(conn, mutation_success_payload(%{comment: comment_payload(comment)}, refresh))
+          json(conn, mutation_success_payload(%{comment: LocalOperatorActions.comment_payload(comment)}, refresh))
         end
       end
     )
@@ -869,9 +869,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       work_request_target(work_request_id),
       :operator_answer_question,
       fn repo ->
-        with {:ok, question} <- scoped_question(repo, work_request_id, question_id),
-             :ok <- require_open_question(question),
-             {:ok, attrs} <- local_operator_question_answer_attrs(question, params),
+        with {:ok, question} <- LocalOperatorActions.scoped_question(repo, work_request_id, question_id),
+             :ok <- LocalOperatorActions.require_open_question(question),
+             {:ok, attrs} <- LocalOperatorActions.local_operator_question_answer_attrs(question, params),
              {:ok, _answered} <- WorkRequestService.answer_question(repo, question.id, question.status, attrs) do
           json(conn, mutation_success_payload(%{work_request_id: work_request_id, question_id: question.id}, %{work_request_id: work_request_id}))
         end
@@ -913,7 +913,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
         with {:ok, handoff} <-
                ArchitectHandoff.create_or_replay(repo, work_request_id,
                  local_operator?: true,
-                 handoff_opts: architect_handoff_opts(repo)
+                 handoff_opts: LocalOperatorActions.architect_handoff_opts(repo)
                ) do
           json(conn, mutation_success_payload(%{architect_handoff: handoff}, %{work_request_id: work_request_id}))
         end
@@ -930,7 +930,12 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       :operator_dispatch_planned_slice,
       fn repo ->
         with {:ok, dispatch} <-
-               PlannedSliceDispatch.dispatch(repo, work_request_id, planned_slice_id, dispatch_handoff_opts(repo)) do
+               PlannedSliceDispatch.dispatch(
+                 repo,
+                 work_request_id,
+                 planned_slice_id,
+                 LocalOperatorActions.dispatch_handoff_opts(repo)
+               ) do
           refresh = %{work_request_id: work_request_id, planned_slice_id: planned_slice_id}
           payload = %{dispatch: PlannedSliceDispatch.response_payload(dispatch)}
 
@@ -964,7 +969,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp send_local_operator_response(conn, action, %Target{} = target, tool_name, fun)
        when is_atom(action) and is_atom(tool_name) and is_function(fun, 1) do
     if local_operator_api_request?(conn) do
-      with_dashboard_repo(fn repo ->
+      Runtime.with_dashboard_repo(fn repo ->
         local_operator_response(repo, conn, action, target, tool_name, fun)
       end)
       |> case do
@@ -1068,7 +1073,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp comment_target(params) do
-    target_id = text_param(params, "target_id")
+    target_id = LocalOperatorActions.text_param(params, "target_id")
     Target.new(:comment, target_id)
   end
 
@@ -1107,436 +1112,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     conn
     |> Conn.fetch_session()
     |> active_local_operator_session?()
-  end
-
-  defp local_operator_work_request_state(params) do
-    case text_param(params, "state") || text_param(params, "status") do
-      "completed" -> {:ok, "completed"}
-      _state -> {:error, :invalid_status}
-    end
-  end
-
-  defp local_operator_work_package_status(params) do
-    case text_param(params, "status") do
-      "merged" -> {:ok, :merged}
-      "merged_and_archive" -> {:ok, :merged_and_archive}
-      "closed_and_archive" -> {:ok, :closed_and_archive}
-      "completed_no_pr" -> {:ok, :completed_no_pr}
-      _status -> {:error, :invalid_status}
-    end
-  end
-
-  defp change_work_package_for_local_operator(repo, work_package_id, :merged, _params) do
-    mark_work_package_merged_and_refresh_for_local_operator(repo, work_package_id)
-  end
-
-  defp change_work_package_for_local_operator(repo, work_package_id, :merged_and_archive, _params) do
-    local_operator_transaction(repo, fn ->
-      with {:ok, work_package} <- mark_work_package_merged_for_local_operator(repo, work_package_id),
-           :ok <- refresh_work_requests_for_work_package(repo, work_package.id),
-           {:ok, _hidden_package} <- hide_work_package_for_local_operator_in_transaction(repo, work_package) do
-        {:ok, work_package}
-      end
-    end)
-  end
-
-  defp change_work_package_for_local_operator(repo, work_package_id, :closed_and_archive, _params) do
-    local_operator_transaction(repo, fn ->
-      with {:ok, work_package} <- close_work_package_for_local_operator(repo, work_package_id),
-           {:ok, _hidden_package} <- hide_work_package_for_local_operator_in_transaction(repo, work_package) do
-        {:ok, work_package}
-      end
-    end)
-  end
-
-  defp change_work_package_for_local_operator(repo, work_package_id, :completed_no_pr, params) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         :ok <- require_closeable_work_package(work_package),
-         {:ok, no_pr_evidence} <- required_no_pr_evidence(params),
-         {:ok, planned_slice} <- linked_planned_slice_for_work_package(repo, work_package_id),
-         {:ok, _delivery} <-
-           WorkRequestService.record_planned_slice_delivery(repo, planned_slice.work_request_id, planned_slice.id, %{
-             outcome: "completed_no_pr",
-             idempotency_key: completed_no_pr_idempotency_key(planned_slice.id),
-             no_pr_evidence: no_pr_evidence,
-             recorded_by: @local_operator_actor
-           }) do
-      WorkPackageRepository.get(repo, work_package_id)
-    end
-  end
-
-  defp mark_work_package_merged_and_refresh_for_local_operator(repo, work_package_id) do
-    local_operator_transaction(repo, fn ->
-      with {:ok, work_package} <- mark_work_package_merged_for_local_operator(repo, work_package_id),
-           :ok <- refresh_work_requests_for_work_package(repo, work_package.id) do
-        {:ok, work_package}
-      end
-    end)
-  end
-
-  defp mark_work_package_merged_for_local_operator(repo, work_package_id) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
-      case work_package.status do
-        "merged" ->
-          {:ok, work_package}
-
-        status when status in @local_operator_nonmergeable_terminal_package_statuses ->
-          {:error, :invalid_status}
-
-        status when is_binary(status) ->
-          WorkPackageRepository.update_status(repo, work_package.id, status, "merged")
-
-        _status ->
-          {:error, :invalid_status}
-      end
-    end
-  end
-
-  defp close_work_package_for_local_operator(repo, work_package_id) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
-      case work_package.status do
-        "closed" ->
-          {:ok, work_package}
-
-        status when status in @local_operator_noncloseable_terminal_package_statuses ->
-          {:error, :invalid_status}
-
-        status when is_binary(status) ->
-          WorkPackageRepository.update_status(repo, work_package.id, status, "closed")
-
-        _status ->
-          {:error, :invalid_status}
-      end
-    end
-  end
-
-  defp require_closeable_work_package(%WorkPackage{status: status})
-       when status in @local_operator_noncloseable_terminal_package_statuses do
-    {:error, :invalid_status}
-  end
-
-  defp require_closeable_work_package(%WorkPackage{status: status}) when is_binary(status), do: :ok
-  defp require_closeable_work_package(%WorkPackage{}), do: {:error, :invalid_status}
-
-  defp hide_work_package_for_local_operator(repo, work_package_id) do
-    local_operator_transaction(repo, fn ->
-      with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
-        hide_work_package_for_local_operator_in_transaction(repo, work_package)
-      end
-    end)
-  end
-
-  defp hide_work_package_for_local_operator_in_transaction(repo, %WorkPackage{} = work_package) do
-    with :ok <- require_hideable_work_package(work_package),
-         :ok <- require_unlinked_work_package(repo, work_package.id),
-         {:ok, _settings} <- append_hidden_work_package_id_for_local_operator(repo, work_package.id) do
-      {:ok, work_package}
-    end
-  end
-
-  defp require_hideable_work_package(%WorkPackage{status: status}) do
-    if status in @local_operator_hideable_package_statuses, do: :ok, else: {:error, :not_delivered}
-  end
-
-  defp require_unlinked_work_package(repo, work_package_id) do
-    linked? =
-      repo.exists?(
-        from(planned_slice in PlannedSlice,
-          where: planned_slice.work_package_id == ^work_package_id
-        )
-      )
-
-    if linked?, do: {:error, :linked_work_package}, else: :ok
-  end
-
-  defp linked_planned_slice_for_work_package(repo, work_package_id) do
-    repo.one(
-      from(planned_slice in PlannedSlice,
-        where: planned_slice.work_package_id == ^work_package_id
-      )
-    )
-    |> case do
-      %PlannedSlice{} = planned_slice -> {:ok, planned_slice}
-      nil -> {:error, :linked_work_package_required}
-    end
-  end
-
-  defp required_no_pr_evidence(params) do
-    case text_param(params, "no_pr_evidence") do
-      nil -> {:error, :missing_no_pr_evidence}
-      evidence -> {:ok, evidence}
-    end
-  end
-
-  defp completed_no_pr_idempotency_key(planned_slice_id), do: "local-operator-completed-no-pr:#{planned_slice_id}"
-
-  defp clear_work_package_blocker_for_local_operator(repo, work_package_id, blocker_id, params) do
-    blocker_id = String.trim(to_string(blocker_id || ""))
-
-    with true <- valid_package_route_id?(work_package_id),
-         true <- blocker_id != "",
-         {:ok, _work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package_id),
-         {:ok, blocker} <- active_blocker(progress_events, blocker_id) do
-      PlanningRepository.append_progress_event(repo, %{
-        work_package_id: work_package_id,
-        summary: "Cleared blocker: #{blocker.summary || blocker.id}",
-        body: text_param(params, "resolution") || "Cleared by local operator from the blocker detail modal.",
-        status: "resolved",
-        idempotency_key: "local-operator-clear-blocker:#{work_package_id}:#{blocker.id}:#{blocker.event_id}",
-        payload: %{
-          type: "blocker",
-          source_tool: "resolve_blocker",
-          blocker_id: blocker.id,
-          resolution: text_param(params, "resolution") || "Cleared by local operator.",
-          active: false
-        }
-      })
-    else
-      false -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp active_blocker(progress_events, blocker_id) do
-    progress_events
-    |> BlockerProjection.blockers()
-    |> Enum.find(&(&1.id == blocker_id and &1.active))
-    |> case do
-      nil -> {:error, :not_found}
-      blocker -> {:ok, blocker}
-    end
-  end
-
-  defp append_hidden_work_package_id_for_local_operator(_repo, work_package_id)
-       when not is_binary(work_package_id) or byte_size(work_package_id) == 0 do
-    {:error, :not_found}
-  end
-
-  defp append_hidden_work_package_id_for_local_operator(repo, work_package_id) do
-    now = DateTime.utc_now(:microsecond)
-
-    with {:ok, _settings} <- ensure_operator_settings_for_local_operator(repo),
-         {:ok, _settings} <- OperatorSettingsRepository.get(repo),
-         {1, _rows} <-
-           repo.update_all(append_hidden_work_package_id_query(work_package_id, now), []),
-         %OperatorSettings{} = settings <- repo.get(OperatorSettings, OperatorSettings.settings_id()) do
-      {:ok, settings}
-    else
-      {0, _rows} -> {:error, :not_found}
-      nil -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp ensure_operator_settings_for_local_operator(repo) do
-    repo.insert(OperatorSettings.default(), on_conflict: :nothing, conflict_target: :id)
-  end
-
-  defp append_hidden_work_package_id_query(work_package_id, now) do
-    from(settings in OperatorSettings,
-      where: settings.id == ^OperatorSettings.settings_id(),
-      update: [
-        set: [
-          hidden_work_package_ids:
-            fragment(
-              """
-              CASE
-                WHEN EXISTS (
-                  SELECT 1
-                  FROM json_each(COALESCE(?, '[]'))
-                  WHERE value IS NOT NULL
-                    AND value = ?
-                )
-                THEN COALESCE((
-                  SELECT json_group_array(value)
-                  FROM (
-                    SELECT DISTINCT value
-                    FROM json_each(COALESCE(?, '[]'))
-                    WHERE value IS NOT NULL
-                  )
-                ), '[]')
-                ELSE json_insert(
-                  COALESCE((
-                    SELECT json_group_array(value)
-                    FROM (
-                      SELECT DISTINCT value
-                      FROM json_each(COALESCE(?, '[]'))
-                      WHERE value IS NOT NULL
-                    )
-                  ), '[]'),
-                  '$[#]',
-                  ?
-                )
-              END
-              """,
-              settings.hidden_work_package_ids,
-              ^work_package_id,
-              settings.hidden_work_package_ids,
-              settings.hidden_work_package_ids,
-              ^work_package_id
-            ),
-          updated_at: ^now
-        ]
-      ]
-    )
-  end
-
-  defp local_operator_transaction(repo, fun) when is_function(fun, 0) do
-    repo.transaction(fn ->
-      case fun.() do
-        {:ok, value} -> value
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-    |> normalize_local_operator_transaction_result()
-  end
-
-  defp normalize_local_operator_transaction_result({:ok, value}), do: {:ok, value}
-  defp normalize_local_operator_transaction_result({:error, reason}), do: {:error, reason}
-
-  defp refresh_work_requests_for_work_package(repo, work_package_id) do
-    with {:ok, work_requests} <- WorkRequestService.list(repo, %{include_archived: true}) do
-      refresh_linked_work_requests(repo, work_requests, work_package_id)
-    end
-  end
-
-  defp refresh_linked_work_requests(repo, work_requests, work_package_id) do
-    Enum.reduce_while(work_requests, :ok, fn work_request, :ok ->
-      repo
-      |> refresh_work_request_if_linked_to_package(work_request, work_package_id)
-      |> reduce_linked_work_request_refresh()
-    end)
-  end
-
-  defp reduce_linked_work_request_refresh(:ok), do: {:cont, :ok}
-  defp reduce_linked_work_request_refresh({:error, reason}), do: {:halt, {:error, reason}}
-
-  defp refresh_work_request_if_linked_to_package(repo, work_request, work_package_id) do
-    with {:ok, planned_slices} <- WorkRequestService.list_planned_slices(repo, work_request.id),
-         true <- Enum.any?(planned_slices, &(&1.work_package_id == work_package_id)) do
-      refresh_work_request_completion(repo, work_request.id)
-    else
-      false -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp refresh_work_request_completion(repo, work_request_id) do
-    case WorkRequestService.refresh_completion(repo, work_request_id) do
-      {:ok, _work_request} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp local_operator_comment_attrs(params) do
-    %{
-      "target_kind" => text_param(params, "target_kind"),
-      "target_id" => text_param(params, "target_id"),
-      "body" => text_param(params, "body"),
-      "source_type" => "operator",
-      "author_name" => @local_operator_actor
-    }
-  end
-
-  defp local_operator_comment_resolution_attrs(params) do
-    %{
-      "resolved_by" => @local_operator_actor,
-      "resolved_source_type" => "operator",
-      "resolution_note" => text_param(params, "resolution_note", "")
-    }
-  end
-
-  defp comment_payload(%Comment{} = comment) do
-    %{
-      id: comment.id,
-      target_kind: comment.target_kind,
-      target_id: comment.target_id,
-      body: Redactor.redact_text(comment.body),
-      source_type: comment.source_type,
-      author_name: Redactor.redact_text(comment.author_name),
-      status: comment.status,
-      resolved_by: Redactor.redact_text(comment.resolved_by),
-      resolved_source_type: comment.resolved_source_type,
-      resolved_at: timestamp(comment.resolved_at),
-      resolution_note: Redactor.redact_text(comment.resolution_note),
-      inserted_at: timestamp(comment.inserted_at),
-      updated_at: timestamp(comment.updated_at)
-    }
-  end
-
-  defp timestamp(%DateTime{} = timestamp), do: DateTime.to_iso8601(timestamp)
-  defp timestamp(nil), do: nil
-
-  defp scoped_question(repo, work_request_id, question_id) when is_binary(work_request_id) and is_binary(question_id) do
-    with {:ok, questions} <- WorkRequestService.list_questions(repo, work_request_id) do
-      case Enum.find(questions, &(&1.id == question_id)) do
-        %ClarificationQuestion{} = question -> {:ok, question}
-        nil -> {:error, :not_found}
-      end
-    end
-  end
-
-  defp scoped_question(_repo, _work_request_id, _question_id), do: {:error, :not_found}
-
-  defp require_open_question(%ClarificationQuestion{status: "open"}), do: :ok
-  defp require_open_question(%ClarificationQuestion{status: "answered"}), do: {:error, :already_answered}
-  defp require_open_question(%ClarificationQuestion{status: "closed"}), do: {:error, :already_closed}
-  defp require_open_question(%ClarificationQuestion{}), do: {:error, :invalid_status}
-
-  defp local_operator_question_answer_attrs(%ClarificationQuestion{} = question, params) do
-    case HumanDecisionPrompt.answer_text_result(question.decision_prompt, params) do
-      {:ok, answer} ->
-        case String.trim(answer) do
-          "" -> {:error, :missing_answer}
-          answer -> {:ok, %{"answer" => answer, "answered_by" => @local_operator_actor}}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp text_param(params, key, default \\ nil) do
-    case Map.get(params, key) || Map.get(params, String.to_atom(key)) do
-      value when is_binary(value) ->
-        value = String.trim(value)
-        if value == "", do: default, else: value
-
-      nil ->
-        default
-
-      value ->
-        to_string(value)
-    end
-  end
-
-  defp github_sync_opts(%{"mode" => "auto"}) do
-    [
-      client: Application.get_env(:symphony_elixir, :sympp_github_client, DefaultClient),
-      require_authenticated_client?: true
-    ]
-  end
-
-  defp github_sync_opts(_params), do: []
-
-  defp architect_handoff_opts(repo) do
-    [
-      database: dashboard_ledger_database(repo),
-      claimed_by: ArchitectHandoff.claimed_by(),
-      local_architect_claim?: true
-    ]
-  end
-
-  defp dispatch_handoff_opts(repo) do
-    [
-      database: dashboard_ledger_database(repo),
-      claimed_by: @local_operator_worker
-    ]
-  end
-
-  defp dashboard_ledger_database(repo) do
-    Repo.operator_database_path(repo)
   end
 
   defp authorize_package_session(conn, work_package_id) do
@@ -1606,7 +1181,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp phase_reader?(_grant), do: false
 
   defp authorize_board_secret(secret) do
-    with true <- auth_storage_ready?(secret),
+    with true <- WorkKey.secret_shape?(secret) and Runtime.dashboard_storage_present?(),
          {:ok, {:grant, %AccessGrant{} = grant} = auth_context} <- authenticate_with_existing_repo(secret),
          :ok <- require_phase_board_with_existing_repo(auth_context) do
       {:ok, grant}
@@ -1618,7 +1193,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp authorize_package_secret(secret, work_package_id) do
     if valid_package_route_id?(work_package_id) do
-      with true <- auth_storage_ready?(secret),
+      with true <- WorkKey.secret_shape?(secret) and Runtime.dashboard_storage_present?(),
            {:ok, {:grant, %AccessGrant{} = grant} = auth_context} <- authenticate_with_existing_repo(secret),
            :ok <- require_work_package_with_existing_repo(auth_context, work_package_id) do
         {:ok, grant}
@@ -1633,7 +1208,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   @spec authorize_board_grant_id(term()) :: {:ok, AccessGrant.t()} | {:error, term()}
   def authorize_board_grant_id(grant_id) when is_binary(grant_id) do
-    with true <- dashboard_storage_present?(),
+    with true <- Runtime.dashboard_storage_present?(),
          {:ok, {:grant, %AccessGrant{} = grant} = auth_context} <- authenticate_grant_id_with_existing_repo(grant_id),
          :ok <- require_phase_board_with_existing_repo(auth_context) do
       {:ok, grant}
@@ -1648,7 +1223,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   @spec authorize_package_grant_id(term(), String.t()) :: {:ok, AccessGrant.t()} | {:error, term()}
   def authorize_package_grant_id(grant_id, work_package_id) when is_binary(grant_id) and is_binary(work_package_id) do
     if valid_package_route_id?(work_package_id) do
-      with true <- dashboard_storage_present?(),
+      with true <- Runtime.dashboard_storage_present?(),
            {:ok, {:grant, %AccessGrant{} = grant} = auth_context} <- authenticate_grant_id_with_existing_repo(grant_id),
            :ok <- require_work_package_with_existing_repo(auth_context, work_package_id) do
         {:ok, grant}
@@ -1669,7 +1244,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp send_authenticated_repo_response(secret, fun) do
-    if auth_storage_ready?(secret) do
+    if WorkKey.secret_shape?(secret) and Runtime.dashboard_storage_present?() do
       send_after_repo_auth(secret, fun)
     else
       {:error, :unauthorized}
@@ -1678,11 +1253,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp send_after_repo_auth(secret, fun) do
     with {:ok, {:grant, %AccessGrant{}}} <- authenticate_with_existing_repo(secret) do
-      with_dashboard_repo(fn repo -> fun.(repo, secret) end)
+      Runtime.with_dashboard_repo(fn repo -> fun.(repo, secret) end)
     end
   end
-
-  defp auth_storage_ready?(secret), do: WorkKey.secret_shape?(secret) and dashboard_storage_present?()
 
   defp authenticate_with_existing_repo(secret) do
     authenticate_existing_repo(fn repo -> grant_auth_context(repo, secret) end)
@@ -1693,7 +1266,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp authenticate_existing_repo(auth_fun) when is_function(auth_fun, 1) do
-    case with_dashboard_repo(auth_fun, migrate?: false) do
+    case Runtime.with_dashboard_repo(auth_fun, migrate?: false) do
       {:error, {:storage_failed, message}} when is_binary(message) ->
         handle_existing_auth_storage_error(auth_fun, message)
 
@@ -1704,122 +1277,23 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp handle_existing_auth_storage_error(auth_fun, message) do
     cond do
-      missing_schema_message?(message) -> {:error, :unauthorized}
-      missing_access_grant_migration_column_message?(message) -> with_dashboard_repo(auth_fun, migrate?: true)
-      true -> {:error, {:storage_failed, message}}
+      Runtime.missing_schema_message?(message) ->
+        {:error, :unauthorized}
+
+      Runtime.missing_access_grant_migration_column_message?(message) ->
+        Runtime.with_dashboard_repo(auth_fun, migrate?: true)
+
+      true ->
+        {:error, {:storage_failed, message}}
     end
   end
-
-  defp dashboard_storage_present? do
-    case configured_repo() do
-      Repo -> configured_repo_storage_present?()
-      nil -> configured_repo_storage_present?()
-      configured_repo -> custom_repo_storage_present?(configured_repo)
-    end
-  end
-
-  defp configured_repo_storage_present? do
-    configured_repo_storage_present?(Repo.database_path_if_present(), Process.whereis(Repo))
-  end
-
-  defp configured_repo_storage_present?(nil, pid) when is_pid(pid), do: local_repo_storage_present?(pid)
-  defp configured_repo_storage_present?(nil, nil), do: false
-
-  defp configured_repo_storage_present?(path, pid) when is_pid(pid) do
-    local_repo_storage_present?(pid) or repo_matches_database?(pid, path) or
-      :global.whereis_name(Repo.process_key(path)) != :undefined or persistent_database_present?(path)
-  end
-
-  defp configured_repo_storage_present?(path, nil), do: persistent_database_present?(path)
-
-  defp local_repo_storage_present?(pid), do: not explicit_database_configured?() and repo_persistent_storage_present?(pid)
-
-  defp explicit_database_configured? do
-    Application.get_env(:symphony_elixir, :sympp_repo_database) != nil or configured_repo_database_configured?()
-  end
-
-  defp configured_repo_database_configured? do
-    :symphony_elixir
-    |> Application.get_env(Repo, [])
-    |> Keyword.get(:database)
-    |> configured_database_value?()
-  end
-
-  defp configured_database_value?(database_path) when is_binary(database_path), do: String.trim(database_path) != ""
-  defp configured_database_value?(nil), do: false
-  defp configured_database_value?(_database_path), do: true
-
-  defp custom_repo_storage_present?(repo) do
-    if ecto_repo?(repo) do
-      custom_ecto_repo_storage_present?(repo)
-    else
-      true
-    end
-  end
-
-  defp custom_ecto_repo_storage_present?(repo) do
-    database_path = custom_repo_database_path(repo)
-
-    case Process.whereis(repo) do
-      pid when is_pid(pid) ->
-        persistent_database_present?(database_path) and custom_repo_matches_database?(repo, database_path)
-
-      nil ->
-        persistent_database_present?(database_path)
-    end
-  end
-
-  defp persistent_database_present?(database_path) do
-    cond do
-      Repo.memory_database?(database_path) -> false
-      is_binary(database_path) -> filesystem_database_present?(database_path)
-      true -> false
-    end
-  end
-
-  defp filesystem_database_present?(database_path) do
-    case filesystem_database_path(database_path) do
-      path when is_binary(path) -> String.trim(path) != "" and File.exists?(path)
-      _path -> false
-    end
-  end
-
-  defp repo_persistent_storage_present?(pid) when is_pid(pid) do
-    original_repo = Repo.put_dynamic_repo(pid)
-
-    try do
-      case Repo.query("PRAGMA database_list", []) do
-        {:ok, %{rows: rows}} ->
-          Enum.any?(rows, fn
-            [_seq, "main", path] when is_binary(path) and path != "" -> File.exists?(path)
-            _row -> false
-          end)
-
-        {:error, _reason} ->
-          false
-      end
-    rescue
-      _error in Exqlite.Error -> false
-    after
-      Repo.put_dynamic_repo(original_repo)
-    end
-  end
-
-  defp filesystem_database_path("file:" <> _rest = database_path) do
-    case Repo.sqlite_file_uri_path(database_path) do
-      path when is_binary(path) and path != "" -> Path.expand(path)
-      _path -> nil
-    end
-  end
-
-  defp filesystem_database_path(database_path), do: Path.expand(database_path)
 
   defp auth_context(_conn, repo, secret) do
     grant_auth_context(repo, secret)
   end
 
   defp grant_auth_context(repo, secret) do
-    normalize_storage_errors(fn ->
+    Runtime.normalize_storage_errors(fn ->
       with secret_hash <- WorkKey.secret_hash(secret),
            {:ok, %AccessGrant{} = grant} <- AccessGrantRepository.find_by_secret_hash(repo, secret_hash),
            true <- Plug.Crypto.secure_compare(secret_hash, grant.secret_hash),
@@ -1839,7 +1313,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   def secret_auth_error(reason), do: {:error, reason}
 
   defp grant_id_auth_context(repo, grant_id) do
-    normalize_storage_errors(fn ->
+    Runtime.normalize_storage_errors(fn ->
       with {:ok, %AccessGrant{} = grant} <- AccessGrantRepository.get(repo, grant_id),
            :ok <- live_grant?(grant),
            :ok <- require_dashboard_package_authority(repo, grant) do
@@ -1930,7 +1404,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp retry_existing_phase_column_read(auth_fun) when is_function(auth_fun, 1) do
-    case with_dashboard_repo(auth_fun, migrate?: false) do
+    case Runtime.with_dashboard_repo(auth_fun, migrate?: false) do
       {:error, {:storage_failed, message}} when is_binary(message) ->
         handle_existing_phase_column_storage_error(auth_fun, message)
 
@@ -1940,8 +1414,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   defp handle_existing_phase_column_storage_error(auth_fun, message) do
-    if missing_access_grant_migration_column_message?(message) do
-      with_dashboard_repo(auth_fun, migrate?: true)
+    if Runtime.missing_access_grant_migration_column_message?(message) do
+      Runtime.with_dashboard_repo(auth_fun, migrate?: true)
     else
       {:error, {:storage_failed, message}}
     end
@@ -2343,459 +1817,5 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     |> to_string()
     |> Phoenix.HTML.html_escape()
     |> Phoenix.HTML.safe_to_string()
-  end
-
-  defp normalize_storage_errors(fun) when is_function(fun, 0) do
-    fun.()
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp normalize_exqlite_error(error) do
-    message = Exception.message(error)
-
-    if message |> String.downcase() |> busy_message?() do
-      {:error, :database_busy}
-    else
-      {:error, {:storage_failed, message}}
-    end
-  end
-
-  defp busy_message?(message) do
-    String.contains?(message, "busy") or String.contains?(message, "locked")
-  end
-
-  defp missing_schema_message?(message) do
-    message
-    |> String.downcase()
-    |> String.contains?("no such table")
-  end
-
-  defp missing_access_grant_migration_column_message?(message) do
-    message = String.downcase(message)
-
-    String.contains?(message, "no such column") and
-      Enum.any?(@access_grant_lazy_migration_columns, &String.contains?(message, &1))
-  end
-
-  defp with_dashboard_repo(fun, opts \\ []) when is_function(fun, 1) and is_list(opts) do
-    migrate? = Keyword.get(opts, :migrate?, true)
-
-    case configured_repo() do
-      Repo -> with_configured_sympp_repo(fun, migrate?)
-      repo when is_atom(repo) and not is_nil(repo) -> with_custom_repo(repo, fun, migrate?)
-      nil -> with_dynamic_dashboard_repo(fun, migrate?)
-    end
-  end
-
-  defp configured_repo do
-    :symphony_elixir
-    |> Application.get_env(Endpoint, [])
-    |> Keyword.get(:sympp_repo)
-    |> Kernel.||(Endpoint.config(:sympp_repo))
-  end
-
-  defp with_configured_sympp_repo(fun, migrate?) do
-    database_path = Repo.database_path()
-
-    with {:ok, pid, owner} <- configured_sympp_repo(database_path) do
-      with_optional_migrated_repo(
-        migrate?,
-        pid,
-        owner,
-        database_path,
-        fn -> ensure_configured_repo_migrated(pid, owner, database_path) end,
-        fn -> call_configured_repo(pid, owner, fun) end
-      )
-    end
-  end
-
-  defp configured_sympp_repo(database_path) do
-    case Process.whereis(Repo) do
-      pid when is_pid(pid) -> local_configured_repo(pid, database_path)
-      nil -> global_or_started_configured_repo(database_path)
-    end
-  end
-
-  defp local_configured_repo(pid, database_path) do
-    if not explicit_database_configured?() or repo_matches_database?(pid, database_path) do
-      {:ok, pid, :local}
-    else
-      global_or_started_configured_repo(database_path)
-    end
-  end
-
-  defp global_or_started_configured_repo(database_path) do
-    case :global.whereis_name(Repo.process_key(database_path)) do
-      pid when is_pid(pid) -> {:ok, pid, :dynamic}
-      :undefined -> start_linked_repo(database_path)
-    end
-  end
-
-  defp ensure_configured_repo_migrated(pid, :local, database_path) do
-    ensure_repo_migrated(Repo, pid, local_repo_database_path(database_path))
-  end
-
-  defp ensure_configured_repo_migrated(pid, _owner, database_path), do: ensure_repo_migrated(Repo, pid, database_path)
-
-  defp local_repo_database_path(fallback) do
-    Repo.config()
-    |> Keyword.get(:database)
-    |> Kernel.||(fallback)
-  end
-
-  defp repo_matches_database?(pid, database_path) do
-    original_repo = Repo.put_dynamic_repo(pid)
-
-    try do
-      case Repo.query("PRAGMA database_list", []) do
-        {:ok, %{rows: rows}} ->
-          database_rows_match?(rows, database_path)
-
-        {:error, _reason} ->
-          false
-      end
-    rescue
-      _error in Exqlite.Error -> false
-    after
-      Repo.put_dynamic_repo(original_repo)
-    end
-  end
-
-  defp call_configured_repo(pid, :dynamic, fun), do: call_dynamic_repo(pid, fun)
-  defp call_configured_repo(pid, {:direct, _direct_pid}, fun), do: call_dynamic_repo(pid, fun)
-  defp call_configured_repo(_pid, _owner, fun), do: fun.(Repo)
-
-  defp call_dynamic_repo(pid, fun) do
-    original_repo = Repo.put_dynamic_repo(pid)
-
-    try do
-      fun.(Repo)
-    after
-      Repo.put_dynamic_repo(original_repo)
-    end
-  end
-
-  defp with_dynamic_dashboard_repo(fun, migrate?) do
-    case Process.whereis(Repo) do
-      pid when is_pid(pid) ->
-        if explicit_database_configured?() do
-          with_started_dynamic_dashboard_repo(fun, migrate?)
-        else
-          with_running_dynamic_dashboard_repo(pid, fun, migrate?)
-        end
-
-      nil ->
-        with_started_dynamic_dashboard_repo(fun, migrate?)
-    end
-  end
-
-  defp with_started_dynamic_dashboard_repo(fun, migrate?) do
-    database_path = Repo.database_path()
-
-    with {:ok, pid, owner} <- ensure_repo_started(database_path) do
-      with_optional_migrated_repo(
-        migrate?,
-        pid,
-        owner,
-        database_path,
-        fn -> ensure_repo_migrated(Repo, pid, database_path) end,
-        fn -> call_dynamic_repo(pid, fun) end
-      )
-    end
-  end
-
-  defp with_running_dynamic_dashboard_repo(pid, fun, migrate?) do
-    database_path = local_repo_database_path(Repo.database_path())
-
-    with_optional_migrated_repo(
-      migrate?,
-      pid,
-      :local,
-      database_path,
-      fn -> ensure_repo_migrated(Repo, pid, database_path) end,
-      fn -> call_dynamic_repo(pid, fun) end
-    )
-  end
-
-  defp ensure_repo_started(database_path) do
-    case :global.whereis_name(Repo.process_key(database_path)) do
-      pid when is_pid(pid) -> {:ok, pid, :shared}
-      :undefined -> start_repo(database_path)
-    end
-  end
-
-  defp start_repo(database_path) do
-    child_spec =
-      Supervisor.child_spec(
-        {Repo, Repo.child_options(database: database_path, name: Repo.process_name(database_path))},
-        id: Repo.child_id(database_path)
-      )
-
-    case Process.whereis(SymphonyElixir.Supervisor) do
-      pid when is_pid(pid) -> start_supervised_repo(child_spec)
-      nil -> start_linked_repo(database_path)
-    end
-  end
-
-  defp start_supervised_repo(child_spec) do
-    case Supervisor.start_child(SymphonyElixir.Supervisor, child_spec) do
-      {:ok, pid} -> {:ok, pid, :shared}
-      {:ok, pid, _info} -> {:ok, pid, :shared}
-      {:error, {:already_started, pid}} -> {:ok, pid, :shared}
-      {:error, reason} -> {:error, {:repo_start_failed, reason}}
-    end
-  end
-
-  defp start_linked_repo(database_path) do
-    options = Repo.child_options(database: database_path, name: nil)
-
-    case Repo.start_link(options) do
-      {:ok, pid} -> unlink_started_repo(pid, {:direct, pid})
-      {:error, {:already_started, pid}} -> {:ok, pid, :shared}
-      {:error, reason} -> {:error, {:repo_start_failed, reason}}
-    end
-  end
-
-  defp unlink_started_repo(pid, owner) do
-    Process.unlink(pid)
-    {:ok, pid, owner}
-  end
-
-  defp stop_owned_repo(_pid, {:direct, direct_pid}, _database_path), do: stop_direct_repo(direct_pid)
-
-  defp stop_owned_repo(_pid, _owner, _database_path), do: :ok
-
-  defp stop_direct_repo(pid) when is_pid(pid) do
-    ref = Process.monitor(pid)
-    Process.exit(pid, :shutdown)
-
-    receive do
-      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
-    after
-      1_000 ->
-        Process.demonitor(ref, [:flush])
-        :ok
-    end
-  end
-
-  defp with_custom_repo(repo, fun, migrate?) do
-    if ecto_repo?(repo) do
-      with_ecto_custom_repo(repo, fun, migrate?)
-    else
-      fun.(repo)
-    end
-  end
-
-  defp with_ecto_custom_repo(repo, fun, migrate?) do
-    :global.trans({{__MODULE__, :custom_repo}, repo}, fn ->
-      with_ecto_custom_repo_locked(repo, fun, migrate?)
-    end)
-  end
-
-  defp with_ecto_custom_repo_locked(repo, fun, migrate?) do
-    database_path = custom_repo_database_path(repo)
-
-    with {:ok, pid, owner} <- ensure_custom_repo_started(repo, database_path) do
-      with_optional_migrated_repo(
-        migrate?,
-        pid,
-        owner,
-        database_path,
-        fn -> ensure_repo_migrated(repo, pid, database_path) end,
-        fn -> fun.(repo) end
-      )
-    end
-  end
-
-  defp with_optional_migrated_repo(true, pid, owner, database_path, migrate_fun, call_fun) do
-    with_migrated_repo(pid, owner, database_path, migrate_fun, call_fun)
-  end
-
-  defp with_optional_migrated_repo(false, pid, owner, database_path, _migrate_fun, call_fun) do
-    call_unmigrated_repo(pid, owner, database_path, call_fun)
-  end
-
-  defp call_unmigrated_repo(pid, owner, database_path, call_fun) do
-    call_fun.()
-  after
-    stop_owned_repo(pid, owner, database_path)
-  end
-
-  defp ecto_repo?(repo) do
-    Code.ensure_loaded?(repo) and function_exported?(repo, :__adapter__, 0) and function_exported?(repo, :start_link, 1)
-  end
-
-  defp custom_repo_database_path(repo) do
-    repo.config()
-    |> Keyword.get(:database)
-    |> normalize_custom_repo_database_config()
-    |> Kernel.||(Repo.database_path())
-  end
-
-  defp normalize_custom_repo_database_config(database_path) when is_binary(database_path) do
-    if String.trim(database_path) == "", do: nil, else: database_path
-  end
-
-  defp normalize_custom_repo_database_config(database_path), do: database_path
-
-  defp ensure_custom_repo_started(repo, database_path) do
-    case Process.whereis(repo) do
-      pid when is_pid(pid) -> reuse_custom_repo(repo, pid, database_path)
-      nil -> start_custom_repo(repo, database_path)
-    end
-  end
-
-  defp reuse_custom_repo(repo, pid, database_path) do
-    if custom_repo_matches_database?(repo, database_path) do
-      {:ok, pid, :local}
-    else
-      {:error, {:storage_failed, :database_mismatch}}
-    end
-  end
-
-  defp custom_repo_matches_database?(repo, database_path) do
-    case repo.query("PRAGMA database_list", []) do
-      {:ok, %{rows: rows}} ->
-        database_rows_match?(rows, database_path)
-
-      {:error, _reason} ->
-        false
-    end
-  rescue
-    _error in Exqlite.Error -> false
-  end
-
-  defp database_rows_match?(rows, database_path) do
-    Enum.any?(rows, fn
-      [_seq, "main", path] when path in [nil, ""] -> Repo.memory_database?(database_path)
-      [_seq, _name, path] when is_binary(path) and path != "" -> database_row_path_matches?(path, database_path)
-      _row -> false
-    end)
-  end
-
-  defp database_row_path_matches?(path, "file:" <> _rest = database_path) do
-    Repo.same_database_path?(path, Repo.sqlite_file_uri_path(database_path))
-  end
-
-  defp database_row_path_matches?(path, database_path), do: Repo.same_database_path?(path, database_path)
-
-  defp start_custom_repo(repo, database_path) do
-    case repo.start_link(database: database_path, name: repo) do
-      {:ok, pid} -> unlink_started_repo(pid, {:direct, pid})
-      {:error, {:already_started, pid}} -> {:ok, pid, :local}
-      {:error, reason} -> {:error, {:repo_start_failed, reason}}
-    end
-  end
-
-  defp with_migrated_repo(pid, owner, database_path, migrate_fun, call_fun) do
-    case migrate_fun.() do
-      :ok ->
-        try do
-          call_fun.()
-        after
-          stop_owned_repo(pid, owner, database_path)
-        end
-
-      {:error, _reason} = error ->
-        stop_owned_repo(pid, owner, database_path)
-        error
-    end
-  end
-
-  defp ensure_repo_migrated(repo, pid, database_path) when is_atom(repo) and is_pid(pid) do
-    database_key = {repo, Repo.database_key(database_path)}
-
-    if migrated_database?(database_key) and migrated_schema?(repo, pid) do
-      :ok
-    else
-      migrate_with_lock(repo, pid, database_path, database_key)
-    end
-  end
-
-  defp migrate_with_lock(repo, pid, database_path, database_key) do
-    TrackerAdapter.run_with_migration_file_lock(database_path, fn ->
-      migrate_if_needed(repo, pid, database_key)
-    end)
-  end
-
-  defp migrate_if_needed(repo, pid, database_key) do
-    if migrated_database?(database_key) and migrated_schema?(repo, pid) do
-      :ok
-    else
-      migrate_repo(repo, pid, database_key)
-    end
-  end
-
-  defp migrate_repo(Repo, pid, database_key) do
-    migration_opts = [all: true, dynamic_repo: pid, log: false]
-
-    Ecto.Migrator.run(Repo, Migrations.all(), :up, migration_opts)
-
-    mark_database_migrated(database_key)
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-    error -> {:error, {:migration_failed, error}}
-  end
-
-  defp migrate_repo(repo, _pid, database_key) do
-    Ecto.Migrator.run(repo, Migrations.all(), :up, all: true, log: false)
-
-    mark_database_migrated(database_key)
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-    error -> {:error, {:migration_failed, error}}
-  end
-
-  defp migrated_database?(database_key), do: MapSet.member?(migrated_databases(), database_key)
-
-  defp migrated_schema?(Repo, pid) when is_pid(pid) do
-    original_repo = Repo.put_dynamic_repo(pid)
-
-    try do
-      repo_schema_migrated?(Repo)
-    rescue
-      _error in Exqlite.Error -> false
-    after
-      Repo.put_dynamic_repo(original_repo)
-    end
-  end
-
-  defp migrated_schema?(repo, _pid), do: repo_schema_migrated?(repo)
-
-  defp repo_schema_migrated?(repo) do
-    expected_versions = migration_versions()
-
-    case repo.query("SELECT version FROM schema_migrations", []) do
-      {:ok, %{rows: rows}} ->
-        migrated_versions =
-          rows
-          |> Enum.map(fn [version] -> to_string(version) end)
-          |> MapSet.new()
-
-        expected_versions != [] and MapSet.subset?(MapSet.new(expected_versions), migrated_versions)
-
-      {:error, _reason} ->
-        false
-    end
-  rescue
-    _error in Exqlite.Error -> false
-  end
-
-  defp migration_versions do
-    Migrations.version_strings()
-  end
-
-  defp mark_database_migrated(database_key) do
-    migrated_databases = MapSet.put(migrated_databases(), database_key)
-    Application.put_env(:symphony_elixir, :sympp_dashboard_api_migrated_databases, migrated_databases)
-    :ok
-  end
-
-  defp migrated_databases do
-    case Application.get_env(:symphony_elixir, :sympp_dashboard_api_migrated_databases, MapSet.new()) do
-      %MapSet{} = migrated_databases -> migrated_databases
-      _invalid -> MapSet.new()
-    end
   end
 end
