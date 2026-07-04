@@ -47,7 +47,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     SoloTools,
     Surface,
     ToolCatalog,
-    ToolResult
+    ToolResult,
+    WorkRequestPayloads
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
@@ -59,7 +60,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{Node, SliceLink}
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
   alias SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes
   alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
   alias SymphonyElixir.SymphonyPlusPlus.Repo
@@ -73,7 +74,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeTargetRoot
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
@@ -1231,7 +1231,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, handoff} ->
         %{
           "status" => "created",
-          "work_request" => work_request_payload(work_request),
+          "work_request" => WorkRequestPayloads.work_request(work_request),
           "architect_handoff" => json_safe_payload(handoff),
           "launch_prompt" => Map.get(handoff, :prompt)
         }
@@ -1245,7 +1245,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp create_work_request_partial_handoff_payload(%WorkRequest{} = work_request, reason) do
     %{
       "status" => "partial_success",
-      "work_request" => work_request_payload(work_request),
+      "work_request" => WorkRequestPayloads.work_request(work_request),
       "architect_handoff" => nil,
       "handoff_error" => %{
         "reason" => reason_text(reason),
@@ -1302,7 +1302,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok,
        ToolResult.tool_result(%{
          "comment" => comment_payload(comment),
-         "work_request" => work_request_mutation_payload(work_request),
+         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
          "provenance" => local_operator_note_provenance(created_by)
        })}
     else
@@ -1328,8 +1328,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            ) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(work_request),
-         "decision_log_entry" => decision_log_entry_payload(decision_record),
+         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+         "decision_log_entry" => WorkRequestPayloads.decision_log_entry(decision_record),
          "provenance" => local_operator_note_provenance(created_by, source_id),
          "status" => %{"work_request_status" => work_request.status}
        })}
@@ -1375,14 +1375,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, status} <- optional_work_request_status(arguments),
          filters = work_request_list_filters(%{}, status),
          {:ok, work_requests} <- WorkRequestService.list(config.repo, work_request_repository_filters(filters)) do
-      cards = work_request_cards(work_requests)
+      cards = WorkRequestPayloads.work_request_cards(work_requests)
 
       {:ok,
        ToolResult.agent_tool_result(%{
          "work_requests" => cards,
          "total_count" => length(cards),
          "scope" => %{"visibility" => "local_ledger"},
-         "filters" => work_request_filter_payload(status)
+         "filters" => WorkRequestPayloads.work_request_filter(status)
        })}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "list_work_requests", "reason" => reason}}
@@ -1404,14 +1404,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, work_requests} <- WorkRequestService.list(config.repo, work_request_repository_filters(filters)),
          {:ok, work_requests} <-
            filter_scoped_work_requests(config.repo, work_requests, filters, policy_session, repo_scope_opts) do
-      cards = work_request_cards(work_requests)
+      cards = WorkRequestPayloads.work_request_cards(work_requests)
 
       {:ok,
        ToolResult.agent_tool_result(%{
          "work_requests" => cards,
          "total_count" => length(cards),
          "scope" => scope,
-         "filters" => work_request_filter_payload(status)
+         "filters" => WorkRequestPayloads.work_request_filter(status)
        })}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "list_work_requests", "reason" => reason}}
@@ -1423,8 +1423,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     with :ok <- authorize_local_trusted_work_request_read_tool_call(server, "read_work_request"),
          {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, work_request, _filters} <- local_trusted_work_request_read_scope(config.repo, work_request_id),
-         {:ok, payload} <- work_request_detail_payload(config.repo, work_request, []) do
-      payload = Map.put(payload, "scope", redacted_work_request_scope(work_request))
+         {:ok, payload} <- WorkRequestPayloads.work_request_detail(config.repo, work_request, []) do
+      payload = Map.put(payload, "scope", WorkRequestPayloads.redacted_work_request_scope(work_request))
       {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_read)}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request", "reason" => reason}}
@@ -1446,7 +1446,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              "read_work_request",
              work_request_repo_scope_opts(config)
            ),
-         {:ok, payload} <- work_request_detail_payload(config.repo, work_request, []) do
+         {:ok, payload} <- WorkRequestPayloads.work_request_detail(config.repo, work_request, []) do
       payload = Map.put(payload, "scope", scope)
       {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_read)}
     else
@@ -1561,8 +1561,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, planned_slices} <- WorkRequestService.list_planned_slices(config.repo, work_request_id),
          {:ok, delivery_board} <- scoped_delivery_board(config.repo, work_request, planned_slices, filters, repo_scope_opts) do
       payload = %{
-        "work_request" => work_request_mutation_payload(work_request),
-        "delivery_board" => delivery_board_payload(delivery_board),
+        "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+        "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board),
         "scope" => scope
       }
 
@@ -1581,9 +1581,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, planned_slices} <- WorkRequestService.list_planned_slices(config.repo, work_request_id),
          {:ok, delivery_board} <- scoped_delivery_board(config.repo, work_request, planned_slices, filters) do
       payload = %{
-        "work_request" => work_request_mutation_payload(work_request),
-        "delivery_board" => delivery_board_payload(delivery_board),
-        "scope" => redacted_work_request_scope(work_request)
+        "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+        "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board),
+        "scope" => WorkRequestPayloads.redacted_work_request_scope(work_request)
       }
 
       {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_delivery_board)}
@@ -1616,9 +1616,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            ) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(work_request),
+         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
          "reconciliation" => reconciliation_payload(reconciliation),
-         "delivery_board" => delivery_board_payload(Map.fetch!(reconciliation, :delivery_board)),
+         "delivery_board" => WorkRequestPayloads.delivery_board(Map.fetch!(reconciliation, :delivery_board)),
          "scope" => scope
        })}
     else
@@ -1670,10 +1670,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, delivery_board} <- scoped_delivery_board(config.repo, work_request, planned_slices, filters) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(work_request),
-         "planned_slice_delivery" => planned_slice_delivery_payload(delivery),
+         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+         "planned_slice_delivery" => WorkRequestPayloads.planned_slice_delivery(delivery),
          "blocker_closeout" => blocker_closeout,
-         "delivery_board" => delivery_board_payload(delivery_board),
+         "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board),
          "scope" => scope
        })}
     else
@@ -1774,7 +1774,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, updated_work_request} <- WorkRequestService.update_status(config.repo, work_request_id, current_status, next_status) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(updated_work_request),
+         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
          "scope" => scope,
          "status" => %{
            "previous_status" => current_status,
@@ -1819,8 +1819,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, updated_work_request} <- scoped_work_request(config.repo, work_request_id, filters) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(updated_work_request),
-         "clarification_question" => clarification_question_payload(question_record),
+         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
+         "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
          "scope" => scope,
          "status" => %{
            "work_request_status" => updated_work_request.status,
@@ -1852,8 +1852,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, updated_work_request} <- scoped_work_request(config.repo, work_request_id, filters) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(updated_work_request),
-         "clarification_question" => clarification_question_payload(question_record),
+         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
+         "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
          "scope" => scope,
          "status" => %{
            "work_request_status" => updated_work_request.status,
@@ -1912,9 +1912,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, updated_work_request} <- scoped_work_request(config.repo, work_request_id, filters) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(updated_work_request),
-         "clarification_question" => clarification_question_payload(question_record),
-         "decision_log_entry" => decision_log_entry_payload(decision_record),
+         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
+         "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
+         "decision_log_entry" => WorkRequestPayloads.decision_log_entry(decision_record),
          "scope" => scope,
          "status" => %{
            "work_request_status" => updated_work_request.status,
@@ -1941,8 +1941,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, updated_work_request} <- scoped_work_request(config.repo, work_request_id, filters) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(updated_work_request),
-         "clarification_question" => clarification_question_payload(question_record),
+         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
+         "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
          "scope" => scope,
          "status" => %{
            "work_request_status" => updated_work_request.status,
@@ -1987,8 +1987,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, updated_work_request} <- scoped_work_request(config.repo, work_request_id, filters) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(updated_work_request),
-         "decision_log_entry" => decision_log_entry_payload(decision_record),
+         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
+         "decision_log_entry" => WorkRequestPayloads.decision_log_entry(decision_record),
          "scope" => scope,
          "status" => %{"work_request_status" => updated_work_request.status}
        })}
@@ -2046,8 +2046,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            ) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(updated_work_request),
-         "planned_slice" => planned_slice_payload(planned_slice),
+         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
+         "planned_slice" => WorkRequestPayloads.planned_slice(planned_slice),
          "scope" => scope,
          "status" => %{
            "work_request_status" => updated_work_request.status,
@@ -2206,8 +2206,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            end) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(work_request),
-         "product_tree_slice_link" => product_tree_slice_link_payload(slice_link),
+         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+         "product_tree_slice_link" => WorkRequestPayloads.product_tree_slice_link(slice_link),
          "product_tree" => json_safe_payload(detail.product_tree),
          "scope" => scope,
          "status" => %{
@@ -2254,7 +2254,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, updated_work_request} <- WorkRequestService.mark_sliced(config.repo, work_request_id, current_status) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(updated_work_request),
+         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
          "scope" => scope,
          "status" => %{
            "previous_status" => current_status,
@@ -2513,8 +2513,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            end) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(work_request),
-         "planned_slice" => planned_slice_payload(planned_slice),
+         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+         "planned_slice" => WorkRequestPayloads.planned_slice(planned_slice),
          "work_package" => child_work_package_payload(Map.fetch!(cleanup, :work_package)),
          "runtime_cleanup" => Map.fetch!(cleanup, :runtime_cleanup),
          "audit_event" => progress_event_payload(Map.fetch!(cleanup, :audit_event)),
@@ -2596,13 +2596,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          view,
          repo_scope_opts \\ []
        ) do
-    with {:ok, payload} <-
-           work_request_product_tree_payload(
-             repo,
-             work_request,
-             filters,
-             Keyword.merge(repo_scope_opts, view: view)
-           ) do
+    with {:ok, planned_slices} <- WorkRequestService.list_planned_slices(repo, work_request.id),
+         {:ok, delivery_board} <-
+           scoped_delivery_board(repo, work_request, planned_slices, filters, Keyword.put(repo_scope_opts, :slice_projection, :operational_state)) do
+      payload = WorkRequestPayloads.work_request_product_tree(repo, work_request, planned_slices, delivery_board, view)
       payload = Map.put(payload, "scope", scope)
       {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_product_tree)}
     end
@@ -2644,8 +2641,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            ) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => work_request_mutation_payload(updated_work_request),
-         "planned_slice" => planned_slice_payload(planned_slice),
+         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
+         "planned_slice" => WorkRequestPayloads.planned_slice(planned_slice),
          "scope" => scope,
          "status" => %{
            "work_request_status" => updated_work_request.status,
@@ -3469,9 +3466,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp work_request_filter_payload(nil), do: %{}
-  defp work_request_filter_payload(status), do: %{"status" => status}
-
   defp optional_work_request_status(arguments) do
     case Map.fetch(arguments, "status") do
       :error ->
@@ -3802,8 +3796,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp product_plan_node_tool_result(work_request, product_tree_node, blocker_closeout, detail, scope) do
     ToolResult.tool_result(%{
-      "work_request" => work_request_mutation_payload(work_request),
-      "product_plan_node" => product_tree_node_payload(product_tree_node),
+      "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+      "product_plan_node" => WorkRequestPayloads.product_tree_node(product_tree_node),
       "blocker_closeout" => blocker_closeout,
       "product_tree" => json_safe_payload(detail.product_tree),
       "scope" => scope,
@@ -12123,27 +12117,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     }
   end
 
-  defp work_request_cards(work_requests) do
-    Enum.map(work_requests, &work_request_card_payload/1)
-  end
-
-  defp work_request_card_payload(%WorkRequest{} = work_request) do
-    scope = redacted_work_request_scope(work_request)
-
-    %{
-      "id" => work_request.id,
-      "title" => Redactor.redact_text(work_request.title),
-      "repo" => Map.fetch!(scope, "repo"),
-      "base_branch" => Map.fetch!(scope, "base_branch"),
-      "work_type" => work_request.work_type,
-      "desired_dispatch_shape" => work_request.desired_dispatch_shape,
-      "creator" => work_request_creator_payload(work_request),
-      "status" => work_request.status,
-      "inserted_at" => timestamp(work_request.inserted_at),
-      "updated_at" => timestamp(work_request.updated_at)
-    }
-  end
-
   defp guidance_request_cards(guidance_requests) do
     Enum.map(guidance_requests, &guidance_request_card_payload/1)
   end
@@ -12198,247 +12171,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       "blocker_id" => guidance_request.blocker_id,
       "inserted_at" => timestamp(guidance_request.inserted_at),
       "updated_at" => timestamp(guidance_request.updated_at)
-    }
-  end
-
-  defp work_request_detail_payload(repo, %WorkRequest{} = work_request, _opts) do
-    with {:ok, questions} <- WorkRequestService.list_questions(repo, work_request.id),
-         {:ok, decisions} <- WorkRequestService.list_decisions(repo, work_request.id),
-         {:ok, planned_slices} <- WorkRequestService.list_planned_slices(repo, work_request.id),
-         {:ok, slice_visibility} <- DeliveryBoard.planned_slice_visibility(repo, work_request.id, planned_slices) do
-      visible_planned_slices = Map.fetch!(slice_visibility, :visible_planned_slices)
-
-      {:ok,
-       %{
-         "work_request" => work_request_payload(work_request),
-         "clarification_questions" => Enum.map(questions, &clarification_question_payload/1),
-         "decision_log_entries" => Enum.map(decisions, &decision_log_entry_payload/1),
-         "planned_slices" => Enum.map(visible_planned_slices, &planned_slice_payload/1),
-         "summary" => work_request_summary_payload(questions, decisions, visible_planned_slices)
-       }}
-    end
-  end
-
-  defp work_request_product_tree_payload(repo, %WorkRequest{} = work_request, filters, opts) do
-    view = Keyword.fetch!(opts, :view)
-
-    with {:ok, planned_slices} <- WorkRequestService.list_planned_slices(repo, work_request.id),
-         {:ok, delivery_board} <-
-           scoped_delivery_board(repo, work_request, planned_slices, filters, slice_projection: :operational_state) do
-      projection_slice_payloads = delivery_board |> Map.fetch!(:slices) |> json_safe_payload()
-      visible_planned_slices = visible_planned_slices_from_projection(planned_slices, projection_slice_payloads)
-      slice_payloads = product_tree_slice_payloads(visible_planned_slices, projection_slice_payloads)
-
-      product_tree =
-        repo
-        |> ProductTree.project(work_request.id, projection_slice_payloads, product_tree_projection_opts())
-        |> json_safe_payload()
-        |> product_tree_view_payload(slice_payloads, view)
-
-      {:ok,
-       %{
-         "work_request" => work_request_payload(work_request),
-         "product_tree" => product_tree,
-         "view" => view
-       }}
-    end
-  end
-
-  defp visible_planned_slices_from_projection(planned_slices, projection_slice_payloads) do
-    visible_slice_ids =
-      projection_slice_payloads
-      |> Enum.map(&map_get(&1, :id))
-      |> Enum.reject(&is_nil/1)
-      |> MapSet.new()
-
-    Enum.filter(planned_slices, &MapSet.member?(visible_slice_ids, &1.id))
-  end
-
-  defp product_tree_view_payload(product_tree, _slice_payloads, "nodes_only") do
-    product_tree
-    |> Map.put("nodes", product_tree |> Map.get("nodes", []) |> Enum.map(&product_tree_node_only_payload/1))
-    |> Map.put("root_slice_ids", [])
-    |> Map.put("dependency_edges", product_tree |> Map.get("dependency_edges", []) |> Enum.filter(&product_tree_node_dependency?/1))
-    |> Map.update("summary", %{"root_slice_count" => 0}, &Map.put(&1, "root_slice_count", 0))
-    |> Map.put("omitted_slice_count", product_tree |> Map.get("summary", %{}) |> Map.get("slice_count", 0))
-  end
-
-  defp product_tree_view_payload(product_tree, slice_payloads, "nodes_with_slices") do
-    Map.put(product_tree, "slices", slice_payloads)
-  end
-
-  defp product_tree_view_payload(product_tree, slice_payloads, "nodes_with_slice_refs") do
-    Map.put(product_tree, "slice_refs", Enum.map(slice_payloads, &product_tree_slice_ref_payload/1))
-  end
-
-  defp product_tree_slice_payloads(visible_planned_slices, projection_slice_payloads) do
-    projection_slice_payloads_by_id = Map.new(projection_slice_payloads, &{map_get(&1, :id), &1})
-
-    Enum.map(visible_planned_slices, fn %PlannedSlice{} = planned_slice ->
-      planned_slice
-      |> planned_slice_payload()
-      |> Map.merge(product_tree_operational_slice_fields(Map.get(projection_slice_payloads_by_id, planned_slice.id, %{})))
-    end)
-  end
-
-  defp product_tree_projection_opts, do: [visible_only?: true, include_unlinked_nodes?: true]
-
-  defp product_tree_operational_slice_fields(projection_slice_payload) when is_map(projection_slice_payload) do
-    projection_slice_payload
-    |> Map.take(["raw_status", "delivery_outcome", "operational_state", "attention_reason_codes"])
-    |> Map.put("status", map_get(projection_slice_payload, :raw_status))
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-    |> Map.new()
-  end
-
-  defp product_tree_node_only_payload(node) when is_map(node) do
-    Map.drop(node, ["slice_ids", "attention_count", "guidance_count", "blocker_count"])
-  end
-
-  defp product_tree_node_dependency?(%{"source_kind" => "product_node", "target_kind" => "product_node"}), do: true
-  defp product_tree_node_dependency?(_edge), do: false
-
-  defp product_tree_slice_ref_payload(slice) when is_map(slice) do
-    slice
-    |> Map.take(["id", "sequence", "title", "status", "work_package_id"])
-    |> Map.merge(product_tree_operational_slice_fields(slice))
-    |> Map.put("has_full_payload", false)
-  end
-
-  defp work_request_payload(%WorkRequest{} = work_request) do
-    scope = redacted_work_request_scope(work_request)
-
-    %{
-      "id" => work_request.id,
-      "title" => Redactor.redact_text(work_request.title),
-      "repo" => Map.fetch!(scope, "repo"),
-      "base_branch" => Map.fetch!(scope, "base_branch"),
-      "work_type" => work_request.work_type,
-      "human_description" => Redactor.redact_text(work_request.human_description),
-      "constraints" => Redactor.redact_output(work_request.constraints || %{}),
-      "desired_dispatch_shape" => work_request.desired_dispatch_shape,
-      "creator" => work_request_creator_payload(work_request),
-      "status" => work_request.status,
-      "inserted_at" => timestamp(work_request.inserted_at),
-      "updated_at" => timestamp(work_request.updated_at)
-    }
-  end
-
-  defp work_request_creator_payload(%WorkRequest{} = work_request) do
-    %{
-      "kind" => work_request.creator_kind,
-      "name" => Redactor.redact_text(work_request.creator_name),
-      "via" => work_request.created_via
-    }
-  end
-
-  defp redacted_work_request_scope(%WorkRequest{} = work_request) do
-    %{
-      "repo" => Redactor.redact_text(work_request.repo),
-      "base_branch" => Redactor.redact_text(work_request.base_branch)
-    }
-  end
-
-  defp work_request_mutation_payload(%WorkRequest{} = work_request) do
-    %{
-      "id" => work_request.id,
-      "status" => work_request.status,
-      "updated_at" => timestamp(work_request.updated_at)
-    }
-  end
-
-  defp clarification_question_payload(%ClarificationQuestion{} = question) do
-    %{
-      "id" => question.id,
-      "work_request_id" => question.work_request_id,
-      "sequence" => question.sequence,
-      "category" => Redactor.redact_text(question.category),
-      "question" => Redactor.redact_text(question.question),
-      "why_needed" => Redactor.redact_text(question.why_needed),
-      "decision_prompt" => Redactor.redact_output(question.decision_prompt),
-      "status" => question.status,
-      "asked_by_agent_run_id" => Redactor.redact_text(question.asked_by_agent_run_id),
-      "answer" => Redactor.redact_text(question.answer),
-      "answered_by" => Redactor.redact_text(question.answered_by),
-      "answered_at" => timestamp(question.answered_at),
-      "inserted_at" => timestamp(question.inserted_at),
-      "updated_at" => timestamp(question.updated_at)
-    }
-  end
-
-  defp decision_log_entry_payload(%DecisionLogEntry{} = decision) do
-    %{
-      "id" => decision.id,
-      "work_request_id" => decision.work_request_id,
-      "sequence" => decision.sequence,
-      "source_type" => Redactor.redact_text(decision.source_type),
-      "source_id" => Redactor.redact_text(decision.source_id),
-      "decision" => Redactor.redact_text(decision.decision),
-      "rationale" => Redactor.redact_text(decision.rationale),
-      "scope_impact" => Redactor.redact_text(decision.scope_impact),
-      "created_by" => Redactor.redact_text(decision.created_by),
-      "created_at" => timestamp(decision.created_at),
-      "inserted_at" => timestamp(decision.inserted_at),
-      "updated_at" => timestamp(decision.updated_at)
-    }
-  end
-
-  defp planned_slice_payload(%PlannedSlice{} = planned_slice) do
-    %{
-      "id" => planned_slice.id,
-      "work_request_id" => planned_slice.work_request_id,
-      "sequence" => planned_slice.sequence,
-      "title" => Redactor.redact_text(planned_slice.title),
-      "goal" => Redactor.redact_text(planned_slice.goal),
-      "work_package_kind" => planned_slice.work_package_kind,
-      "delivery_repo" => Redactor.redact_text(planned_slice.delivery_repo),
-      "target_base_branch" => Redactor.redact_text(planned_slice.target_base_branch),
-      "branch_pattern" => Redactor.redact_text(planned_slice.branch_pattern),
-      "owned_file_globs" => Enum.map(planned_slice.owned_file_globs || [], &Redactor.redact_text/1),
-      "forbidden_file_globs" => Enum.map(planned_slice.forbidden_file_globs || [], &Redactor.redact_text/1),
-      "acceptance_criteria" => Enum.map(planned_slice.acceptance_criteria || [], &Redactor.redact_text/1),
-      "validation_steps" => Enum.map(planned_slice.validation_steps || [], &Redactor.redact_text/1),
-      "review_lanes" => Enum.map(planned_slice.review_lanes || [], &Redactor.redact_text/1),
-      "stop_conditions" => Enum.map(planned_slice.stop_conditions || [], &Redactor.redact_text/1),
-      "status" => planned_slice.status,
-      "work_package_id" => planned_slice.work_package_id,
-      "dispatched_at" => timestamp(planned_slice.dispatched_at),
-      "inserted_at" => timestamp(planned_slice.inserted_at),
-      "updated_at" => timestamp(planned_slice.updated_at)
-    }
-  end
-
-  defp product_tree_node_payload(%Node{} = node) do
-    %{
-      "id" => node.id,
-      "work_request_id" => node.work_request_id,
-      "parent_id" => node.parent_id,
-      "title" => Redactor.redact_text(node.title),
-      "description" => Redactor.redact_text(node.description),
-      "node_kind" => Redactor.redact_text(node.node_kind),
-      "completion_mark" => node.completion_mark,
-      "position" => node.position,
-      "created_by" => Redactor.redact_text(node.created_by),
-      "created_at" => timestamp(node.created_at),
-      "inserted_at" => timestamp(node.inserted_at),
-      "updated_at" => timestamp(node.updated_at)
-    }
-  end
-
-  defp product_tree_slice_link_payload(nil), do: nil
-
-  defp product_tree_slice_link_payload(%SliceLink{} = slice_link) do
-    %{
-      "id" => slice_link.id,
-      "work_request_id" => slice_link.work_request_id,
-      "product_tree_node_id" => slice_link.product_tree_node_id,
-      "planned_slice_id" => slice_link.planned_slice_id,
-      "role" => slice_link.role,
-      "position" => slice_link.position,
-      "created_by" => Redactor.redact_text(slice_link.created_by),
-      "created_at" => timestamp(slice_link.created_at),
-      "inserted_at" => timestamp(slice_link.inserted_at),
-      "updated_at" => timestamp(slice_link.updated_at)
     }
   end
 
@@ -12519,36 +12251,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp product_tree_revision_reason("skip_work_request_planned_slice"), do: "Planned slice skipped in product tree through MCP."
   defp product_tree_revision_reason("record_planned_slice_delivery"), do: "Planned slice delivery recorded in product tree through MCP."
   defp product_tree_revision_reason("reconcile_work_request"), do: "Planned slice delivery reconciled in product tree through MCP."
-
-  defp planned_slice_delivery_payload(%PlannedSliceDelivery{} = delivery) do
-    %{
-      "id" => delivery.id,
-      "work_request_id" => delivery.work_request_id,
-      "planned_slice_id" => delivery.planned_slice_id,
-      "outcome" => delivery.outcome,
-      "idempotency_key" => Redactor.redact_text(delivery.idempotency_key),
-      "recorded_by" => Redactor.redact_text(delivery.recorded_by),
-      "recorded_at" => timestamp(delivery.recorded_at),
-      "pr_url" => Redactor.redact_text(delivery.pr_url),
-      "pr_number" => delivery.pr_number,
-      "pr_repository" => Redactor.redact_text(delivery.pr_repository),
-      "pr_merged_at" => timestamp(delivery.pr_merged_at),
-      "merge_commit_sha" => Redactor.redact_text(delivery.merge_commit_sha),
-      "no_pr_evidence" => Redactor.redact_text(delivery.no_pr_evidence),
-      "successor_planned_slice_id" => delivery.successor_planned_slice_id,
-      "successor_work_package_id" => delivery.successor_work_package_id,
-      "superseded_reason" => Redactor.redact_text(delivery.superseded_reason),
-      "abandoned_rationale" => Redactor.redact_text(delivery.abandoned_rationale),
-      "inserted_at" => timestamp(delivery.inserted_at),
-      "updated_at" => timestamp(delivery.updated_at)
-    }
-  end
-
-  defp delivery_board_payload(delivery_board) do
-    delivery_board
-    |> json_safe_payload()
-    |> Redactor.redact_output()
-  end
 
   defp reconciliation_payload(reconciliation) when is_map(reconciliation) do
     reconciliation
@@ -12646,19 +12348,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp safe_recovery_value(value) when is_atom(value), do: Atom.to_string(value)
   defp safe_recovery_value(value) when is_binary(value) or is_number(value) or is_boolean(value) or is_nil(value), do: value
   defp safe_recovery_value(value), do: inspect(value)
-
-  defp work_request_summary_payload(questions, decisions, planned_slices) do
-    %{
-      "open_question_count" => Enum.count(questions, &(&1.status == "open")),
-      "answered_question_count" => Enum.count(questions, &(&1.status == "answered")),
-      "closed_question_count" => Enum.count(questions, &(&1.status == "closed")),
-      "decision_count" => length(decisions),
-      "planned_slice_count" => Enum.count(planned_slices, &(&1.status == "planned")),
-      "approved_slice_count" => Enum.count(planned_slices, &(&1.status == "approved")),
-      "dispatched_slice_count" => Enum.count(planned_slices, &(&1.status == "dispatched")),
-      "skipped_slice_count" => Enum.count(planned_slices, &(&1.status == "skipped"))
-    }
-  end
 
   @doc false
   @spec mcp_timestamp(DateTime.t() | NaiveDateTime.t() | nil) :: String.t() | nil
