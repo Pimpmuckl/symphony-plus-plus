@@ -569,7 +569,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     case prepare_local_operator_tool_call(server, params, name) do
       {:ok, arguments} -> local_operator_tool(name, arguments, server)
       {:error, code, message, data} -> {:error, code, message, data}
-      {:error, reason} -> local_operator_error(reason, name)
     end
   end
 
