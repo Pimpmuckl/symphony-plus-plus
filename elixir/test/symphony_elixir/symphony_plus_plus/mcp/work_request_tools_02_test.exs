@@ -447,6 +447,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     assert get_in(mismatch_response, ["error", "data", "reason"]) == "conflicting_delivery_evidence"
 
+    invalid_outcome_response =
+      mcp_tool(repo, session, "record_planned_slice_delivery", %{
+        "work_request_id" => work_request.id,
+        "planned_slice_id" => planned_slice.id,
+        "outcome" => "merged",
+        "idempotency_key" => "typed-delivery-invalid-outcome",
+        "evidence" => %{"merged" => %{"summary" => "invalid outcome"}}
+      })
+
+    assert get_in(invalid_outcome_response, ["error", "data", "reason"]) == "invalid_outcome"
+
+    assert get_in(invalid_outcome_response, ["error", "data", "validation_errors"]) == [
+             %{
+               "field" => "outcome",
+               "reason" => "invalid_value",
+               "allowed_values" => ["pr_merged", "completed_no_pr", "superseded", "abandoned"]
+             }
+           ]
+
+    invalid_cleanup_evidence_response =
+      mcp_tool(repo, session, "cleanup_work_request_planned_slice_runtime", %{
+        "work_request_id" => work_request.id,
+        "planned_slice_id" => planned_slice.id,
+        "outcome" => "superseded",
+        "reason" => "cleanup stale runtime"
+      })
+
+    assert get_in(invalid_cleanup_evidence_response, ["error", "data", "reason"]) == "invalid_delivery_evidence"
+
+    cleanup_errors = get_in(invalid_cleanup_evidence_response, ["error", "data", "validation_errors"])
+
+    assert %{
+             "field" => "successor_planned_slice_id",
+             "message" => "can't be blank",
+             "reason" => "required"
+           } = Enum.find(cleanup_errors, &(&1["field"] == "successor_planned_slice_id"))
+
+    assert %{
+             "field" => "superseded_reason",
+             "message" => "can't be blank",
+             "reason" => "required"
+           } = Enum.find(cleanup_errors, &(&1["field"] == "superseded_reason"))
+
     flat_response =
       mcp_tool(repo, session, "record_planned_slice_delivery", %{
         "work_request_id" => work_request.id,
