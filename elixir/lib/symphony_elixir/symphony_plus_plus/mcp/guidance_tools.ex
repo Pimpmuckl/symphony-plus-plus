@@ -476,14 +476,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
   defp run_architect_transaction(repo, fun) do
     case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do
       {:ok, result} -> {:ok, result}
-      {:error, {:tool_error, reason}} -> {:tool_error, reason}
       {:error, {:error, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp rollback_architect_transaction_result(_repo, {:ok, result}), do: result
-  defp rollback_architect_transaction_result(repo, {:tool_error, reason}), do: repo.rollback({:tool_error, reason})
   defp rollback_architect_transaction_result(repo, {:error, reason}), do: repo.rollback({:error, reason})
 
   defp optional_decision_prompt_argument(arguments, key) do
