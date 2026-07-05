@@ -33,6 +33,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     Auth,
     Config,
     CurrentWorkRequest,
+    ErrorDetails,
     PlannedSliceWorkerRevoke,
     ProgressEvents,
     Session,
@@ -222,8 +223,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
        })}
     else
       {:tool_error, reason} ->
-        data = %{"tool" => "cleanup_work_request_planned_slice_runtime", "reason" => reason}
-        {:error, -32_602, "Invalid params", data}
+        invalid_params_error("cleanup_work_request_planned_slice_runtime", reason)
 
       {:error, :not_found} ->
         not_found_error("cleanup_work_request_planned_slice_runtime")
@@ -320,17 +320,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
       if outcome in PlannedSliceDelivery.outcomes() do
         {:ok, outcome}
       else
-        {:tool_error, "invalid_outcome"}
+        {:tool_error, {:invalid_enum, "outcome", PlannedSliceDelivery.outcomes()}}
       end
     end
   end
 
   defp required_runtime_cleanup_delivery_outcome(arguments) do
+    allowed_outcomes = ["superseded", "abandoned"]
+
     with {:ok, outcome} <- required_argument(arguments, "outcome") do
-      if outcome in ["superseded", "abandoned"] do
+      if outcome in allowed_outcomes do
         {:ok, outcome}
       else
-        {:tool_error, "invalid_outcome"}
+        {:tool_error, {:invalid_enum, "outcome", allowed_outcomes}}
       end
     end
   end
@@ -359,7 +361,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp validate_runtime_cleanup_delivery_evidence(attrs) do
     case attrs |> PlannedSliceDelivery.create_changeset() |> Ecto.Changeset.apply_action(:insert) do
       {:ok, _delivery} -> {:ok, attrs}
-      {:error, _changeset} -> {:tool_error, "invalid_delivery_evidence"}
+      {:error, changeset} -> {:tool_error, {:invalid_changeset, "invalid_delivery_evidence", changeset}}
     end
   end
 
@@ -1372,59 +1374,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
      }}
   end
 
+  defp invalid_params_error(tool, {:invalid_changeset, reason, %Ecto.Changeset{} = changeset}) do
+    changeset_invalid_params_error(tool, reason, changeset)
+  end
+
+  defp invalid_params_error(tool, {:invalid_enum, _field, _allowed_values} = reason) do
+    ErrorDetails.invalid_params_error(tool, reason)
+  end
+
   defp invalid_params_error(tool, reason),
     do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp changeset_invalid_params_error(tool, reason, %Ecto.Changeset{} = changeset) do
-    data =
-      case changeset_validation_errors(changeset) do
-        [] -> %{"tool" => tool, "reason" => reason_text(reason)}
-        errors -> %{"tool" => tool, "reason" => reason_text(reason), "validation_errors" => errors}
-      end
-
-    {:error, -32_602, "Invalid params", data}
-  end
-
-  defp changeset_validation_errors(%Ecto.Changeset{errors: errors}),
-    do: Enum.map(errors, fn {field, error} -> changeset_validation_error(field, error) end)
-
-  defp changeset_validation_error(field, {message, opts}) do
-    field = Atom.to_string(field)
-
-    %{
-      "field" => field,
-      "message" => changeset_validation_message(field, message, opts),
-      "reason" => changeset_validation_reason(field, opts)
-    }
-    |> maybe_put_allowed_values(field, opts)
-  end
-
-  defp changeset_validation_message(_field, message, opts) do
-    Regex.replace(~r/%{(count|number)}/, message, fn _match, key ->
-      opts
-      |> Keyword.get(changeset_message_key(key))
-      |> to_string()
-    end)
-  end
-
-  defp changeset_message_key("count"), do: :count
-  defp changeset_message_key("number"), do: :number
-
-  defp changeset_validation_reason(_field, opts) do
-    case Keyword.get(opts, :validation) do
-      :required -> "required"
-      :inclusion -> "invalid_value"
-      :number -> "invalid_number"
-      validation when is_atom(validation) -> Atom.to_string(validation)
-      _validation -> "invalid"
-    end
-  end
-
-  defp maybe_put_allowed_values(detail, _field, opts) do
-    case Keyword.get(opts, :enum) do
-      values when is_list(values) -> Map.put(detail, "allowed_values", Enum.map(values, &reason_text/1))
-      _values -> detail
-    end
+    ErrorDetails.changeset_invalid_params_error(tool, reason, changeset)
   end
 
   defp scope_validation_details(errors) when is_list(errors), do: Enum.map(errors, &scope_validation_detail/1)
