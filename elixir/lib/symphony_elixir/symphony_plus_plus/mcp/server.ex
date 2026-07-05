@@ -458,10 +458,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     {:error, -32_602, "Invalid params", %{"reason" => "invalid_initialize_params"}}
   end
 
-  defp dispatch("initialize", params, _server) when not is_map(params) do
-    {:error, -32_602, "Invalid params", %{"reason" => "params_must_be_object"}}
-  end
-
   defp dispatch("initialize", _params, _server) do
     {:error, -32_602, "Invalid params", %{"reason" => "missing_protocol_version", "supported" => @protocol_version}}
   end
@@ -672,10 +668,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp dispatch("resources/read", %{"uri" => uri}, _server) when is_binary(uri) do
     {:error, -32_601, "Method not found", %{"resource" => uri}}
-  end
-
-  defp dispatch("resources/read", params, _server) when not is_map(params) do
-    {:error, -32_602, "Invalid params", %{"reason" => "params_must_be_object"}}
   end
 
   defp dispatch("resources/read", _params, _server) do
@@ -2239,7 +2231,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_text(reason), do: inspect(reason)
 
-  defp request_params(%{"params" => params}) when is_map(params) or is_list(params), do: {:ok, params}
+  defp request_params(%{"params" => params}) when is_map(params), do: {:ok, params}
+
+  defp request_params(%{"params" => params}) when is_list(params),
+    do: {:error, -32_602, "Invalid params", %{"reason" => "params_must_be_object"}}
 
   defp request_params(%{"params" => _params}),
     do: {:error, -32_602, "Invalid params", %{"reason" => "params_must_be_object_or_array"}}
