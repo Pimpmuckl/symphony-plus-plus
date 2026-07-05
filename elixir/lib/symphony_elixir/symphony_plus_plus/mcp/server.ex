@@ -22,12 +22,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads,
     only: [
       comment_payload: 1,
-      dispatch_link_recovery_payload: 1,
-      dispatch_work_request_planned_slice_payload: 2,
       json_safe_payload: 1,
       optional_payload: 1,
-      work_package_payload: 1,
-      worktree_lifecycle_payload: 3
+      work_package_payload: 1
     ]
 
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
@@ -47,9 +44,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     ArchitectDeliveryTools,
     ArchitectProductTreeTools,
+    ArchitectWorkRequestTools,
     Auth,
     Config,
-    CurrentWorkRequest,
     ErrorDetails,
     GuidanceTools,
     HandleStateStore,
@@ -84,11 +81,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
   alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceLinkage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
@@ -111,10 +106,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @session_claim_tools ToolCatalog.session_claim_tools()
   @worker_tools ToolCatalog.worker_tools()
   @architect_tools ToolCatalog.architect_tools()
+  @architect_work_request_tools ArchitectWorkRequestTools.tools()
   @architect_product_tree_tools ArchitectProductTreeTools.tools()
   @work_request_policy_tools ToolCatalog.work_request_policy_tools()
   @delivery_policy_tools ToolCatalog.delivery_policy_tools()
-  @work_request_product_tree_views ToolCatalog.work_request_product_tree_views()
   @phase7_stub_architect_tools ToolCatalog.phase7_stub_architect_tools()
   @version_resource "sympp://health/version"
   @assignment_resource "sympp://assignment/current"
@@ -738,7 +733,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp normalize_optional_value(nil), do: nil
-  defp normalize_optional_value(value), do: value
 
   defp handle_assignment_release_tool(params, id, %__MODULE__{} = server) do
     case prepare_assignment_release_tool_call(server, params) do
@@ -846,13 +840,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp require_local_architect_assignment_claim_mode(%__MODULE__{config: config} = server) do
     with :ok <- require_local_assignment_claim_mode(server) do
       LocalTrustedTools.require_database(config)
-    end
-  end
-
-  defp default_claimed_by(%__MODULE__{config: %Config{claimed_by: claimed_by}}) do
-    case normalize_optional_value(claimed_by) do
-      claimed_by when is_binary(claimed_by) -> claimed_by
-      nil -> "local-agent"
     end
   end
 
@@ -1265,134 +1252,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp architect_tool("list_work_requests", arguments, %__MODULE__{config: config, session: nil} = server) do
-    with :ok <- authorize_local_trusted_work_request_read_tool_call(server, "list_work_requests"),
-         {:ok, status} <- optional_work_request_status(arguments),
-         filters = WorkRequestScope.work_request_list_filters(%{}, status),
-         {:ok, work_requests} <- WorkRequestService.list(config.repo, WorkRequestScope.work_request_repository_filters(filters)) do
-      cards = WorkRequestPayloads.work_request_cards(work_requests)
-
-      {:ok,
-       ToolResult.agent_tool_result(%{
-         "work_requests" => cards,
-         "total_count" => length(cards),
-         "scope" => %{"visibility" => "local_ledger"},
-         "filters" => WorkRequestPayloads.work_request_filter(status)
-       })}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "list_work_requests", "reason" => reason}}
-      {:error, code, message, data} -> {:error, code, message, data}
-      {:error, reason} -> architect_error(reason, "list_work_requests")
-    end
-  end
-
-  defp architect_tool("list_work_requests", arguments, %__MODULE__{config: config, session: session}) do
-    repo_scope_opts = WorkRequestScope.work_request_repo_scope_opts(config)
-
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, status} <- optional_work_request_status(arguments),
-         {:ok, filters, scope} <-
-           WorkRequestScope.scoped_work_request_filters(config.repo, session, handoff_phase_scope?: false),
-         policy_session = WorkRequestScope.read_scoped_work_request_session(config.repo, session, scope, :work_request_read),
-         :ok <- WorkRequestScope.authorize_work_request_list_policy(policy_session, scope, "list_work_requests", repo_scope_opts),
-         filters = WorkRequestScope.work_request_list_filters(filters, status),
-         {:ok, work_requests} <- WorkRequestService.list(config.repo, WorkRequestScope.work_request_repository_filters(filters)),
-         {:ok, work_requests} <-
-           WorkRequestScope.filter_scoped_work_requests(config.repo, work_requests, filters, policy_session, repo_scope_opts) do
-      cards = WorkRequestPayloads.work_request_cards(work_requests)
-
-      {:ok,
-       ToolResult.agent_tool_result(%{
-         "work_requests" => cards,
-         "total_count" => length(cards),
-         "scope" => scope,
-         "filters" => WorkRequestPayloads.work_request_filter(status)
-       })}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "list_work_requests", "reason" => reason}}
-      {:error, reason} -> architect_error(reason, "list_work_requests")
-    end
-  end
-
-  defp architect_tool("read_work_request", arguments, %__MODULE__{config: config, session: nil} = server) do
-    with :ok <- authorize_local_trusted_work_request_read_tool_call(server, "read_work_request"),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, work_request, _filters} <- WorkRequestScope.local_trusted_work_request_read_scope(config.repo, work_request_id),
-         {:ok, payload} <- WorkRequestPayloads.work_request_detail(config.repo, work_request, []) do
-      payload = Map.put(payload, "scope", WorkRequestPayloads.redacted_work_request_scope(work_request))
-      {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_read)}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("read_work_request")
-      {:error, code, message, data} -> {:error, code, message, data}
-      {:error, reason} -> architect_error(reason, "read_work_request")
-    end
-  end
-
-  defp architect_tool("read_work_request", arguments, %__MODULE__{config: config, session: %Session{} = session}) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, work_request, _filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(
-             config.repo,
-             session,
-             work_request_id,
-             :work_request_read,
-             "read_work_request",
-             WorkRequestScope.work_request_repo_scope_opts(config)
-           ),
-         {:ok, payload} <- WorkRequestPayloads.work_request_detail(config.repo, work_request, []) do
-      payload = Map.put(payload, "scope", scope)
-      {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_read)}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("read_work_request")
-      {:error, reason} -> architect_error(reason, "read_work_request")
-    end
-  end
-
-  defp architect_tool("read_work_request_product_tree", arguments, %__MODULE__{config: config, session: nil} = server) do
-    with :ok <- authorize_local_trusted_work_request_read_tool_call(server, "read_work_request_product_tree"),
-         {:ok, work_request_id, view} <- read_work_request_product_tree_arguments(arguments),
-         {:ok, work_request, scope} <- WorkRequestScope.local_trusted_work_request_read_scope(config.repo, work_request_id),
-         {:ok, result} <-
-           read_work_request_product_tree_result(
-             config.repo,
-             work_request,
-             scope,
-             scope,
-             view
-           ) do
-      {:ok, result}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request_product_tree", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("read_work_request_product_tree")
-      {:error, code, message, data} -> {:error, code, message, data}
-      {:error, reason} -> architect_error(reason, "read_work_request_product_tree")
-    end
-  end
-
-  defp architect_tool("read_work_request_product_tree", arguments, %__MODULE__{config: config, session: %Session{} = session}) do
-    repo_scope_opts = WorkRequestScope.work_request_repo_scope_opts(config)
-
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id, view} <- read_work_request_product_tree_arguments(arguments),
-         {:ok, work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(
-             config.repo,
-             session,
-             work_request_id,
-             :work_request_read,
-             "read_work_request_product_tree",
-             repo_scope_opts
-           ),
-         {:ok, result} <- read_work_request_product_tree_result(config.repo, work_request, filters, scope, view, repo_scope_opts) do
-      {:ok, result}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request_product_tree", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("read_work_request_product_tree")
-      {:error, reason} -> architect_error(reason, "read_work_request_product_tree")
-    end
+  defp architect_tool(name, arguments, %__MODULE__{config: config, session: session} = server) when name in @architect_work_request_tools do
+    ArchitectWorkRequestTools.call(name, config, session, arguments, server: server)
   end
 
   defp architect_tool(name, arguments, %__MODULE__{config: config, session: %Session{} = session})
@@ -1410,57 +1271,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_tool("resolve_blocker", arguments, %__MODULE__{config: config, session: session}),
     do: GuidanceTools.call("resolve_blocker", config, session, arguments)
 
-  defp architect_tool("read_work_request_delivery_board", arguments, %__MODULE__{config: config, session: %Session{} = session}) do
-    repo_scope_opts = WorkRequestScope.work_request_repo_scope_opts(config)
-
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
-         {:ok, work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(
-             config.repo,
-             session,
-             work_request_id,
-             :delivery_board_read,
-             "read_work_request_delivery_board",
-             repo_scope_opts
-           ),
-         {:ok, planned_slices} <- WorkRequestService.list_planned_slices(config.repo, work_request_id),
-         {:ok, delivery_board} <- WorkRequestScope.scoped_delivery_board(config.repo, work_request, planned_slices, filters, repo_scope_opts) do
-      payload = %{
-        "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-        "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board),
-        "scope" => scope
-      }
-
-      {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_delivery_board)}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request_delivery_board", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("read_work_request_delivery_board")
-      {:error, reason} -> architect_error(reason, "read_work_request_delivery_board")
-    end
-  end
-
-  defp architect_tool("read_work_request_delivery_board", arguments, %__MODULE__{config: config, session: nil} = server) do
-    with :ok <- authorize_local_trusted_work_request_read_tool_call(server, "read_work_request_delivery_board"),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, work_request, filters} <- WorkRequestScope.local_trusted_work_request_read_scope(config.repo, work_request_id),
-         {:ok, planned_slices} <- WorkRequestService.list_planned_slices(config.repo, work_request_id),
-         {:ok, delivery_board} <- WorkRequestScope.scoped_delivery_board(config.repo, work_request, planned_slices, filters) do
-      payload = %{
-        "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-        "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board),
-        "scope" => WorkRequestPayloads.redacted_work_request_scope(work_request)
-      }
-
-      {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_delivery_board)}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request_delivery_board", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("read_work_request_delivery_board")
-      {:error, code, message, data} -> {:error, code, message, data}
-      {:error, reason} -> architect_error(reason, "read_work_request_delivery_board")
-    end
-  end
-
   defp architect_tool(name, arguments, %__MODULE__{config: config, session: session})
        when name in [
               "reconcile_work_request",
@@ -1474,264 +1284,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
        when name in ["list_guidance_requests", "answer_guidance_request", "escalate_guidance_request"],
        do: GuidanceTools.call(name, config, session, arguments)
 
-  defp architect_tool("set_work_request_status", arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, current_status} <- required_argument(arguments, "current_status"),
-         {:ok, next_status} <- required_argument(arguments, "next_status"),
-         {:ok, _work_request, _filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, "set_work_request_status"),
-         {:ok, updated_work_request} <- WorkRequestService.update_status(config.repo, work_request_id, current_status, next_status) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "scope" => scope,
-         "status" => %{
-           "previous_status" => current_status,
-           "current_status" => updated_work_request.status
-         }
-       })}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "set_work_request_status", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("set_work_request_status")
-      {:error, reason} -> architect_error(reason, "set_work_request_status")
-    end
-  end
-
   defp architect_tool(name, arguments, %__MODULE__{config: config, session: session}) when name in @architect_product_tree_tools do
     ArchitectProductTreeTools.call(name, config, session, arguments)
-  end
-
-  defp architect_tool("answer_work_request_question", arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, question_id} <- required_argument(arguments, "question_id"),
-         {:ok, expected_question_status} <- expected_question_status_argument(arguments),
-         {:ok, answer} <- required_argument(arguments, "answer"),
-         {:ok, answered_by} <- optional_string_argument(arguments, "answered_by", session_claimed_by(session)),
-         {:ok, _work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :question_answer, "answer_work_request_question"),
-         {:ok, _question} <- WorkRequestScope.scoped_work_request_question(config.repo, work_request_id, question_id),
-         {:ok, question_record} <-
-           WorkRequestService.answer_question(config.repo, question_id, expected_question_status, %{
-             "answer" => answer,
-             "answered_by" => answered_by
-           }),
-         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id, filters) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
-         "scope" => scope,
-         "status" => %{
-           "work_request_status" => updated_work_request.status,
-           "previous_question_status" => expected_question_status,
-           "question_status" => question_record.status
-         }
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error("answer_work_request_question", reason)
-      {:error, :not_found} -> not_found_error("answer_work_request_question")
-      {:error, reason} -> architect_error(reason, "answer_work_request_question")
-    end
-  end
-
-  defp architect_tool("answer_work_request_question_and_record_decision", arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, question_id} <- required_argument(arguments, "question_id"),
-         {:ok, expected_question_status} <- expected_question_status_argument(arguments),
-         {:ok, answer} <- required_argument(arguments, "answer"),
-         {:ok, answered_by} <- optional_string_argument(arguments, "answered_by", session_claimed_by(session)),
-         {:ok, source_type} <- required_argument(arguments, "source_type"),
-         {:ok, decision} <- required_argument(arguments, "decision"),
-         {:ok, rationale} <- required_argument(arguments, "rationale"),
-         {:ok, scope_impact} <- required_argument(arguments, "scope_impact"),
-         {:ok, created_by} <- optional_string_argument(arguments, "created_by", answered_by),
-         {:ok, source_id} <- optional_string_argument(arguments, "source_id", question_id),
-         {:ok, work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(
-             config.repo,
-             session,
-             work_request_id,
-             :question_answer,
-             "answer_work_request_question_and_record_decision"
-           ),
-         :ok <-
-           WorkRequestScope.authorize_work_request_policy(
-             config.repo,
-             session,
-             :decision_record,
-             work_request,
-             "answer_work_request_question_and_record_decision"
-           ),
-         {:ok, _question} <- WorkRequestScope.scoped_work_request_question(config.repo, work_request_id, question_id),
-         {:ok, %{decision: decision_record, question: question_record}} <-
-           answer_question_and_record_decision_transaction(config.repo, work_request_id, question_id, expected_question_status, %{
-             "answer" => answer,
-             "answered_by" => answered_by,
-             "source_type" => source_type,
-             "source_id" => source_id,
-             "decision" => decision,
-             "rationale" => rationale,
-             "scope_impact" => scope_impact,
-             "created_by" => created_by
-           }),
-         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id, filters) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
-         "decision_log_entry" => WorkRequestPayloads.decision_log_entry(decision_record),
-         "scope" => scope,
-         "status" => %{
-           "work_request_status" => updated_work_request.status,
-           "previous_question_status" => expected_question_status,
-           "question_status" => question_record.status
-         }
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error("answer_work_request_question_and_record_decision", reason)
-      {:error, :not_found} -> not_found_error("answer_work_request_question_and_record_decision")
-      {:error, reason} -> architect_error(reason, "answer_work_request_question_and_record_decision")
-    end
-  end
-
-  defp architect_tool("close_work_request_question", arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, question_id} <- required_argument(arguments, "question_id"),
-         {:ok, expected_question_status} <- expected_question_status_argument(arguments),
-         {:ok, _work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :question_close, "close_work_request_question"),
-         {:ok, _question} <- WorkRequestScope.scoped_work_request_question(config.repo, work_request_id, question_id),
-         {:ok, question_record} <- WorkRequestService.close_question(config.repo, question_id, expected_question_status),
-         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id, filters) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "clarification_question" => WorkRequestPayloads.clarification_question(question_record),
-         "scope" => scope,
-         "status" => %{
-           "work_request_status" => updated_work_request.status,
-           "previous_question_status" => expected_question_status,
-           "question_status" => question_record.status
-         }
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error("close_work_request_question", reason)
-      {:error, :not_found} -> not_found_error("close_work_request_question")
-      {:error, reason} -> architect_error(reason, "close_work_request_question")
-    end
-  end
-
-  defp architect_tool("mark_work_request_sliced", arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
-         {:ok, current_status} <- required_argument(arguments, "current_status"),
-         {:ok, _work_request, _filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, "mark_work_request_sliced"),
-         {:ok, updated_work_request} <- WorkRequestService.mark_sliced(config.repo, work_request_id, current_status) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "scope" => scope,
-         "status" => %{
-           "previous_status" => current_status,
-           "current_status" => updated_work_request.status
-         }
-       })}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "mark_work_request_sliced", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("mark_work_request_sliced")
-      {:error, reason} -> architect_error(reason, "mark_work_request_sliced")
-    end
-  end
-
-  defp architect_tool("dispatch_work_request_planned_slice", arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
-         {:ok, planned_slice_id} <- required_argument(arguments, "planned_slice_id"),
-         {:ok, claimed_by} <- optional_string_argument(arguments, "claimed_by", default_claimed_by(%__MODULE__{config: config})),
-         {:ok, _work_request, planned_slice, _filters, scope} <-
-           WorkRequestScope.authorized_planned_slice_scope(
-             config.repo,
-             session,
-             work_request_id,
-             planned_slice_id,
-             :planned_slice_dispatch,
-             "dispatch_work_request_planned_slice"
-           ),
-         :ok <- require_approved_dispatch_planned_slice(planned_slice),
-         {:ok, handoff_opts, dispatch_opts} <- dispatch_planned_slice_bootstrap_opts(config, claimed_by),
-         {:ok, dispatch} <- PlannedSliceDispatch.dispatch(config.repo, work_request_id, planned_slice_id, handoff_opts, dispatch_opts) do
-      {:ok, ToolResult.tool_result(dispatch_work_request_planned_slice_payload(dispatch, scope))}
-    else
-      {:tool_error, reason} -> invalid_params_error("dispatch_work_request_planned_slice", reason)
-      {:error, :not_found} -> not_found_error("dispatch_work_request_planned_slice")
-      {:error, reason} -> dispatch_work_request_planned_slice_error(reason)
-    end
-  end
-
-  defp architect_tool("prepare_work_package_worktree", arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, session} <- architect_session(config.repo, session, "dispatch:work_request"),
-         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, work_package, scope} <- scoped_worktree_work_package(config.repo, session, work_package_id),
-         {:ok, explicit_root} <- optional_string_argument(arguments, "target_repo_root"),
-         {:ok, target_repo_root} <- WorktreeScope.target_repo_root_argument(explicit_root, work_package, config),
-         {:ok, branch_arg} <- optional_string_argument(arguments, "branch"),
-         {:ok, branch} <- WorktreeScope.prepare_branch(work_package, branch_arg),
-         :ok <- WorktreeScope.require_target_repo_root_scope(target_repo_root, work_package, config),
-         {:ok, result} <-
-           WorkPackageService.prepare_worktree(
-             config.repo,
-             work_package_id,
-             %{
-               "target_repo_root" => target_repo_root,
-               "base_branch" => work_package.base_branch,
-               "branch" => branch
-             }
-           ),
-         {:ok, audit_event} <- append_worktree_lifecycle_audit(config.repo, session, work_package_id, "prepare_work_package_worktree", result) do
-      {:ok, ToolResult.tool_result(worktree_lifecycle_payload(result, scope, audit_event))}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "prepare_work_package_worktree", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("prepare_work_package_worktree")
-      {:error, reason} -> architect_error(reason, "prepare_work_package_worktree")
-    end
-  end
-
-  defp architect_tool("cleanup_work_package_worktree", arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, session} <- architect_session(config.repo, session, "dispatch:work_request"),
-         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, target_repo_root} <- optional_string_argument(arguments, "target_repo_root"),
-         {:ok, work_package, scope} <- scoped_worktree_work_package(config.repo, session, work_package_id),
-         {:ok, cleanup_target_repo_root} <-
-           WorktreeScope.cleanup_target_repo_root(
-             target_repo_root,
-             work_package,
-             config
-           ),
-         :ok <-
-           WorktreeScope.require_cleanup_target_repo_root_scope(
-             cleanup_target_repo_root,
-             work_package,
-             config
-           ),
-         {:ok, result} <-
-           WorkPackageService.cleanup_worktree(
-             config.repo,
-             work_package_id,
-             cleanup_worktree_opts(cleanup_target_repo_root)
-           ),
-         {:ok, _runtime_cleanup} <- ArchitectDeliveryTools.cleanup_worktree_runtime(config.repo, session, work_package),
-         {:ok, audit_event} <- maybe_append_cleanup_worktree_audit(config.repo, session, work_package_id, result) do
-      {:ok, ToolResult.tool_result(worktree_lifecycle_payload(result, scope, audit_event))}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "cleanup_work_package_worktree", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("cleanup_work_package_worktree")
-      {:error, reason} -> architect_error(reason, "cleanup_work_package_worktree")
-    end
   end
 
   defp architect_tool(name, arguments, %__MODULE__{config: config, session: session})
@@ -1777,153 +1331,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       phase7_not_implemented(name)
     else
       {:error, reason} -> architect_error(reason, name)
-    end
-  end
-
-  defp read_work_request_product_tree_arguments(arguments) do
-    with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
-         {:ok, view} <- optional_product_tree_view(arguments) do
-      {:ok, work_request_id, view}
-    end
-  end
-
-  defp read_work_request_product_tree_result(
-         repo,
-         %WorkRequest{} = work_request,
-         filters,
-         scope,
-         view,
-         repo_scope_opts \\ []
-       ) do
-    with {:ok, planned_slices} <- WorkRequestService.list_planned_slices(repo, work_request.id),
-         {:ok, delivery_board} <-
-           WorkRequestScope.scoped_delivery_board(repo, work_request, planned_slices, filters, Keyword.put(repo_scope_opts, :slice_projection, :operational_state)) do
-      payload = WorkRequestPayloads.work_request_product_tree(repo, work_request, planned_slices, delivery_board, view)
-      payload = Map.put(payload, "scope", scope)
-      {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_product_tree)}
-    end
-  end
-
-  defp dispatch_planned_slice_bootstrap_opts(%Config{} = config, claimed_by) do
-    with {:ok, database} <- HandoffDatabase.resolve(config.database, config.repo) do
-      {:ok, [claimed_by: claimed_by, database: database], []}
-    end
-  end
-
-  defp cleanup_worktree_opts(nil), do: []
-  defp cleanup_worktree_opts(target_repo_root), do: [target_repo_root: target_repo_root]
-
-  defp require_approved_dispatch_planned_slice(%PlannedSlice{status: "approved"}), do: :ok
-
-  defp require_approved_dispatch_planned_slice(%PlannedSlice{status: status}),
-    do: {:error, {:invalid_planned_slice_status, status}}
-
-  defp dispatch_work_request_planned_slice_error({:invalid_planned_slice_status, _status}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_work_request_planned_slice", "reason" => "invalid_planned_slice_status"}}
-  end
-
-  defp dispatch_work_request_planned_slice_error({:invalid_work_request_status, _status}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_work_request_planned_slice", "reason" => "invalid_work_request_status"}}
-  end
-
-  defp dispatch_work_request_planned_slice_error({:planned_slice_scope_violation, errors}) do
-    invalid_params_error("dispatch_work_request_planned_slice", {:planned_slice_scope_violation, errors})
-  end
-
-  defp dispatch_work_request_planned_slice_error({:unsupported_branch_pattern, branch_pattern, reason}) do
-    invalid_params_error("dispatch_work_request_planned_slice", {:branch_pattern, branch_pattern, reason})
-  end
-
-  defp dispatch_work_request_planned_slice_error({:kind_not_dispatchable, _kind}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_work_request_planned_slice", "reason" => "kind_not_dispatchable"}}
-  end
-
-  defp dispatch_work_request_planned_slice_error({:dispatch_link_failed, _reason, recovery}) do
-    {:error, -32_000, "Server error",
-     %{
-       "tool" => "dispatch_work_request_planned_slice",
-       "reason" => "dispatch_link_failed",
-       "recovery" => dispatch_link_recovery_payload(recovery)
-     }}
-  end
-
-  defp dispatch_work_request_planned_slice_error(reason), do: architect_error(reason, "dispatch_work_request_planned_slice")
-
-  defp append_worktree_lifecycle_audit(repo, %Session{} = session, work_package_id, source_tool, result) do
-    PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, work_package_id, %{
-      "summary" => worktree_lifecycle_summary(source_tool, result.status),
-      "status" => result.status,
-      "idempotency_key" => worktree_lifecycle_idempotency_key(work_package_id, source_tool, result),
-      "payload" => %{
-        "type" => "worktree_lifecycle",
-        "source_tool" => source_tool,
-        "work_package_id" => work_package_id,
-        "worktree_path" => audit_local_path(result.worktree_path),
-        "target_repo_root" => audit_local_path(result.target_repo_root || result.repo_root),
-        "branch" => result.branch,
-        "base_branch" => result.base_branch,
-        "status" => result.status
-      }
-    })
-  end
-
-  defp maybe_append_cleanup_worktree_audit(_repo, _session, _work_package_id, %{status: "already_clean"}), do: {:ok, nil}
-
-  defp maybe_append_cleanup_worktree_audit(repo, %Session{} = session, work_package_id, result) do
-    append_worktree_lifecycle_audit(repo, session, work_package_id, "cleanup_work_package_worktree", result)
-  end
-
-  defp audit_local_path(nil), do: nil
-  defp audit_local_path(_path), do: "[REDACTED]"
-
-  defp worktree_lifecycle_summary("prepare_work_package_worktree", "already_prepared"), do: "WorkPackage worktree already prepared"
-  defp worktree_lifecycle_summary("prepare_work_package_worktree", _status), do: "Prepared WorkPackage worktree"
-  defp worktree_lifecycle_summary("cleanup_work_package_worktree", _status), do: "Success removing worktree. Subagent can be closed now."
-
-  defp worktree_lifecycle_idempotency_key(work_package_id, source_tool, result) do
-    fingerprint =
-      :sha256
-      |> :crypto.hash([to_string(result.status), "\0", to_string(result.worktree_path), "\0", to_string(result.branch)])
-      |> Base.url_encode64(padding: false)
-
-    "worktree_lifecycle:#{source_tool}:#{work_package_id}:#{fingerprint}"
-  end
-
-  defp optional_work_request_status(arguments) do
-    case Map.fetch(arguments, "status") do
-      :error ->
-        {:ok, nil}
-
-      {:ok, status} when is_binary(status) ->
-        status = String.trim(status)
-
-        if status in WorkRequest.statuses() do
-          {:ok, status}
-        else
-          {:tool_error, "invalid_status"}
-        end
-
-      {:ok, _status} ->
-        {:tool_error, "invalid_status"}
-    end
-  end
-
-  defp optional_product_tree_view(arguments) do
-    case Map.fetch(arguments, "view") do
-      :error ->
-        {:ok, "nodes_with_slice_refs"}
-
-      {:ok, view} when is_binary(view) ->
-        view = String.trim(view)
-
-        if view in @work_request_product_tree_views do
-          {:ok, view}
-        else
-          {:tool_error, "invalid_view"}
-        end
-
-      {:ok, _view} ->
-        {:tool_error, "invalid_view"}
     end
   end
 
@@ -1975,65 +1382,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp progress_tool_policy("resolve_blocker"), do: {:blocker_resolve, :blocker}
   defp progress_tool_policy("set_status"), do: {:work_package_update, :work_package}
   defp progress_tool_policy(_tool), do: {:progress_append, :progress}
-
-  defp scoped_worktree_work_package(repo, %Session{} = session, work_package_id) do
-    with {:ok, %WorkPackage{} = work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         {:ok, filters, scope} <- WorkRequestScope.scoped_work_request_filters(repo, session),
-         :ok <- require_worktree_work_package_scope(repo, work_package, filters) do
-      {:ok, work_package, scope}
-    else
-      {:error, :forbidden} -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp require_worktree_work_package_scope(repo, %WorkPackage{} = work_package, filters) do
-    case PlannedSliceLinkage.linked_work_requests_for_work_package(repo, work_package.id) do
-      {:ok, []} ->
-        {:error, :forbidden}
-
-      {:ok, links} ->
-        with :ok <- require_unique_worktree_work_request_link(links) do
-          require_any_worktree_work_package_link_scope(repo, work_package, links, filters)
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp require_unique_worktree_work_request_link(links) do
-    case Enum.uniq_by(links, fn {%PlannedSlice{}, %WorkRequest{id: work_request_id}} -> work_request_id end) do
-      [_single] -> :ok
-      [] -> {:error, :forbidden}
-      [_first | _rest] -> {:error, :ambiguous_planned_slice_link}
-    end
-  end
-
-  defp require_any_worktree_work_package_link_scope(repo, %WorkPackage{} = work_package, links, filters) do
-    Enum.reduce_while(links, {:error, :forbidden}, fn
-      {%PlannedSlice{} = planned_slice, %WorkRequest{} = work_request}, _error ->
-        case require_worktree_work_package_link_scope(repo, work_package, planned_slice, work_request, filters) do
-          :ok -> {:halt, :ok}
-          {:error, reason} when reason in [:forbidden, :not_found] -> {:cont, {:error, :forbidden}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-    end)
-  end
-
-  defp require_worktree_work_package_link_scope(
-         repo,
-         %WorkPackage{} = work_package,
-         %PlannedSlice{} = planned_slice,
-         %WorkRequest{} = work_request,
-         filters
-       ) do
-    with :ok <- WorkRequestScope.require_work_package_repo_scope(work_package, work_request, planned_slice),
-         :ok <- WorkRequestScope.require_work_package_delivery_base_scope(work_package, planned_slice),
-         :ok <- WorkRequestScope.require_work_request_scope(repo, work_request, filters) do
-      WorkRequestScope.require_delivery_work_package_filter_scope(repo, work_package, work_request, filters)
-    end
-  end
 
   defp linked_planned_slice_work_request_for_work_package(repo, work_package_id) do
     PlannedSliceLinkage.linked_work_request_for_work_package(repo, work_package_id)
@@ -3001,7 +2349,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp approve_scope_expansion_linked_work_package(repo, %Session{} = session, work_package_id) do
     with :ok <- require_scope_expansion_handoff_package_scope(repo, session),
-         {:ok, work_package, _scope} <- scoped_worktree_work_package(repo, session, work_package_id),
+         {:ok, work_package, _scope} <-
+           ArchitectWorkRequestTools.scoped_worktree_work_package(repo, session, work_package_id),
          {:ok, work_request} <- optional_scope_expansion_linked_work_request(repo, work_package_id) do
       {:ok, work_package, work_request}
     else
@@ -3374,60 +2723,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       _reason ->
         {:tool_error, "invalid_reason"}
     end
-  end
-
-  defp expected_question_status_argument(arguments) do
-    cond do
-      Map.has_key?(arguments, "expected_question_status") ->
-        parse_question_status_guard(Map.get(arguments, "expected_question_status"))
-
-      Map.has_key?(arguments, "current_status") ->
-        parse_question_status_guard(Map.get(arguments, "current_status"))
-
-      true ->
-        {:ok, "open"}
-    end
-  end
-
-  defp parse_question_status_guard(status) when is_binary(status) do
-    status
-    |> String.trim()
-    |> require_open_question_status()
-  end
-
-  defp parse_question_status_guard(_status), do: {:tool_error, {:invalid_question_status, "non_string", ["open"]}}
-
-  defp require_open_question_status("open"), do: {:ok, "open"}
-  defp require_open_question_status(status), do: {:tool_error, {:invalid_question_status, status, ["open"]}}
-
-  defp answer_question_and_record_decision_transaction(repo, work_request_id, question_id, expected_question_status, attrs) do
-    repo.transaction(fn ->
-      with {:ok, question_record} <-
-             WorkRequestService.answer_question(repo, question_id, expected_question_status, %{
-               "answer" => Map.fetch!(attrs, "answer"),
-               "answered_by" => Map.fetch!(attrs, "answered_by")
-             }),
-           {:ok, decision_record} <-
-             WorkRequestService.record_decision(
-               repo,
-               work_request_id,
-               optional_put(
-                 %{
-                   "source_type" => Map.fetch!(attrs, "source_type"),
-                   "decision" => Map.fetch!(attrs, "decision"),
-                   "rationale" => Map.fetch!(attrs, "rationale"),
-                   "scope_impact" => Map.fetch!(attrs, "scope_impact"),
-                   "created_by" => Map.fetch!(attrs, "created_by")
-                 },
-                 "source_id",
-                 Map.get(attrs, "source_id")
-               )
-             ) do
-        %{question: question_record, decision: decision_record}
-      else
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
   end
 
   defp reject_ready_work_package(%WorkPackage{kind: "phase_child", status: status}) when status in ["merging_into_phase", "merged_into_phase"] do
