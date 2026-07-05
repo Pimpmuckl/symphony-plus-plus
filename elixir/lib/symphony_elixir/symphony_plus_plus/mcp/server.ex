@@ -253,19 +253,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp handle_tool_call_notification(params_result, %__MODULE__{} = server),
     do: {nil, dispatch_notification(params_result, "tools/call", server)}
 
-  defp do_handle([], %__MODULE__{}) do
-    Response.error(nil, -32_600, "Invalid Request", %{"reason" => "empty_batch"})
-  end
-
-  defp do_handle(payloads, %__MODULE__{} = server) when is_list(payloads) do
-    if Enum.any?(payloads, &initialize_request?/1) do
-      Response.error(nil, -32_600, "Invalid Request", %{"reason" => "initialize_must_be_standalone"})
-    else
-      handle_batch(payloads, server)
-      |> elem(0)
-    end
-  end
-
   defp do_handle(%{"id" => id}, %__MODULE__{}) when invalid_request_id(id) do
     Response.error(nil, -32_600, "Invalid Request", %{"reason" => "invalid_request_id"})
   end
