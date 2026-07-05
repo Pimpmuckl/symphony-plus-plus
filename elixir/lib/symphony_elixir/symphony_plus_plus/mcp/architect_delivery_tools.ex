@@ -279,14 +279,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   @spec cleanup_worktree_runtime(module(), Session.t(), WorkPackage.t()) ::
           {:ok, map() | nil} | {:error, term()}
-  def cleanup_worktree_runtime(repo, %Session{} = session, %WorkPackage{worktree_path: worktree_path} = work_package)
-      when is_binary(worktree_path) do
+  def cleanup_worktree_runtime(repo, %Session{} = session, %WorkPackage{} = work_package) do
     run_architect_transaction(repo, fn ->
       cleanup_worktree_runtime_in_transaction(repo, session, work_package.id)
     end)
   end
-
-  def cleanup_worktree_runtime(_repo, %Session{}, %WorkPackage{}), do: {:ok, nil}
 
   @spec prepare_scoped_blocker_closeout(module(), Session.t(), [String.t()], map(), String.t()) ::
           {:ok, blocker_closeout_plan()} | {:tool_error, term()} | {:error, term()}
@@ -307,7 +304,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   @spec apply_prepared_blocker_closeout(module(), Session.t(), blocker_closeout_plan()) ::
-          {:ok, map()} | {:error, term()}
+          {:ok, map()} | {:tool_error, term()} | {:error, term()}
   def apply_prepared_blocker_closeout(_repo, %Session{}, :not_needed), do: {:ok, blocker_closeout_not_needed()}
 
   def apply_prepared_blocker_closeout(repo, %Session{} = session, %{
