@@ -10,16 +10,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       bootstrap_tool_arguments: 2,
       local_operator_tool_arguments: 2,
       optional_argument: 3,
-      optional_boolean: 3,
       optional_list_argument: 2,
       optional_nonnegative_integer_argument: 2,
       optional_object_argument: 2,
-      optional_positive_integer_argument: 2,
       optional_string_argument: 2,
       optional_string_argument: 3,
       optional_string_list_argument: 2,
       required_argument: 2,
-      required_object: 2,
       required_string_array: 2,
       solo_tool_arguments: 2,
       worker_tool_arguments: 2
@@ -27,7 +24,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads,
     only: [
-      child_work_package_payload: 1,
       comment_payload: 1,
       dispatch_link_recovery_payload: 1,
       dispatch_work_request_planned_slice_payload: 2,
@@ -52,13 +48,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Service, as: GuidanceRequestService
   alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
+    ArchitectDeliveryTools,
     Auth,
     Config,
     CurrentWorkRequest,
@@ -70,7 +66,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     LocalTrustedTools,
     Payloads,
     PhaseChildTools,
-    PlannedSliceWorkerRevoke,
     ProgressEvents,
     PullRequestMetadata,
     Repository,
@@ -100,15 +95,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceLinkage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup, as: WorkRequestRuntimeCleanup
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @protocol_version "2025-03-26"
@@ -122,7 +113,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     "read_work_request_product_tree",
     "read_work_request_delivery_board"
   ]
-  @blocker_closeout_decisions ToolCatalog.blocker_closeout_decisions()
   @terminal_product_tree_completion_marks ["done", "deferred"]
   @terminal_work_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
   @local_assignment_claim_tool ToolCatalog.local_assignment_claim_tool()
@@ -134,8 +124,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @delivery_policy_tools ToolCatalog.delivery_policy_tools()
   @work_request_product_tree_views ToolCatalog.work_request_product_tree_views()
   @phase7_stub_architect_tools ToolCatalog.phase7_stub_architect_tools()
-  @child_worker_capabilities ["worker:claim", "worker:lifecycle.transition"]
-  @child_worker_grant_provenance "child_worker_delegation"
   @version_resource "sympp://health/version"
   @assignment_resource "sympp://assignment/current"
   @finding_replay_retry_attempts 50
@@ -1510,96 +1498,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp architect_tool("reconcile_work_request", arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, apply?} <- optional_boolean(arguments, "apply", false),
-         {:ok, live_session} <- Auth.require_session(session, config.repo),
-         :ok <- require_delivery_reconcile_capability(live_session, apply?),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
-         {:ok, recorded_by} <- optional_string_argument(arguments, "recorded_by", session_claimed_by(live_session)),
-         {:ok, work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, live_session, work_request_id, reconcile_work_request_action(apply?), "reconcile_work_request"),
-         {:ok, planned_slices} <- WorkRequestService.list_planned_slices(config.repo, work_request_id),
-         {visible_work_package_ids, work_package_contexts} <-
-           WorkRequestScope.visible_delivery_board_work_package_contexts(config.repo, work_request, planned_slices, filters),
-         {:ok, reconciliation} <-
-           reconcile_work_request(config.repo, live_session, work_request_id, apply?, recorded_by,
-             mode: reconcile_work_request_mode(apply?),
-             work_request: work_request,
-             planned_slices: planned_slices,
-             visible_work_package_ids: visible_work_package_ids,
-             work_package_contexts: work_package_contexts
-           ) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-         "reconciliation" => reconciliation_payload(reconciliation),
-         "delivery_board" => WorkRequestPayloads.delivery_board(Map.fetch!(reconciliation, :delivery_board)),
-         "scope" => scope
-       })}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "reconcile_work_request", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("reconcile_work_request")
-      {:error, reason} -> architect_error(reason, "reconcile_work_request")
-    end
-  end
-
-  defp architect_tool("record_planned_slice_delivery", arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, live_session} <- Auth.require_session(session, config.repo),
-         :ok <- require_delivery_write_capability(live_session),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
-         {:ok, planned_slice_id} <- required_argument(arguments, "planned_slice_id"),
-         {:ok, outcome} <- required_planned_slice_delivery_outcome(arguments),
-         {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
-         {:ok, recorded_by} <- optional_string_argument(arguments, "recorded_by", session_claimed_by(live_session)),
-         {:ok, attrs} <- planned_slice_delivery_attrs(arguments, outcome, idempotency_key, recorded_by),
-         {:ok, work_request, planned_slice, filters, scope} <-
-           WorkRequestScope.authorized_planned_slice_scope(
-             config.repo,
-             live_session,
-             work_request_id,
-             planned_slice_id,
-             :delivery_closeout_record,
-             "record_planned_slice_delivery"
-           ),
-         :ok <- require_planned_slice_delivery_scope(config.repo, work_request, planned_slice, attrs, filters),
-         {:ok, attrs, blocker_closeout_plan} <-
-           maybe_prepare_slice_delivery_blocker_closeout(config.repo, live_session, planned_slice, arguments, attrs),
-         {:ok, {delivery, blocker_closeout}} <-
-           mutate_product_tree(
-             config.repo,
-             work_request_id,
-             "record_planned_slice_delivery",
-             recorded_by,
-             fn ->
-               record_planned_slice_delivery_with_blocker_closeout(
-                 config.repo,
-                 live_session,
-                 work_request_id,
-                 planned_slice_id,
-                 attrs,
-                 blocker_closeout_plan
-               )
-             end
-           ),
-         {:ok, planned_slices} <- WorkRequestService.list_planned_slices(config.repo, work_request_id),
-         {:ok, delivery_board} <- WorkRequestScope.scoped_delivery_board(config.repo, work_request, planned_slices, filters) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-         "planned_slice_delivery" => WorkRequestPayloads.planned_slice_delivery(delivery),
-         "blocker_closeout" => blocker_closeout,
-         "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board),
-         "scope" => scope
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error("record_planned_slice_delivery", reason)
-      {:error, :not_found} -> not_found_error("record_planned_slice_delivery")
-      {:error, reason} -> record_planned_slice_delivery_error(reason)
-    end
-  end
-
-  defp architect_tool(name, arguments, %__MODULE__{} = server) when name in ["cleanup_work_request_planned_slice_runtime", "revoke_planned_slice_worker_key"],
-    do: delivery_runtime_architect_tool(name, arguments, server)
+  defp architect_tool(name, arguments, %__MODULE__{config: config, session: session})
+       when name in [
+              "reconcile_work_request",
+              "record_planned_slice_delivery",
+              "cleanup_work_request_planned_slice_runtime",
+              "revoke_planned_slice_worker_key"
+            ],
+       do: ArchitectDeliveryTools.call(name, config, session, arguments)
 
   defp architect_tool("list_guidance_requests", arguments, %__MODULE__{config: config, session: session}) do
     with {:ok, session} <- architect_session(config.repo, session, "read:guidance_request"),
@@ -2259,7 +2165,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
              work_package_id,
              cleanup_worktree_opts(cleanup_target_repo_root)
            ),
-         {:ok, _runtime_cleanup} <- cleanup_worktree_runtime(config.repo, session, work_package),
+         {:ok, _runtime_cleanup} <- ArchitectDeliveryTools.cleanup_worktree_runtime(config.repo, session, work_package),
          {:ok, audit_event} <- maybe_append_cleanup_worktree_audit(config.repo, session, work_package_id, result) do
       {:ok, ToolResult.tool_result(worktree_lifecycle_payload(result, scope, audit_event))}
     else
@@ -2312,109 +2218,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       phase7_not_implemented(name)
     else
       {:error, reason} -> architect_error(reason, name)
-    end
-  end
-
-  defp cleanup_work_request_planned_slice_runtime_tool(arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, live_session} <- Auth.require_session(session, config.repo),
-         :ok <- require_delivery_write_capability(live_session),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
-         {:ok, planned_slice_id} <- required_argument(arguments, "planned_slice_id"),
-         {:ok, outcome} <- required_runtime_cleanup_delivery_outcome(arguments),
-         {:ok, reason} <- required_argument(arguments, "reason"),
-         {:ok, delivery_evidence} <-
-           runtime_cleanup_delivery_evidence_attrs(arguments, outcome, work_request_id, planned_slice_id),
-         {:ok, work_request, planned_slice, filters, scope} <-
-           WorkRequestScope.authorized_planned_slice_scope(
-             config.repo,
-             live_session,
-             work_request_id,
-             planned_slice_id,
-             :work_package_repair_state,
-             "cleanup_work_request_planned_slice_runtime"
-           ),
-         :ok <- require_planned_slice_delivery_scope(config.repo, work_request, planned_slice, delivery_evidence, filters),
-         {:ok, work_package_id} <- WorkRequestScope.planned_slice_work_package_id(config.repo, work_request, planned_slice),
-         {:ok, cleanup} <-
-           run_architect_transaction(config.repo, fn ->
-             cleanup_work_request_planned_slice_runtime_in_transaction(
-               config.repo,
-               live_session,
-               work_request,
-               planned_slice,
-               work_package_id,
-               reason,
-               delivery_evidence,
-               filters
-             )
-           end) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-         "planned_slice" => WorkRequestPayloads.planned_slice(planned_slice),
-         "work_package" => child_work_package_payload(Map.fetch!(cleanup, :work_package)),
-         "runtime_cleanup" => Map.fetch!(cleanup, :runtime_cleanup),
-         "audit_event" => ProgressEvents.payload(Map.fetch!(cleanup, :audit_event)),
-         "scope" => scope
-       })}
-    else
-      {:tool_error, reason} ->
-        {:error, -32_602, "Invalid params", %{"tool" => "cleanup_work_request_planned_slice_runtime", "reason" => reason}}
-
-      {:error, :not_found} ->
-        not_found_error("cleanup_work_request_planned_slice_runtime")
-
-      {:error, reason} ->
-        work_request_runtime_cleanup_error(reason)
-    end
-  end
-
-  defp delivery_runtime_architect_tool("cleanup_work_request_planned_slice_runtime", arguments, %__MODULE__{} = server),
-    do: cleanup_work_request_planned_slice_runtime_tool(arguments, server)
-
-  defp delivery_runtime_architect_tool("revoke_planned_slice_worker_key", arguments, %__MODULE__{} = server),
-    do: revoke_planned_slice_worker_key_tool(arguments, server)
-
-  defp revoke_planned_slice_worker_key_tool(arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, live_session} <- Auth.require_session(session, config.repo),
-         :ok <- require_delivery_write_capability(live_session),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
-         {:ok, planned_slice_id} <- required_argument(arguments, "planned_slice_id"),
-         {:ok, grant_id} <- required_argument(arguments, "grant_id"),
-         {:ok, reason} <- required_argument(arguments, "reason"),
-         {:ok, work_request, planned_slice, filters, scope} <-
-           WorkRequestScope.authorized_planned_slice_scope(
-             config.repo,
-             live_session,
-             work_request_id,
-             planned_slice_id,
-             :work_package_repair_state,
-             "revoke_planned_slice_worker_key"
-           ),
-         {:ok, work_package_id} <- WorkRequestScope.planned_slice_work_package_id(config.repo, work_request, planned_slice),
-         {:ok, payload} <-
-           run_architect_transaction(config.repo, fn ->
-             revoke_planned_slice_worker_key_in_transaction(
-               config.repo,
-               live_session,
-               work_request,
-               planned_slice,
-               work_package_id,
-               grant_id,
-               reason,
-               filters
-             )
-           end) do
-      {:ok, ToolResult.tool_result(Map.put(payload, "scope", scope))}
-    else
-      {:tool_error, reason} ->
-        planned_slice_worker_revoke_tool_error(reason)
-
-      {:error, :not_found} ->
-        not_found_error("revoke_planned_slice_worker_key")
-
-      {:error, reason} ->
-        architect_error(reason, "revoke_planned_slice_worker_key")
     end
   end
 
@@ -2561,71 +2364,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp cleanup_worktree_opts(nil), do: []
   defp cleanup_worktree_opts(target_repo_root), do: [target_repo_root: target_repo_root]
 
-  defp cleanup_worktree_runtime(repo, %Session{} = session, %WorkPackage{} = work_package) do
-    run_architect_transaction(repo, fn ->
-      cleanup_worktree_runtime_in_transaction(repo, session, work_package.id)
-    end)
-  end
-
-  defp cleanup_worktree_runtime_in_transaction(repo, %Session{} = session, work_package_id) do
-    with :ok <- lock_access_grant(repo, session.assignment.grant_id),
-         {:ok, _architect_grant} <- WorkRequestScope.require_live_architect_grant(repo, session),
-         :ok <- lock_work_package(repo, Session.work_package_id(session)),
-         :ok <- lock_work_package(repo, work_package_id),
-         {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         {:ok, work_request, planned_slice} <- cleanup_worktree_runtime_scope(repo, work_package_id),
-         true <- cleanup_worktree_claim_only_runtime?(repo, work_package_id) do
-      WorkRequestRuntimeCleanup.cleanup(
-        repo,
-        work_request,
-        planned_slice,
-        work_package,
-        session.assignment,
-        reason: "cleanup_work_package_worktree",
-        delivery_evidence: %{"outcome" => "worktree_cleanup"}
-      )
-    else
-      false -> {:ok, nil}
-      {:error, :not_found} -> {:ok, nil}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp cleanup_worktree_runtime_scope(repo, work_package_id) do
-    query =
-      from(planned_slice in PlannedSlice,
-        join: work_request in WorkRequest,
-        on: work_request.id == planned_slice.work_request_id,
-        where: planned_slice.work_package_id == ^work_package_id,
-        select: {work_request, planned_slice},
-        limit: 1
-      )
-
-    case repo.one(query) do
-      {%WorkRequest{} = work_request, %PlannedSlice{} = planned_slice} -> {:ok, work_request, planned_slice}
-      nil -> {:error, :not_found}
-    end
-  end
-
-  defp cleanup_worktree_claim_only_runtime?(repo, work_package_id) do
-    now = DateTime.utc_now(:microsecond)
-    context = WorkPackageActivity.context(repo, work_package_id)
-    reason_codes = List.wrap(get_in(context, [:runtime_state, :reason_codes]))
-
-    with {:ok, grants} <- AccessGrantRepository.list_for_work_package(repo, work_package_id) do
-      not Enum.any?(grants, &live_worker_grant?(&1, now)) and get_in(context, [:runtime_state, :paused?]) != true and
-        reason_codes -- ["claim_lease_active", "claim_lease_stale", "worker_recycled", "package_terminal"] == []
-    end
-  end
-
-  defp live_worker_grant?(%AccessGrant{grant_role: "worker", revoked_at: nil, expires_at: nil}, _now), do: true
-
-  defp live_worker_grant?(%AccessGrant{grant_role: "worker", revoked_at: nil, expires_at: %DateTime{} = expires_at}, now) do
-    DateTime.compare(expires_at, now) == :gt
-  end
-
-  defp live_worker_grant?(%AccessGrant{}, _now), do: false
-
   defp require_approved_dispatch_planned_slice(%PlannedSlice{status: "approved"}), do: :ok
 
   defp require_approved_dispatch_planned_slice(%PlannedSlice{status: status}),
@@ -2668,76 +2406,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp dispatch_work_request_planned_slice_error(reason), do: architect_error(reason, "dispatch_work_request_planned_slice")
-
-  defp record_planned_slice_delivery_error(%Ecto.Changeset{} = changeset) do
-    changeset_invalid_params_error("record_planned_slice_delivery", "invalid_planned_slice_delivery", changeset)
-  end
-
-  defp record_planned_slice_delivery_error(reason)
-       when reason in [:delivery_outcome_conflict, :missing_strong_pr_evidence, :idempotency_key_conflict] do
-    {:error, -32_602, "Invalid params", %{"tool" => "record_planned_slice_delivery", "reason" => Atom.to_string(reason)}}
-  end
-
-  defp record_planned_slice_delivery_error(reason) when reason in [:active_runtime, :claim_not_current, :work_package_not_abandonable] do
-    delivery_closeout_precondition_error("record_planned_slice_delivery", reason)
-  end
-
-  defp record_planned_slice_delivery_error(reason), do: architect_error(reason, "record_planned_slice_delivery")
-
-  defp work_request_runtime_cleanup_error(reason) do
-    if runtime_cleanup_precondition_error?(reason) do
-      delivery_closeout_precondition_error(
-        "cleanup_work_request_planned_slice_runtime",
-        runtime_cleanup_precondition_reason(reason)
-      )
-    else
-      architect_error(reason, "cleanup_work_request_planned_slice_runtime")
-    end
-  end
-
-  defp runtime_cleanup_precondition_error?(reason) do
-    reason in [:active_runtime, :claim_not_current, :worker_grant_revoke_conflict, :mcp_session_binding_conflict]
-  end
-
-  defp runtime_cleanup_precondition_reason(:worker_grant_revoke_conflict), do: :claim_not_current
-  defp runtime_cleanup_precondition_reason(:mcp_session_binding_conflict), do: :claim_not_current
-  defp runtime_cleanup_precondition_reason(reason), do: reason
-
-  defp planned_slice_worker_revoke_tool_error(reason)
-       when reason == "planned_slice_worker_revoke_conflict" do
-    delivery_closeout_precondition_error("revoke_planned_slice_worker_key", :claim_not_current)
-  end
-
-  defp planned_slice_worker_revoke_tool_error(reason) do
-    {:error, -32_602, "Invalid params", %{"tool" => "revoke_planned_slice_worker_key", "reason" => reason}}
-  end
-
-  defp delivery_closeout_precondition_error(tool, :claim_not_current) do
-    precondition_error(tool, "runtime_lease_conflict")
-  end
-
-  defp delivery_closeout_precondition_error(tool, reason) when is_atom(reason) do
-    precondition_error(tool, Atom.to_string(reason))
-  end
-
-  defp precondition_error(tool, reason) do
-    {:error, -32_009, "Precondition Failed",
-     %{
-       "tool" => tool,
-       "reason" => reason,
-       "reason_code" => reason,
-       "decision_reason" => "precondition_denied",
-       "next_action" => precondition_next_action(tool, reason)
-     }}
-  end
-
-  defp precondition_next_action("record_planned_slice_delivery", "active_runtime"),
-    do: "release_worker_or_retry_after_stale"
-
-  defp precondition_next_action("record_planned_slice_delivery", _reason),
-    do: "retry_record_planned_slice_delivery"
-
-  defp precondition_next_action(_tool, _reason), do: "retry_after_runtime_state_changes"
 
   defp append_worktree_lifecycle_audit(repo, %Session{} = session, work_package_id, source_tool, result) do
     PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, work_package_id, %{
@@ -2880,181 +2548,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp optional_put_present(attrs, key, value, true), do: Map.put(attrs, key, value)
   defp optional_put_present(attrs, _key, _value, false), do: attrs
 
-  defp required_planned_slice_delivery_outcome(arguments) do
-    with {:ok, outcome} <- required_argument(arguments, "outcome") do
-      if outcome in PlannedSliceDelivery.outcomes() do
-        {:ok, outcome}
-      else
-        {:tool_error, "invalid_outcome"}
-      end
-    end
-  end
-
-  defp required_runtime_cleanup_delivery_outcome(arguments) do
-    with {:ok, outcome} <- required_argument(arguments, "outcome") do
-      if outcome in ["superseded", "abandoned"] do
-        {:ok, outcome}
-      else
-        {:tool_error, "invalid_outcome"}
-      end
-    end
-  end
-
-  defp runtime_cleanup_delivery_evidence_attrs(arguments, outcome, work_request_id, planned_slice_id) do
-    with {:ok, successor_planned_slice_id} <- optional_string_argument(arguments, "successor_planned_slice_id"),
-         {:ok, successor_work_package_id} <- optional_string_argument(arguments, "successor_work_package_id"),
-         {:ok, superseded_reason} <- optional_string_argument(arguments, "superseded_reason"),
-         {:ok, abandoned_rationale} <- optional_string_argument(arguments, "abandoned_rationale") do
-      attrs =
-        %{
-          "work_request_id" => work_request_id,
-          "planned_slice_id" => planned_slice_id,
-          "outcome" => outcome,
-          "idempotency_key" => "runtime-cleanup-evidence"
-        }
-        |> optional_put("successor_planned_slice_id", successor_planned_slice_id)
-        |> optional_put("successor_work_package_id", successor_work_package_id)
-        |> optional_put("superseded_reason", superseded_reason)
-        |> optional_put("abandoned_rationale", abandoned_rationale)
-
-      validate_runtime_cleanup_delivery_evidence(attrs)
-    end
-  end
-
-  defp validate_runtime_cleanup_delivery_evidence(attrs) do
-    case attrs |> PlannedSliceDelivery.create_changeset() |> Ecto.Changeset.apply_action(:insert) do
-      {:ok, _delivery} -> {:ok, attrs}
-      {:error, _changeset} -> {:tool_error, "invalid_delivery_evidence"}
-    end
-  end
-
-  defp planned_slice_delivery_attrs(arguments, outcome, idempotency_key, recorded_by) do
-    with {:ok, evidence} <- required_object(arguments, "evidence"),
-         {:ok, evidence_attrs} <- planned_slice_delivery_evidence_attrs(evidence, outcome) do
-      {:ok,
-       Map.merge(
-         %{
-           "outcome" => outcome,
-           "idempotency_key" => idempotency_key,
-           "recorded_by" => recorded_by
-         },
-         evidence_attrs
-       )}
-    end
-  end
-
-  defp planned_slice_delivery_evidence_attrs(evidence, outcome) do
-    case Map.keys(evidence) do
-      [^outcome] ->
-        with {:ok, typed_evidence} <- required_object(evidence, outcome) do
-          planned_slice_delivery_typed_evidence_attrs(outcome, typed_evidence)
-        end
-
-      [] ->
-        {:tool_error, "missing_evidence"}
-
-      _keys ->
-        {:tool_error, "conflicting_delivery_evidence"}
-    end
-  end
-
-  defp planned_slice_delivery_typed_evidence_attrs(outcome, evidence) do
-    field_specs = planned_slice_delivery_evidence_field_specs(outcome)
-    allowed_keys = Enum.map(field_specs, &elem(&1, 0))
-
-    with :ok <- require_planned_slice_delivery_evidence_fields(evidence, allowed_keys) do
-      collect_planned_slice_delivery_evidence_attrs(evidence, field_specs)
-    end
-  end
-
-  defp planned_slice_delivery_evidence_field_specs("pr_merged"),
-    do: [
-      {"pr_url", :string},
-      {"pr_number", :positive_integer},
-      {"pr_repository", :string},
-      {"pr_merged_at", :string},
-      {"merge_commit_sha", :string}
-    ]
-
-  defp planned_slice_delivery_evidence_field_specs("completed_no_pr"), do: [{"no_pr_evidence", :string}]
-
-  defp planned_slice_delivery_evidence_field_specs("superseded"),
-    do: [
-      {"successor_planned_slice_id", :string},
-      {"successor_work_package_id", :string},
-      {"superseded_reason", :string}
-    ]
-
-  defp planned_slice_delivery_evidence_field_specs("abandoned"), do: [{"abandoned_rationale", :string}]
-
-  defp collect_planned_slice_delivery_evidence_attrs(evidence, field_specs) do
-    Enum.reduce_while(field_specs, {:ok, %{}}, fn {field, type}, {:ok, attrs} ->
-      case planned_slice_delivery_evidence_field(evidence, field, type) do
-        {:ok, value} -> {:cont, {:ok, optional_put(attrs, field, value)}}
-        {:tool_error, reason} -> {:halt, {:tool_error, reason}}
-      end
-    end)
-  end
-
-  defp planned_slice_delivery_evidence_field(evidence, field, :string), do: optional_string_argument(evidence, field)
-  defp planned_slice_delivery_evidence_field(evidence, field, :positive_integer), do: optional_positive_integer_argument(evidence, field)
-
-  defp require_planned_slice_delivery_evidence_fields(evidence, allowed_keys) do
-    case Map.keys(evidence) -- allowed_keys do
-      [] -> :ok
-      _unexpected -> {:tool_error, "invalid_evidence"}
-    end
-  end
-
-  defp maybe_prepare_slice_delivery_blocker_closeout(
-         repo,
-         %Session{} = session,
-         %PlannedSlice{work_package_id: work_package_id},
-         arguments,
-         attrs
-       ) do
-    case prepare_scoped_blocker_closeout(repo, session, [work_package_id], arguments, "record_planned_slice_delivery") do
-      {:ok, closeout_plan} ->
-        attrs =
-          if blocker_closeout_decision(closeout_plan) == "still_active" do
-            Map.put(attrs, "allow_active_blocker_closeout", true)
-          else
-            attrs
-          end
-
-        {:ok, attrs, closeout_plan}
-
-      {:tool_error, reason} ->
-        {:tool_error, reason}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp record_planned_slice_delivery_with_blocker_closeout(
-         repo,
-         %Session{} = session,
-         work_request_id,
-         planned_slice_id,
-         attrs,
-         blocker_closeout_plan
-       ) do
-    with {:ok, blocker_closeout} <- apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan),
-         {:ok, delivery} <-
-           WorkRequestService.record_planned_slice_delivery(
-             repo,
-             work_request_id,
-             planned_slice_id,
-             attrs
-           ) do
-      {:ok, {delivery, blocker_closeout}}
-    end
-  end
-
   defp upsert_product_plan_node_with_blocker_closeout(repo, %Session{} = session, attrs, blocker_closeout_plan) do
     with {:ok, product_tree_node} <- ProductTree.upsert_node(repo, attrs),
-         {:ok, blocker_closeout} <- apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan) do
+         {:ok, blocker_closeout} <-
+           ArchitectDeliveryTools.apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan) do
       {:ok, {product_tree_node, blocker_closeout}}
     end
   end
@@ -3089,7 +2586,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp maybe_prepare_work_package_status_blocker_closeout(repo, %Session{} = session, status, arguments)
        when status in @terminal_work_package_statuses do
-    prepare_scoped_blocker_closeout(repo, session, [Session.work_package_id(session)], arguments, "set_status")
+    ArchitectDeliveryTools.prepare_scoped_blocker_closeout(
+      repo,
+      session,
+      [Session.work_package_id(session)],
+      arguments,
+      "set_status"
+    )
   end
 
   defp maybe_prepare_work_package_status_blocker_closeout(_repo, %Session{}, _status, _arguments) do
@@ -3103,202 +2606,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp maybe_prepare_product_plan_node_blocker_closeout(repo, %Session{} = session, work_request_id, product_tree_node_id, _completion_mark, arguments, tool) do
     with {:ok, work_package_ids} <- product_plan_node_work_package_ids(repo, work_request_id, product_tree_node_id) do
-      prepare_scoped_blocker_closeout(repo, session, work_package_ids, arguments, tool)
-    end
-  end
-
-  defp prepare_scoped_blocker_closeout(repo, %Session{}, work_package_ids, arguments, tool) do
-    with {:ok, closeout} <- optional_blocker_closeout_argument(arguments),
-         {:ok, active_blockers} <- active_blockers_for_work_packages(repo, work_package_ids) do
-      cond do
-        active_blockers == [] ->
-          {:ok, :not_needed}
-
-        is_nil(closeout) ->
-          {:tool_error, {:blocker_closeout_required, active_blocker_payloads(active_blockers)}}
-
-        true ->
-          prepare_active_blocker_closeout(active_blockers, closeout, tool)
-      end
-    end
-  end
-
-  defp prepare_active_blocker_closeout(active_blockers, closeout, tool) do
-    with :ok <- require_blocker_closeout_covers_active_blockers(active_blockers, closeout.blocker_ids) do
-      {:ok, %{active_blockers: active_blockers, closeout: closeout, tool: tool}}
-    end
-  end
-
-  defp blocker_closeout_decision(%{closeout: %{decision: decision}}), do: decision
-  defp blocker_closeout_decision(:not_needed), do: nil
-
-  defp apply_prepared_blocker_closeout(_repo, %Session{}, :not_needed), do: {:ok, blocker_closeout_not_needed()}
-
-  defp apply_prepared_blocker_closeout(repo, %Session{} = session, %{active_blockers: active_blockers, closeout: closeout, tool: tool}) do
-    apply_blocker_closeout_decision(repo, session, active_blockers, closeout, tool)
-  end
-
-  defp optional_blocker_closeout_argument(arguments) do
-    with {:ok, closeout} <- optional_object_argument(arguments, "blocker_closeout") do
-      normalize_blocker_closeout(closeout)
-    end
-  end
-
-  defp normalize_blocker_closeout(nil), do: {:ok, nil}
-
-  defp normalize_blocker_closeout(closeout) when is_map(closeout) do
-    with {:ok, decision} <- required_argument(closeout, "decision"),
-         :ok <- require_blocker_closeout_decision(decision),
-         {:ok, blocker_ids} <- optional_string_list_argument(closeout, "blocker_ids"),
-         {:ok, resolution} <- optional_string_argument(closeout, "resolution"),
-         {:ok, summary} <- optional_string_argument(closeout, "summary"),
-         :ok <- require_blocker_closeout_resolution(decision, resolution) do
-      {:ok, %{decision: decision, blocker_ids: blocker_ids, resolution: resolution, summary: summary}}
-    end
-  end
-
-  defp require_blocker_closeout_decision(decision) do
-    if decision in @blocker_closeout_decisions, do: :ok, else: {:tool_error, "invalid_blocker_closeout_decision"}
-  end
-
-  defp require_blocker_closeout_resolution("resolved", resolution) when is_binary(resolution), do: :ok
-  defp require_blocker_closeout_resolution("resolved", _resolution), do: {:tool_error, "missing_blocker_closeout_resolution"}
-  defp require_blocker_closeout_resolution("still_active", _resolution), do: :ok
-
-  defp apply_blocker_closeout_decision(repo, %Session{} = session, active_blockers, closeout, tool) do
-    with :ok <- require_blocker_closeout_covers_active_blockers(active_blockers, closeout.blocker_ids) do
-      case closeout.decision do
-        "resolved" -> resolve_active_blockers(repo, session, active_blockers, closeout, tool)
-        "still_active" -> preserve_active_blockers(repo, session, active_blockers, closeout, tool)
-      end
-    end
-  end
-
-  defp require_blocker_closeout_covers_active_blockers(_active_blockers, []), do: :ok
-
-  defp require_blocker_closeout_covers_active_blockers(active_blockers, blocker_ids) do
-    active_ids = active_blockers |> Enum.map(& &1.id) |> Enum.sort()
-    requested_ids = Enum.sort(blocker_ids)
-
-    if requested_ids == active_ids do
-      :ok
-    else
-      {:tool_error, {:blocker_closeout_scope_mismatch, active_ids, requested_ids}}
-    end
-  end
-
-  defp resolve_active_blockers(repo, %Session{} = session, active_blockers, closeout, tool) do
-    with {:ok, events} <-
-           append_blocker_closeout_events(active_blockers, fn blocker ->
-             append_blocker_closeout_resolution(repo, session, blocker, closeout, tool)
-           end) do
-      {:ok,
-       %{
-         "decision" => "resolved",
-         "active_blockers_before" => active_blocker_payloads(active_blockers),
-         "resolved_blocker_ids" => Enum.map(active_blockers, & &1.id),
-         "progress_event_ids" => events |> Enum.reverse() |> Enum.map(& &1.id)
-       }}
-    end
-  end
-
-  defp preserve_active_blockers(repo, %Session{} = session, active_blockers, closeout, tool) do
-    with {:ok, events} <-
-           append_blocker_closeout_events(active_blockers, fn blocker ->
-             append_blocker_closeout_preservation(repo, session, blocker, closeout, tool)
-           end) do
-      {:ok,
-       %{
-         "decision" => "still_active",
-         "active_blockers" => active_blocker_payloads(active_blockers),
-         "progress_event_ids" => events |> Enum.reverse() |> Enum.map(& &1.id)
-       }}
-    end
-  end
-
-  defp append_blocker_closeout_events(active_blockers, append_fun) do
-    Enum.reduce_while(active_blockers, {:ok, []}, fn blocker, {:ok, events} ->
-      append_blocker_closeout_event(append_fun, blocker, events)
-    end)
-  end
-
-  defp append_blocker_closeout_event(append_fun, blocker, events) do
-    case append_fun.(blocker) do
-      {:ok, event} -> {:cont, {:ok, [event | events]}}
-      {:error, reason} -> {:halt, {:error, reason}}
-    end
-  end
-
-  defp append_blocker_closeout_resolution(repo, %Session{} = session, blocker, closeout, tool) do
-    PlanningRepository.append_audit_progress_event_for_work_package(
-      repo,
-      session.assignment,
-      blocker.work_package_id,
-      %{
-        "summary" => closeout.summary || "Resolved blocker during #{tool}",
-        "body" => closeout.resolution,
-        "status" => "resolved",
-        "idempotency_key" => blocker_closeout_idempotency_key(tool, blocker, "resolved"),
-        "payload" => %{
-          "type" => "blocker",
-          "source_tool" => "resolve_blocker",
-          "blocker_id" => blocker.id,
-          "resolution" => closeout.resolution,
-          "active" => false,
-          "closeout_tool" => tool
-        }
-      }
-    )
-  end
-
-  defp append_blocker_closeout_preservation(repo, %Session{} = session, blocker, closeout, tool) do
-    PlanningRepository.append_audit_progress_event_for_work_package(
-      repo,
-      session.assignment,
-      blocker.work_package_id,
-      %{
-        "summary" => closeout.summary || "Preserved active blocker during #{tool}",
-        "body" => closeout.resolution || blocker.body || blocker.summary,
-        "status" => "blocked",
-        "idempotency_key" => blocker_closeout_idempotency_key(tool, blocker, "still_active"),
-        "payload" => %{
-          "type" => "blocker_closeout_decision",
-          "source_tool" => tool,
-          "blocker_id" => blocker.id,
-          "decision" => "still_active"
-        }
-      }
-    )
-  end
-
-  defp blocker_closeout_idempotency_key(tool, blocker, decision) do
-    ["blocker_closeout", tool, blocker.work_package_id, blocker.id, blocker.event_id, decision]
-    |> Enum.join(":")
-  end
-
-  defp active_blockers_for_work_packages(repo, work_package_ids) do
-    work_package_ids =
-      work_package_ids
-      |> Enum.filter(&filled_string?/1)
-      |> Enum.uniq()
-
-    Enum.reduce_while(work_package_ids, {:ok, []}, fn work_package_id, {:ok, blockers} ->
-      case active_blockers_for_work_package(repo, work_package_id) do
-        {:ok, package_blockers} -> {:cont, {:ok, blockers ++ package_blockers}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp active_blockers_for_work_package(repo, work_package_id) do
-    with {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package_id) do
-      blockers =
-        progress_events
-        |> BlockerProjection.blockers()
-        |> Enum.filter(& &1.active)
-        |> Enum.map(&Map.put(&1, :work_package_id, work_package_id))
-
-      {:ok, blockers}
+      ArchitectDeliveryTools.prepare_scoped_blocker_closeout(repo, session, work_package_ids, arguments, tool)
     end
   end
 
@@ -3336,21 +2644,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     |> Enum.uniq()
   end
 
-  defp active_blocker_payloads(blockers), do: Enum.map(blockers, &active_blocker_payload/1)
-
-  defp active_blocker_payload(blocker) do
-    %{
-      "blocker_id" => blocker.id,
-      "work_package_id" => blocker.work_package_id,
-      "summary" => blocker.summary,
-      "body" => blocker.body,
-      "status" => blocker.status,
-      "updated_at" => blocker.updated_at
-    }
-  end
-
-  defp blocker_closeout_not_needed, do: %{"decision" => "none", "active_blockers" => []}
-
   defp session_claimed_by(%Session{assignment: %{claimed_by: claimed_by}}) when is_binary(claimed_by) do
     case String.trim(claimed_by) do
       "" -> "architect"
@@ -3384,181 +2677,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp authorize_guidance_request_for_session(repo, %Session{} = session, action, %GuidanceRequest{} = guidance_request) do
     GuidanceRequestService.authorize_for_assignment(repo, session.assignment, action, guidance_request)
-  end
-
-  defp reconcile_work_request_action(true), do: :delivery_reconcile_apply
-  defp reconcile_work_request_action(false), do: :delivery_reconcile_dry_run
-
-  defp require_delivery_reconcile_capability(%Session{} = session, apply?) do
-    if WorkRequestScope.architect_session?(session) do
-      require_architect_capability(session.assignment, reconcile_work_request_capability(apply?))
-    else
-      :ok
-    end
-  end
-
-  defp require_delivery_write_capability(%Session{} = session) do
-    if WorkRequestScope.architect_session?(session) do
-      require_architect_capability(session.assignment, "write:work_request")
-    else
-      :ok
-    end
-  end
-
-  defp reconcile_work_request_capability(true), do: "write:work_request"
-  defp reconcile_work_request_capability(false), do: "read:work_request"
-
-  defp reconcile_work_request_mode(true), do: :apply
-  defp reconcile_work_request_mode(false), do: :dry_run
-
-  defp reconcile_work_request(repo, %Session{} = session, work_request_id, true = _apply?, recorded_by, opts) do
-    opts = Keyword.put(opts, :recorded_by, recorded_by)
-    opts = Keyword.put(opts, :append_blocker_closeout_event, reconcile_blocker_closeout_appender(session))
-
-    run_architect_transaction(repo, fn ->
-      with {:ok, reconciliation} <- DeliveryReconciler.reconcile(repo, work_request_id, opts) do
-        record_reconcile_product_tree_revision_after_apply(repo, work_request_id, recorded_by, reconciliation)
-      end
-    end)
-  end
-
-  defp reconcile_work_request(repo, %Session{}, work_request_id, false = _apply?, recorded_by, opts) do
-    opts = Keyword.put(opts, :recorded_by, recorded_by)
-
-    DeliveryReconciler.reconcile(repo, work_request_id, opts)
-  end
-
-  defp record_reconcile_product_tree_revision_after_apply(
-         repo,
-         work_request_id,
-         recorded_by,
-         reconciliation
-       ) do
-    with {:ok, _revision} <-
-           maybe_record_reconcile_product_tree_revision(
-             repo,
-             work_request_id,
-             recorded_by,
-             reconciliation
-           ) do
-      {:ok, reconciliation}
-    end
-  end
-
-  defp reconcile_blocker_closeout_appender(%Session{} = session) do
-    fn repo, work_package_id, attrs ->
-      PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, work_package_id, attrs)
-    end
-  end
-
-  defp maybe_record_reconcile_product_tree_revision(repo, work_request_id, recorded_by, reconciliation) do
-    if reconcile_product_tree_revision_required?(reconciliation) do
-      record_current_product_tree_revision(repo, work_request_id, "reconcile_work_request", recorded_by)
-    else
-      {:ok, nil}
-    end
-  end
-
-  defp reconcile_product_tree_revision_required?(%{applied_count: count}) when count > 0, do: true
-
-  defp reconcile_product_tree_revision_required?(%{results: results}) when is_list(results) do
-    Enum.any?(results, &reconcile_result_has_delivery_closeout?/1)
-  end
-
-  defp reconcile_result_has_delivery_closeout?(%{reason: "already_closeout", work_package_status: status}) when is_binary(status), do: true
-  defp reconcile_result_has_delivery_closeout?(_result), do: false
-
-  defp require_planned_slice_delivery_scope(repo, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, attrs, filters) do
-    primary_scope? = WorkRequestScope.primary_work_request_scope?(repo, work_request, filters)
-
-    with :ok <- require_linked_delivery_work_package_scope(repo, work_request, planned_slice, primary_scope?, filters),
-         :ok <- require_successor_planned_slice_scope(repo, work_request, attrs) do
-      require_successor_work_package_scope(repo, work_request, attrs, primary_scope?, filters)
-    end
-  end
-
-  defp require_linked_delivery_work_package_scope(
-         _repo,
-         %WorkRequest{},
-         %PlannedSlice{work_package_id: work_package_id},
-         _primary_scope?,
-         _filters
-       )
-       when work_package_id in [nil, ""],
-       do: :ok
-
-  defp require_linked_delivery_work_package_scope(
-         repo,
-         %WorkRequest{} = work_request,
-         %PlannedSlice{work_package_id: work_package_id} = planned_slice,
-         primary_scope?,
-         filters
-       ) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
-      WorkRequestScope.require_scoped_delivery_work_package_visibility(
-        work_package,
-        work_request,
-        planned_slice,
-        primary_scope?,
-        filters
-      )
-    end
-  end
-
-  defp require_successor_work_package_scope(repo, %WorkRequest{} = work_request, attrs, primary_scope?, filters) do
-    case Map.get(attrs, "successor_work_package_id") do
-      nil ->
-        :ok
-
-      successor_work_package_id ->
-        with {:ok, successor_work_package} <- WorkPackageRepository.get(repo, successor_work_package_id),
-             {:ok, successor_slice} <-
-               scoped_work_request_work_package_planned_slice(repo, work_request.id, successor_work_package_id) do
-          WorkRequestScope.require_scoped_delivery_work_package_visibility(
-            successor_work_package,
-            work_request,
-            successor_slice,
-            primary_scope?,
-            filters
-          )
-        else
-          {:tool_error, reason} -> {:tool_error, reason}
-          {:error, :not_found} -> {:tool_error, "successor_work_package_out_of_scope"}
-          {:error, reason} -> {:error, reason}
-        end
-    end
-  end
-
-  defp require_successor_planned_slice_scope(_repo, %WorkRequest{}, %{"outcome" => outcome}) when outcome != "superseded", do: :ok
-
-  defp require_successor_planned_slice_scope(repo, %WorkRequest{} = work_request, attrs) do
-    case Map.get(attrs, "successor_planned_slice_id") do
-      nil ->
-        {:tool_error, "missing_successor_planned_slice_id"}
-
-      successor_planned_slice_id ->
-        case WorkRequestScope.scoped_work_request_planned_slice(repo, work_request.id, successor_planned_slice_id) do
-          {:ok, successor_slice} -> require_successor_work_package_matches_slice(successor_slice, attrs)
-          {:error, :not_found} -> {:tool_error, "successor_planned_slice_out_of_scope"}
-          {:error, reason} -> {:error, reason}
-        end
-    end
-  end
-
-  defp require_successor_work_package_matches_slice(%PlannedSlice{} = successor_slice, attrs) do
-    case Map.get(attrs, "successor_work_package_id") do
-      nil -> :ok
-      successor_work_package_id when successor_work_package_id == successor_slice.work_package_id -> :ok
-      _successor_work_package_id -> {:tool_error, "successor_work_package_slice_mismatch"}
-    end
-  end
-
-  defp scoped_work_request_work_package_planned_slice(repo, work_request_id, work_package_id) do
-    case PlannedSliceLinkage.linked_slice_for_work_package(repo, work_request_id, work_package_id) do
-      {:ok, %PlannedSlice{} = planned_slice} -> {:ok, planned_slice}
-      {:error, :ambiguous_planned_slice_link} -> {:tool_error, "ambiguous_planned_slice_link"}
-      {:error, reason} -> {:error, reason}
-    end
   end
 
   defp scoped_worktree_work_package(repo, %Session{} = session, work_package_id) do
@@ -3670,225 +2788,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, phase_id} -> WorkRequestScope.require_architect_phase_anchor(repo, session, phase_id)
       {:error, reason} -> {:error, reason}
     end
-  end
-
-  defp cleanup_work_request_planned_slice_runtime_in_transaction(
-         repo,
-         %Session{} = session,
-         %WorkRequest{} = work_request,
-         %PlannedSlice{} = planned_slice,
-         work_package_id,
-         reason,
-         delivery_evidence,
-         filters
-       ) do
-    primary_scope? = WorkRequestScope.primary_work_request_scope?(repo, work_request, filters)
-
-    with :ok <- lock_access_grant(repo, session.assignment.grant_id),
-         {:ok, _architect_grant} <- WorkRequestScope.require_live_architect_grant(repo, session),
-         :ok <- lock_work_package(repo, Session.work_package_id(session)),
-         :ok <- lock_work_package(repo, work_package_id),
-         {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         :ok <-
-           WorkRequestScope.require_scoped_delivery_work_package_visibility(
-             work_package,
-             work_request,
-             planned_slice,
-             primary_scope?,
-             filters
-           ),
-         :ok <- require_runtime_cleanup_delivery_state(work_package, delivery_evidence) do
-      WorkRequestRuntimeCleanup.cleanup(repo, work_request, planned_slice, work_package, session.assignment,
-        reason: reason,
-        delivery_evidence: delivery_evidence
-      )
-    end
-  end
-
-  defp require_runtime_cleanup_delivery_state(%WorkPackage{}, %{"outcome" => "superseded"}), do: :ok
-
-  defp require_runtime_cleanup_delivery_state(%WorkPackage{status: status}, %{"outcome" => "abandoned"})
-       when status in ["planning", "ready_for_worker"],
-       do: :ok
-
-  defp require_runtime_cleanup_delivery_state(%WorkPackage{}, %{"outcome" => "abandoned"}), do: {:tool_error, "work_package_not_abandonable"}
-
-  defp revoke_planned_slice_worker_key_in_transaction(
-         repo,
-         %Session{} = session,
-         %WorkRequest{} = work_request,
-         %PlannedSlice{} = planned_slice,
-         work_package_id,
-         grant_id,
-         reason,
-         filters
-       ) do
-    now = DateTime.utc_now(:microsecond)
-    primary_scope? = WorkRequestScope.primary_work_request_scope?(repo, work_request, filters)
-
-    with :ok <- lock_access_grant(repo, session.assignment.grant_id),
-         {:ok, _architect_grant} <- WorkRequestScope.require_live_architect_grant(repo, session),
-         :ok <- lock_work_package(repo, Session.work_package_id(session)),
-         :ok <- lock_work_package(repo, work_package_id),
-         :ok <- lock_access_grant(repo, grant_id),
-         {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         :ok <-
-           WorkRequestScope.require_scoped_delivery_work_package_visibility(
-             work_package,
-             work_request,
-             planned_slice,
-             primary_scope?,
-             filters
-           ),
-         :ok <- PlannedSliceWorkerRevoke.require_revoke_status(work_package),
-         {:ok, grant} <- scoped_planned_slice_worker_grant_for_revoke(repo, grant_id, work_package_id, now),
-         {:ok, recycled_work_package} <- PlannedSliceWorkerRevoke.update_status(repo, work_package, now),
-         {:ok, revoked_grant} <- revoke_live_planned_slice_worker_grant(repo, grant, now),
-         {:ok, event} <-
-           append_planned_slice_worker_revoke_event(
-             repo,
-             session,
-             work_request,
-             planned_slice,
-             work_package.status,
-             recycled_work_package,
-             revoked_grant,
-             reason
-           ) do
-      {:ok,
-       planned_slice_worker_revoke_result(
-         work_request,
-         planned_slice,
-         work_package.status,
-         recycled_work_package,
-         revoked_grant,
-         event,
-         reason
-       )}
-    end
-  end
-
-  defp scoped_planned_slice_worker_grant_for_revoke(repo, grant_id, work_package_id, %DateTime{} = now) do
-    with {:ok, grant} <- AccessGrantRepository.get(repo, grant_id),
-         :ok <- require_planned_slice_worker_grant_scope(grant, work_package_id),
-         :ok <- require_live_planned_slice_worker_grant_for_revoke(grant, now) do
-      {:ok, grant}
-    end
-  end
-
-  defp require_planned_slice_worker_grant_scope(%AccessGrant{work_package_id: work_package_id}, work_package_id), do: :ok
-  defp require_planned_slice_worker_grant_scope(%AccessGrant{}, _work_package_id), do: {:tool_error, "worker_grant_out_of_scope"}
-
-  defp require_live_planned_slice_worker_grant_for_revoke(%AccessGrant{grant_role: "worker"} = grant, now) do
-    cond do
-      grant.provenance == @child_worker_grant_provenance ->
-        {:tool_error, "not_planned_slice_worker_grant"}
-
-      not child_worker_grant_capabilities?(grant.capabilities || []) ->
-        {:tool_error, "not_planned_slice_worker_grant"}
-
-      match?(%DateTime{}, grant.revoked_at) ->
-        {:tool_error, "planned_slice_worker_grant_already_revoked"}
-
-      not live_expires_at?(grant.expires_at, now) ->
-        {:tool_error, "planned_slice_worker_grant_expired"}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp require_live_planned_slice_worker_grant_for_revoke(%AccessGrant{}, _now), do: {:tool_error, "not_planned_slice_worker_grant"}
-
-  defp child_worker_grant_capabilities?(capabilities) when is_list(capabilities) do
-    Enum.all?(capabilities, &(&1 in @child_worker_capabilities))
-  end
-
-  defp child_worker_grant_capabilities?(_capabilities), do: false
-
-  defp revoke_live_planned_slice_worker_grant(repo, %AccessGrant{} = grant, %DateTime{} = now) do
-    query =
-      from(access_grant in AccessGrant,
-        where:
-          access_grant.id == ^grant.id and access_grant.work_package_id == ^grant.work_package_id and
-            access_grant.grant_role == "worker" and is_nil(access_grant.revoked_at) and
-            (is_nil(access_grant.expires_at) or access_grant.expires_at > ^now)
-      )
-
-    case repo.update_all(query, set: [revoked_at: now, updated_at: now]) do
-      {1, _rows} -> AccessGrantRepository.get(repo, grant.id)
-      {0, _rows} -> classify_planned_slice_worker_revoke_miss(repo, grant.id, now)
-    end
-  end
-
-  defp classify_planned_slice_worker_revoke_miss(repo, grant_id, %DateTime{} = now) do
-    with {:ok, grant} <- AccessGrantRepository.get(repo, grant_id) do
-      case require_live_planned_slice_worker_grant_for_revoke(grant, now) do
-        :ok -> {:tool_error, "planned_slice_worker_revoke_conflict"}
-        {:tool_error, reason} -> {:tool_error, reason}
-      end
-    end
-  end
-
-  defp append_planned_slice_worker_revoke_event(
-         repo,
-         %Session{} = session,
-         %WorkRequest{} = work_request,
-         %PlannedSlice{} = planned_slice,
-         previous_work_package_status,
-         %WorkPackage{} = work_package,
-         %AccessGrant{} = grant,
-         reason
-       ) do
-    payload =
-      PlannedSliceWorkerRevoke.payload(
-        work_request,
-        planned_slice,
-        previous_work_package_status,
-        work_package,
-        grant,
-        reason
-      )
-
-    PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, work_package.id, %{
-      "summary" => "WorkRequest planned-slice worker grant revoked for cleanup",
-      "body" => "Cleanup reason: #{redacted_child_worker_revoke_reason(reason)}; WorkRequest: #{work_request.id}; planned slice: #{planned_slice.id}",
-      "status" => "planned_slice_worker_key_revoked",
-      "idempotency_key" => ProgressEvents.metadata_idempotency_key(payload),
-      "payload" => payload
-    })
-  end
-
-  defp planned_slice_worker_revoke_result(
-         %WorkRequest{} = work_request,
-         %PlannedSlice{} = planned_slice,
-         previous_work_package_status,
-         %WorkPackage{} = work_package,
-         %AccessGrant{} = grant,
-         %ProgressEvent{} = event,
-         _reason
-       ) do
-    reason_codes = PlannedSliceWorkerRevoke.reason_codes(previous_work_package_status, work_package.status)
-
-    %{
-      "planned_slice" => %{"id" => planned_slice.id, "work_request_id" => work_request.id, "status" => planned_slice.status},
-      "work_package" => work_package_payload(work_package),
-      "revoked_worker_grant" => %{"id" => grant.id, "work_package_id" => grant.work_package_id},
-      "closeout_affordance" => %{
-        "status" => "revoked",
-        "previous_work_package_status" => previous_work_package_status,
-        "work_package_status" => work_package.status,
-        "reason_codes" => reason_codes
-      },
-      "audit_event" => ProgressEvents.payload(event),
-      "next_action" => "retry_record_planned_slice_delivery"
-    }
-  end
-
-  defp redacted_child_worker_revoke_reason(reason) when is_binary(reason) do
-    reason
-    |> String.trim()
-    |> Redactor.redact_text()
   end
 
   defp put_optional_handoff_opt(opts, _key, nil), do: opts
@@ -4392,9 +3291,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          :ok <- require_worker_assignment(session.assignment),
          {:ok, review_suite_result} <- ReviewReadiness.mark_ready_review_suite_result(arguments, session),
-         {:ok, blocker_closeout_plan} <- prepare_scoped_blocker_closeout(config.repo, session, [Session.work_package_id(session)], arguments, "mark_ready"),
+         {:ok, blocker_closeout_plan} <- ArchitectDeliveryTools.prepare_scoped_blocker_closeout(config.repo, session, [Session.work_package_id(session)], arguments, "mark_ready"),
          {:ok, {work_package, blocker_closeout, warnings}} <-
-           ReviewReadiness.mark_ready(config.repo, session, blocker_closeout_plan, review_suite_result, &apply_prepared_blocker_closeout/3) do
+           ReviewReadiness.mark_ready(config.repo, session, blocker_closeout_plan, review_suite_result, &ArchitectDeliveryTools.apply_prepared_blocker_closeout/3) do
       {:ok,
        ToolResult.tool_result(
          %{"work_package" => work_package_payload(work_package), "ready" => true, "blocker_closeout" => blocker_closeout}
@@ -4570,7 +3469,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
            :ok <- reject_architect_controlled_child(state.work_package, status),
            {:ok, _event} <- append_status_reason_event(repo, session, expected_status, status, reason),
            {:ok, work_package} <- LifecycleService.transition(repo, state.work_package, status, actor(session)),
-           {:ok, blocker_closeout} <- apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan) do
+           {:ok, blocker_closeout} <-
+             ArchitectDeliveryTools.apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan) do
         {:ok, {work_package, blocker_closeout}}
       end
     end)
@@ -5160,15 +4060,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     case repo.update_all(query, set: [id: work_package_id]) do
       {1, _rows} -> :ok
       {0, _rows} -> {:error, :not_found}
-    end
-  end
-
-  defp lock_access_grant(repo, grant_id) do
-    query = from(access_grant in AccessGrant, where: access_grant.id == ^grant_id)
-
-    case repo.update_all(query, set: [id: grant_id]) do
-      {1, _rows} -> :ok
-      {0, _rows} -> {:error, :phase_scope_not_available}
     end
   end
 
@@ -6145,13 +5036,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp product_tree_revision_reason("record_planned_slice_delivery"), do: "Planned slice delivery recorded in product tree through MCP."
   defp product_tree_revision_reason("reconcile_work_request"), do: "Planned slice delivery reconciled in product tree through MCP."
 
-  defp reconciliation_payload(reconciliation) when is_map(reconciliation) do
-    reconciliation
-    |> Map.drop([:delivery_board, "delivery_board"])
-    |> json_safe_payload()
-    |> Redactor.redact_output()
-  end
-
   defp not_found_error(tool) do
     {:error, -32_004, "Not found", %{"tool" => tool, "reason" => "not_found"}}
   end
@@ -6232,9 +5116,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
        "action" => action
      }, updated_server}
   end
-
-  defp live_expires_at?(nil, %DateTime{}), do: true
-  defp live_expires_at?(%DateTime{} = expires_at, %DateTime{} = now), do: DateTime.compare(expires_at, now) == :gt
 
   defp auth_error(:unauthorized, resource) do
     {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}
