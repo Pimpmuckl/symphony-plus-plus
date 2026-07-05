@@ -160,7 +160,7 @@ jobs:
       - name: Prepare ${{ matrix.name }} build copies
         run: |
           make ci-prepare
-          MIX_ENV=test mix deps.compile
+          MIX_ENV=test mix deps.compile --include-children floki lazy_html
           rm -rf "_p/${{ matrix.gate_id }}"
           mkdir -p "_p/${{ matrix.gate_id }}"
           cp -a _build "_p/${{ matrix.gate_id }}/b${{ matrix.partition_1 }}"

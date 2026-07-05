@@ -67,7 +67,7 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
     assert parallel_gates =~ "parallel:"
     refute workflow =~ "matrix.mode"
     assert parallel_gates =~ "make ci-prepare"
-    assert parallel_gates =~ "MIX_ENV=test mix deps.compile"
+    assert parallel_gates =~ "MIX_ENV=test mix deps.compile --include-children floki lazy_html"
     assert parallel_gates =~ "cp -a _build \"_p/${{ matrix.gate_id }}/b${{ matrix.partition_1 }}\""
     assert parallel_gates =~ "run: make ci-test-run"
     assert parallel_gates =~ "MIX_BUILD_PATH: _p/${{ matrix.gate_id }}/b${{ matrix.partition_1 }}"
