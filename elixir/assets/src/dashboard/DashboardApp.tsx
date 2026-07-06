@@ -20,6 +20,8 @@ import { canMutateDashboardComments, canMutateDashboardOperatorActions } from ".
 import { packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
 import { useDashboardUpdateAnimations } from "./update-animations";
 
+type DashboardLoadMode = "initial" | "refresh" | "silent" | "reconnect";
+
 export function DashboardApp() {
   const shellProps = useDashboardController();
   return <DashboardShell {...shellProps} />;
@@ -138,7 +140,12 @@ function useDashboardController() {
     [setDashboard, setError],
   );
 
-  const loadDashboard = useCallback(async (mode: "initial" | "refresh" | "silent" | "reconnect" = "refresh", force = false) => {
+  const recordDashboardLoadFailure = useCallback((loadSequence: number, caught: unknown, mode: DashboardLoadMode) => {
+    if (loadSequence !== loadSequenceRef.current) return;
+    recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard API unavailable"), mode === "initial" || mode === "reconnect", isReconnectableLocalOperatorError(caught));
+  }, [recordConnectionFailure]);
+
+  const loadDashboard = useCallback(async (mode: DashboardLoadMode = "refresh", force = false) => {
     if (shouldSkipDashboardLoad(loadInFlightRef.current, mode, force)) return;
     const loadMutationVersion = mutationVersionRef.current;
     const loadSequence = loadSequenceRef.current + 1;
@@ -161,11 +168,7 @@ function useDashboardController() {
         await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current);
       });
     } catch (caught) {
-      recordConnectionFailure(
-        dashboardCaughtMessage(caught, "Dashboard API unavailable"),
-        mode === "initial" || mode === "reconnect",
-        isReconnectableLocalOperatorError(caught),
-      );
+      recordDashboardLoadFailure(loadSequence, caught, mode);
     } finally {
       if (loadSequence === loadSequenceRef.current) {
         loadInFlightRef.current = false;
@@ -176,7 +179,7 @@ function useDashboardController() {
         setRefreshing(false);
       }
     }
-  }, [applyDashboardResponse, recordConnectionFailure, setLoading, setRefreshing]);
+  }, [applyDashboardResponse, recordDashboardLoadFailure, setLoading, setRefreshing]);
 
   const loadDashboardDeferred = useCallback(async () => {
     const baseDashboard = dashboardRef.current;

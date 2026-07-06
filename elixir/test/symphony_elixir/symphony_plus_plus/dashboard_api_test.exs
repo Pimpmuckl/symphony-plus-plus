@@ -4570,6 +4570,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
+  test "local operator dashboard invalidates after work package status writes", %{repo: repo} do
+    work_package =
+      create_work_package!(repo,
+        id: "SYMPP-DASHBOARD-PACKAGE-INVALIDATE",
+        status: "claimed"
+      )
+
+    assert :ok = DashboardPubSub.subscribe()
+    assert {:ok, _work_package} = WorkPackageRepository.update_status(repo, work_package.id, "claimed", "planning")
+    assert_receive :operator_dashboard_changed
+  end
+
   test "local operator dashboard projects persisted local path repos through their git origin", %{repo: repo} do
     repo_path =
       TestSupport.git_repo_with_origin_fixture!(
