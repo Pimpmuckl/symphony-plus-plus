@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
@@ -11,7 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
-  @type error :: Repository.error() | DeliveryCloseout.error()
+  @type error :: Repository.error() | DeliveryCloseout.error() | WorkPackageService.error()
 
   @spec create(Repository.repo(), map()) :: {:ok, WorkRequest.t()} | {:error, error()}
   def create(repo, attrs), do: notify_dashboard(Repository.create(repo, attrs))
@@ -99,6 +100,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
 
   @spec restore(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error()}
   def restore(repo, work_request_id), do: notify_dashboard(Completion.restore(repo, work_request_id))
+
+  @spec delete(Repository.repo(), String.t()) :: {:ok, String.t()} | {:error, error()}
+  def delete(repo, work_request_id), do: notify_dashboard(Completion.delete(repo, work_request_id))
 
   @spec retention_pass(Repository.repo()) ::
           {:ok, Completion.retention_summary()}

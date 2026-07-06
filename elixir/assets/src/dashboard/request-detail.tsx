@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, CheckCircle2, Copy, Loader2, MessageSquareText } from "lucide-react";
+import { AlertTriangle, Archive, CheckCircle2, Copy, Loader2, MessageSquareText, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { CopyArchitectHandoff, GuidanceItem, WorkRequestDetail } from "@/types/dashboard";
@@ -24,6 +24,7 @@ export function RequestDetailContent({
   onCopyArchitectHandoff,
   onArchiveWorkRequest,
   onChangeWorkRequestState,
+  onDeleteWorkRequest,
   canMutateOperatorActions,
   onSubmitComment,
   onResolveComment,
@@ -34,6 +35,7 @@ export function RequestDetailContent({
   onCopyArchitectHandoff: CopyArchitectHandoff;
   onArchiveWorkRequest: WorkRequestMutation;
   onChangeWorkRequestState: WorkRequestStateMutation;
+  onDeleteWorkRequest: WorkRequestMutation;
   canMutateOperatorActions: boolean;
   onSubmitComment: SubmitContextComment;
   onResolveComment: ResolveContextComment;
@@ -42,7 +44,7 @@ export function RequestDetailContent({
   const request = detail.work_request;
   const [requestComments, setRequestComments] = useSyncedComments(detail.comments || []);
   const [uiState, dispatchUiState] = useReducer(requestDetailUiReducer, initialRequestDetailUiState);
-  const { archiveError, archivePending, commentsOpen, deliverConfirmOpen, stateError, statePending } = uiState;
+  const { archiveError, archivePending, commentsOpen, deleteError, deletePending, deliverConfirmOpen, stateError, statePending } = uiState;
   const setCommentsOpen = useCallback((open: boolean) => dispatchUiState({ type: "commentsOpen", open }), []);
   const setDeliverConfirmOpen = useCallback((open: boolean) => dispatchUiState({ type: "deliverConfirmOpen", open }), []);
   const commentTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -57,6 +59,7 @@ export function RequestDetailContent({
   const handoffIdentity = `${handoffHasOpenQuestions}:${request.id}:${request.status || ""}:${request.updated_at || ""}`;
   const canManualArchive = canMutateOperatorActions && canArchiveWorkRequest(request);
   const canMarkDelivered = canMutateOperatorActions && !detailFinished;
+  const canDelete = canMutateOperatorActions;
   const {
     cachedHandoff,
     error: handoffError,
@@ -99,6 +102,19 @@ export function RequestDetailContent({
       dispatchUiState({ type: "archiveError", error: caught instanceof Error ? caught.message : "WorkRequest was not archived" });
     } finally {
       dispatchUiState({ type: "archivePending", pending: false });
+    }
+  }
+
+  async function deleteRequest() {
+    dispatchUiState({ type: "deletePending", pending: true });
+    dispatchUiState({ type: "deleteError", error: null });
+
+    try {
+      await onDeleteWorkRequest(request.id);
+    } catch (caught) {
+      dispatchUiState({ type: "deleteError", error: caught instanceof Error ? caught.message : "WorkRequest was not deleted" });
+    } finally {
+      dispatchUiState({ type: "deletePending", pending: false });
     }
   }
 
@@ -206,26 +222,20 @@ export function RequestDetailContent({
           <DetailList title="Execution slices" items={(detail.planned_slices || []).map((slice) => slice.title || slice.id)} empty="No slices recorded." />
           <JsonDetail label="Constraints" value={request.constraints} />
         </DetailDisclosure>
-        {canMarkDelivered || canManualArchive ? (
-          <div className="flex flex-col items-start gap-2 border-t border-destructive/20 pt-4">
-            <div className="flex flex-wrap gap-2">
-              {canMarkDelivered ? (
-                <Button type="button" size="sm" variant="destructive" onClick={() => setDeliverConfirmOpen(true)} disabled={statePending}>
-                  {statePending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-                  Mark Delivered
-                </Button>
-              ) : null}
-              {canManualArchive ? (
-                <Button type="button" size="sm" variant="outline" disabled={archivePending} onClick={() => void archiveRequest()}>
-                  {archivePending ? <Loader2 className="size-4 animate-spin" /> : <Archive className="size-4" />}
-                  Archive Request
-                </Button>
-              ) : null}
-            </div>
-            {stateError ? <p className="text-xs text-destructive">{stateError}</p> : null}
-            {archiveError ? <p className="text-xs text-destructive">{archiveError}</p> : null}
-          </div>
-        ) : null}
+        <RequestDangerActions
+          canArchive={canManualArchive}
+          canDelete={canDelete}
+          canMarkDelivered={canMarkDelivered}
+          archiveError={archiveError}
+          archivePending={archivePending}
+          deleteError={deleteError}
+          deletePending={deletePending}
+          stateError={stateError}
+          statePending={statePending}
+          onArchive={() => void archiveRequest()}
+          onDelete={() => void deleteRequest()}
+          onMarkDelivered={() => setDeliverConfirmOpen(true)}
+        />
       </div>
       <DangerousStateConfirmationDialog
         open={deliverConfirmOpen}
@@ -237,6 +247,64 @@ export function RequestDetailContent({
         onConfirm={() => void markDelivered()}
       />
     </>
+  );
+}
+
+function RequestDangerActions({
+  archiveError,
+  archivePending,
+  canArchive,
+  canDelete,
+  canMarkDelivered,
+  deleteError,
+  deletePending,
+  onArchive,
+  onDelete,
+  onMarkDelivered,
+  stateError,
+  statePending,
+}: {
+  archiveError: string | null;
+  archivePending: boolean;
+  canArchive: boolean;
+  canDelete: boolean;
+  canMarkDelivered: boolean;
+  deleteError: string | null;
+  deletePending: boolean;
+  onArchive: () => void;
+  onDelete: () => void;
+  onMarkDelivered: () => void;
+  stateError: string | null;
+  statePending: boolean;
+}) {
+  if (!canMarkDelivered && !canArchive && !canDelete) return null;
+
+  return (
+    <div className="flex flex-col items-start gap-2 border-t border-destructive/20 pt-4">
+      <div className="flex flex-wrap gap-2">
+        {canMarkDelivered ? (
+          <Button type="button" size="sm" variant="destructive" onClick={onMarkDelivered} disabled={statePending}>
+            {statePending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+            Mark Delivered
+          </Button>
+        ) : null}
+        {canArchive ? (
+          <Button type="button" size="sm" variant="outline" disabled={archivePending} onClick={onArchive}>
+            {archivePending ? <Loader2 className="size-4 animate-spin" /> : <Archive className="size-4" />}
+            Archive Request
+          </Button>
+        ) : null}
+        {canDelete ? (
+          <Button type="button" size="sm" variant="destructive" disabled={deletePending} onClick={onDelete}>
+            {deletePending ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+            Delete Request
+          </Button>
+        ) : null}
+      </div>
+      {stateError ? <p className="text-xs text-destructive">{stateError}</p> : null}
+      {archiveError ? <p className="text-xs text-destructive">{archiveError}</p> : null}
+      {deleteError ? <p className="text-xs text-destructive">{deleteError}</p> : null}
+    </div>
   );
 }
 

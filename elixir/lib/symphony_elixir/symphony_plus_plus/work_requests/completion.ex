@@ -33,6 +33,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
           deleted_count: non_neg_integer(),
           deleted_ids: [String.t()]
         }
+  @type delete_error :: Repository.error() | WorkPackageService.error()
+  @type retention_error ::
+          delete_error()
+          | :active_runtime
+          | :invalid_archive_after_days
+          | :invalid_delete_after_days
+          | :not_completed
 
   @spec default_archive_after_days() :: pos_integer()
   def default_archive_after_days, do: @default_archive_after_days
@@ -215,12 +222,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     end
   end
 
-  @spec retention_pass(Repository.repo()) ::
-          {:ok, retention_summary()}
-          | {:error, Repository.error() | :active_runtime | :invalid_archive_after_days | :invalid_delete_after_days | :not_completed}
-  @spec retention_pass(Repository.repo(), keyword()) ::
-          {:ok, retention_summary()}
-          | {:error, Repository.error() | :active_runtime | :invalid_archive_after_days | :invalid_delete_after_days | :not_completed}
+  @spec delete(Repository.repo(), String.t()) :: {:ok, String.t()} | {:error, delete_error()}
+  def delete(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
+    with {:ok, %WorkRequest{}} <- Repository.get(repo, work_request_id),
+         {planned_slice_ids, linked_work_package_ids} <- archived_planned_slice_context(repo, [work_request_id]),
+         :ok <- cleanup_linked_work_package_worktrees(repo, linked_work_package_ids, force: true) do
+      delete_work_request_with_dependents(repo, work_request_id, planned_slice_ids, linked_work_package_ids)
+    end
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  @spec retention_pass(Repository.repo()) :: {:ok, retention_summary()} | {:error, retention_error()}
+  @spec retention_pass(Repository.repo(), keyword()) :: {:ok, retention_summary()} | {:error, retention_error()}
   def retention_pass(repo, opts \\ []) when is_atom(repo) and is_list(opts) do
     now = Keyword.get_lazy(opts, :now, fn -> DateTime.utc_now(:microsecond) end)
 
@@ -543,7 +557,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   defp delete_archived_work_request_after_dependents(repo, work_request_id, planned_slice_ids, linked_work_package_ids, cutoff) do
     case require_archived_before(repo, work_request_id, cutoff) do
       {:ok, _current} ->
-        case delete_archived_dependents(repo, [work_request_id], planned_slice_ids, linked_work_package_ids) do
+        case delete_work_request_dependents(repo, [work_request_id], planned_slice_ids, linked_work_package_ids) do
           :ok -> delete_archived_work_request(repo, work_request_id, cutoff)
           {:error, reason} -> repo.rollback(reason)
         end
@@ -577,6 +591,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     count
   end
 
+  defp delete_work_request_with_dependents(repo, work_request_id, planned_slice_ids, linked_work_package_ids) do
+    repo.transaction(fn ->
+      case delete_work_request_dependents(repo, [work_request_id], planned_slice_ids, linked_work_package_ids) do
+        :ok -> delete_work_request_row(repo, work_request_id)
+        {:error, reason} -> repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp delete_work_request_row(repo, work_request_id) do
+    {count, _rows} =
+      repo.delete_all(
+        from(work_request in WorkRequest,
+          where: work_request.id == ^work_request_id
+        )
+      )
+
+    case count do
+      1 -> work_request_id
+      0 -> repo.rollback(:not_found)
+    end
+  end
+
   defp archived_planned_slice_context(repo, work_request_ids) do
     rows =
       work_request_ids
@@ -598,7 +635,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     }
   end
 
-  defp delete_archived_dependents(repo, work_request_ids, planned_slice_ids, linked_work_package_ids) do
+  defp delete_work_request_dependents(repo, work_request_ids, planned_slice_ids, linked_work_package_ids) do
     with :ok <- preserve_archived_linked_work_package_hides(repo, linked_work_package_ids),
          :ok <- delete_archived_comments(repo, work_request_ids, planned_slice_ids) do
       delete_archived_grant_scopes(repo, work_request_ids, planned_slice_ids)

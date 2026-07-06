@@ -131,6 +131,8 @@ export const initialRequestDetailUiState: RequestDetailUiState = {
   archiveError: null,
   archivePending: false,
   commentsOpen: false,
+  deleteError: null,
+  deletePending: false,
   deliverConfirmOpen: false,
   stateError: null,
   statePending: false,
@@ -144,6 +146,10 @@ export function requestDetailUiReducer(state: RequestDetailUiState, action: Requ
       return state.archivePending === action.pending ? state : { ...state, archivePending: action.pending };
     case "commentsOpen":
       return state.commentsOpen === action.open ? state : { ...state, commentsOpen: action.open };
+    case "deleteError":
+      return state.deleteError === action.error ? state : { ...state, deleteError: action.error };
+    case "deletePending":
+      return state.deletePending === action.pending ? state : { ...state, deletePending: action.pending };
     case "deliverConfirmOpen":
       return state.deliverConfirmOpen === action.open ? state : { ...state, deliverConfirmOpen: action.open };
     case "stateError":

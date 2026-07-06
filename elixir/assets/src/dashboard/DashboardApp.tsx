@@ -2,7 +2,7 @@ import type { ArchitectHandoffPayload, ContextComment, CopyArchitectHandoff, Cre
 import type { NewRequestForm } from "@/components/dashboard/new-request-dialog";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, DashboardRuntimeConfig, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRuntimeConfig, ensureDashboardRuntimeConfig, isReconnectableLocalOperatorError, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, reconnectLocalOperatorSession, shouldSkipDashboardLoad, withLocalOperatorReconnect } from "./runtime";
+import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, DashboardRuntimeConfig, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRuntimeConfig, ensureDashboardRuntimeConfig, isReconnectableLocalOperatorError, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, reconnectLocalOperatorSession, removeDashboardWorkRequest, shouldSkipDashboardLoad, withLocalOperatorReconnect } from "./runtime";
 import { DashboardShell } from "./dashboard-shell";
 import { SoloSessions } from "./solo-sessions";
 import { WorkstreamsPane } from "./workspace-tabs";
@@ -216,7 +216,7 @@ function useDashboardController() {
   }, [loadDashboard, setDashboard, setError]);
 
   const mutateWorkRequest = useCallback(
-    async (workRequestId: string, action: "archive" | "state", body: Record<string, unknown>, fallbackMessage: string, options: { archive?: boolean } = {}) => {
+    async (workRequestId: string, action: "archive" | "delete" | "state", body: Record<string, unknown>, fallbackMessage: string, options: { archive?: boolean; remove?: boolean } = {}) => {
       const payload = (await withLocalOperatorReconnect(async () => {
         const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/${action}`), {
           method: "POST",
@@ -228,7 +228,8 @@ function useDashboardController() {
 
       const workRequest = dashboardMutationWorkRequest(payload);
       mutationVersionRef.current += 1;
-      if (workRequest) setDashboard(patchDashboardWorkRequest(dashboardRef.current, workRequest, options));
+      if (options.remove) setDashboard(removeDashboardWorkRequest(dashboardRef.current, workRequestId));
+      else if (workRequest) setDashboard(patchDashboardWorkRequest(dashboardRef.current, workRequest, options));
       setConnectionIssue(null);
       setError(null);
       setSelectedCardDetail(null);
@@ -373,9 +374,9 @@ function useDashboardController() {
     [updateRetentionSetting],
   );
 
-  const archiveWorkRequest = useCallback<WorkRequestMutation>(async (workRequestId) => {
-    await mutateWorkRequest(workRequestId, "archive", {}, "WorkRequest was not archived", { archive: true });
-  }, [mutateWorkRequest]);
+  const archiveWorkRequest = useCallback<WorkRequestMutation>((workRequestId) => mutateWorkRequest(workRequestId, "archive", {}, "WorkRequest was not archived", { archive: true }), [mutateWorkRequest]);
+
+  const deleteWorkRequest = useCallback<WorkRequestMutation>((workRequestId) => mutateWorkRequest(workRequestId, "delete", {}, "WorkRequest was not deleted", { remove: true }), [mutateWorkRequest]);
 
   const restoreWorkRequest = useCallback<WorkRequestMutation>(async (workRequestId) => {
     await withLocalOperatorReconnect(async () => {
@@ -389,9 +390,7 @@ function useDashboardController() {
     });
   }, [refreshAfterMutation]);
 
-  const changeWorkRequestState = useCallback<WorkRequestStateMutation>(async (workRequestId, nextState) => {
-    await mutateWorkRequest(workRequestId, "state", { state: nextState }, "WorkRequest state was not changed");
-  }, [mutateWorkRequest]);
+  const changeWorkRequestState = useCallback<WorkRequestStateMutation>((workRequestId, nextState) => mutateWorkRequest(workRequestId, "state", { state: nextState }, "WorkRequest state was not changed"), [mutateWorkRequest]);
 
   const changeWorkPackageState = useCallback<WorkPackageStateMutation>(async (workPackageId, action, options) => {
     await withLocalOperatorReconnect(async () => {
@@ -570,6 +569,7 @@ function useDashboardController() {
     onArchiveWorkPackage: archiveWorkPackage,
     onClearWorkPackageBlocker: clearWorkPackageBlocker,
     onArchiveWorkRequest: archiveWorkRequest,
+    onDeleteWorkRequest: deleteWorkRequest,
     onHideEmptyWorkstreamsChange: setHideEmptyWorkstreams,
     onReconnectDashboard: reconnectDashboard,
     onRefreshDashboard: loadDashboard,

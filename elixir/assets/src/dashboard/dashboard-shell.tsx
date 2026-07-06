@@ -50,6 +50,7 @@ export function DashboardShell({
   onArchiveWorkPackage,
   onArchiveWorkRequest,
   onClearWorkPackageBlocker,
+  onDeleteWorkRequest,
   onHideEmptyWorkstreamsChange,
   onReconnectDashboard,
   onRefreshDashboard,
@@ -95,6 +96,7 @@ export function DashboardShell({
   onArchiveWorkPackage: WorkPackageArchiveMutation;
   onArchiveWorkRequest: WorkRequestMutation;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
+  onDeleteWorkRequest: WorkRequestMutation;
   onHideEmptyWorkstreamsChange: (hide: boolean) => void;
   onReconnectDashboard: () => Promise<void>;
   onRefreshDashboard: () => Promise<void>;
@@ -273,6 +275,7 @@ export function DashboardShell({
           onCopyArchitectHandoff={copyArchitectHandoff}
           onArchiveWorkRequest={onArchiveWorkRequest}
           onChangeWorkRequestState={changeWorkRequestState}
+          onDeleteWorkRequest={onDeleteWorkRequest}
           onChangeWorkPackageState={changeWorkPackageState}
           onArchiveWorkPackage={onArchiveWorkPackage}
           onClearWorkPackageBlocker={onClearWorkPackageBlocker}

@@ -108,6 +108,7 @@ export function CardDetailDialog({
   onCopyArchitectHandoff,
   onArchiveWorkRequest,
   onChangeWorkRequestState,
+  onDeleteWorkRequest,
   onChangeWorkPackageState,
   onArchiveWorkPackage,
   onClearWorkPackageBlocker,
@@ -123,6 +124,7 @@ export function CardDetailDialog({
   onCopyArchitectHandoff: CopyArchitectHandoff;
   onArchiveWorkRequest: WorkRequestMutation;
   onChangeWorkRequestState: WorkRequestStateMutation;
+  onDeleteWorkRequest: WorkRequestMutation;
   onChangeWorkPackageState: WorkPackageStateMutation;
   onArchiveWorkPackage: WorkPackageArchiveMutation;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
@@ -293,6 +295,7 @@ export function CardDetailDialog({
               onCopyArchitectHandoff={onCopyArchitectHandoff}
               onArchiveWorkRequest={onArchiveWorkRequest}
               onChangeWorkRequestState={onChangeWorkRequestState}
+              onDeleteWorkRequest={onDeleteWorkRequest}
               onChangeWorkPackageState={onChangeWorkPackageState}
               onArchiveWorkPackage={onArchiveWorkPackage}
               onClearWorkPackageBlocker={onClearWorkPackageBlocker}
@@ -316,6 +319,7 @@ function CardDetailReadyContent({
   onCopyArchitectHandoff,
   onArchiveWorkRequest,
   onChangeWorkRequestState,
+  onDeleteWorkRequest,
   onChangeWorkPackageState,
   onArchiveWorkPackage,
   onClearWorkPackageBlocker,
@@ -331,6 +335,7 @@ function CardDetailReadyContent({
   onCopyArchitectHandoff: CopyArchitectHandoff;
   onArchiveWorkRequest: WorkRequestMutation;
   onChangeWorkRequestState: WorkRequestStateMutation;
+  onDeleteWorkRequest: WorkRequestMutation;
   onChangeWorkPackageState: WorkPackageStateMutation;
   onArchiveWorkPackage: WorkPackageArchiveMutation;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
@@ -349,6 +354,7 @@ function CardDetailReadyContent({
         onCopyArchitectHandoff,
         onArchiveWorkRequest,
         onChangeWorkRequestState,
+        onDeleteWorkRequest,
         canMutateOperatorActions,
         onSubmitComment,
         onResolveComment,
@@ -391,6 +397,7 @@ function renderRequestDetailContent(
     onCopyArchitectHandoff: CopyArchitectHandoff;
     onArchiveWorkRequest: WorkRequestMutation;
     onChangeWorkRequestState: WorkRequestStateMutation;
+    onDeleteWorkRequest: WorkRequestMutation;
     canMutateOperatorActions: boolean;
     onSubmitComment: SubmitContextComment;
     onResolveComment: ResolveContextComment;

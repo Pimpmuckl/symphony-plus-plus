@@ -754,6 +754,21 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     )
   end
 
+  @spec operator_delete_work_request(Conn.t(), map()) :: Conn.t()
+  def operator_delete_work_request(conn, %{"work_request_id" => work_request_id}) do
+    send_local_operator_response(
+      conn,
+      :dangerous_delete,
+      work_request_target(work_request_id),
+      :operator_delete_work_request,
+      fn repo ->
+        with {:ok, deleted_id} <- WorkRequestService.delete(repo, work_request_id) do
+          json(conn, mutation_success_payload(%{work_request: %{id: deleted_id}}, %{work_request_id: deleted_id}))
+        end
+      end
+    )
+  end
+
   @spec operator_restore_work_request(Conn.t(), map()) :: Conn.t()
   def operator_restore_work_request(conn, %{"work_request_id" => work_request_id}) do
     send_local_operator_response(

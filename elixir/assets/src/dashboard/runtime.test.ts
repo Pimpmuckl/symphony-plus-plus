@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { dashboardEventsUrl, dashboardMutationWorkRequest, mergeDashboardPayload, mutationShouldRefreshDashboard, patchDashboardWorkRequest, shouldSkipDashboardLoad } from "./runtime";
+import { dashboardEventsUrl, dashboardMutationWorkRequest, mergeDashboardPayload, mutationShouldRefreshDashboard, patchDashboardWorkRequest, removeDashboardWorkRequest, shouldSkipDashboardLoad } from "./runtime";
 import type { DashboardPayload, WorkRequestCard } from "@/types/dashboard";
 
 describe("dashboard runtime mutation helpers", () => {
@@ -49,6 +49,21 @@ describe("dashboard runtime mutation helpers", () => {
       repo: "symphony-plus-plus",
       archived_at: "2026-06-25T12:00:00Z",
     });
+  });
+
+  it("removes deleted WorkRequests from active, archived, and detail snapshots", () => {
+    const dashboard = dashboardWithRequest({ id: "wr-1", title: "Delete me" });
+    const patched = removeDashboardWorkRequest(
+      {
+        ...dashboard,
+        archived_work_requests: { work_requests: [{ id: "wr-1", title: "Archived copy" }], total_count: 1 },
+      },
+      "wr-1",
+    );
+
+    expect(patched?.work_requests?.work_requests).toEqual([]);
+    expect(patched?.archived_work_requests?.work_requests).toEqual([]);
+    expect(patched?.work_request_details).toEqual([]);
   });
 
   it("reads compact WorkRequest mutation payloads", () => {

@@ -6431,6 +6431,59 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
+  test "local operator can delete any WorkRequest", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      work_request = create_work_request!(repo, id: "WR-LOCAL-DELETE-DIRECT", status: "ready_for_slicing")
+
+      assert {:ok, planned_slice} =
+               WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-LOCAL-DELETE-DIRECT"))
+
+      assert {:ok, planned_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+      assert {:ok, _open_question} = WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-LOCAL-DELETE-DIRECT"))
+
+      linked_package =
+        create_matching_work_package!(repo, work_request, planned_slice,
+          id: "WP-LOCAL-DELETE-DIRECT",
+          status: "claimed"
+        )
+
+      assert {:ok, _dispatched} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, planned_slice.id, "approved", linked_package.id)
+
+      assert {:ok, request_comment} =
+               CommentService.create(repo, %{
+                 id: "comment-local-delete-direct-wr",
+                 target_kind: "work_request",
+                 target_id: work_request.id,
+                 body: "Delete with request",
+                 source_type: "operator",
+                 author_name: "dashboard-test"
+               })
+
+      payload =
+        local_operator_csrf_conn()
+        |> post("/api/v1/sympp/operator/work-requests/#{work_request.id}/delete", %{})
+        |> json_response(200)
+
+      assert get_in(payload, ["work_request", "id"]) == work_request.id
+      assert get_in(payload, ["refresh", "work_request_id"]) == work_request.id
+      assert {:error, :not_found} = WorkRequestService.get(repo, work_request.id)
+      assert {:error, :not_found} = CommentService.get(repo, request_comment.id)
+      assert {:ok, settings} = OperatorSettingsRepository.get(repo)
+      assert linked_package.id in settings.hidden_work_package_ids
+
+      dashboard_payload = local_operator_dashboard_payload()
+
+      refute Enum.any?(dashboard_payload["work_requests"]["work_requests"], &(&1["id"] == work_request.id))
+      refute Enum.any?(dashboard_payload["archived_work_requests"]["work_requests"], &(&1["id"] == work_request.id))
+      refute linked_package.id in board_work_package_ids(dashboard_payload)
+
+      assert [%OperatorAudit{} = audit] = repo.all(OperatorAudit)
+      assert audit.action == "dangerous_delete"
+      assert audit.target_id == work_request.id
+      assert audit.tool_metadata["name"] == "operator_delete_work_request"
+    end)
+  end
+
   test "local operator can create and resolve comments through the dashboard API", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-LOCAL-COMMENTS", status: "ready_for_slicing")
