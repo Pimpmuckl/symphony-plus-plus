@@ -16,6 +16,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Target
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Service, as: GuidanceRequestService
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
@@ -619,6 +620,29 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     end)
   end
 
+  @spec operator_dashboard_deferred(Conn.t(), map()) :: Conn.t()
+  def operator_dashboard_deferred(conn, _params) do
+    send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_dashboard_deferred, fn repo ->
+      with {:ok, payload} <- LocalOperatorDashboard.operator_dashboard_deferred_payload(repo) do
+        json(conn, payload)
+      end
+    end)
+  end
+
+  @spec operator_dashboard_events(Conn.t(), map()) :: Conn.t()
+  def operator_dashboard_events(conn, _params) do
+    send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_dashboard_events, fn _repo ->
+      with :ok <- DashboardPubSub.subscribe() do
+        conn
+        |> Conn.put_resp_header("cache-control", "no-cache")
+        |> Conn.put_resp_header("connection", "keep-alive")
+        |> Conn.put_resp_content_type("text/event-stream")
+        |> Conn.send_chunked(200)
+        |> stream_dashboard_events()
+      end
+    end)
+  end
+
   @spec operator_config(Conn.t(), map()) :: Conn.t()
   def operator_config(conn, _params) do
     with {:ok, conn} <- ensure_local_operator_api_session(conn),
@@ -986,7 +1010,34 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
     with :ok <- maybe_append_operator_audit(repo, conn, decision, tool_name),
          :ok <- require_allowed_local_operator_decision(decision) do
-      fun.(repo)
+      case fun.(repo) do
+        %Conn{} = conn ->
+          maybe_broadcast_dashboard_change(action)
+          conn
+
+        other ->
+          other
+      end
+    end
+  end
+
+  defp maybe_broadcast_dashboard_change(:dashboard_read), do: :ok
+  defp maybe_broadcast_dashboard_change(:work_package_read), do: :ok
+  defp maybe_broadcast_dashboard_change(_action), do: DashboardPubSub.broadcast_changed()
+
+  defp stream_dashboard_events(conn) do
+    receive do
+      :operator_dashboard_changed ->
+        case Conn.chunk(conn, "event: dashboard_changed\ndata: {}\n\n") do
+          {:ok, conn} -> stream_dashboard_events(conn)
+          {:error, _reason} -> conn
+        end
+    after
+      30_000 ->
+        case Conn.chunk(conn, ": keep-alive\n\n") do
+          {:ok, conn} -> stream_dashboard_events(conn)
+          {:error, _reason} -> conn
+        end
     end
   end
 

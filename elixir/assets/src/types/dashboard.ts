@@ -608,6 +608,7 @@ export type DashboardPayload = {
     solo_sessions?: SoloSession[];
     total_count?: number;
   };
+  deferred?: { dashboard_sections?: boolean };
 };
 export type DashboardMutationRefresh = {
   dashboard?: boolean;
@@ -617,8 +618,4 @@ export type DashboardMutationRefresh = {
   comment_target_kind?: string | null;
   comment_target_id?: string | null;
 };
-export type DashboardMutationPayload = {
-  ok?: boolean;
-  dashboard?: DashboardPayload;
-  refresh?: DashboardMutationRefresh;
-};
+export type DashboardMutationPayload = { ok?: boolean; dashboard?: DashboardPayload; refresh?: DashboardMutationRefresh };

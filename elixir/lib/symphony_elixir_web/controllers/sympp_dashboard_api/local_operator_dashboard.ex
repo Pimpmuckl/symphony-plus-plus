@@ -22,6 +22,56 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   @spec operator_dashboard_payload(module()) :: {:ok, map()} | {:error, term()}
   def operator_dashboard_payload(repo) do
+    with {:ok, context} <- operator_dashboard_context(repo) do
+      opts = dashboard_opts(context)
+
+      with {:ok, board} <- Dashboard.operator_board(repo, opts),
+           {:ok, work_requests} <- Dashboard.work_requests(repo, opts),
+           {:ok, guidance_requests} <- Dashboard.human_guidance_requests(repo, opts) do
+        dashboard_payload(context, board, work_requests, guidance_requests)
+      end
+    end
+  end
+
+  defp dashboard_payload(context, board, work_requests, guidance_requests) do
+    {board, active_blocking_edges} = local_operator_board(board, context.hidden_work_package_ids)
+
+    {:ok,
+     context
+     |> base_payload(board, active_blocking_edges)
+     |> Map.merge(%{
+       work_requests: work_requests,
+       archived_work_requests: empty_work_requests(),
+       work_request_details: [],
+       guidance_requests: guidance_requests,
+       solo_sessions: empty_solo_sessions(),
+       deferred: %{dashboard_sections: true}
+     })}
+  end
+
+  @spec operator_dashboard_deferred_payload(module()) :: {:ok, map()} | {:error, term()}
+  def operator_dashboard_deferred_payload(repo) do
+    with {:ok, context} <- operator_dashboard_context(repo) do
+      opts = dashboard_opts(context)
+
+      with {:ok, work_requests} <- Dashboard.work_requests(repo, opts),
+           {:ok, archived_work_requests} <- Dashboard.archived_work_requests(repo, opts),
+           {:ok, solo_sessions} <- Dashboard.solo_sessions(repo, %{}, opts),
+           {:ok, work_request_details} <-
+             operator_work_request_board_details(repo, Map.get(work_requests, :work_requests, []), context.repo_identity_catalog) do
+        {:ok,
+         %{
+           generated_at: DateTime.utc_now(:microsecond) |> DateTime.to_iso8601(),
+           archived_work_requests: archived_work_requests,
+           work_request_details: work_request_details,
+           solo_sessions: solo_sessions,
+           deferred: %{dashboard_sections: false}
+         }}
+      end
+    end
+  end
+
+  defp operator_dashboard_context(repo) do
     with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo),
          {:ok, settings} <- OperatorSettingsRepository.get(repo),
          :ok <- run_operator_retention(repo, settings),
@@ -30,43 +80,53 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
          {:ok, architect_handoff_anchor_work_package_ids} <- architect_handoff_anchor_work_package_ids(repo),
          {:ok, settings} <- dedupe_hidden_work_package_ids_for_local_operator(repo, settings),
          {:ok, expired_unlinked_work_package_ids} <-
-           expired_unlinked_work_package_ids_for_local_operator(repo, settings, linked_work_package_id_sets.active),
-         hidden_work_package_ids =
-           settings
-           |> effective_hidden_work_package_ids(linked_work_package_id_sets.active)
-           |> MapSet.union(expired_unlinked_work_package_ids)
-           |> MapSet.union(linked_work_package_id_sets.archived_only)
-           |> MapSet.union(architect_handoff_anchor_work_package_ids),
-         opts = [repo_identity_catalog: repo_identity_catalog, hidden_work_package_ids: hidden_work_package_ids],
-         {:ok, board} <- Dashboard.operator_board(repo, opts),
-         {:ok, work_requests} <- Dashboard.work_requests(repo, opts),
-         {:ok, archived_work_requests} <- Dashboard.archived_work_requests(repo, opts),
-         {:ok, guidance_requests} <- Dashboard.human_guidance_requests(repo, opts),
-         {:ok, solo_sessions} <- Dashboard.solo_sessions(repo, %{}, opts),
-         {:ok, work_request_details} <-
-           operator_work_request_board_details(repo, Map.get(work_requests, :work_requests, []), repo_identity_catalog) do
-      active_blocking_edges = Map.get(board, :active_blocking_edges, [])
-      board = Map.delete(board, :active_blocking_edges)
-
-      board = hide_local_operator_work_packages(board, hidden_work_package_ids)
-      active_blocking_edges = hide_local_operator_blocking_edges(active_blocking_edges, hidden_work_package_ids)
+           expired_unlinked_work_package_ids_for_local_operator(repo, settings, linked_work_package_id_sets.active) do
+      hidden_work_package_ids =
+        settings
+        |> effective_hidden_work_package_ids(linked_work_package_id_sets.active)
+        |> MapSet.union(expired_unlinked_work_package_ids)
+        |> MapSet.union(linked_work_package_id_sets.archived_only)
+        |> MapSet.union(architect_handoff_anchor_work_package_ids)
 
       {:ok,
        %{
-         generated_at: DateTime.utc_now(:microsecond) |> DateTime.to_iso8601(),
-         ledger: %{database: dashboard_ledger_database(repo)},
-         active_blocking_edges: active_blocking_edges,
-         board: board,
+         repo: repo,
+         repo_identity_catalog: repo_identity_catalog,
+         hidden_work_package_ids: hidden_work_package_ids,
          settings: operator_settings_payload(settings),
-         linked_work_package_ids: linked_work_package_id_sets.persisted |> MapSet.to_list() |> Enum.sort(),
-         work_requests: work_requests,
-         archived_work_requests: archived_work_requests,
-         work_request_details: work_request_details,
-         guidance_requests: guidance_requests,
-         solo_sessions: solo_sessions
+         linked_work_package_ids: linked_work_package_id_sets.persisted |> MapSet.to_list() |> Enum.sort()
        }}
     end
   end
+
+  defp dashboard_opts(context) do
+    [repo_identity_catalog: context.repo_identity_catalog, hidden_work_package_ids: context.hidden_work_package_ids]
+  end
+
+  defp local_operator_board(board, hidden_work_package_ids) do
+    active_blocking_edges = Map.get(board, :active_blocking_edges, [])
+
+    board =
+      board
+      |> Map.delete(:active_blocking_edges)
+      |> hide_local_operator_work_packages(hidden_work_package_ids)
+
+    {board, hide_local_operator_blocking_edges(active_blocking_edges, hidden_work_package_ids)}
+  end
+
+  defp base_payload(context, board, active_blocking_edges) do
+    %{
+      generated_at: DateTime.utc_now(:microsecond) |> DateTime.to_iso8601(),
+      ledger: %{database: dashboard_ledger_database(context.repo)},
+      active_blocking_edges: active_blocking_edges,
+      board: board,
+      settings: context.settings,
+      linked_work_package_ids: context.linked_work_package_ids
+    }
+  end
+
+  defp empty_work_requests, do: %{work_requests: [], total_count: 0}
+  defp empty_solo_sessions, do: %{solo_sessions: [], total_count: 0}
 
   defp hide_local_operator_work_packages(board, hidden_ids) do
     groups = Map.get(board, :groups, %{})

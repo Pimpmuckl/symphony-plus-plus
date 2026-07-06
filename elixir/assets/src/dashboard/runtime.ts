@@ -231,6 +231,10 @@ export function operatorApiUrl(path: string) {
   return `${base}${suffix}`;
 }
 
+export function dashboardEventsUrl() {
+  return operatorApiUrl("/dashboard/events");
+}
+
 function operatorConfigUrl() {
   const url = operatorApiUrl("/config");
   const token = currentOperatorBootstrapToken();
@@ -389,6 +393,11 @@ export function patchDashboardWorkRequest(
     work_request_details: nextDetails,
     work_requests: dashboard.work_requests ? { ...dashboard.work_requests, work_requests: nextCards, total_count: nextCards.length } : dashboard.work_requests,
   };
+}
+
+export function mergeDashboardPayload(dashboard: DashboardPayload | null, patch: DashboardPayload | null | undefined): DashboardPayload | null {
+  if (!dashboard || !patch) return patch ?? dashboard;
+  return { ...dashboard, ...patch };
 }
 
 function patchWorkRequestCards(cards: WorkRequestCard[], workRequest: WorkRequestMutationPatch, archive: boolean) {
