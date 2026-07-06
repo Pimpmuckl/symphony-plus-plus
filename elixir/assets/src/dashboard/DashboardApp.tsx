@@ -122,8 +122,9 @@ function useDashboardController() {
   }, []);
 
   const applyDashboardResponse = useCallback(
-    async (response: Response, fallbackMessage: string, selectDashboard: DashboardResponseSelector = (payload) => payload as DashboardPayload, loadMutationVersion = mutationVersionRef.current) => {
+    async (response: Response, fallbackMessage: string, selectDashboard: DashboardResponseSelector = (payload) => payload as DashboardPayload, loadMutationVersion = mutationVersionRef.current, shouldApply: () => boolean = () => true) => {
       const payload = await readDashboardApiResponse(response, fallbackMessage);
+      if (!shouldApply()) return null;
       const nextDashboard = selectDashboard(payload);
       if (!nextDashboard) {
         throw new Error(fallbackMessage);
@@ -157,7 +158,7 @@ function useDashboardController() {
         setRuntimeConfig(config);
         const response = await operatorFetch(operatorApiUrl("/dashboard"), { headers: jsonHeaders() });
         if (loadSequence !== loadSequenceRef.current) return;
-        await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion);
+        await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current);
       });
     } catch (caught) {
       recordConnectionFailure(
