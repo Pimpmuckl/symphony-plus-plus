@@ -2,7 +2,7 @@ import type { ArchitectHandoffPayload, ContextComment, CopyArchitectHandoff, Cre
 import type { NewRequestForm } from "@/components/dashboard/new-request-dialog";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, DashboardRuntimeConfig, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, dashboardCaughtMessage, dashboardMutationWorkRequest, dashboardRuntimeConfig, ensureDashboardRuntimeConfig, isReconnectableLocalOperatorError, jsonHeaders, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, reconnectLocalOperatorSession, shouldSkipDashboardLoad, withLocalOperatorReconnect } from "./runtime";
+import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, DashboardRuntimeConfig, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRuntimeConfig, ensureDashboardRuntimeConfig, isReconnectableLocalOperatorError, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, reconnectLocalOperatorSession, shouldSkipDashboardLoad, withLocalOperatorReconnect } from "./runtime";
 import { DashboardShell } from "./dashboard-shell";
 import { SoloSessions } from "./solo-sessions";
 import { WorkstreamsPane } from "./workspace-tabs";
@@ -19,6 +19,8 @@ import { applyDashboardTheme, repoWorkstreamHasWorkItems, shouldShowUpdateSimula
 import { canMutateDashboardComments, canMutateDashboardOperatorActions } from "./detail-utils";
 import { packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
 import { useDashboardUpdateAnimations } from "./update-animations";
+
+type DashboardLoadMode = "initial" | "refresh" | "silent" | "reconnect";
 
 export function DashboardApp() {
   const shellProps = useDashboardController();
@@ -37,6 +39,8 @@ function useDashboardController() {
   const dashboardFingerprintRef = useRef(initialDashboardFingerprint);
   const connectionIssueRef = useRef<DashboardConnectionIssue | null>(null);
   const loadInFlightRef = useRef(false);
+  const loadSequenceRef = useRef(0);
+  const refreshingSequenceRef = useRef(0);
   const mutationVersionRef = useRef(0);
   const setDashboard = useCallback((nextDashboard: DashboardPayload | null) => {
     const nextFingerprint = dashboardContentFingerprint(nextDashboard);
@@ -120,8 +124,9 @@ function useDashboardController() {
   }, []);
 
   const applyDashboardResponse = useCallback(
-    async (response: Response, fallbackMessage: string, selectDashboard: DashboardResponseSelector = (payload) => payload as DashboardPayload, loadMutationVersion = mutationVersionRef.current) => {
+    async (response: Response, fallbackMessage: string, selectDashboard: DashboardResponseSelector = (payload) => payload as DashboardPayload, loadMutationVersion = mutationVersionRef.current, shouldApply: () => boolean = () => true) => {
       const payload = await readDashboardApiResponse(response, fallbackMessage);
+      if (!shouldApply()) return null;
       const nextDashboard = selectDashboard(payload);
       if (!nextDashboard) {
         throw new Error(fallbackMessage);
@@ -135,13 +140,22 @@ function useDashboardController() {
     [setDashboard, setError],
   );
 
-  const loadDashboard = useCallback(async (mode: "initial" | "refresh" | "silent" | "reconnect" = "refresh", force = false) => {
+  const recordDashboardLoadFailure = useCallback((loadSequence: number, caught: unknown, mode: DashboardLoadMode) => {
+    if (loadSequence !== loadSequenceRef.current) return;
+    recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard API unavailable"), mode === "initial" || mode === "reconnect", isReconnectableLocalOperatorError(caught));
+  }, [recordConnectionFailure]);
+
+  const loadDashboard = useCallback(async (mode: DashboardLoadMode = "refresh", force = false) => {
     if (shouldSkipDashboardLoad(loadInFlightRef.current, mode, force)) return;
     const loadMutationVersion = mutationVersionRef.current;
+    const loadSequence = loadSequenceRef.current + 1;
+    const showsRefreshing = mode === "refresh" || mode === "reconnect";
+    loadSequenceRef.current = loadSequence;
     loadInFlightRef.current = true;
     if (mode === "initial") {
       setLoading(true);
-    } else if (mode === "refresh" || mode === "reconnect") {
+    } else if (showsRefreshing) {
+      refreshingSequenceRef.current = loadSequence;
       setRefreshing(true);
     }
 
@@ -150,20 +164,39 @@ function useDashboardController() {
         const config = mode === "reconnect" ? await reconnectLocalOperatorSession() : await ensureDashboardRuntimeConfig();
         setRuntimeConfig(config);
         const response = await operatorFetch(operatorApiUrl("/dashboard"), { headers: jsonHeaders() });
-        await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion);
+        if (loadSequence !== loadSequenceRef.current) return;
+        await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current);
       });
     } catch (caught) {
-      recordConnectionFailure(
-        dashboardCaughtMessage(caught, "Dashboard API unavailable"),
-        mode === "initial" || mode === "reconnect",
-        isReconnectableLocalOperatorError(caught),
-      );
+      recordDashboardLoadFailure(loadSequence, caught, mode);
     } finally {
-      loadInFlightRef.current = false;
-      setLoading(false);
-      if (mode === "refresh" || mode === "reconnect") setRefreshing(false);
+      if (loadSequence === loadSequenceRef.current) {
+        loadInFlightRef.current = false;
+        setLoading(false);
+      }
+      if (showsRefreshing && refreshingSequenceRef.current === loadSequence) {
+        refreshingSequenceRef.current = 0;
+        setRefreshing(false);
+      }
     }
-  }, [applyDashboardResponse, recordConnectionFailure, setLoading, setRefreshing]);
+  }, [applyDashboardResponse, recordDashboardLoadFailure, setLoading, setRefreshing]);
+
+  const loadDashboardDeferred = useCallback(async () => {
+    const baseDashboard = dashboardRef.current;
+    if (!baseDashboard?.deferred?.dashboard_sections) return;
+
+    try {
+      await withLocalOperatorReconnect(async () => {
+        const response = await operatorFetch(operatorApiUrl("/dashboard/deferred"), { headers: jsonHeaders() });
+        const payload = await readDashboardApiResponse(response, "Dashboard details unavailable");
+        if (dashboardRef.current !== baseDashboard) return;
+        const nextDashboard = mergeDashboardPayload(dashboardRef.current, payload as DashboardPayload);
+        if (nextDashboard) setDashboard(nextDashboard);
+      });
+    } catch (caught) {
+      recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard details unavailable"), false, isReconnectableLocalOperatorError(caught));
+    }
+  }, [recordConnectionFailure, setDashboard]);
 
   const refreshAfterMutation = useCallback(async (payload?: DashboardMutationPayload) => {
     if (payload?.dashboard) {
@@ -410,6 +443,20 @@ function useDashboardController() {
       cancelled = true;
     };
   }, [loadDashboard]);
+
+  useEffect(() => {
+    if (dashboard?.deferred?.dashboard_sections) void loadDashboardDeferred();
+  }, [dashboard, dashboard?.deferred?.dashboard_sections, loadDashboardDeferred]);
+
+  const dashboardReady = dashboard !== null;
+
+  useEffect(() => {
+    if (!dashboardReady || typeof EventSource === "undefined") return;
+
+    const events = new EventSource(dashboardEventsUrl(), { withCredentials: true });
+    events.addEventListener("dashboard_changed", () => void loadDashboard("silent", true));
+    return () => events.close();
+  }, [dashboardReady, loadDashboard]);
 
   useEffect(() => {
     writeDashboardUiStateValue("workspaceTab", workspaceTab);

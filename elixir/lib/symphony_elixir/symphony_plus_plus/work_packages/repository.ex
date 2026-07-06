@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   @moduledoc false
 
   alias Ecto.Changeset
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
@@ -109,6 +110,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     with :ok <- validate_persisted_status(current_status),
          :ok <- validate_status(next_status) do
       update_valid_status(repo, id, current_status, next_status)
+      |> notify_dashboard()
     end
   end
 
@@ -179,6 +181,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
       {:error, reason} -> repo.rollback(reason)
     end
   end
+
+  defp notify_dashboard({:ok, %WorkPackage{}} = result) do
+    DashboardPubSub.broadcast_changed()
+    result
+  end
+
+  defp notify_dashboard(result), do: result
 
   defp validate_status(status) do
     if status in WorkPackage.statuses() do

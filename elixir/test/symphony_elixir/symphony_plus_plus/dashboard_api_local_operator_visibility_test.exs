@@ -120,10 +120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       |> Ecto.Changeset.change(completed_at: archived_at, completion_source: "operator", archived_at: archived_at)
       |> repo.update!()
 
-      payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      payload = local_operator_dashboard_payload()
 
       package_ids = board_work_package_ids(payload)
 
@@ -174,10 +171,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
           base_branch: anchor.base_branch
         )
 
-      payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      payload = local_operator_dashboard_payload()
 
       package_ids = board_work_package_ids(payload)
 
@@ -216,10 +210,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       assert get_in(archive_payload, ["refresh", "dashboard"]) == true
       assert get_in(archive_payload, ["refresh", "work_package_id"]) == delivered_package.id
 
-      dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      dashboard_payload = local_operator_dashboard_payload()
 
       assert get_in(dashboard_payload, ["settings", "hidden_work_package_ids"]) == [delivered_package.id]
       assert active_package.id in board_work_package_ids(dashboard_payload)
@@ -344,6 +335,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
 
     local_operator_conn()
     |> put_req_header("x-csrf-token", csrf_token)
+  end
+
+  defp local_operator_dashboard_payload do
+    initial = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+    deferred = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/deferred"), 200)
+
+    Map.merge(initial, deferred)
   end
 
   defp start_test_endpoint do

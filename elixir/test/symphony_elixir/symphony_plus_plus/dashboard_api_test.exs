@@ -22,6 +22,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Repository, as: GuidanceRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
@@ -4240,7 +4241,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       |> Ecto.Changeset.change(archived_at: DateTime.add(DateTime.utc_now(:microsecond), -1, :day))
       |> repo.update!()
 
-      payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+      payload = local_operator_dashboard_payload()
 
       assert payload["work_requests"]["total_count"] == 1
       assert [%{"work_request" => %{"id" => work_request_id}}] = payload["work_request_details"]
@@ -4311,7 +4312,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  author_name: "operator"
                })
 
-      dashboard = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+      dashboard = local_operator_dashboard_payload()
       compact_detail = work_request_detail(dashboard, work_request.id)
       [compact_slice] = compact_detail["planned_slices"]
 
@@ -4384,7 +4385,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  })
                )
 
-      payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+      payload = local_operator_dashboard_payload()
       detail = work_request_detail(payload, work_request.id)
       [slice] = detail["planned_slices"]
       [card] = Enum.filter(payload["work_requests"]["work_requests"], &(&1["id"] == work_request.id))
@@ -4465,6 +4466,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  })
 
         payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+        deferred_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/deferred"), 200)
 
         package_card =
           payload["board"]["groups"]["created"]
@@ -4480,7 +4482,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  payload["work_requests"]["work_requests"]
 
         assert [%{"work_request" => %{"repo_key" => "symphony-plus-plus", "repo_remote" => "Pimpmuckl/symphony-plus-plus"}}] =
-                 payload["work_request_details"]
+                 deferred_payload["work_request_details"]
 
         assert [
                  %{
@@ -4492,7 +4494,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  }
                ] = payload["guidance_requests"]["guidance_requests"]
 
-        solo_sessions = payload["solo_sessions"]["solo_sessions"]
+        assert payload["archived_work_requests"] == %{"total_count" => 0, "work_requests" => []}
+        assert payload["solo_sessions"] == %{"total_count" => 0, "solo_sessions" => []}
+        assert payload["work_request_details"] == []
+        assert payload["deferred"] == %{"dashboard_sections" => true}
+        assert deferred_payload["deferred"] == %{"dashboard_sections" => false}
+
+        solo_sessions = deferred_payload["solo_sessions"]["solo_sessions"]
         assert Enum.map(solo_sessions, & &1["id"]) |> Enum.sort() == Enum.sort([owner_session.id, bare_session.id])
         assert Enum.all?(solo_sessions, &(&1["repo_key"] == "symphony-plus-plus"))
         assert Enum.all?(solo_sessions, &(&1["repo_display"] == "symphony-plus-plus"))
@@ -4515,6 +4523,63 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         assert stream.repo == "symphony-plus-plus"
       end)
     end)
+  end
+
+  test "local operator dashboard invalidates after MCP-side planned slice writes", %{repo: repo} do
+    work_request =
+      create_work_request!(repo,
+        id: "WR-DASHBOARD-INVALIDATE",
+        repo: "symphony-plus-plus",
+        base_branch: "main",
+        status: "ready_for_slicing"
+      )
+
+    assert :ok = DashboardPubSub.subscribe()
+
+    assert {:ok, _slice} =
+             WorkRequestService.add_planned_slice_for_authoring(
+               repo,
+               work_request.id,
+               planned_slice_attrs(id: "WRS-DASHBOARD-INVALIDATE", title: "Refresh dashboard")
+             )
+
+    assert_receive :operator_dashboard_changed
+  end
+
+  test "local operator dashboard invalidates after local operator comment writes", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      work_request =
+        create_work_request!(repo,
+          id: "WR-DASHBOARD-COMMENT-INVALIDATE",
+          repo: "symphony-plus-plus",
+          base_branch: "main",
+          status: "ready_for_slicing"
+        )
+
+      assert :ok = DashboardPubSub.subscribe()
+
+      local_operator_csrf_conn()
+      |> post("/api/v1/sympp/operator/comments", %{
+        "target_kind" => "work_request",
+        "target_id" => work_request.id,
+        "body" => "Refresh dashboard after comment."
+      })
+      |> json_response(201)
+
+      assert_receive :operator_dashboard_changed
+    end)
+  end
+
+  test "local operator dashboard invalidates after work package status writes", %{repo: repo} do
+    work_package =
+      create_work_package!(repo,
+        id: "SYMPP-DASHBOARD-PACKAGE-INVALIDATE",
+        status: "claimed"
+      )
+
+    assert :ok = DashboardPubSub.subscribe()
+    assert {:ok, _work_package} = WorkPackageRepository.update_status(repo, work_package.id, "claimed", "planning")
+    assert_receive :operator_dashboard_changed
   end
 
   test "local operator dashboard projects persisted local path repos through their git origin", %{repo: repo} do
@@ -4557,7 +4622,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                    title: "Path scoped solo"
                  })
 
-        payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+        payload = local_operator_dashboard_payload()
         expected_aliases = Enum.sort_by([repo_path, "nextide-saas-live-chat", "Pimpmuckl/nextide-saas-live-chat"], &String.downcase/1)
 
         package_card =
@@ -4634,7 +4699,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                    title: "Path scoped solo"
                  })
 
-        payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+        payload = local_operator_dashboard_payload()
 
         package_card =
           payload["board"]["groups"]["created"]
@@ -4865,7 +4930,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         created_at: DateTime.add(timestamp, 4, :second)
       )
 
-      payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+      payload = local_operator_dashboard_payload()
       edges = payload["active_blocking_edges"]
 
       assert Enum.map(edges, & &1["blocker_id"]) == ["blocker-linked", "blocker-unlinked"]
@@ -4892,7 +4957,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert linked_card["active_blocker_count"] == 1
       assert [%{"id" => "blocker-linked", "summary" => "[REDACTED]", "active" => true}] = linked_card["active_blockers"]
 
-      repeated_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+      repeated_payload = local_operator_dashboard_payload()
       assert Enum.map(repeated_payload["active_blocking_edges"], & &1["id"]) == Enum.map(edges, & &1["id"])
     end)
   end
@@ -5433,10 +5498,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       refute Map.has_key?(payload, "dashboard")
       assert get_in(payload, ["refresh", "dashboard"]) == true
 
-      dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      dashboard_payload = local_operator_dashboard_payload()
 
       assert dashboard_payload["work_requests"]["total_count"] == 1
 
@@ -5475,10 +5537,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       completed_at = DateTime.add(DateTime.utc_now(:microsecond), -2 * 24 * 60 * 60, :second)
       request = create_completed_skipped_work_request!(repo, "WR-LOCAL-ARCHIVE-SETTINGS", completed_at)
 
-      dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      dashboard_payload = local_operator_dashboard_payload()
 
       assert dashboard_payload["settings"]["work_request_archive_after_days"] == 14
       assert dashboard_payload["settings"]["solo_session_delete_after_days"] == 30
@@ -5494,10 +5553,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert archive_payload["settings"]["solo_session_delete_after_days"] == 30
       refute Map.has_key?(archive_payload, "dashboard")
 
-      archived_dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      archived_dashboard_payload = local_operator_dashboard_payload()
 
       refute Enum.any?(archived_dashboard_payload["work_requests"]["work_requests"], &(&1["id"] == request.id))
       assert [%{"id" => "WR-LOCAL-ARCHIVE-SETTINGS", "archived_at" => archived_at}] = archived_dashboard_payload["archived_work_requests"]["work_requests"]
@@ -5511,10 +5567,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       refute Map.has_key?(restore_payload, "dashboard")
       assert get_in(restore_payload, ["work_request", "archived_at"]) == nil
 
-      restored_dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      restored_dashboard_payload = local_operator_dashboard_payload()
 
       assert Enum.any?(restored_dashboard_payload["work_requests"]["work_requests"], &(&1["id"] == request.id))
       refute Enum.any?(restored_dashboard_payload["archived_work_requests"]["work_requests"], &(&1["id"] == request.id))
@@ -5552,10 +5605,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> archive_solo_session!(repo)
         |> set_solo_session_archived_at!(repo, fresh_at)
 
-      payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      payload = local_operator_dashboard_payload()
 
       solo_sessions = get_in(payload, ["solo_sessions", "solo_sessions"])
       stale_active_card = Enum.find(solo_sessions, &(&1["id"] == stale_active.id))
@@ -5646,10 +5696,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  author_name: "dashboard-test"
                })
 
-      payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      payload = local_operator_dashboard_payload()
 
       archived_ids = payload["archived_work_requests"]["work_requests"] |> Enum.map(& &1["id"])
 
@@ -5674,10 +5721,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       completed_at = DateTime.add(DateTime.utc_now(:microsecond), -2 * 24 * 60 * 60, :second)
       request = create_completed_skipped_work_request!(repo, "WR-LOCAL-REFRESH-RETENTION", completed_at)
 
-      payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      payload = local_operator_dashboard_payload()
 
       refute Enum.any?(payload["work_requests"]["work_requests"], &(&1["id"] == request.id))
       assert [%{"id" => "WR-LOCAL-REFRESH-RETENTION", "archived_at" => archived_at}] = payload["archived_work_requests"]["work_requests"]
@@ -5703,10 +5747,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> create_solo_session!("solo-retention-throttle-first")
           |> set_solo_session_last_activity!(repo, stale_at)
 
-        first_payload =
-          local_operator_conn()
-          |> get("/api/v1/sympp/operator/dashboard")
-          |> json_response(200)
+        first_payload = local_operator_dashboard_payload()
 
         assert Enum.any?(first_payload["archived_work_requests"]["work_requests"], &(&1["id"] == first_request.id))
         assert Enum.any?(first_payload["solo_sessions"]["solo_sessions"], &(&1["id"] == first_solo.id and &1["status"] == "archived"))
@@ -5718,10 +5759,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> create_solo_session!("solo-retention-throttle-second")
           |> set_solo_session_last_activity!(repo, stale_at)
 
-        second_payload =
-          local_operator_conn()
-          |> get("/api/v1/sympp/operator/dashboard")
-          |> json_response(200)
+        second_payload = local_operator_dashboard_payload()
 
         assert Enum.any?(second_payload["work_requests"]["work_requests"], &(&1["id"] == second_request.id))
         refute Enum.any?(second_payload["archived_work_requests"]["work_requests"], &(&1["id"] == second_request.id))
@@ -5742,10 +5780,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         stale_at = DateTime.add(DateTime.utc_now(:microsecond), -2 * 24 * 60 * 60, :second)
         first_request = create_completed_skipped_work_request!(repo, "WR-LOCAL-THROTTLE-EXPIRED-FIRST", stale_at)
 
-        first_payload =
-          local_operator_conn()
-          |> get("/api/v1/sympp/operator/dashboard")
-          |> json_response(200)
+        first_payload = local_operator_dashboard_payload()
 
         assert Enum.any?(first_payload["archived_work_requests"]["work_requests"], &(&1["id"] == first_request.id))
 
@@ -5753,10 +5788,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
         Process.sleep(25)
 
-        second_payload =
-          local_operator_conn()
-          |> get("/api/v1/sympp/operator/dashboard")
-          |> json_response(200)
+        second_payload = local_operator_dashboard_payload()
 
         refute Enum.any?(second_payload["work_requests"]["work_requests"], &(&1["id"] == second_request.id))
         assert Enum.any?(second_payload["archived_work_requests"]["work_requests"], &(&1["id"] == second_request.id))
@@ -5858,10 +5890,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  "hidden_work_package_ids" => [existing_hidden_package.id, existing_hidden_package.id]
                })
 
-      payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      payload = local_operator_dashboard_payload()
 
       assert get_in(payload, ["settings", "hidden_work_package_ids"]) == [
                existing_hidden_package.id
@@ -5896,10 +5925,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert get_in(archive_payload, ["work_request", "id"]) == completed.id
       assert is_binary(get_in(archive_payload, ["work_request", "archived_at"]))
 
-      dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      dashboard_payload = local_operator_dashboard_payload()
 
       refute Enum.any?(dashboard_payload["work_requests"]["work_requests"], &(&1["id"] == completed.id))
       assert [%{"id" => "WR-LOCAL-MANUAL-ARCHIVE"}] = dashboard_payload["archived_work_requests"]["work_requests"]
@@ -5933,10 +5959,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert get_in(delivered_archive_payload, ["work_request", "id"]) == delivered.id
       assert is_binary(get_in(delivered_archive_payload, ["work_request", "archived_at"]))
 
-      delivered_dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      delivered_dashboard_payload = local_operator_dashboard_payload()
 
       refute Enum.any?(delivered_dashboard_payload["work_requests"]["work_requests"], &(&1["id"] == delivered.id))
       assert Enum.any?(delivered_dashboard_payload["archived_work_requests"]["work_requests"], &(&1["id"] == delivered.id and is_binary(&1["archived_at"])))
@@ -5979,10 +6002,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       refute Map.has_key?(payload, "dashboard")
 
-      dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      dashboard_payload = local_operator_dashboard_payload()
 
       assert get_in(work_request_detail(dashboard_payload, work_request.id), ["work_request", "operational_state", "key"]) ==
                "needs_closeout"
@@ -6050,10 +6070,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       refute Map.has_key?(second_payload, "dashboard")
 
-      dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      dashboard_payload = local_operator_dashboard_payload()
 
       package_card = dashboard_payload["board"]["groups"] |> Map.values() |> List.flatten() |> Enum.find(&(&1["id"] == work_package.id))
       assert package_card["active_blocker_count"] == 0
@@ -6103,10 +6120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         OperatorSettings.settings_id()
       ])
 
-      dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      dashboard_payload = local_operator_dashboard_payload()
 
       assert get_in(dashboard_payload, ["settings", "hidden_work_package_ids"]) == []
       assert %{rows: [["[]"]]} = repo.query!("SELECT hidden_work_package_ids FROM sympp_operator_settings WHERE id = ?", [OperatorSettings.settings_id()])
@@ -6134,10 +6148,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       refute Map.has_key?(archive_payload, "dashboard")
 
-      refreshed_dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      refreshed_dashboard_payload = local_operator_dashboard_payload()
 
       assert get_in(refreshed_dashboard_payload, ["settings", "hidden_work_package_ids"]) == [archive_package.id]
       refute archive_package.id in board_work_package_ids(refreshed_dashboard_payload)
@@ -6179,10 +6190,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       refute Map.has_key?(payload, "dashboard")
 
-      dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      dashboard_payload = local_operator_dashboard_payload()
 
       detail = work_request_detail(dashboard_payload, work_request.id)
       assert get_in(detail, ["planned_slices", Access.at(0), "delivery", "outcome"]) == "completed_no_pr"
@@ -6289,10 +6297,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       refute Map.has_key?(merge_payload, "dashboard")
       refute Map.has_key?(close_payload, "dashboard")
 
-      dashboard_payload =
-        local_operator_conn()
-        |> get("/api/v1/sympp/operator/dashboard")
-        |> json_response(200)
+      dashboard_payload = local_operator_dashboard_payload()
 
       assert get_in(dashboard_payload, ["settings", "hidden_work_package_ids"]) == [merge_package.id, close_package.id]
       refute merge_package.id in board_work_package_ids(dashboard_payload)
@@ -7653,6 +7658,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
   defp restore_fetched_app_env(key, {:ok, value}), do: Application.put_env(:symphony_elixir, key, value)
   defp restore_fetched_app_env(key, :error), do: Application.delete_env(:symphony_elixir, key)
+
+  defp local_operator_dashboard_payload do
+    initial = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+    deferred = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/deferred"), 200)
+
+    Map.merge(initial, deferred)
+  end
 
   defp work_request_detail(dashboard, work_request_id) do
     dashboard

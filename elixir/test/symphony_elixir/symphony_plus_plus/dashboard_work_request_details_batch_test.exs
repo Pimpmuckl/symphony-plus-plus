@@ -102,7 +102,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
       first = create_work_request!(repo, id: "WR-OPERATOR-BATCH-1", status: "ready_for_clarification")
       second = create_work_request!(repo, id: "WR-OPERATOR-BATCH-2", status: "ready_for_slicing")
 
-      payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+      payload = local_operator_dashboard_payload()
 
       work_request_ids = Enum.map(payload["work_requests"]["work_requests"], & &1["id"])
       detail_ids = Enum.map(payload["work_request_details"], &get_in(&1, ["work_request", "id"]))
@@ -180,6 +180,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
     |> put_req_header("origin", "http://localhost")
     |> Plug.Test.init_test_session(%{})
     |> SymppDashboardApiController.put_local_operator_session()
+  end
+
+  defp local_operator_dashboard_payload do
+    initial = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+    deferred = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/deferred"), 200)
+
+    Map.merge(initial, deferred)
   end
 
   defp with_local_operator_endpoint(fun) when is_function(fun, 0) do

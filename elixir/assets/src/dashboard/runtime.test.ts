@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { dashboardMutationWorkRequest, mutationShouldRefreshDashboard, patchDashboardWorkRequest, shouldSkipDashboardLoad } from "./runtime";
+import { dashboardEventsUrl, dashboardMutationWorkRequest, mergeDashboardPayload, mutationShouldRefreshDashboard, patchDashboardWorkRequest, shouldSkipDashboardLoad } from "./runtime";
 import type { DashboardPayload, WorkRequestCard } from "@/types/dashboard";
 
 describe("dashboard runtime mutation helpers", () => {
@@ -57,6 +57,28 @@ describe("dashboard runtime mutation helpers", () => {
       archived_at: "2026-06-25T12:00:00Z",
     });
     expect(dashboardMutationWorkRequest({ work_request: { archived_at: "2026-06-25T12:00:00Z" } })).toBeNull();
+  });
+
+  it("merges deferred dashboard sections into the current snapshot", () => {
+    const dashboard = dashboardWithRequest({ id: "wr-1", title: "Active" });
+    const merged = mergeDashboardPayload(dashboard, {
+      archived_work_requests: { work_requests: [{ id: "wr-old", title: "Archived" }], total_count: 1 },
+      deferred: { dashboard_sections: false },
+      solo_sessions: { solo_sessions: [{ id: "solo-1" }], total_count: 1 },
+      work_request_details: [{ work_request: { id: "wr-1", title: "Hydrated" }, planned_slices: [{ id: "slice-1", work_request_id: "wr-1" }] }],
+    });
+
+    expect(merged?.work_requests).toBe(dashboard.work_requests);
+    expect(merged).toMatchObject({
+      archived_work_requests: { work_requests: [{ id: "wr-old" }] },
+      deferred: { dashboard_sections: false },
+      solo_sessions: { solo_sessions: [{ id: "solo-1" }] },
+      work_request_details: [{ planned_slices: [{ id: "slice-1" }] }],
+    });
+  });
+
+  it("uses the local operator API base for dashboard events", () => {
+    expect(dashboardEventsUrl()).toBe("/api/v1/sympp/operator/dashboard/events");
   });
 });
 
