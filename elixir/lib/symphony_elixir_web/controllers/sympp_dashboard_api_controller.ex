@@ -631,16 +631,19 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   @spec operator_dashboard_events(Conn.t(), map()) :: Conn.t()
   def operator_dashboard_events(conn, _params) do
-    send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_dashboard_events, fn _repo ->
-      with :ok <- DashboardPubSub.subscribe() do
-        conn
-        |> Conn.put_resp_header("cache-control", "no-cache")
-        |> Conn.put_resp_header("connection", "keep-alive")
-        |> Conn.put_resp_content_type("text/event-stream")
-        |> Conn.send_chunked(200)
-        |> stream_dashboard_events()
-      end
-    end)
+    with true <- local_operator_api_request?(conn),
+         {:ok, %Decision{}} <- authorize_local_operator_policy(conn, :dashboard_read, Target.new(:dashboard)),
+         :ok <- DashboardPubSub.subscribe() do
+      conn
+      |> Conn.put_resp_header("cache-control", "no-cache")
+      |> Conn.put_resp_header("connection", "keep-alive")
+      |> Conn.put_resp_content_type("text/event-stream")
+      |> Conn.send_chunked(200)
+      |> stream_dashboard_events()
+    else
+      false -> error_response(conn, :unauthorized)
+      {:error, reason} -> error_response(conn, reason)
+    end
   end
 
   @spec operator_config(Conn.t(), map()) :: Conn.t()
