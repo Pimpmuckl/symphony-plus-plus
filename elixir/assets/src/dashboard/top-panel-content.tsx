@@ -1,6 +1,6 @@
 import { AnimatedTopGrid } from "@/components/dashboard/motion";
 import { BlockerPreviewCard } from "./blocker-preview-card";
-import { EmptyPanel } from "./detail-extras";
+import { EmptyPanel } from "./empty-panel";
 import { GuidancePreviewCard } from "./guidance-preview-card";
 import type { TopPanelContentProps } from "./status-rail-types";
 import { TopTray } from "./top-tray";

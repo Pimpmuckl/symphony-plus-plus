@@ -14,7 +14,7 @@ import { sortedCopy } from "@/lib/collections";
 import { updateMotionAttributes } from "@/components/dashboard/motion-utils";
 import { CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
 import { stripMarkdown } from "./dashboard-text";
-import { EmptyPanel } from "./detail-extras";
+import { EmptyPanel } from "./empty-panel";
 import { detailDate } from "./detail-utils";
 import { RepoSummaryPlate } from "./dashboard-settings";
 import { interactiveCardProps, stateCardBodyMotionKey } from "./card-helpers";

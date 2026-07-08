@@ -2,7 +2,6 @@ import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { CopyArchitectHandoff, DashboardPayload, GuidanceAnswerSubmission, GuidanceItem, WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
-import { GuidanceDialog } from "@/components/dashboard/guidance-dialog";
 import { NewRequestDialog } from "@/components/dashboard/new-request-dialog";
 import type { NewRequestForm } from "@/components/dashboard/new-request-dialog";
 import type * as React from "react";
@@ -13,8 +12,8 @@ import { architectHandoffEligibleRequest } from "@/lib/operational-state";
 import { cn } from "@/lib/utils";
 import { AppDialogState, BlockerItem } from "./dashboard-state";
 import { ArchivedRequestsDialog, DashboardSettingsDialog, ThemeToggle } from "./dashboard-settings";
-import { CardDetailDialog } from "./card-detail-dialog";
 import { CardDetailSelection, DASHBOARD_LOGO_URL, DashboardConnectionIssue, DashboardTheme, DashboardUpdateAnimations, LOCAL_OPERATOR_AUTH_REQUIRED_MESSAGE, ResolveContextComment, SubmitContextComment, TopPanelKey, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, isLocalOperatorAuthRequiredMessage } from "./runtime";
+import { DashboardDeferredDialogs } from "./dashboard-deferred-dialogs";
 import { LiveLedgerBadge } from "./status-cards";
 import { RepoSummary } from "./dashboard-data";
 import { DashboardSearchControl } from "./dashboard-search-control";
@@ -277,32 +276,23 @@ export function DashboardShell({
           </Tabs>
         </div>
 
-        <GuidanceDialog
-          canSubmitAnswer={canMutateOperatorActions}
-          item={dialogState.selectedGuidance}
-          onOpenChange={(open) => {
-            if (!open) onSelectGuidance(null);
-          }}
-          onSubmitAnswer={onSubmitGuidanceAnswer}
-        />
-        <CardDetailDialog
-          selection={dialogState.selectedCardDetail}
-          onOpenChange={(open) => {
-            if (!open) onSelectCard(null);
-          }}
-          onSelectGuidance={onSelectGuidance}
-          onCopyArchitectHandoff={copyArchitectHandoff}
-          onArchiveWorkRequest={onArchiveWorkRequest}
-          onChangeWorkRequestState={changeWorkRequestState}
-          onDeleteWorkRequest={onDeleteWorkRequest}
-          onChangeWorkPackageState={changeWorkPackageState}
-          onArchiveWorkPackage={onArchiveWorkPackage}
-          onClearWorkPackageBlocker={onClearWorkPackageBlocker}
-          canMutateOperatorActions={canMutateOperatorActions}
-          linkedWorkPackageIds={linkedWorkPackageIds}
-          onSubmitComment={onSubmitComment}
-          onResolveComment={onResolveComment}
+        <DashboardDeferredDialogs
           canMutateComments={canMutateComments}
+          canMutateOperatorActions={canMutateOperatorActions}
+          changeWorkPackageState={changeWorkPackageState}
+          changeWorkRequestState={changeWorkRequestState}
+          copyArchitectHandoff={copyArchitectHandoff}
+          dialogState={dialogState}
+          linkedWorkPackageIds={linkedWorkPackageIds}
+          onArchiveWorkPackage={onArchiveWorkPackage}
+          onArchiveWorkRequest={onArchiveWorkRequest}
+          onClearWorkPackageBlocker={onClearWorkPackageBlocker}
+          onDeleteWorkRequest={onDeleteWorkRequest}
+          onResolveComment={onResolveComment}
+          onSelectCard={onSelectCard}
+          onSelectGuidance={onSelectGuidance}
+          onSubmitComment={onSubmitComment}
+          onSubmitGuidanceAnswer={onSubmitGuidanceAnswer}
         />
         <DashboardWelcomeDialog
           ready={dashboard !== null}

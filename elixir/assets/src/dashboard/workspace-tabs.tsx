@@ -4,7 +4,7 @@ import { WORKSPACE_TAB_SLIDE_MS } from "@/components/dashboard/motion";
 import { clearMotionTimers, later, measureElementHeight, nextFrame } from "@/components/dashboard/motion-utils";
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
 import { CardDetailSelect, DashboardUpdateAnimations, TopPanelDirection, WorkspaceTab, WorkspaceTabPhase } from "./runtime";
-import { EmptyPanel } from "./detail-extras";
+import { EmptyPanel } from "./empty-panel";
 import { RepoSummary } from "./dashboard-data";
 import { RepoWorkstream } from "./repo-workstream";
 import {

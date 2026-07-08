@@ -44,6 +44,11 @@ function localOperatorProxy(): ProxyOptions {
   };
 }
 
+function manualChunks(id: string) {
+  const normalized = id.replaceAll("\\", "/");
+  if (normalized.includes("/node_modules/react/") || normalized.includes("/node_modules/react-dom/")) return "vendor-react";
+}
+
 export default defineConfig({
   plugins: [
     {
@@ -86,6 +91,7 @@ export default defineConfig({
         entryFileNames: "assets/[name]-[hash].js",
         chunkFileNames: "assets/[name]-[hash].js",
         assetFileNames: "assets/[name]-[hash][extname]",
+        manualChunks,
       },
     },
   },
