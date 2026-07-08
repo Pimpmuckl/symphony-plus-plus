@@ -17,6 +17,8 @@ import {
 import { appDialogReducer, appStateReducer, createInitialAppState, initialAppDialogState } from "./dashboard-state";
 import { applyDashboardTheme, repoWorkstreamHasWorkItems, shouldShowUpdateSimulationControls, writeDashboardUiStateValue, writeStoredTheme } from "./dashboard-persistence";
 import { canMutateDashboardComments, canMutateDashboardOperatorActions } from "./detail-utils";
+import { useDashboardOperatorSettings } from "./dashboard-operator-settings";
+import { filterWorkstreamsBySearch } from "./dashboard-search";
 import { packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
 import { useDashboardUpdateAnimations } from "./update-animations";
 
@@ -28,9 +30,10 @@ export function DashboardApp() {
 }
 function useDashboardController() {
   const [appState, dispatchApp] = useReducer(appStateReducer, null, createInitialAppState);
-  const { dashboard, error, hideEmptyWorkstreams, loading, refreshing, showWorkstreamContextBar, theme, workspaceTab } = appState;
+  const { dashboard, error, hideEmptyWorkstreams, loading, refreshing, showWelcomeToast, showWorkstreamContextBar, theme, workspaceTab } = appState;
   const [dialogState, dispatchDialog] = useReducer(appDialogReducer, initialAppDialogState);
   const [connectionIssue, setConnectionIssue] = useState<DashboardConnectionIssue | null>(null);
+  const [dashboardSearchQuery, setDashboardSearchQuery] = useState("");
   const showUpdateSimulationControls = useMemo(() => shouldShowUpdateSimulationControls(), []);
   const [runtimeConfig, setRuntimeConfig] = useState<DashboardRuntimeConfig | undefined>(() => dashboardRuntimeConfig);
   const canMutateOperatorActions = canMutateDashboardOperatorActions(runtimeConfig);
@@ -49,33 +52,20 @@ function useDashboardController() {
     dashboardFingerprintRef.current = nextFingerprint;
     dispatchApp({ type: "patch", state: { dashboard: nextDashboard } });
   }, []);
-  const setLoading = useCallback((nextLoading: boolean) => {
-    dispatchApp({ type: "patch", state: { loading: nextLoading } });
-  }, []);
-  const setRefreshing = useCallback((nextRefreshing: boolean) => {
-    dispatchApp({ type: "patch", state: { refreshing: nextRefreshing } });
-  }, []);
-  const setError = useCallback((nextError: string | null) => {
-    dispatchApp({ type: "patch", state: { error: nextError } });
-  }, []);
-  const setWorkspaceTab = useCallback((nextWorkspaceTab: WorkspaceTab) => {
-    dispatchApp({ type: "patch", state: { workspaceTab: nextWorkspaceTab } });
-  }, []);
-  const setHideEmptyWorkstreams = useCallback((nextHideEmptyWorkstreams: boolean) => {
-    dispatchApp({ type: "patch", state: { hideEmptyWorkstreams: nextHideEmptyWorkstreams } });
-  }, []);
-  const setShowWorkstreamContextBar = useCallback((nextShowWorkstreamContextBar: boolean) => {
-    dispatchApp({ type: "patch", state: { showWorkstreamContextBar: nextShowWorkstreamContextBar } });
-  }, []);
-  const setSelectedGuidance = useCallback((selectedGuidance: GuidanceItem | null) => {
-    dispatchDialog({ type: "guidance", selectedGuidance });
-  }, []);
-  const setSelectedCardDetail = useCallback((selectedCardDetail: CardDetailSelection | null) => {
-    dispatchDialog({ type: "cardDetail", selectedCardDetail });
-  }, []);
-  const setNewRequestOpen = useCallback((open: boolean) => {
-    dispatchDialog({ type: "newRequest", open });
-  }, []);
+  const setLoading = useCallback((nextLoading: boolean) => dispatchApp({ type: "patch", state: { loading: nextLoading } }), []);
+  const setRefreshing = useCallback((nextRefreshing: boolean) => dispatchApp({ type: "patch", state: { refreshing: nextRefreshing } }), []);
+  const setError = useCallback((nextError: string | null) => dispatchApp({ type: "patch", state: { error: nextError } }), []);
+  const setWorkspaceTab = useCallback((nextWorkspaceTab: WorkspaceTab) => dispatchApp({ type: "patch", state: { workspaceTab: nextWorkspaceTab } }), []);
+  const updateDashboardSearchQuery = useCallback((query: string) => {
+    setDashboardSearchQuery(query);
+    if (query.trim()) setWorkspaceTab("workstreams");
+  }, [setWorkspaceTab]);
+  const setHideEmptyWorkstreams = useCallback((nextHideEmptyWorkstreams: boolean) => dispatchApp({ type: "patch", state: { hideEmptyWorkstreams: nextHideEmptyWorkstreams } }), []);
+  const setShowWorkstreamContextBar = useCallback((nextShowWorkstreamContextBar: boolean) => dispatchApp({ type: "patch", state: { showWorkstreamContextBar: nextShowWorkstreamContextBar } }), []);
+  const setShowWelcomeToast = useCallback((nextShowWelcomeToast: boolean) => dispatchApp({ type: "patch", state: { showWelcomeToast: nextShowWelcomeToast } }), []);
+  const setSelectedGuidance = useCallback((selectedGuidance: GuidanceItem | null) => dispatchDialog({ type: "guidance", selectedGuidance }), []);
+  const setSelectedCardDetail = useCallback((selectedCardDetail: CardDetailSelection | null) => dispatchDialog({ type: "cardDetail", selectedCardDetail }), []);
+  const setNewRequestOpen = useCallback((open: boolean) => dispatchDialog({ type: "newRequest", open }), []);
 
   useEffect(() => {
     dashboardRef.current = dashboard;
@@ -352,28 +342,6 @@ function useDashboardController() {
     return result;
   }, [refreshAfterMutation]);
 
-  const updateRetentionSetting = useCallback(async (payload: { work_request_archive_after_days?: number; solo_session_delete_after_days?: number }) => {
-    await withLocalOperatorReconnect(async () => {
-      const response = await operatorFetch(operatorApiUrl("/settings"), {
-        method: "POST",
-        headers: await mutationHeaders(),
-        body: JSON.stringify(payload),
-      });
-      const responsePayload = (await readDashboardApiResponse(response, "Settings were not saved")) as DashboardMutationPayload;
-      await refreshAfterMutation(responsePayload);
-    });
-  }, [refreshAfterMutation]);
-
-  const updateArchiveAfterDays = useCallback(
-    (archiveAfterDays: number) => updateRetentionSetting({ work_request_archive_after_days: archiveAfterDays }),
-    [updateRetentionSetting],
-  );
-
-  const updateSoloSessionDeleteAfterDays = useCallback(
-    (deleteAfterDays: number) => updateRetentionSetting({ solo_session_delete_after_days: deleteAfterDays }),
-    [updateRetentionSetting],
-  );
-
   const archiveWorkRequest = useCallback<WorkRequestMutation>((workRequestId) => mutateWorkRequest(workRequestId, "archive", {}, "WorkRequest was not archived", { archive: true }), [mutateWorkRequest]);
 
   const deleteWorkRequest = useCallback<WorkRequestMutation>((workRequestId) => mutateWorkRequest(workRequestId, "delete", {}, "WorkRequest was not deleted", { remove: true }), [mutateWorkRequest]);
@@ -470,6 +438,10 @@ function useDashboardController() {
   }, [showWorkstreamContextBar]);
 
   useEffect(() => {
+    writeDashboardUiStateValue("showWelcomeToast", showWelcomeToast);
+  }, [showWelcomeToast]);
+
+  useEffect(() => {
     applyDashboardTheme(theme);
   }, [theme]);
 
@@ -486,8 +458,10 @@ function useDashboardController() {
   const linkedWorkPackageIds = useMemo(() => new Set(dashboard?.linked_work_package_ids ?? []), [dashboard]);
   const requestDetailsByRepo = useMemo(() => requestDetailsByRepoKey(requestDetails), [requestDetails]);
   const packageSelections = useMemo(() => packageSelectionIndex(requestDetails, packages), [packages, requestDetails]);
-  const archiveAfterDays = dashboard?.settings?.work_request_archive_after_days ?? 14;
-  const soloSessionDeleteAfterDays = dashboard?.settings?.solo_session_delete_after_days ?? 30;
+  const { archiveAfterDays, openDashboardOnBoot, soloSessionDeleteAfterDays, updateArchiveAfterDays, updateOpenDashboardOnBoot, updateSoloSessionDeleteAfterDays } = useDashboardOperatorSettings({
+    dashboard,
+    refreshAfterMutation,
+  });
   const guidanceItems = useMemo(() => allGuidanceItems(dashboard), [dashboard]);
   const blockerItems = useMemo(() => activeBlockerItems(packages, packageSelections, dashboard?.active_blocking_edges ?? []), [dashboard?.active_blocking_edges, packages, packageSelections]);
   const soloSessions = useMemo(() => dashboard?.solo_sessions?.solo_sessions ?? [], [dashboard]);
@@ -501,6 +475,10 @@ function useDashboardController() {
   const workstreamRepos = useMemo(
     () => (hideEmptyWorkstreams ? repos.filter(repoWorkstreamHasWorkItems) : repos),
     [hideEmptyWorkstreams, repos],
+  );
+  const searchedWorkstreams = useMemo(
+    () => filterWorkstreamsBySearch(workstreamRepos, requestDetailsByRepo, dashboardSearchQuery),
+    [dashboardSearchQuery, requestDetailsByRepo, workstreamRepos],
   );
   const hiddenWorkstreamCount = repos.length - workstreamRepos.length;
   const updateAnimations = useDashboardUpdateAnimations({
@@ -516,9 +494,10 @@ function useDashboardController() {
     () => ({
       workstreams: (
         <WorkstreamsPane
-          repos={workstreamRepos}
+          repos={searchedWorkstreams.repos}
           hiddenRepoCount={hiddenWorkstreamCount}
-          requestDetailsByRepo={requestDetailsByRepo}
+          searchActive={searchedWorkstreams.active}
+          requestDetailsByRepo={searchedWorkstreams.requestDetailsByRepo}
           activeBlockingEdges={dashboard?.active_blocking_edges ?? []}
           guidanceItems={guidanceItems}
           onSelectGuidance={setSelectedGuidance}
@@ -537,13 +516,12 @@ function useDashboardController() {
       dashboard?.active_blocking_edges,
       guidanceItems,
       hiddenWorkstreamCount,
-      requestDetailsByRepo,
+      searchedWorkstreams,
       setSelectedCardDetail,
       setSelectedGuidance,
       showWorkstreamContextBar,
       soloSessions,
       updateAnimations,
-      workstreamRepos,
     ],
   );
 
@@ -559,6 +537,7 @@ function useDashboardController() {
     copyArchitectHandoff,
     createWorkRequest,
     dashboard,
+    dashboardSearchQuery,
     dialogState,
     displayPreferences: { hideEmptyWorkstreams, showWorkstreamContextBar },
     error,
@@ -570,7 +549,9 @@ function useDashboardController() {
     onClearWorkPackageBlocker: clearWorkPackageBlocker,
     onArchiveWorkRequest: archiveWorkRequest,
     onDeleteWorkRequest: deleteWorkRequest,
+    onDashboardSearchQueryChange: updateDashboardSearchQuery,
     onHideEmptyWorkstreamsChange: setHideEmptyWorkstreams,
+    onOpenDashboardOnBootChange: updateOpenDashboardOnBoot,
     onReconnectDashboard: reconnectDashboard,
     onRefreshDashboard: loadDashboard,
     onRestoreWorkRequest: restoreWorkRequest,
@@ -579,6 +560,7 @@ function useDashboardController() {
     onSelectGuidance: setSelectedGuidance,
     onSetNewRequestOpen: setNewRequestOpen,
     onShowWorkstreamContextBarChange: setShowWorkstreamContextBar,
+    onShowWelcomeToastChange: setShowWelcomeToast,
     onSubmitComment: submitComment,
     onSubmitGuidanceAnswer: submitGuidanceAnswer,
     onUpdateArchiveAfterDays: updateArchiveAfterDays,
@@ -587,6 +569,8 @@ function useDashboardController() {
     refreshing,
     repos,
     showUpdateSimulationControls,
+    openDashboardOnBoot,
+    showWelcomeToast,
     soloSessionDeleteAfterDays,
     theme,
     toggleTheme,

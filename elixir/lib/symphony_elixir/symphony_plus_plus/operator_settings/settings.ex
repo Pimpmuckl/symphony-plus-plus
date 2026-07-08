@@ -40,6 +40,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
   @settings_id "local_operator"
   @default_work_request_archive_after_days 14
   @default_solo_session_delete_after_days 30
+  @default_open_dashboard_on_boot true
   @max_work_request_archive_after_days 3650
 
   @primary_key {:id, :string, autogenerate: false}
@@ -47,6 +48,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
           id: String.t(),
           work_request_archive_after_days: pos_integer(),
           solo_session_delete_after_days: pos_integer(),
+          open_dashboard_on_boot: boolean(),
           hidden_work_package_ids: [String.t()],
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
@@ -55,6 +57,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
   schema "sympp_operator_settings" do
     field(:work_request_archive_after_days, :integer, default: @default_work_request_archive_after_days)
     field(:solo_session_delete_after_days, :integer, default: @default_solo_session_delete_after_days)
+    field(:open_dashboard_on_boot, :boolean, default: @default_open_dashboard_on_boot)
     field(:hidden_work_package_ids, HiddenWorkPackageIdList, default: [])
 
     timestamps(type: :utc_datetime_usec)
@@ -69,12 +72,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
   @spec default_solo_session_delete_after_days() :: pos_integer()
   def default_solo_session_delete_after_days, do: @default_solo_session_delete_after_days
 
+  @spec default_open_dashboard_on_boot() :: boolean()
+  def default_open_dashboard_on_boot, do: @default_open_dashboard_on_boot
+
   @spec default() :: t()
   def default do
     %__MODULE__{
       id: @settings_id,
       work_request_archive_after_days: @default_work_request_archive_after_days,
       solo_session_delete_after_days: @default_solo_session_delete_after_days,
+      open_dashboard_on_boot: @default_open_dashboard_on_boot,
       hidden_work_package_ids: []
     }
   end
@@ -93,8 +100,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings do
 
   defp changeset(settings, attrs) do
     settings
-    |> cast(attrs, [:id, :work_request_archive_after_days, :solo_session_delete_after_days, :hidden_work_package_ids])
-    |> validate_required([:id, :work_request_archive_after_days, :solo_session_delete_after_days])
+    |> cast(attrs, [
+      :id,
+      :work_request_archive_after_days,
+      :solo_session_delete_after_days,
+      :open_dashboard_on_boot,
+      :hidden_work_package_ids
+    ])
+    |> validate_required([
+      :id,
+      :work_request_archive_after_days,
+      :solo_session_delete_after_days,
+      :open_dashboard_on_boot
+    ])
     |> validate_number(:work_request_archive_after_days,
       greater_than_or_equal_to: 1,
       less_than_or_equal_to: @max_work_request_archive_after_days

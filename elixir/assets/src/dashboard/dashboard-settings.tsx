@@ -60,32 +60,54 @@ function SettingsSwitch({
   checked: boolean;
   description: string;
   label: string;
-  onChange: (value: boolean) => void;
+  onChange: (value: boolean) => Promise<void> | void;
 }) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function toggle() {
+    setPending(true);
+    setError(null);
+
+    try {
+      await onChange(!checked);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Setting was not saved");
+    } finally {
+      setPending(false);
+    }
+  }
+
   return (
-    <div className="flex items-center justify-between gap-4 rounded-md border bg-card/60 p-3">
-      <div className="min-w-0">
-        <span className="block text-sm font-medium">{label}</span>
-        <span className="mt-1 block text-xs text-muted-foreground">{description}</span>
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={ariaLabel}
-        className={cn(
-          "relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          checked && "bg-primary",
-        )}
-        onClick={() => onChange(!checked)}
-      >
-        <span
+    <div className="grid gap-2 rounded-md border bg-card/60 p-3">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <span className="block text-sm font-medium">{label}</span>
+          <span className="mt-1 block text-xs text-muted-foreground">{description}</span>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={checked}
+          aria-busy={pending}
+          aria-label={ariaLabel}
+          disabled={pending}
           className={cn(
-            "absolute left-1 top-1 size-4 rounded-full bg-background shadow transition-transform",
-            checked && "translate-x-5",
+            "relative h-6 w-11 shrink-0 rounded-full bg-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70",
+            checked && "bg-primary",
           )}
-        />
-      </button>
+          onClick={() => void toggle()}
+        >
+          <span
+            className={cn(
+              "absolute left-1 top-1 size-4 rounded-full bg-background shadow transition-transform",
+              checked && "translate-x-5",
+            )}
+          />
+          {pending ? <Loader2 className="absolute left-3.5 top-1 size-4 animate-spin text-background" /> : null}
+        </button>
+      </div>
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>
   );
 }
@@ -177,23 +199,31 @@ export function DashboardSettingsDialog({
   canUpdateRetentionSettings,
   hideEmptyWorkstreams,
   hiddenWorkstreamCount,
+  openDashboardOnBoot,
   showWorkstreamContextBar,
+  showWelcomeToast,
   soloSessionDeleteAfterDays,
   onArchiveAfterDaysChange,
   onHideEmptyWorkstreamsChange,
+  onOpenDashboardOnBootChange,
   onSoloSessionDeleteAfterDaysChange,
   onShowWorkstreamContextBarChange,
+  onShowWelcomeToastChange,
 }: {
   archiveAfterDays: number;
   canUpdateRetentionSettings: boolean;
   hideEmptyWorkstreams: boolean;
   hiddenWorkstreamCount: number;
+  openDashboardOnBoot: boolean;
   showWorkstreamContextBar: boolean;
+  showWelcomeToast: boolean;
   soloSessionDeleteAfterDays: number;
   onArchiveAfterDaysChange: (value: number) => Promise<void>;
   onHideEmptyWorkstreamsChange: (value: boolean) => void;
+  onOpenDashboardOnBootChange: (value: boolean) => Promise<void>;
   onSoloSessionDeleteAfterDaysChange: (value: number) => Promise<void>;
   onShowWorkstreamContextBarChange: (value: boolean) => void;
+  onShowWelcomeToastChange: (value: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const initialFocusRef = useRef<HTMLDivElement | null>(null);
@@ -203,6 +233,8 @@ export function DashboardSettingsDialog({
   const contextBarLabel = showWorkstreamContextBar
     ? "Shows the sticky repo, WR, and plan-node path while scrolling."
     : "Board rows scroll without the sticky context path.";
+  const welcomeLabel = showWelcomeToast ? "Shows the welcome modal on dashboard load." : "Welcome modal is hidden.";
+  const openOnBootLabel = openDashboardOnBoot ? "Opens the dashboard when the local server starts." : "Local server starts without opening a browser.";
 
   return (
     <>
@@ -254,8 +286,23 @@ export function DashboardSettingsDialog({
                   value={soloSessionDeleteAfterDays}
                   onSave={onSoloSessionDeleteAfterDaysChange}
                 />
+                <SettingsSwitch
+                  ariaLabel="Open dashboard on boot"
+                  checked={openDashboardOnBoot}
+                  description={openOnBootLabel}
+                  label="Open dashboard on boot"
+                  onChange={onOpenDashboardOnBootChange}
+                />
               </>
             ) : null}
+
+            <SettingsSwitch
+              ariaLabel="Show welcome toast"
+              checked={showWelcomeToast}
+              description={welcomeLabel}
+              label="Welcome toast"
+              onChange={onShowWelcomeToastChange}
+            />
 
             <SettingsSwitch
               ariaLabel="Hide empty repositories"

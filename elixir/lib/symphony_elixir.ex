@@ -57,7 +57,8 @@ defmodule SymphonyElixir.Application do
       [
         SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore,
         SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases,
-        {SymphonyElixir.HttpServer, host: "127.0.0.1"}
+        {SymphonyElixir.HttpServer, host: "127.0.0.1"},
+        SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
       ]
     else
       [

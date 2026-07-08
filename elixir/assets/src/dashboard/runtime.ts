@@ -217,6 +217,7 @@ export type DashboardUiState = {
   finishedRequestChildren?: Record<string, boolean>;
   hideEmptyWorkstreams?: boolean;
   showWorkstreamContextBar?: boolean;
+  showWelcomeToast?: boolean;
   theme?: DashboardTheme;
 };
 

@@ -285,6 +285,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     %{}
     |> put_settings_param(params, "work_request_archive_after_days")
     |> put_settings_param(params, "solo_session_delete_after_days")
+    |> put_settings_param(params, "open_dashboard_on_boot")
   end
 
   defp put_settings_param(attrs, params, key) do
@@ -308,6 +309,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     %{
       work_request_archive_after_days: settings.work_request_archive_after_days,
       solo_session_delete_after_days: settings.solo_session_delete_after_days,
+      open_dashboard_on_boot: settings.open_dashboard_on_boot,
       hidden_work_package_ids: settings.hidden_work_package_ids
     }
   end

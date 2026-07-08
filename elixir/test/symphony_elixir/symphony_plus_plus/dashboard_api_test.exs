@@ -5541,16 +5541,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert dashboard_payload["settings"]["work_request_archive_after_days"] == 14
       assert dashboard_payload["settings"]["solo_session_delete_after_days"] == 30
+      assert dashboard_payload["settings"]["open_dashboard_on_boot"] == true
       assert Enum.any?(dashboard_payload["work_requests"]["work_requests"], &(&1["id"] == request.id))
       assert dashboard_payload["archived_work_requests"]["work_requests"] == []
 
       archive_payload =
         local_operator_csrf_conn()
-        |> post("/api/v1/sympp/operator/settings", %{"work_request_archive_after_days" => 1})
+        |> post("/api/v1/sympp/operator/settings", %{"work_request_archive_after_days" => 1, "open_dashboard_on_boot" => false})
         |> json_response(200)
 
       assert archive_payload["settings"]["work_request_archive_after_days"] == 1
       assert archive_payload["settings"]["solo_session_delete_after_days"] == 30
+      assert archive_payload["settings"]["open_dashboard_on_boot"] == false
       refute Map.has_key?(archive_payload, "dashboard")
 
       archived_dashboard_payload = local_operator_dashboard_payload()

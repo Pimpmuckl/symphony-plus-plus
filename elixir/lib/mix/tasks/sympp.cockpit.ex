@@ -47,7 +47,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   def usage do
     [
       "Usage: mix sympp.cockpit [--host <loopback-host>] [--port <port>] " <>
-        "[--database <sqlite-path>] [--dashboard-origin <vite-origin>] [--open-dashboard]",
+        "[--database <sqlite-path>] [--dashboard-origin <vite-origin>] [--open-dashboard|--no-open-dashboard]",
       Repo.default_database_help_text()
     ]
     |> Enum.join("\n")
@@ -138,11 +138,14 @@ defmodule Mix.Tasks.Sympp.Cockpit do
     if Keyword.has_key?(opts, :open_dashboard) do
       opts
     else
-      Keyword.put(opts, :open_dashboard, open_dashboard_from_env?())
+      case open_dashboard_from_env() do
+        :unset -> opts
+        enabled -> Keyword.put(opts, :open_dashboard, enabled)
+      end
     end
   end
 
-  defp open_dashboard_from_env? do
+  defp open_dashboard_from_env do
     case System.get_env(@open_dashboard_env) do
       value when is_binary(value) ->
         value
@@ -151,7 +154,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
         |> then(&(&1 in ["1", "true", "yes", "on"]))
 
       _value ->
-        false
+        :unset
     end
   end
 
@@ -178,6 +181,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
       configure_cockpit(opts, original_endpoint_config)
       {:ok, _started} = ensure_runtime_started()
       :ok = run_work_request_retention()
+      opts = put_open_dashboard_default(opts)
       :ok = start_http_server_or_raise(opts)
       port = wait_for_bound_port()
 
@@ -395,6 +399,21 @@ defmodule Mix.Tasks.Sympp.Cockpit do
       :ok
     else
       {:error, reason} -> skip_operator_retention(reason)
+    end
+  end
+
+  defp put_open_dashboard_default(opts) do
+    if Keyword.has_key?(opts, :open_dashboard) do
+      opts
+    else
+      Keyword.put(opts, :open_dashboard, open_dashboard_from_settings?())
+    end
+  end
+
+  defp open_dashboard_from_settings? do
+    case OperatorSettingsRepository.get(Repo) do
+      {:ok, settings} -> settings.open_dashboard_on_boot
+      _error -> true
     end
   end
 

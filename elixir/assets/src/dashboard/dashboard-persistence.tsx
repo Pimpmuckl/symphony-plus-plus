@@ -84,6 +84,11 @@ export function readStoredShowWorkstreamContextBar() {
   return typeof storedValue === "boolean" ? storedValue : true;
 }
 
+export function readStoredShowWelcomeToast() {
+  const storedValue = readDashboardUiState().showWelcomeToast;
+  return typeof storedValue === "boolean" ? storedValue : true;
+}
+
 export function readStoredRepoWorkstreamOpen(stateKey: string, fallback: boolean) {
   const repoWorkstreams = readDashboardUiState().repoWorkstreams;
   const storedOpen = repoWorkstreams?.[stateKey];

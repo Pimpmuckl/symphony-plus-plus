@@ -17,6 +17,8 @@ import { CardDetailDialog } from "./card-detail-dialog";
 import { CardDetailSelection, DASHBOARD_LOGO_URL, DashboardConnectionIssue, DashboardTheme, DashboardUpdateAnimations, LOCAL_OPERATOR_AUTH_REQUIRED_MESSAGE, ResolveContextComment, SubmitContextComment, TopPanelKey, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, isLocalOperatorAuthRequiredMessage } from "./runtime";
 import { LiveLedgerBadge } from "./status-cards";
 import { RepoSummary } from "./dashboard-data";
+import { DashboardSearchControl } from "./dashboard-search-control";
+import { DashboardWelcomeDialog } from "./dashboard-welcome";
 import { AttentionBarControls } from "./attention-bar-controls";
 import { StatusRail } from "./status-rail";
 import { UpdateSimulationControls } from "./update-simulation-controls";
@@ -41,6 +43,7 @@ export function DashboardShell({
   dashboard,
   dialogState,
   displayPreferences,
+  dashboardSearchQuery,
   error,
   guidanceItems,
   hiddenWorkstreamCount,
@@ -51,7 +54,9 @@ export function DashboardShell({
   onArchiveWorkRequest,
   onClearWorkPackageBlocker,
   onDeleteWorkRequest,
+  onDashboardSearchQueryChange,
   onHideEmptyWorkstreamsChange,
+  onOpenDashboardOnBootChange,
   onReconnectDashboard,
   onRefreshDashboard,
   onResolveComment,
@@ -60,6 +65,7 @@ export function DashboardShell({
   onSelectGuidance,
   onSetNewRequestOpen,
   onShowWorkstreamContextBarChange,
+  onShowWelcomeToastChange,
   onSubmitComment,
   onSubmitGuidanceAnswer,
   onUpdateArchiveAfterDays,
@@ -68,6 +74,8 @@ export function DashboardShell({
   refreshing,
   repos,
   showUpdateSimulationControls,
+  openDashboardOnBoot,
+  showWelcomeToast,
   soloSessionDeleteAfterDays,
   theme,
   toggleTheme,
@@ -87,6 +95,7 @@ export function DashboardShell({
   dashboard: DashboardPayload | null;
   dialogState: AppDialogState;
   displayPreferences: DashboardDisplayPreferences;
+  dashboardSearchQuery: string;
   error: string | null;
   guidanceItems: GuidanceItem[];
   hiddenWorkstreamCount: number;
@@ -97,7 +106,9 @@ export function DashboardShell({
   onArchiveWorkRequest: WorkRequestMutation;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
   onDeleteWorkRequest: WorkRequestMutation;
+  onDashboardSearchQueryChange: (query: string) => void;
   onHideEmptyWorkstreamsChange: (hide: boolean) => void;
+  onOpenDashboardOnBootChange: (open: boolean) => Promise<void>;
   onReconnectDashboard: () => Promise<void>;
   onRefreshDashboard: () => Promise<void>;
   onResolveComment: ResolveContextComment;
@@ -106,6 +117,7 @@ export function DashboardShell({
   onSelectGuidance: (item: GuidanceItem | null) => void;
   onSetNewRequestOpen: (open: boolean) => void;
   onShowWorkstreamContextBarChange: (show: boolean) => void;
+  onShowWelcomeToastChange: (show: boolean) => void;
   onSubmitComment: SubmitContextComment;
   onSubmitGuidanceAnswer: (item: GuidanceItem, submission: GuidanceAnswerSubmission) => Promise<void>;
   onUpdateArchiveAfterDays: (archiveAfterDays: number) => Promise<void>;
@@ -114,6 +126,8 @@ export function DashboardShell({
   refreshing: boolean;
   repos: RepoSummary[];
   showUpdateSimulationControls: boolean;
+  openDashboardOnBoot: boolean;
+  showWelcomeToast: boolean;
   soloSessionDeleteAfterDays: number;
   theme: DashboardTheme;
   toggleTheme: () => void;
@@ -158,6 +172,7 @@ export function DashboardShell({
             <div className="flex flex-wrap items-center gap-2">
               {showUpdateSimulationControls ? <UpdateSimulationControls updateAnimations={updateAnimations} /> : null}
               <LiveLedgerBadge error={error} connectionIssue={connectionIssue} databasePath={dashboard?.ledger?.database} />
+              <DashboardSearchControl value={dashboardSearchQuery} onValueChange={onDashboardSearchQueryChange} />
               <AttentionBarControls
                 guidanceItems={guidanceItems}
                 blockerItems={blockerItems}
@@ -170,11 +185,15 @@ export function DashboardShell({
                 archiveAfterDays={archiveAfterDays}
                 canUpdateRetentionSettings={canMutateOperatorActions}
                 soloSessionDeleteAfterDays={soloSessionDeleteAfterDays}
+                openDashboardOnBoot={openDashboardOnBoot}
+                showWelcomeToast={showWelcomeToast}
                 hideEmptyWorkstreams={hideEmptyWorkstreams}
                 hiddenWorkstreamCount={hiddenWorkstreamCount}
                 showWorkstreamContextBar={showWorkstreamContextBar}
                 onArchiveAfterDaysChange={onUpdateArchiveAfterDays}
                 onSoloSessionDeleteAfterDaysChange={onUpdateSoloSessionDeleteAfterDays}
+                onOpenDashboardOnBootChange={onOpenDashboardOnBootChange}
+                onShowWelcomeToastChange={onShowWelcomeToastChange}
                 onHideEmptyWorkstreamsChange={onHideEmptyWorkstreamsChange}
                 onShowWorkstreamContextBarChange={onShowWorkstreamContextBarChange}
               />
@@ -284,6 +303,13 @@ export function DashboardShell({
           onSubmitComment={onSubmitComment}
           onResolveComment={onResolveComment}
           canMutateComments={canMutateComments}
+        />
+        <DashboardWelcomeDialog
+          ready={dashboard !== null}
+          showWelcomeToast={showWelcomeToast}
+          openDashboardOnBoot={openDashboardOnBoot}
+          onShowWelcomeToastChange={onShowWelcomeToastChange}
+          onOpenDashboardOnBootChange={onOpenDashboardOnBootChange}
         />
       </main>
     </TooltipProvider>

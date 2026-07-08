@@ -21,6 +21,7 @@ import { workstreamCategoryCounts } from "./workstream-data";
 export function WorkstreamsPane({
   repos,
   hiddenRepoCount,
+  searchActive,
   requestDetailsByRepo,
   activeBlockingEdges,
   guidanceItems,
@@ -33,6 +34,7 @@ export function WorkstreamsPane({
 }: {
   repos: RepoSummary[];
   hiddenRepoCount: number;
+  searchActive: boolean;
   requestDetailsByRepo: Map<string, WorkRequestDetail[]>;
   activeBlockingEdges: ActiveBlockingEdge[];
   guidanceItems: GuidanceItem[];
@@ -70,7 +72,7 @@ export function WorkstreamsPane({
   } as React.CSSProperties;
 
   if (repos.length === 0) {
-    return <EmptyPanel title={hiddenRepoCount > 0 ? "No active repositories" : "No repositories yet"} />;
+    return <EmptyPanel title={searchActive ? "No matches" : hiddenRepoCount > 0 ? "No active repositories" : "No repositories yet"} />;
   }
 
   return (
