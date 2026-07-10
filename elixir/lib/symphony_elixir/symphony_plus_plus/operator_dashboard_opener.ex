@@ -156,8 +156,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener do
   defp dashboard_url(port) do
     origin =
       case System.get_env("SYMPP_DASHBOARD_ORIGIN") do
-        value when is_binary(value) and value != "" -> String.trim_trailing(value, "/")
-        _value -> "http://127.0.0.1:#{port}"
+        value when is_binary(value) and value != "" ->
+          String.trim_trailing(value, "/")
+
+        _value ->
+          case Application.get_env(:symphony_elixir, Endpoint, []) |> Keyword.get(:sympp_dashboard_origin) do
+            value when is_binary(value) and value != "" -> String.trim_trailing(value, "/")
+            _value -> "http://127.0.0.1:#{port}"
+          end
       end
 
     origin

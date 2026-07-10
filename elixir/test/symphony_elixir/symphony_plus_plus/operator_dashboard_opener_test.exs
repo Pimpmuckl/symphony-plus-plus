@@ -76,11 +76,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpenerTest do
 
   test "enabled settings preserve the cockpit bootstrap token" do
     System.delete_env("SYMPP_OPEN_DASHBOARD")
-    System.put_env("SYMPP_DASHBOARD_ORIGIN", "http://127.0.0.1:5174")
     parent = self()
 
-    endpoint_config = Application.get_env(:symphony_elixir, Endpoint, [])
-    Application.put_env(:symphony_elixir, Endpoint, Keyword.put(endpoint_config, :sympp_local_operator_bootstrap_token, "test-bootstrap-token"))
+    endpoint_config =
+      Application.get_env(:symphony_elixir, Endpoint, [])
+      |> Keyword.put(:sympp_dashboard_origin, "http://127.0.0.1:5174")
+      |> Keyword.put(:sympp_local_operator_bootstrap_token, "test-bootstrap-token")
+
+    Application.put_env(:symphony_elixir, Endpoint, endpoint_config)
 
     assert :ok =
              OperatorDashboardOpener.open_once(
