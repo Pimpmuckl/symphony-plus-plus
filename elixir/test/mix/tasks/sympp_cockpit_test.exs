@@ -324,6 +324,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
   test "uses operator settings to suppress dashboard browser opening" do
     database_path = WorkPackageFactory.database_path()
     original_dynamic_repo = Repo.get_dynamic_repo()
+    System.put_env("SYMPP_DEFER_DASHBOARD_OPEN", "1")
 
     try do
       pid = start_supervised!({Repo, database: database_path, name: Repo.process_name(database_path), pool_size: 1})

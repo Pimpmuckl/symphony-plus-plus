@@ -535,9 +535,14 @@ defmodule Mix.Tasks.Sympp.Cockpit do
 
   defp dashboard_open_message(opts) do
     cond do
-      defer_dashboard_open?() -> "Dashboard browser open deferred until an MCP client connects."
-      Keyword.get(opts, :open_dashboard, false) -> "Bootstrap URL browser open attempted; token redacted from logs."
-      true -> "Dashboard browser auto-open disabled; pass --open-dashboard or set #{@open_dashboard_env}=1 to open it."
+      Keyword.get(opts, :open_dashboard, false) and defer_dashboard_open?() ->
+        "Dashboard browser open deferred until an MCP client connects."
+
+      Keyword.get(opts, :open_dashboard, false) ->
+        "Bootstrap URL browser open attempted; token redacted from logs."
+
+      true ->
+        "Dashboard browser auto-open disabled; pass --open-dashboard or set #{@open_dashboard_env}=1 to open it."
     end
   end
 
