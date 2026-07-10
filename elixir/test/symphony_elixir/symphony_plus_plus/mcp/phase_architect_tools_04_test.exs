@@ -373,71 +373,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
     assert get_in(response, ["error", "data", "reason"]) == "missing_phase_id"
   end
 
-  test "remaining Phase 7 architect stubs return explicit not-yet-implemented errors", %{repo: repo} do
-    {_package, session} =
-      create_architect_session(repo, "SYMPP-ARCHITECT-PHASE7", [
-        "read:phase",
-        "request:child_replan"
-      ])
-
-    grants_before = repo.aggregate(AccessGrant, :count)
-
-    replan_response =
-      mcp_tool(repo, session, "request_child_replan", %{"work_package_id" => "SYMPP-ARCHITECT-PHASE7", "reason" => "not wired"})
-
-    assert get_in(replan_response, ["error", "code"]) == -32_604
-    assert get_in(replan_response, ["error", "data", "reason"]) == "phase7_not_implemented"
-    assert repo.aggregate(AccessGrant, :count) == grants_before
-  end
-
-  test "Phase 7 architect stubs revalidate phase anchors before not-implemented", %{repo: repo} do
+  test "phase architect tools revalidate phase anchors", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-ARCHITECT-STUB-DRIFT", kind: "mcp"))
     assert {:ok, other_phase} = PhaseRepository.create(repo, %{id: "phase-mcp-stub-drift", title: "Stub drift"})
 
     assert {:ok, architect_work_key} =
-             create_architect_work_key(repo, package.id, ["mint:child_worker_key", "read:phase", "request:child_replan"])
+             create_architect_work_key(repo, package.id, ["mint:child_worker_key", "read:phase"])
 
     assert {:ok, architect_assignment} =
              AccessGrantRepository.claim(repo, architect_work_key.secret, %{claimed_by: "architect-1"}, DateTime.utc_now(:microsecond))
 
     session = MCPHarness.session(architect_assignment, proof_hash: WorkKey.secret_hash(architect_work_key.secret))
 
-    replan_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "replan-child-stub",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "request_child_replan",
-            "arguments" => %{"work_package_id" => package.id, "reason" => "drift check"}
-          }
-        },
-        config: test_mcp_config(repo),
-        session: session
-      )
-
-    assert get_in(replan_response, ["error", "data", "reason"]) == "phase7_not_implemented"
-
     assert {:ok, _package} = WorkPackageRepository.update(repo, package.id, %{phase_id: other_phase.id})
-
-    stale_replan_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "replan-child-stale",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "request_child_replan",
-            "arguments" => %{"work_package_id" => package.id, "reason" => "drift check"}
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(stale_replan_response, ["error", "code"]) == -32_003
-    assert get_in(stale_replan_response, ["error", "data", "reason"]) == "outside_session_scope"
 
     stale_mint_response =
       MCPHarness.request(

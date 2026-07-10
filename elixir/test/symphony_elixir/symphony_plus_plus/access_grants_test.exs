@@ -826,7 +826,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
           "dispatch:work_request",
           "mint:child_worker_key",
           "approve:child_ready_state",
-          "split:child_work_package",
           "write:phase_plan",
           "update:child_work_package"
         ] do

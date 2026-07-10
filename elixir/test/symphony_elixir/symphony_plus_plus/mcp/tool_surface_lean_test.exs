@@ -4,7 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Server, ToolCatalog}
 
   @profiles ~w(worker architect coordinator solo)a
-  @phase7_stubs ~w(request_child_replan split_work_package publish_phase_update)
+  @removed_tools ~w(request_child_replan split_work_package publish_phase_update)
 
   test "surface profile is selected before the first tools/list" do
     for profile <- @profiles do
@@ -13,13 +13,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
 
       assert length(tools) == MapSet.size(names)
       assert Enum.all?(tools, &(not Map.has_key?(&1, "title")))
+      refute Enum.any?(@removed_tools, fn name -> MapSet.member?(names, name) end)
 
       case profile do
         :worker ->
           assert MapSet.equal?(names, MapSet.new(["sympp.health", "release_current_assignment", "claim_local_assignment" | ToolCatalog.worker_tools()]))
 
         :architect ->
-          expected = ["sympp.health", "release_current_assignment", "claim_local_architect_assignment", "get_current_assignment" | ToolCatalog.architect_tools() -- @phase7_stubs]
+          expected = ["sympp.health", "release_current_assignment", "claim_local_architect_assignment", "get_current_assignment" | ToolCatalog.architect_tools()]
           assert MapSet.equal?(names, MapSet.new(expected))
 
         profile when profile in [:coordinator, :solo] ->
@@ -41,10 +42,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
     assert Map.has_key?(architect, "read_work_request")
     assert Map.has_key?(architect, "dispatch_work_request_planned_slice")
     assert architect["dispatch_work_request_planned_slice"]["inputSchema"]["required"] == ["planned_slice_id"]
-    refute Enum.any?(@phase7_stubs, &Map.has_key?(architect, &1))
+    refute Enum.any?(@removed_tools, &Map.has_key?(architect, &1))
   end
 
-  test "full and default retain the complete compatibility surface" do
+  test "full and default expose every implemented tool" do
     full = ToolCatalog.startup_tool_specs(:full, Config.default(surface_profile: :full, source_revision: nil))
 
     assert full ==
@@ -53,7 +54,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
     assert Enum.any?(full, &(&1["name"] == "claim_local_assignment"))
     assert Enum.any?(full, &(&1["name"] == "claim_local_architect_assignment"))
     assert Enum.any?(full, &(&1["name"] == "solo_attach"))
-    assert Enum.all?(@phase7_stubs, fn name -> Enum.any?(full, &(&1["name"] == name)) end)
+    refute Enum.any?(@removed_tools, fn name -> Enum.any?(full, &(&1["name"] == name)) end)
     assert Config.default(surface_profile: "default", source_revision: nil).surface_profile == :full
   end
 

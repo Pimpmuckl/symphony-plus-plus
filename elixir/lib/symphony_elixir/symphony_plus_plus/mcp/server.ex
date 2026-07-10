@@ -97,7 +97,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @architect_product_tree_tools ArchitectProductTreeTools.tools()
   @work_request_policy_tools ToolCatalog.work_request_policy_tools()
   @delivery_policy_tools ToolCatalog.delivery_policy_tools()
-  @phase7_stub_architect_tools ToolCatalog.phase7_stub_architect_tools()
   @version_resource "sympp://health/version"
   @assignment_resource "sympp://assignment/current"
   @enforce_keys [:config]
@@ -1280,15 +1279,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp architect_tool(name, arguments, %__MODULE__{config: config, session: session}) when name in @phase7_stub_architect_tools do
-    with {:ok, session} <- architect_session(config.repo, session, architect_tool_capability(name)),
-         :ok <- require_architect_target_scope(config.repo, session, arguments) do
-      phase7_not_implemented(name)
-    else
-      {:error, reason} -> architect_error(reason, name)
-    end
-  end
-
   defp optional_put(attrs, _key, nil), do: attrs
   defp optional_put(attrs, key, value), do: Map.put(attrs, key, value)
 
@@ -1303,29 +1293,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp linked_planned_slice_work_request_for_work_package(repo, work_package_id) do
     PlannedSliceLinkage.linked_work_request_for_work_package(repo, work_package_id)
-  end
-
-  defp require_architect_target_scope(repo, %Session{} = session, %{"work_package_id" => work_package_id}) do
-    with :ok <- require_architect_work_package_scope(session, work_package_id) do
-      require_architect_current_phase_anchor(repo, session)
-    end
-  end
-
-  defp require_architect_target_scope(repo, %Session{} = session, %{"phase_id" => phase_id}) do
-    with :ok <- WorkRequestScope.require_architect_phase_scope(repo, session, phase_id) do
-      WorkRequestScope.require_architect_phase_anchor(repo, session, phase_id)
-    end
-  end
-
-  defp require_architect_target_scope(repo, %Session{} = session, _arguments) do
-    require_architect_current_phase_anchor(repo, session)
-  end
-
-  defp require_architect_current_phase_anchor(repo, %Session{} = session) do
-    case WorkRequestScope.architect_phase_scope(repo, session) do
-      {:ok, phase_id} -> WorkRequestScope.require_architect_phase_anchor(repo, session, phase_id)
-      {:error, reason} -> {:error, reason}
-    end
   end
 
   defp put_optional_handoff_opt(opts, _key, nil), do: opts
@@ -1612,14 +1579,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp architect_session(repo, session, capability) when is_binary(capability) do
-    with {:ok, session} <- Auth.require_session(session, repo),
-         :ok <- require_architect_assignment(session.assignment),
-         :ok <- require_architect_capabilities(repo, session.assignment, [capability]) do
-      {:ok, session}
-    end
-  end
-
   defp architect_session(repo, session, capabilities) when is_list(capabilities) do
     with {:ok, session} <- Auth.require_session(session, repo),
          :ok <- require_architect_assignment(session.assignment),
@@ -1758,14 +1717,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp require_architect_work_package_scope(%Session{} = session, work_package_id) do
-    if Session.work_package_id(session) == work_package_id do
-      :ok
-    else
-      {:error, :phase_scope_not_available}
-    end
-  end
-
   defp architect_tool_capability("create_child_work_package"), do: "create:child_work_package"
   defp architect_tool_capability("mint_child_worker_key"), do: "mint:child_worker_key"
   defp architect_tool_capability("revoke_child_worker_key"), do: "revoke:child_worker_key"
@@ -1805,21 +1756,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_tool_capability("cleanup_work_package_worktree"), do: "dispatch:work_request"
   defp architect_tool_capability("read_phase_board"), do: "read:phase"
   defp architect_tool_capability("approve_scope_expansion"), do: "approve:scope_expansion"
-  defp architect_tool_capability("request_child_replan"), do: "request:child_replan"
   defp architect_tool_capability("approve_child_ready_state"), do: "approve:child_ready_state"
   defp architect_tool_capability("merge_child_into_phase"), do: "merge:child_into_phase"
-  defp architect_tool_capability("split_work_package"), do: "split:child_work_package"
-  defp architect_tool_capability("publish_phase_update"), do: "publish:phase_update"
-
-  defp phase7_not_implemented(tool) do
-    {:error, -32_604, "Not implemented",
-     %{
-       "tool" => tool,
-       "reason" => "phase7_not_implemented",
-       "phase" => "Phase 7",
-       "detail" => "This Phase 7 architect workflow is not implemented in the current package."
-     }}
-  end
 
   defp lock_work_package(repo, work_package_id) do
     query = from(work_package in WorkPackage, where: work_package.id == ^work_package_id)

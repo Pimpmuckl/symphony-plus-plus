@@ -59,11 +59,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "read_child_status",
     "approve_scope_expansion",
     "read_phase_board",
-    "request_child_replan",
     "approve_child_ready_state",
-    "merge_child_into_phase",
-    "split_work_package",
-    "publish_phase_update"
+    "merge_child_into_phase"
   ]
   @worker_tool_names [
     "get_current_assignment",
