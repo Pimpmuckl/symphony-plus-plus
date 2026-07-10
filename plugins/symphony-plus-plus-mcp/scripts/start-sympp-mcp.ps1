@@ -502,6 +502,16 @@ function Get-McpContractFingerprintFromMarketplaceSource([string]$PluginRoot) {
   return Get-McpContractFingerprintFromContractFile (Join-Path $marketplaceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
 }
 
+function Resolve-LocalMcpContractFingerprint([string]$PluginRoot) {
+  $sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $PluginRoot "../.."))
+  if (Test-SymphonySourceRoot $sourceRoot) {
+    $fingerprint = Get-McpContractFingerprintFromContractFile (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+    if ($fingerprint) { return $fingerprint }
+  }
+
+  return Get-McpContractFingerprintFromMarketplaceSource $PluginRoot
+}
+
 function Resolve-ExpectedMcpContractFingerprint([string]$PluginRoot) {
   if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT)) {
     $explicitRepoRoot = [System.IO.Path]::GetFullPath($env:SYMPP_REPO_ROOT)
@@ -518,20 +528,7 @@ function Resolve-ExpectedMcpContractFingerprint([string]$PluginRoot) {
     throw "Symphony++ MCP launcher expected MCP contract fingerprint could not be resolved from explicit SYMPP_REPO_ROOT contract JSON: $contractPath"
   }
 
-  $candidateRoots = New-Object System.Collections.Generic.List[string]
-  $sourceCandidate = [System.IO.Path]::GetFullPath((Join-Path $PluginRoot "../.."))
-  if (Test-SymphonySourceRoot $sourceCandidate) {
-    $candidateRoots.Add($sourceCandidate)
-  }
-
-  foreach ($root in @($candidateRoots | Select-Object -Unique)) {
-    $fingerprint = Get-McpContractFingerprintFromContractFile (Join-Path $root "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
-    if ($fingerprint) {
-      return $fingerprint
-    }
-  }
-
-  $fingerprint = Get-McpContractFingerprintFromMarketplaceSource $PluginRoot
+  $fingerprint = Resolve-LocalMcpContractFingerprint $PluginRoot
   if ($fingerprint) {
     return $fingerprint
   }
@@ -1682,10 +1679,12 @@ function Resolve-LocalWarmAttachIdentity {
   }
   if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($recordedPluginRoot, $currentPluginRoot)) { return $null }
 
+  $currentContract = Resolve-LocalMcpContractFingerprint $PluginRoot
   $expectedContract = Normalize-McpContractFingerprint ([string]$RuntimeState.backend.expected_contract_fingerprint)
   $actualContract = Normalize-McpContractFingerprint ([string]$RuntimeState.backend.contract_fingerprint)
-  if ([string]::IsNullOrWhiteSpace($expectedContract) -or
-      -not [System.StringComparer]::OrdinalIgnoreCase.Equals($expectedContract, $actualContract)) {
+  if ([string]::IsNullOrWhiteSpace($currentContract) -or
+      -not [System.StringComparer]::OrdinalIgnoreCase.Equals($currentContract, $expectedContract) -or
+      -not [System.StringComparer]::OrdinalIgnoreCase.Equals($currentContract, $actualContract)) {
     return $null
   }
 
