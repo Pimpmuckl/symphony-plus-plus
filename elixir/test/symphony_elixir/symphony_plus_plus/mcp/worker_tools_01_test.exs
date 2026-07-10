@@ -577,10 +577,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
       )
 
     acceptance_contents = get_in(acceptance_resource, ["result", "contents"])
+    assert Enum.map(acceptance_contents, & &1["mimeType"]) == ["text/markdown", "text/vnd.toon"]
     acceptance_toon_resource = Enum.find(acceptance_contents, &(Map.get(&1, "mimeType") == "text/vnd.toon"))
     assert acceptance_toon_resource["text"] =~ "acceptance[1]{source}:"
     assert acceptance_toon_resource["text"] =~ "Do not invent completion state"
     refute acceptance_toon_resource["text"] =~ "done"
+
+    http_acceptance_resource =
+      MCPHarness.request(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "http-acceptance-resource",
+          "method" => "resources/read",
+          "params" => %{"uri" => "sympp://work-packages/#{package.id}/acceptance.md"}
+        },
+        config: Config.default(repo: repo, mode: :http, surface_profile: :full),
+        session: session
+      )
+
+    assert [%{"mimeType" => "text/vnd.toon", "text" => http_acceptance_text}] =
+             get_in(http_acceptance_resource, ["result", "contents"])
+
+    assert http_acceptance_text =~ "acceptance[1]{source}:"
+    assert http_acceptance_text =~ "Do not invent completion state"
 
     read_plan_response =
       MCPHarness.request(

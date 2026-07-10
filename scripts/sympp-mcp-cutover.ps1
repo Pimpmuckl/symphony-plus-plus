@@ -243,7 +243,26 @@ function Invoke-MarketplaceUpgrade([string]$CodexHomePath) {
 }
 
 function Resolve-InstalledMcpPluginRoot([string]$CacheRoot) {
-  return Resolve-InstalledPluginRoot $CacheRoot $McpPluginName "scripts\start-sympp-mcp.cmd" $true
+  return Resolve-InstalledPluginRoot $CacheRoot $McpPluginName ".mcp.json" $true
+}
+
+function Assert-InstalledDirectMcpConfig([string]$InstalledPluginRoot, [int]$BackendPort) {
+  $configPath = Require-File (Join-Path $InstalledPluginRoot ".mcp.json") "Installed MCP config"
+  $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+  $servers = if ($config.PSObject.Properties["mcp_servers"]) { $config.mcp_servers } else { $config }
+  $server = $servers.PSObject.Properties["symphony_plus_plus"].Value
+  $expectedUrl = "http://127.0.0.1:$BackendPort/mcp"
+
+  if ($null -eq $server -or [string]$server.url -ne $expectedUrl) {
+    throw "Installed Symphony++ MCP config must use direct streamable HTTP at $expectedUrl."
+  }
+  foreach ($stdioField in @("command", "args", "cwd")) {
+    if ($server.PSObject.Properties[$stdioField]) {
+      throw "Installed Symphony++ MCP config mixes direct HTTP with stdio field '$stdioField'."
+    }
+  }
+
+  return $expectedUrl
 }
 
 function Resolve-InstalledDefaultPluginRoot([string]$CacheRoot) {
@@ -556,10 +575,6 @@ function Get-SymppProcessKind($Process, [string]$MarketplaceSourceRoot, [string]
     return "launcher_bridge"
   }
 
-  if ($commandLine -match "\bsympp\.(cockpit|mcp)\b") {
-    return "elixir_runtime"
-  }
-
   $assetsRoot = Join-Path $MarketplaceSourceRoot "elixir\assets"
   if ((Test-CommandLineContainsPath $commandLine $assetsRoot) -and $commandLine -match "(vite|node_modules)") {
     return "dashboard_vite"
@@ -567,6 +582,10 @@ function Get-SymppProcessKind($Process, [string]$MarketplaceSourceRoot, [string]
 
   if ((Test-CommandLineContainsPath $commandLine $MarketplaceSourceRoot) -and $commandLine -match "\b(mix|mise|erl|elixir)\b.*\bsympp\.(cockpit|mcp)\b") {
     return "marketplace_elixir_runtime"
+  }
+
+  if ($commandLine -match "\bsympp\.(cockpit|mcp)\b") {
+    return "elixir_runtime"
   }
 
   if (($name -in @("cmd.exe", "pwsh.exe", "powershell.exe", "mise.exe", "erl.exe", "node.exe")) -and
@@ -667,59 +686,8 @@ function Write-ProcessTable([object[]]$Rows, [string]$EmptyMessage) {
     Format-Table -AutoSize -Wrap
 }
 
-function Stop-CandidateProcesses([object[]]$Candidates) {
-  $stopped = @()
-  $stillRunning = @()
-
-  foreach ($candidate in @($Candidates | Sort-Object ProcessId -Descending)) {
-    $process = Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
-    if (-not $process) {
-      continue
-    }
-
-    if ($PSCmdlet.ShouldProcess("PID $($candidate.ProcessId) $($candidate.Name) $($candidate.Kind)", "Stop verified Symphony++ runtime process")) {
-      Stop-Process -Id $candidate.ProcessId -Force -ErrorAction SilentlyContinue
-      $stopped += $candidate
-    }
-  }
-
-  Start-Sleep -Seconds 2
-
-  foreach ($candidate in $Candidates) {
-    $process = Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
-    if ($process) {
-      $stillRunning += $candidate
-    }
-  }
-
-  return [pscustomobject]@{
-    Stopped = @($stopped | Sort-Object ProcessId)
-    StillRunning = @($stillRunning | Sort-Object ProcessId)
-  }
-}
-
 function Get-ProcessByPidFromInventory([int]$ProcessId) {
   return Get-ProcessCommandLines | Where-Object { $_.ProcessId -eq $ProcessId } | Select-Object -First 1
-}
-
-function Assert-RequiredPortsAvailable([int[]]$Ports) {
-  $listeners = @(Get-ListeningPorts $Ports)
-  if ($listeners.Count -eq 0) {
-    return
-  }
-
-  $details = @(
-    foreach ($listener in $listeners) {
-      $process = Get-ProcessByPidFromInventory $listener.OwningProcess
-      if ($process) {
-        "port $($listener.LocalPort) pid $($listener.OwningProcess) $($process.Name)"
-      } else {
-        "port $($listener.LocalPort) pid $($listener.OwningProcess)"
-      }
-    }
-  ) -join "; "
-
-  throw "Required singleton ports are still occupied after stopping verified S++ candidates: $details"
 }
 
 function Wait-ListeningPort([int]$Port, [int]$TimeoutSeconds) {
@@ -832,57 +800,6 @@ function Start-Dashboard([string]$MarketplaceSourceRoot, [int]$BackendPort, [int
     ProcessId = $process.Id
     StdoutLog = $stdout
     StderrLog = $stderr
-  }
-}
-
-function Invoke-InstalledWrapperInitialize([string]$InstalledPluginRoot, [string]$SymppHomePath, [string]$RuntimeFilePath) {
-  $script = Require-File (Join-Path $InstalledPluginRoot "scripts\start-sympp-mcp.ps1") "Installed MCP launcher script"
-  $powershell = Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $powershell) {
-    $powershell = Get-Command powershell -ErrorAction SilentlyContinue | Select-Object -First 1
-  }
-  if (-not $powershell) {
-    throw "Neither pwsh nor powershell was found on PATH."
-  }
-
-  $request = @{
-    jsonrpc = "2.0"
-    id = "sympp-cutover-init"
-    method = "initialize"
-    params = @{
-      protocolVersion = "2025-03-26"
-      capabilities = @{}
-      clientInfo = @{
-        name = "sympp-mcp-cutover"
-        version = "0.1.0"
-      }
-    }
-  } | ConvertTo-Json -Depth 12 -Compress
-
-  $previousErrorActionPreference = $ErrorActionPreference
-  $previousSymppHome = $env:SYMPP_HOME
-  $previousRuntimeFile = $env:SYMPP_RUNTIME_FILE
-  try {
-    $ErrorActionPreference = "Continue"
-    $env:SYMPP_HOME = $SymppHomePath
-    $env:SYMPP_RUNTIME_FILE = $RuntimeFilePath
-    $output = @($request | & $powershell.Source -NoProfile -ExecutionPolicy Bypass -File $script 2>&1)
-    $exitCode = $LASTEXITCODE
-  } finally {
-    $ErrorActionPreference = $previousErrorActionPreference
-    $env:SYMPP_HOME = $previousSymppHome
-    $env:SYMPP_RUNTIME_FILE = $previousRuntimeFile
-  }
-  $stdout = (($output | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }) | Out-String)
-  $stderr = (($output | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] }) | Out-String)
-
-  if ($exitCode -ne 0) {
-    throw "Installed MCP wrapper initialize failed with exit code $($exitCode).`nSTDOUT:`n$stdout`nSTDERR:`n$stderr"
-  }
-
-  return [pscustomobject]@{
-    Stdout = $stdout
-    Stderr = $stderr
   }
 }
 
@@ -1026,13 +943,33 @@ function New-RuntimeKey([string]$BackendUrl, [string]$DashboardOrigin, [string]$
   return "contract=$contract;backend=$backend;dashboard=$dashboard"
 }
 
-function Update-RuntimeStatePids([string]$RuntimeFile, [int]$BackendPid, [int]$DashboardPid, [string]$SourceRevision, [int]$BackendPort, [int]$DashboardPort, [string]$ExpectedContractFingerprint) {
-  $runtimeFilePath = Require-File $RuntimeFile "Runtime state file"
-  $state = Get-Content -LiteralPath $runtimeFilePath -Raw | ConvertFrom-Json
+function Update-RuntimeStatePids([string]$RuntimeFile, [string]$InstalledPluginRoot, [int]$BackendPid, [int]$DashboardPid, [string]$SourceRevision, [int]$BackendPort, [int]$DashboardPort, [string]$ExpectedContractFingerprint) {
+  $runtimeFilePath = ConvertTo-FullPath $RuntimeFile
+  $state = if (Test-Path -LiteralPath $runtimeFilePath -PathType Leaf) {
+    Get-Content -LiteralPath $runtimeFilePath -Raw | ConvertFrom-Json
+  } else {
+    [pscustomobject]@{
+      generated_at = $null
+      runtime_kind = $null
+      runtime_key = $null
+      runtime_mode = "source"
+      plugin_root = $InstalledPluginRoot
+      backend = [pscustomobject]@{
+        pid = $null; port = $null; url = $null; mcp_url = $null; status = $null
+        reused = $null; managed = $null; expected_source_revision = $null; source_revision = $null
+        expected_contract_fingerprint = $null; contract_fingerprint = $null
+      }
+      frontend = [pscustomobject]@{
+        pid = $null; port = $null; origin = $null; url = $null; status = $null; reused = $null; managed = $null
+      }
+      superseded_runtimes = @()
+    }
+  }
   $backendUrl = "http://127.0.0.1:$BackendPort"
   $dashboardOrigin = "http://127.0.0.1:$DashboardPort"
   $contractFingerprint = Get-RuntimeStateContractFingerprint $state $ExpectedContractFingerprint
   $state.generated_at = (Get-Date).ToString("o")
+  $state.plugin_root = $InstalledPluginRoot
   $state.runtime_kind = "external_loopback"
   $state.runtime_key = New-RuntimeKey $backendUrl $dashboardOrigin $contractFingerprint
   $state.backend.pid = $BackendPid
@@ -1059,6 +996,7 @@ function Update-RuntimeStatePids([string]$RuntimeFile, [int]$BackendPid, [int]$D
     $state.superseded_runtimes = @()
   }
 
+  New-Item -ItemType Directory -Path (Split-Path -Parent $runtimeFilePath) -Force | Out-Null
   $state | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $runtimeFilePath -Encoding UTF8
   return $state
 }
@@ -1126,7 +1064,7 @@ if (-not $script:SymppCutoverDryRun -and -not $SkipMarketplaceUpgrade -and -not 
     Write-Section "Marketplace Upgrade Preflight"
     $preflightUpgradeFailed = $false
     try {
-      if ($PSCmdlet.ShouldProcess("Codex marketplace $MarketplaceName", "Run pre-stop codex plugin marketplace upgrade")) {
+      if ($PSCmdlet.ShouldProcess("Codex marketplace $MarketplaceName", "Run codex plugin marketplace upgrade")) {
         $preflightUpgrade = Invoke-MarketplaceUpgrade $codexHomePath
         $marketplaceUpgradeAlreadyRun = $true
         if (-not $Json -and -not [string]::IsNullOrWhiteSpace($preflightUpgrade.Stdout)) {
@@ -1136,7 +1074,7 @@ if (-not $script:SymppCutoverDryRun -and -not $SkipMarketplaceUpgrade -and -not 
     } catch {
       $preflightUpgradeFailed = $true
       if (-not $Json) {
-        Write-Host "Pre-stop marketplace upgrade failed; will retry after stopping verified S++ processes."
+        Write-Host "Marketplace upgrade failed; the installed-cache fallback will be evaluated."
         Write-Host $_.Exception.Message
       }
     }
@@ -1147,7 +1085,7 @@ if (-not $script:SymppCutoverDryRun -and -not $SkipMarketplaceUpgrade -and -not 
     $installedPluginRoot = Resolve-InstalledMcpPluginRoot $cacheRoot
     $currentMarketplaceRevision = Resolve-MarketplaceSourceRevision $marketplaceSourceRoot
     if ($currentMarketplaceRevision -ne $sourceRevision -and -not $preflightUpgradeFailed) {
-      throw "Marketplace source revision mismatch before stopping runtime. Expected $sourceRevision but $marketplaceSourceRoot is at $currentMarketplaceRevision."
+      throw "Marketplace source revision mismatch. Expected $sourceRevision but $marketplaceSourceRoot is at $currentMarketplaceRevision."
     }
   }
 }
@@ -1165,12 +1103,12 @@ if (-not $Json) {
 }
 
 $initialInventory = Get-CandidateProcesses $marketplaceSourceRoot $installedPluginRoot $allPorts
-Write-Section "Verified S++ Stop Candidates"
+Write-Section "Existing S++ Processes (Preserved)"
 if (-not $Json) {
   Write-ProcessTable $initialInventory.Candidates "No verified S++ launcher/runtime processes are currently running."
   if ($initialInventory.NonSymppListeners.Count -gt 0) {
     Write-Host ""
-    Write-Host "Non-S++ listeners on checked ports were not selected for stopping:"
+    Write-Host "Non-S++ listeners on checked ports are preserved:"
     $initialInventory.NonSymppListeners |
       Select-Object ProcessId, ParentProcessId, Name, ListeningPorts |
       Format-Table -AutoSize -Wrap
@@ -1180,7 +1118,7 @@ if (-not $Json) {
 if ($script:SymppCutoverDryRun) {
   $summary = [pscustomobject]@{
     status = "what_if"
-    message = "Dry run completed. No processes were stopped, no cache was upgraded, and no singleton was restarted."
+    message = "Dry run completed. No processes were stopped, no cache was upgraded, and no singleton was started."
     candidates = $initialInventory.Candidates
     nonSymppListeners = $initialInventory.NonSymppListeners
     installedCache = $initialCacheStatus
@@ -1198,17 +1136,6 @@ if ($script:SymppCutoverDryRun) {
   exit 0
 }
 
-$stopResult = Stop-CandidateProcesses $initialInventory.Candidates
-Write-Section "Stopped PIDs"
-if (-not $Json) {
-  Write-ProcessTable $stopResult.Stopped "No S++ processes needed to be stopped."
-  if ($stopResult.StillRunning.Count -gt 0) {
-    Write-Host ""
-    Write-Host "S++ processes still running after stop attempt:"
-    Write-ProcessTable $stopResult.StillRunning "None."
-  }
-}
-
 if (-not $SkipMarketplaceUpgrade -and -not $marketplaceUpgradeAlreadyRun) {
   Write-Section "Marketplace Upgrade"
   if ($PSCmdlet.ShouldProcess("Codex marketplace $MarketplaceName", "Run codex plugin marketplace upgrade")) {
@@ -1223,7 +1150,7 @@ if (-not $SkipMarketplaceUpgrade -and -not $marketplaceUpgradeAlreadyRun) {
         throw "Marketplace upgrade failed and -ExpectedSourceRevision was not supplied. The installed-cache fallback only runs when the helper can prove the marketplace snapshot is at the intended revision. Rerun with -ExpectedSourceRevision <git-sha>, use -SkipMarketplaceUpgrade when the cache is intentionally pre-refreshed, or fix the marketplace upgrade failure.`n$marketplaceUpgradeFailure"
       }
       if (-not $Json) {
-        Write-Host "Marketplace upgrade failed after stopping verified S++ processes; evaluating installed-cache fallback."
+        Write-Host "Marketplace upgrade failed; evaluating installed-cache fallback."
         Write-Host $marketplaceUpgradeFailure
       }
     }
@@ -1273,11 +1200,10 @@ if ($cacheStatus.refreshNeeded) {
   }
 }
 
-Write-Section "Installed Launcher Validation"
-$validateCmd = Require-File (Join-Path $installedPluginRoot "scripts\start-sympp-mcp.cmd") "Installed MCP launcher command"
-$validation = Invoke-CheckedCommand "cmd.exe" @("/d", "/s", "/c", "`"$validateCmd`" -ValidateOnly") $HOME "installed start-sympp-mcp.cmd -ValidateOnly"
+Write-Section "Installed Direct HTTP Validation"
+$installedMcpUrl = Assert-InstalledDirectMcpConfig $installedPluginRoot $BackendPort
 if (-not $Json) {
-  Write-Host $validation.Stdout.Trim()
+  Write-Host "MCP URL: $installedMcpUrl"
 }
 
 Write-Section "Installed Runtime Setup"
@@ -1289,17 +1215,29 @@ if (-not $Json) {
 Write-Section "Start Singleton"
 $backendStart = $null
 $dashboardStart = $null
-Assert-RequiredPortsAvailable @($BackendPort, $DashboardPort)
-if ($PSCmdlet.ShouldProcess("127.0.0.1:$BackendPort", "Start Symphony++ backend singleton from installed marketplace cache")) {
+$backendListeners = @(Get-ListeningPorts @($BackendPort))
+if ($backendListeners.Count -gt 1) {
+  throw "Multiple listeners were found on the configured backend port $BackendPort."
+}
+if ($backendListeners.Count -eq 0 -and $PSCmdlet.ShouldProcess("127.0.0.1:$BackendPort", "Start Symphony++ backend singleton from installed marketplace cache")) {
   $backendStart = Start-Backend $marketplaceSourceRoot $sourceRevision $BackendPort $DashboardPort $logDir
 }
-if ($PSCmdlet.ShouldProcess("127.0.0.1:$DashboardPort", "Start Symphony++ dashboard from installed marketplace cache")) {
+$dashboardListeners = @(Get-ListeningPorts @($DashboardPort))
+if ($dashboardListeners.Count -gt 1) {
+  throw "Multiple listeners were found on the configured dashboard port $DashboardPort."
+}
+if ($dashboardListeners.Count -eq 0 -and $PSCmdlet.ShouldProcess("127.0.0.1:$DashboardPort", "Start Symphony++ dashboard from installed marketplace cache")) {
   $dashboardStart = Start-Dashboard $marketplaceSourceRoot $BackendPort $DashboardPort $logDir
 }
 
 $backendPid = Wait-ListeningPort $BackendPort 60
 $dashboardPid = Wait-ListeningPort $DashboardPort 60
-Assert-ListenerKind $backendPid @("elixir_runtime", "marketplace_elixir_runtime", "marketplace_runtime_wrapper") "Backend" $marketplaceSourceRoot $installedPluginRoot
+$backendKinds = if ($backendStart) {
+  @("elixir_runtime", "marketplace_elixir_runtime", "marketplace_runtime_wrapper")
+} else {
+  @("marketplace_elixir_runtime", "marketplace_runtime_wrapper")
+}
+Assert-ListenerKind $backendPid $backendKinds "Backend" $marketplaceSourceRoot $installedPluginRoot
 Assert-ListenerKind $dashboardPid @("dashboard_vite", "marketplace_runtime_wrapper") "Dashboard" $marketplaceSourceRoot $installedPluginRoot
 
 if (-not $Json) {
@@ -1308,9 +1246,9 @@ if (-not $Json) {
 }
 
 Write-Section "Refresh Runtime State"
-$wrapperInit = Invoke-InstalledWrapperInitialize $installedPluginRoot $symppHomePath $runtimeFile
 $expectedContractFingerprint = Resolve-CutoverMcpContractFingerprint $installedPluginRoot $marketplaceSourceRoot
-$runtimeState = Update-RuntimeStatePids $runtimeFile $backendPid $dashboardPid $sourceRevision $BackendPort $DashboardPort $expectedContractFingerprint
+$smokeJson = Invoke-McpSmoke $marketplaceSourceRoot $sourceRevision $BackendPort
+$runtimeState = Update-RuntimeStatePids $runtimeFile $installedPluginRoot $backendPid $dashboardPid $sourceRevision $BackendPort $DashboardPort $expectedContractFingerprint
 if (-not $Json) {
   Write-Host "Runtime key: $($runtimeState.runtime_key)"
   Write-Host "Runtime kind: $($runtimeState.runtime_kind)"
@@ -1335,7 +1273,6 @@ if ($dynamicListeners.Count -gt 0) {
   throw "Unexpected dynamic S++ leak/listener ports remain in 20000-20120: $dynamicSummary"
 }
 
-$smokeJson = Invoke-McpSmoke $marketplaceSourceRoot $sourceRevision $BackendPort
 $dashboardSmoke = Invoke-DashboardSmoke $DashboardPort
 if (-not $dashboardSmoke.HasRoot) {
   throw "Dashboard route returned HTTP $($dashboardSmoke.StatusCode) but did not include the Vite root element."
@@ -1363,7 +1300,7 @@ if (-not $Json) {
 
 $summary = [pscustomobject]@{
   status = "ok"
-  message = "Installed Symphony++ MCP cutover completed."
+  message = "Installed Symphony++ direct HTTP cutover completed."
   sourceRevision = $sourceRevision
   mcpContractFingerprint = if ($runtimeState.backend.PSObject.Properties["contract_fingerprint"]) { $runtimeState.backend.contract_fingerprint } else { $null }
   marketplaceSourceRoot = $marketplaceSourceRoot
@@ -1387,8 +1324,8 @@ $summary = [pscustomobject]@{
     stderrLog = if ($dashboardStart) { $dashboardStart.StderrLog } else { $null }
     route = $dashboardSmoke
   }
-  stoppedPids = @($stopResult.Stopped | ForEach-Object { $_.ProcessId })
-  stillRunningStoppedCandidates = @($stopResult.StillRunning | ForEach-Object { $_.ProcessId })
+  stoppedPids = @()
+  stillRunningStoppedCandidates = @()
   dynamicLeakPorts = @($dynamicListeners)
   mcpSmoke = $smokeJson | ConvertFrom-Json
 }
@@ -1397,6 +1334,6 @@ if ($Json) {
   $summary | ConvertTo-Json -Depth 20
 } else {
   Write-Host "Cutover complete."
-  Write-Host "Stopped PIDs: $(@($summary.stoppedPids) -join ', ')"
+  Write-Host "Stopped PIDs: none (active sessions are preserved)"
   Write-Host "Left running: backend PID $backendPid, dashboard PID $dashboardPid"
 }

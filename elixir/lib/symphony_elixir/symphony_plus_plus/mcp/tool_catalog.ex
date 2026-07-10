@@ -1221,7 +1221,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   end
 
   @spec startup_tool_specs(:full | :worker | :architect | :coordinator | :solo, Config.t()) :: [tool_spec()]
-  def startup_tool_specs(:full, %Config{} = config), do: unbound_tool_specs_for_config(config)
+  def startup_tool_specs(:full, %Config{} = config), do: config |> unbound_tool_specs_for_config() |> lean_tool_specs()
 
   def startup_tool_specs(:worker, %Config{}) do
     [worker_tool_spec(@local_assignment_claim_tool) | worker_session_tool_specs()]
@@ -1293,7 +1293,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp shared_worker_architect_tool_spec(name), do: architect_tool_spec(name)
 
-  defp lean_tool_specs(specs), do: Enum.map(specs, &lean_tool_spec/1)
+  @spec lean_tool_specs([tool_spec()]) :: [tool_spec()]
+  def lean_tool_specs(specs), do: Enum.map(specs, &lean_tool_spec/1)
 
   defp lean_tool_spec(%{"name" => name, "description" => "Symphony++ worker tool " <> name_and_period} = spec) do
     if name_and_period == name <> ".", do: Map.drop(spec, ["title", "description"]), else: Map.delete(spec, "title")
