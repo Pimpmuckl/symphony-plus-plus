@@ -14,6 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   @foreign_key_type :string
 
   @executable_kinds [
+    "standard_pr",
     "quick_fix",
     "hotfix",
     "docs",
@@ -28,7 +29,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   @anchor_kinds ["delegation"]
   @kinds @executable_kinds ++ [@phase_child_kind] ++ @anchor_kinds
   @legacy_kinds [
-    "standard_pr",
     "review_only",
     "setup",
     "core",

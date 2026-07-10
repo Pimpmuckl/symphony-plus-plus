@@ -69,8 +69,13 @@ Design one PR-sized execution slice per worker unless the operator approves
 another shape. Each slice needs:
 
 - Outcome-focused title and goal.
-- Valid `work_package_kind`.
-- Owned globs, forbidden globs, target base branch, and branch strategy.
+- Owned globs. Keep this boundary explicit.
+- `work_package_kind` defaults to `standard_pr` for ordinary PR-backed work;
+  use `mcp` only for MCP servers, protocols, tools, or plugins.
+- Delivery repo and target base branch default to the selected WorkRequest's
+  primary repo scope. Pass the target base branch when selecting a secondary
+  delivery repo. Branch pattern, forbidden globs, and review lanes may be
+  omitted when their safe empty or package-policy defaults are sufficient.
 - Acceptance criteria the worker can prove.
 - Validation commands or blocked-validation owner.
 - Review profile/provider requirements.
@@ -92,6 +97,12 @@ delivery closeout, runtime cleanup, worker-key revocation, and dispatch. Keep
 intentional sibling reads, status/question tools, durable decisions, and package
 tools explicit.
 
+For `add_work_request_planned_slice`, the selected WorkRequest also supplies
+the default primary delivery repo and target base branch. Pass the target base
+branch with a secondary delivery repo. The tool defaults the package kind to
+`standard_pr`; title, goal, owned globs, acceptance criteria, validation, and
+stop conditions remain explicit.
+
 Use product-plan node content, move, and completion tools separately: content
 changes title/description/kind, move changes parent/position, and completion
 sets completion marks plus any required blocker closeout.
@@ -110,9 +121,10 @@ pass `branch`, `worktree_path`, `caller_id`, and `claimed_by` without asking
 for secrets.
 
 Dispatch workers with `prepare_work_package_worktree`; pass the WorkPackage id
-and use the returned `worker_launch.workspace_path` as the worker cwd. If
-prepare or cleanup returns `target_repo_root_required`, retry with the product
-checkout that owns the recorded worktree path.
+and use the returned `worker_launch.workspace_path` as the worker cwd. Pass a
+concrete `branch` when the WorkPackage branch pattern is absent or templated.
+If prepare or cleanup returns `target_repo_root_required`, retry with the
+product checkout that owns the recorded worktree path.
 
 Worker prompts must include:
 

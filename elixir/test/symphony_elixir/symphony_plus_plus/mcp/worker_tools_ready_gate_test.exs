@@ -53,13 +53,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-READY-BLOCKER", kind: "mcp", status: "ci_waiting")
+               WorkPackageFactory.attrs(id: "SYMPP-READY-BLOCKER", kind: "standard_pr", status: "ci_waiting")
              )
 
     append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+
+    missing_merge_evidence_response =
+      MCPHarness.request(
+        %{"jsonrpc" => "2.0", "id" => "missing-merge-evidence", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
+        repo: repo,
+        session: session
+      )
+
+    assert "pr_attached" in get_in(missing_merge_evidence_response, ["error", "data", "missing"])
+    assert "review_package_submitted" in get_in(missing_merge_evidence_response, ["error", "data", "missing"])
 
     empty_review_response =
       MCPHarness.request(

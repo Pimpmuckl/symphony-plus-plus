@@ -81,6 +81,14 @@ claimed current WorkRequest may omit `work_request_id`:
 status/question tools, durable decision tools, and package tools still require
 their explicit target ids.
 
+For ordinary PR-backed work, `add_work_request_planned_slice` defaults
+`work_package_kind` to `standard_pr`, delivery repo and target base branch to
+the selected WorkRequest's primary repo scope, and omitted review lanes to the
+package policy. Pass the target base branch when selecting a secondary delivery
+repo. Branch pattern and forbidden globs may also be omitted. Title, goal,
+owned globs, acceptance criteria, validation, and stop conditions stay
+required. Use `mcp` only for MCP server, protocol, tool, or plugin work.
+
 For product-plan nodes, use the content tool for title, description, or kind,
 the node move tool for parent or position, and the completion tool for
 completion marks and blocker closeout.

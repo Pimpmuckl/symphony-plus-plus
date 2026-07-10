@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
   @moduledoc false
 
-  @mcp_policy %{
+  @worker_package_policy %{
     template: "worker_package",
     constraints: %{
       expiry_seconds: nil,
@@ -13,7 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
     review_suite: %{required: ["normal"], optional: ["deep"]}
   }
 
-  @mcp_ci_required_policy @mcp_policy
+  @mcp_ci_required_policy @worker_package_policy
                           |> Map.put(:work_package_kind, "mcp")
                           |> Map.update!(:required_gates, &(&1 ++ ["ci_waiting"]))
                           |> Map.update!(:readiness_requirements, &(&1 ++ ["ci_waiting"]))
@@ -62,7 +62,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
       readiness_requirements: ["acceptance_criteria_met", "tests_passed", "review_normal_green"],
       review_suite: %{required: ["normal"], optional: ["deep"]}
     },
-    "mcp" => @mcp_policy,
+    "standard_pr" => @worker_package_policy,
+    "mcp" => @worker_package_policy,
     "mcp_ci_required" => @mcp_ci_required_policy,
     "mcp_current_pr_state" => %{
       work_package_kind: "mcp",

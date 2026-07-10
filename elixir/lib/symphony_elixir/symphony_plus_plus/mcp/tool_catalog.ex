@@ -367,7 +367,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp architect_tool_description("record_work_request_decision"),
     do: "Record a durable decision log entry on a scoped WorkRequest. source_type must be one of: #{Enum.join(DecisionLogEntry.source_types(), ", ")}."
 
-  defp architect_tool_description("add_work_request_planned_slice"), do: "Add a planned slice to the claimed current WorkRequest."
+  defp architect_tool_description("add_work_request_planned_slice"),
+    do: "Add a slice; standard_pr is ordinary PR work, while mcp is MCP server, protocol, tool, or plugin work."
 
   defp architect_tool_description("upsert_work_request_product_plan_node_content") do
     "Create or edit V3 product plan node content inside the claimed current WorkRequest. Do not create a plan node solely to wrap one slice. Leave simple slices direct unless the node groups multiple units or records a real product boundary."
@@ -952,30 +953,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         "work_request_id" => current_work_request_id_schema(),
         "title" => string_schema(),
         "goal" => string_schema(),
-        "work_package_kind" => string_enum_schema(WorkPackage.planned_slice_kinds()),
+        "work_package_kind" => Map.put(string_enum_schema(WorkPackage.planned_slice_kinds()), "default", "standard_pr"),
         "delivery_repo" => described_string_schema("Optional delivery repo for this planned slice. Defaults to the parent WorkRequest primary repo and must be listed in the WorkRequest repo scopes."),
         "target_base_branch" =>
           described_string_schema(
-            "Delivery base branch for the planned slice and created WorkPackage. It may differ from the parent WorkRequest base branch; worktree preparation must use this package base branch."
+            "Optional delivery base branch for the planned slice and created WorkPackage. Defaults to the selected WorkRequest base branch for its primary repo; pass it when selecting a secondary delivery repo. Worktree preparation must use the effective package base branch."
           ),
         "owned_file_globs" =>
           described_string_array_schema(
             "Repo-relative slash-separated owned file globs. `**` must be a complete path segment, for example `scripts/**/deploy*.ps1`; invalid examples include `scripts/**deploy**` and `packages/**kraken_batch**`."
           ),
-        "forbidden_file_globs" => string_array_schema(),
+        "forbidden_file_globs" => described_string_array_schema("Optional forbidden file globs. Defaults to an empty list."),
         "acceptance_criteria" => string_array_schema(),
         "validation_steps" => string_array_schema(),
-        "review_lanes" => review_suite_profile_array_schema(),
+        "review_lanes" => Map.put(review_suite_profile_array_schema(), "description", "Omit to use package policy review defaults."),
         "stop_conditions" => string_array_schema(),
         "branch_pattern" => described_string_schema("Optional exact branch or {{placeholder}} template. Git wildcard patterns such as `*` are not supported.")
       },
       [
         "title",
         "goal",
-        "work_package_kind",
-        "target_base_branch",
         "owned_file_globs",
-        "forbidden_file_globs",
         "acceptance_criteria",
         "validation_steps",
         "stop_conditions"

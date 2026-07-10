@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
 
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
   alias SymphonyElixir.SymphonyPlusPlus.Id
+  alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
   alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.StringList
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -86,6 +87,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
       |> normalize_keys()
       |> put_new_value("id", stable_id())
       |> put_new_value("status", "planned")
+      |> put_new_review_lanes()
       |> put_new_list_values()
 
     %__MODULE__{}
@@ -177,6 +179,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
   defp put_new_list_values(attrs) do
     Enum.reduce(@list_fields, attrs, fn field, acc -> put_new_value(acc, Atom.to_string(field), []) end)
   end
+
+  defp put_new_review_lanes(%{"work_package_kind" => kind} = attrs) when is_binary(kind) do
+    case Templates.expand(kind) do
+      {:ok, policy} -> put_new_value(attrs, "review_lanes", policy.review_suite.required)
+      {:error, :unknown_policy_template} -> attrs
+    end
+  end
+
+  defp put_new_review_lanes(attrs), do: attrs
 
   defp normalize_keys(attrs) when is_map(attrs) do
     Map.new(attrs, fn {key, value} -> {normalize_key(key), value} end)

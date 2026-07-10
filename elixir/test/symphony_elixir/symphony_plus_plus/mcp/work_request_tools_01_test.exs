@@ -102,14 +102,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert get_in(claimed_tools_by_name, ["add_work_request_planned_slice", "inputSchema", "required"]) == [
              "title",
              "goal",
-             "work_package_kind",
-             "target_base_branch",
              "owned_file_globs",
-             "forbidden_file_globs",
              "acceptance_criteria",
              "validation_steps",
              "stop_conditions"
            ]
+
+    assert get_in(claimed_tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "work_package_kind", "default"]) ==
+             "standard_pr"
+
+    assert get_in(claimed_tools_by_name, ["add_work_request_planned_slice", "description"]) =~ "mcp is MCP server"
 
     assert get_in(claimed_tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "work_request_id", "description"]) =~
              "claimed architect WorkRequest"
