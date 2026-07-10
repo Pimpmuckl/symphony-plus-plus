@@ -70,7 +70,9 @@ after the singleton cutover.
 2. Confirm the response includes `work_package.id` and `worker_bootstrap`.
 3. Prepare the worker's product-repo worktree with
    `prepare_work_package_worktree`. Pass the WorkPackage id; pass
-   `target_repo_root` only when the helper cannot infer the product checkout.
+   `target_repo_root` only when the helper cannot infer the product checkout,
+   and pass a concrete `branch` when the WorkPackage branch pattern is absent
+   or templated.
    If prepare or cleanup returns `target_repo_root_required`, retry with the
    product checkout that owns the recorded worktree path.
    Use the returned `worker_launch.workspace_path` as the worker cwd.

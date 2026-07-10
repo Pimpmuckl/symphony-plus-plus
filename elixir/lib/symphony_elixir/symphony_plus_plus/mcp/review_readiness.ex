@@ -925,7 +925,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   end
 
   defp merge_required?(%WorkPackage{} = work_package) do
-    work_package.kind in ["hotfix", "adapter", "mcp", "skill", "hooks", "phase_child"]
+    required_gate?(work_package, "human_merge") or required_gate?(work_package, "architect_merge")
   end
 
   defp review_lanes_present?(_state, []), do: true

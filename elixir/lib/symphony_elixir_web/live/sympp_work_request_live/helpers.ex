@@ -130,15 +130,13 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
   def planned_slice_form(attrs \\ %{}, work_request \\ %{}) do
     attrs = normalize_keys(attrs)
 
-    defaults = %{
+    %{
       "title" => "",
       "goal" => "",
-      "work_package_kind" => "mcp",
+      "work_package_kind" => "standard_pr",
       "target_base_branch" => value(work_request, :base_branch, ""),
       "branch_pattern" => ""
     }
-
-    defaults
     |> Map.merge(Map.take(attrs, @planned_slice_scalar_fields))
     |> Map.merge(planned_slice_list_form_values(attrs))
   end
@@ -156,6 +154,7 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
       Map.new(@planned_slice_list_fields, fn field ->
         {field, newline_list(Map.get(form, field, ""))}
       end)
+      |> then(fn attrs -> if attrs["review_lanes"] == [], do: Map.delete(attrs, "review_lanes"), else: attrs end)
 
     Map.merge(scalar_attrs, list_attrs)
   end

@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Revision
 
@@ -246,20 +247,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
         status: "ready_for_slicing"
       )
 
-    grant_work_request_scope!(repo, session, work_request.id)
-
     add_args = %{
       "title" => "Current WorkRequest slice",
       "goal" => "Use the claimed WorkRequest when omitted.",
-      "work_package_kind" => "mcp",
-      "target_base_branch" => anchor.base_branch,
       "owned_file_globs" => ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
-      "forbidden_file_globs" => [],
       "acceptance_criteria" => ["Omitted WorkRequest id targets the current claim."],
       "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp/work_request_tools_02_test.exs"],
-      "review_lanes" => ["normal"],
       "stop_conditions" => ["Stop before dispatch."]
     }
+
+    missing_context_response = mcp_tool(repo, session, "add_work_request_planned_slice", add_args)
+    assert get_in(missing_context_response, ["error", "data", "reason"]) == "missing_work_request_id"
+
+    grant_work_request_scope!(repo, session, work_request.id)
 
     add_response = mcp_tool(repo, session, "add_work_request_planned_slice", add_args)
     add_payload = get_in(add_response, ["result", "structuredContent"])
@@ -267,6 +267,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     assert add_payload["work_request"]["id"] == work_request.id
     assert get_in(add_payload, ["planned_slice", "work_request_id"]) == work_request.id
+    assert get_in(add_payload, ["planned_slice", "delivery_repo"]) == work_request.repo
+    assert get_in(add_payload, ["planned_slice", "target_base_branch"]) == work_request.base_branch
+
+    assert {:ok, planned_slice} = WorkRequestRepository.get_planned_slice(repo, work_request.id, planned_slice_id)
+    assert planned_slice.work_package_kind == "standard_pr"
+    assert planned_slice.branch_pattern == nil
+    assert planned_slice.forbidden_file_globs == []
+    assert planned_slice.review_lanes == ["normal"]
+
+    unsafe_omission_response =
+      mcp_tool(repo, session, "add_work_request_planned_slice", Map.delete(add_args, "owned_file_globs"))
+
+    assert get_in(unsafe_omission_response, ["error", "data", "reason"]) == "missing_owned_file_globs"
 
     skip_add_response =
       mcp_tool(
@@ -340,6 +353,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     work_package_id = get_in(dispatch_response, ["result", "structuredContent", "work_package", "id"])
     assert is_binary(work_package_id)
+
+    work_package = repo.get!(WorkPackage, work_package_id)
+    assert work_package.kind == "standard_pr"
+    assert work_package.policy_template == "standard_pr"
+    assert {:ok, review_suite} = Renderer.render(repo, work_package_id, "review_suite.md")
+    assert review_suite =~ "Policy template: `worker_package`"
+    assert review_suite =~ "- Required: normal"
+    assert review_suite =~ "human_merge"
 
     assert get_in(dispatch_response, ["result", "structuredContent", "coordinates", "primary_execution"]) == %{
              "kind" => "work_package",
@@ -1344,8 +1365,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
              "field" => "work_package_kind",
              "message" => "is invalid",
              "reason" => "invalid_value",
-             "allowed_values" => ["quick_fix", "hotfix", "docs", "investigation", "adapter", "mcp", "skill", "hooks"]
+             "allowed_values" => allowed_kinds
            } = Enum.find(validation_errors, &(&1["field"] == "work_package_kind"))
+
+    assert allowed_kinds == WorkPackage.planned_slice_kinds()
 
     refute inspect(changeset_error_response) =~ "raw_secret_value"
     assert {:ok, []} = WorkRequestRepository.list_planned_slices(repo, work_request.id)
