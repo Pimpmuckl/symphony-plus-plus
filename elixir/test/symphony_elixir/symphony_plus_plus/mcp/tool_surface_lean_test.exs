@@ -46,14 +46,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
   end
 
   test "full and default expose every implemented tool" do
-    full = ToolCatalog.startup_tool_specs(:full, Config.default(surface_profile: :full, source_revision: nil))
+    config = Config.default(surface_profile: :full, source_revision: nil)
+    full = ToolCatalog.startup_tool_specs(:full, config)
+    expected_full = config |> ToolCatalog.unbound_tool_specs_for_config() |> ToolCatalog.lean_tool_specs()
 
-    assert full ==
-             ToolCatalog.unbound_tool_specs_for_config(Config.default(surface_profile: :full, source_revision: nil))
+    assert full == expected_full
 
     assert Enum.any?(full, &(&1["name"] == "claim_local_assignment"))
     assert Enum.any?(full, &(&1["name"] == "claim_local_architect_assignment"))
     assert Enum.any?(full, &(&1["name"] == "solo_attach"))
+    assert Enum.all?(full, &(not Map.has_key?(&1, "title")))
+    refute Enum.any?(full, &(&1["description"] == "Symphony++ worker tool #{&1["name"]}."))
     refute Enum.any?(@removed_tools, fn name -> Enum.any?(full, &(&1["name"] == name)) end)
     assert Config.default(surface_profile: "default", source_revision: nil).surface_profile == :full
   end

@@ -1,15 +1,7 @@
 {
   "symphony_plus_plus": {
-    "type": "stdio",
-    "command": "cmd.exe",
-    "args": [
-      "/d",
-      "/s",
-      "/c",
-      "scripts\\start-sympp-mcp.cmd"
-    ],
-    "cwd": ".",
-    "startup_timeout_sec": 360.0,
+    "url": "http://127.0.0.1:19998/mcp",
+    "startup_timeout_sec": 10.0,
     "tool_timeout_sec": 300.0
   }
 }

@@ -645,7 +645,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
        }) do
     case Surface.work_package_resource_id(rest) do
       {:ok, work_package_id, file_name} ->
-        Surface.read_work_package_virtual_resource(config.repo, session, work_package_id, file_name, uri, surface_profile: config.surface_profile)
+        Surface.read_work_package_virtual_resource(config.repo, session, work_package_id, file_name, uri,
+          surface_profile: config.surface_profile,
+          mode: config.mode
+        )
 
       :error ->
         {:error, -32_602, "Invalid params", %{"resource" => uri, "reason" => "invalid_work_package_resource_uri"}}
@@ -2198,7 +2201,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     {Response.error(id, code, message, data), server}
   end
 
-  defp response_result(result, %__MODULE__{config: %Config{surface_profile: :full}}), do: result
+  defp response_result(result, %__MODULE__{config: %Config{mode: :stdio, surface_profile: :full}}), do: result
   defp response_result(result, %__MODULE__{}), do: ToolResult.canonical_agent_result(result)
 
   defp dispatch_notification({:ok, params}, method, %__MODULE__{} = server) do

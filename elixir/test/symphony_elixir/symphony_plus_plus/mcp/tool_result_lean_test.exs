@@ -1,5 +1,5 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResultLeanTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Server, ToolResult}
 
@@ -39,7 +39,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResultLeanTest do
     assert result["structuredContent"]["progress_event"]["idempotency_key"] == "progress:lean"
   end
 
-  test "server applies canonical results only to explicit startup profiles" do
+  test "HTTP full and explicit profiles both emit canonical results" do
     request = %{
       "jsonrpc" => "2.0",
       "id" => "health",
@@ -47,15 +47,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResultLeanTest do
       "params" => %{"name" => "sympp.health", "arguments" => %{}}
     }
 
-    lean_server = Server.new(Config.default(surface_profile: :worker, source_revision: nil, health_ledger_mode: :configured_identity), initialized: true)
-    full_server = Server.new(Config.default(surface_profile: :full, source_revision: nil, health_ledger_mode: :configured_identity), initialized: true)
+    shared_config = [source_revision: nil, health_ledger_mode: :configured_identity]
+    lean_config = Config.default([surface_profile: :worker] ++ shared_config)
+    full_config = Config.default([mode: :http, surface_profile: :full] ++ shared_config)
+    lean_server = Server.new(lean_config, initialized: true)
+
+    full_server = Server.new(full_config, initialized: true)
 
     lean_text = lean_server |> then(&Server.handle(request, &1)) |> get_in(["result", "content", Access.at(0), "text"])
     full_text = full_server |> then(&Server.handle(request, &1)) |> get_in(["result", "content", Access.at(0), "text"])
 
     assert lean_text =~ "ledger:"
     assert lean_text =~ "status:"
+    assert full_text =~ "ledger:"
+    assert full_text =~ "status:"
     refute lean_text =~ "mcp_contract:"
-    assert full_text =~ "mcp_contract:"
+    refute full_text =~ "mcp_contract:"
   end
 end

@@ -77,6 +77,48 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert is_list(get_in(tools_response, ["result", "tools"]))
   end
 
+  test "HTTP transport preserves distinct sessions across concurrent initialization", %{repo: repo} do
+    config = local_mcp_config(repo)
+    client_key = "concurrent-initialize-client"
+
+    initialized =
+      1..20
+      |> Task.async_stream(
+        fn index ->
+          HTTPTransport.handle(
+            config,
+            %{"jsonrpc" => "2.0", "id" => "init-#{index}", "method" => "initialize", "params" => initialize_params()},
+            client_key: client_key
+          )
+        end,
+        max_concurrency: 20,
+        ordered: true,
+        timeout: 30_000
+      )
+      |> Enum.map(fn {:ok, {:ok, result}} -> result end)
+
+    state_keys = Enum.map(initialized, & &1.state_key)
+    assert length(Enum.uniq(state_keys)) == 20
+
+    initialized
+    |> Task.async_stream(
+      fn init_result ->
+        HTTPTransport.handle(
+          config,
+          %{"jsonrpc" => "2.0", "id" => "tools", "method" => "tools/list", "params" => %{}},
+          client_key: client_key,
+          state_key: init_result.state_key
+        )
+      end,
+      max_concurrency: 20,
+      ordered: false,
+      timeout: 30_000
+    )
+    |> Enum.each(fn {:ok, {:ok, result}} ->
+      assert is_list(get_in(result.response, ["result", "tools"]))
+    end)
+  end
+
   test "response-only handle namespaces explicit state keys by config", %{repo: repo} do
     state_key = make_ref()
 
