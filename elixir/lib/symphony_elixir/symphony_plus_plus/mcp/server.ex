@@ -646,7 +646,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
        }) do
     case Surface.work_package_resource_id(rest) do
       {:ok, work_package_id, file_name} ->
-        Surface.read_work_package_virtual_resource(config.repo, session, work_package_id, file_name, uri)
+        Surface.read_work_package_virtual_resource(config.repo, session, work_package_id, file_name, uri, surface_profile: config.surface_profile)
 
       :error ->
         {:error, -32_602, "Invalid params", %{"resource" => uri, "reason" => "invalid_work_package_resource_uri"}}
@@ -694,7 +694,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, arguments} ->
         case release_current_assignment(arguments, server) do
           {:ok, result, updated_server} ->
-            {Response.response(id, ToolResult.release_tool_result(result)), updated_server}
+            {Response.response(id, response_result(ToolResult.release_tool_result(result), server)), updated_server}
 
           {:tool_error, reason} ->
             {:error, code, message, data} = invalid_params_error(@assignment_release_tool, reason)
@@ -710,7 +710,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     case claim_local_assignment(params, server) do
       {:ok, result, session} ->
         {
-          Response.response(id, ToolResult.claim_tool_result(result)),
+          Response.response(id, response_result(ToolResult.claim_tool_result(result), server)),
           %{server | session: session, session_refresh_required: false}
         }
 
@@ -723,7 +723,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     case claim_local_architect_assignment(params, server) do
       {:ok, result, session} ->
         {
-          Response.response(id, ToolResult.claim_tool_result(result)),
+          Response.response(id, response_result(ToolResult.claim_tool_result(result), server)),
           %{server | session: session, session_refresh_required: false}
         }
 
@@ -2242,10 +2242,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, server} ->
         case dispatch(method, params, server) do
           {:ok, result} ->
-            {Response.response(id, result), server}
+            {Response.response(id, response_result(result, server)), server}
 
           {:ok, result, %__MODULE__{} = updated_server} ->
-            {Response.response(id, result), updated_server}
+            {Response.response(id, response_result(result, server)), updated_server}
 
           {:error, code, message, data} ->
             {Response.error(id, code, message, data), server}
@@ -2259,6 +2259,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch_request_state({:error, code, message, data}, _method, id, %__MODULE__{} = server) do
     {Response.error(id, code, message, data), server}
   end
+
+  defp response_result(result, %__MODULE__{config: %Config{surface_profile: :full}}), do: result
+  defp response_result(result, %__MODULE__{}), do: ToolResult.canonical_agent_result(result)
 
   defp dispatch_notification({:ok, params}, method, %__MODULE__{} = server) do
     case require_current_session_claim_for_bound_call(server, method, params) do

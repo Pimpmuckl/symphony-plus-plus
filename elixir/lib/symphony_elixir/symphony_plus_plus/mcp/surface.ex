@@ -29,6 +29,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   @version_resource "sympp://health/version"
 
   @spec tool_specs_for_server(map()) :: {:ok, [map()]} | {:error, term()}
+  def tool_specs_for_server(%{config: %Config{surface_profile: profile} = config}) when profile != :full do
+    {:ok, ToolCatalog.startup_tool_specs(profile, config)}
+  end
+
   def tool_specs_for_server(%{session_refresh_required: true, config: %Config{} = config} = server) do
     {:ok, dedupe_tool_specs(claimable_tool_specs(config) ++ local_trusted_tool_specs(server))}
   end
@@ -65,16 +69,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     end
   end
 
-  @spec read_work_package_virtual_resource(module(), Session.t() | nil | term(), String.t(), String.t(), String.t()) ::
+  @spec read_work_package_virtual_resource(
+          module(),
+          Session.t() | nil | term(),
+          String.t(),
+          String.t(),
+          String.t(),
+          keyword()
+        ) ::
           {:ok, map()} | {:error, integer(), String.t(), map()}
-  def read_work_package_virtual_resource(repo, session, work_package_id, file_name, uri) do
+  def read_work_package_virtual_resource(repo, session, work_package_id, file_name, uri, opts \\ []) do
     resource_type = resource_type_for_virtual_file(file_name)
     action = action_for_virtual_file(file_name)
 
     with {:ok, session} <- Auth.require_session(session, repo),
          {:ok, actor} <- actor_for_package_resource(repo, session, resource_type, work_package_id),
          :ok <- PlanningService.authorize_package_action(repo, actor, action, work_package_id, resource_type) do
-      read_virtual_resource(repo, work_package_id, file_name, uri, agent_text?: worker_session?(session))
+      read_virtual_resource(
+        repo,
+        work_package_id,
+        file_name,
+        uri,
+        agent_text?: worker_session?(session),
+        canonical_agent_text?: Keyword.get(opts, :surface_profile, :full) != :full
+      )
     else
       {:error, {:authorization_policy_denied, %Decision{} = decision}} -> MCPError.from_decision(decision, uri)
       {:error, reason} -> auth_error(reason, uri)
@@ -262,12 +280,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   defp virtual_resource_result(uri, markdown, state, file_name, opts) do
     if Keyword.get(opts, :agent_text?, false) do
       with {:ok, toon} <- WorkerContext.encode_virtual_file(state, file_name, uri: uri) do
-        {:ok, Response.agent_text_resource(uri, markdown, toon, "text/markdown", @agent_text_mime_type)}
+        {:ok, agent_text_resource(uri, markdown, toon, Keyword.get(opts, :canonical_agent_text?, false))}
       end
     else
       {:ok, Response.text_resource(uri, markdown, "text/markdown")}
     end
   end
+
+  defp agent_text_resource(uri, _markdown, toon, true), do: Response.text_resource(uri, toon, @agent_text_mime_type)
+
+  defp agent_text_resource(uri, markdown, toon, false),
+    do: Response.agent_text_resource(uri, markdown, toon, "text/markdown", @agent_text_mime_type)
 
   defp actor_for_package_resource(repo, %Session{} = session, resource_type, work_package_id) do
     with {:ok, target} <- PlanningService.package_resource_target(repo, work_package_id, resource_type) do

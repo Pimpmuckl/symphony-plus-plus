@@ -1248,6 +1248,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
       Enum.map(@bootstrap_tools, &bootstrap_tool_spec/1)
   end
 
+  @spec startup_tool_specs(:full | :worker | :architect | :coordinator | :solo, Config.t()) :: [tool_spec()]
+  def startup_tool_specs(:full, %Config{} = config), do: unbound_tool_specs_for_config(config)
+
+  def startup_tool_specs(:worker, %Config{}) do
+    [worker_tool_spec(@local_assignment_claim_tool) | worker_session_tool_specs()]
+    |> lean_tool_specs()
+  end
+
+  def startup_tool_specs(:architect, %Config{}) do
+    [local_architect_assignment_claim_tool_spec() | architect_session_tool_specs(current_work_request?: true)]
+    |> Enum.reject(&(&1["name"] in @phase7_stub_architect_tools))
+    |> lean_tool_specs()
+  end
+
+  def startup_tool_specs(profile, %Config{}) when profile in [:coordinator, :solo] do
+    [health_tool_spec(), assignment_release_tool_spec() | Enum.map(@solo_tools, &solo_tool_spec/1)]
+    |> lean_tool_specs()
+  end
+
   defp local_assignment_claim_tool_specs(%Config{}), do: [worker_tool_spec(@local_assignment_claim_tool)]
 
   defp local_architect_assignment_claim_tool_specs(%Config{}), do: [local_architect_assignment_claim_tool_spec()]
@@ -1302,6 +1321,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   end
 
   defp shared_worker_architect_tool_spec(name), do: architect_tool_spec(name)
+
+  defp lean_tool_specs(specs), do: Enum.map(specs, &lean_tool_spec/1)
+
+  defp lean_tool_spec(%{"name" => name, "description" => "Symphony++ worker tool " <> name_and_period} = spec) do
+    if name_and_period == name <> ".", do: Map.drop(spec, ["title", "description"]), else: Map.delete(spec, "title")
+  end
+
+  defp lean_tool_spec(spec), do: Map.delete(spec, "title")
+
   @spec local_operator_tool_specs() :: [tool_spec()]
   def local_operator_tool_specs, do: Enum.map(@local_operator_tools, &local_operator_tool_spec/1)
 

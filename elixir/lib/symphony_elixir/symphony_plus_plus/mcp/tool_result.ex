@@ -5,6 +5,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ClaimToolText
 
+  @summary_fields ~w(action binding_cleared claimed_by grant_role id outcome reachable status summary title uri work_package_id work_request_id)
+
   @spec tool_result(term()) :: map()
   def tool_result(payload) do
     payload = compact_tool_payload(payload)
@@ -45,6 +47,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
     agent_tool_result(payload, ArchitectContext.encode_tool_payload(payload, kind))
   end
 
+  @spec canonical_agent_result(map()) :: map()
+  def canonical_agent_result(%{"structuredContent" => %{"assignment" => %{}, "local_claim" => %{}}, "content" => [_text]} = result), do: result
+
+  def canonical_agent_result(%{"structuredContent" => %{} = payload} = result) do
+    Map.put(result, "content", [%{"type" => "text", "text" => payload |> summary_payload() |> WorkerContext.encode_tool_payload()}])
+  end
+
+  def canonical_agent_result(result), do: result
+
   defp compact_tool_payload(%{} = payload) do
     payload
     |> compact_tool_payload_entries()
@@ -52,6 +63,48 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   end
 
   defp compact_tool_payload(payload), do: payload
+
+  defp summary_payload(payload) do
+    case single_result_summary(payload) do
+      nil -> general_summary_payload(payload)
+      summary -> summary
+    end
+  end
+
+  defp single_result_summary(payload) do
+    case Map.drop(payload, ["action", "next_action", "product_tree", "status", "text", "uri"]) |> Enum.to_list() do
+      [{key, %{} = value}] ->
+        %{"result" => key}
+        |> Map.merge(Map.take(payload, ["next_action"]))
+        |> Map.merge(value |> json_safe_payload() |> Map.take(["status", "summary"]) |> drop_nil_values())
+
+      _entries ->
+        nil
+    end
+  end
+
+  defp general_summary_payload(payload) do
+    priority = Map.take(payload, ["action", "next_action", "status", "uri"])
+
+    payload
+    |> Map.drop(["action", "next_action", "product_tree", "status", "text", "uri"])
+    |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
+    |> Enum.take(4 - map_size(priority))
+    |> Map.new()
+    |> Map.merge(priority)
+    |> Map.new(fn {key, value} -> {key, summary_value(value)} end)
+  end
+
+  defp summary_value(%{} = value) do
+    case value |> json_safe_payload() |> Map.take(@summary_fields) |> drop_nil_values() do
+      empty when empty == %{} -> "available in structuredContent"
+      summary -> summary
+    end
+  end
+
+  defp summary_value(values) when is_list(values), do: "#{length(values)} items in structuredContent"
+  defp summary_value(value) when is_binary(value) and byte_size(value) > 160, do: "available in structuredContent"
+  defp summary_value(value), do: value
 
   defp compact_tool_payload_entries(%{} = payload) do
     payload
