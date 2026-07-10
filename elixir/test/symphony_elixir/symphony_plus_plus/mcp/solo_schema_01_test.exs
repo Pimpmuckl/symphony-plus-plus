@@ -920,10 +920,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              "work_request_id",
              "title",
              "goal",
-             "work_package_kind",
-             "target_base_branch",
              "owned_file_globs",
-             "forbidden_file_globs",
              "acceptance_criteria",
              "validation_steps",
              "stop_conditions"
@@ -946,6 +943,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
 
     planned_slice_kinds = get_in(tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "work_package_kind", "enum"])
     assert planned_slice_kinds == WorkPackage.planned_slice_kinds()
+    assert "standard_pr" in planned_slice_kinds
     assert "docs" in planned_slice_kinds
 
     refute Map.has_key?(get_in(tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "forbidden_file_globs"]), "minItems")

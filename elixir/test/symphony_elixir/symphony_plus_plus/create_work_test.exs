@@ -501,6 +501,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
                acceptance_criteria: ["Summary copy is updated."],
                policy_template: "hotfix"
              })
+
+    assert CreateWork.error_message(:kind_not_dispatchable) =~ "standard_pr (ordinary PR work)"
   end
 
   test "renders investigation and blank scope plan guidance correctly", %{repo: repo} do

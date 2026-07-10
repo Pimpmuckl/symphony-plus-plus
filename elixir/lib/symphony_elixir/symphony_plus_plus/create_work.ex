@@ -130,7 +130,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   def error_message(:policy_template_mismatch), do: "policy_template/review_suite_template must select the same policy"
 
   def error_message(:kind_not_dispatchable),
-    do: "Create-work supports quick_fix, hotfix, docs, investigation, adapter, mcp, skill, and hooks work only"
+    do: "Create-work supports standard_pr (ordinary PR work), quick_fix, hotfix, docs, investigation, adapter, mcp (MCP server, protocol, tool, or plugin work), skill, and hooks only"
 
   def error_message(:unknown_policy_template), do: "No policy template exists for requested kind"
   def error_message(%Changeset{} = changeset), do: "Invalid create-work request: #{inspect(changeset.errors)}"

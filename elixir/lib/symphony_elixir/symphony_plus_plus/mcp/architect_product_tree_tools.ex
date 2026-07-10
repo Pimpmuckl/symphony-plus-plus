@@ -152,11 +152,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
          {:ok, title} <- required_argument(arguments, "title"),
          {:ok, goal} <- required_argument(arguments, "goal"),
-         {:ok, work_package_kind} <- required_argument(arguments, "work_package_kind"),
+         {:ok, work_package_kind} <- optional_string_argument(arguments, "work_package_kind", "standard_pr"),
          {:ok, delivery_repo} <- optional_string_argument(arguments, "delivery_repo"),
-         {:ok, target_base_branch} <- required_argument(arguments, "target_base_branch"),
+         {:ok, target_base_branch} <- optional_string_argument(arguments, "target_base_branch"),
          {:ok, owned_file_globs} <- required_string_array(arguments, "owned_file_globs"),
-         {:ok, forbidden_file_globs} <- required_string_array(arguments, "forbidden_file_globs"),
+         {:ok, forbidden_file_globs} <- optional_string_list_argument(arguments, "forbidden_file_globs"),
          {:ok, acceptance_criteria} <- required_string_array(arguments, "acceptance_criteria"),
          {:ok, validation_steps} <- required_string_array(arguments, "validation_steps"),
          {:ok, review_lanes} <- optional_string_list_argument(arguments, "review_lanes"),
@@ -167,23 +167,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :planned_slice_create, "add_work_request_planned_slice"),
          :ok <- validate_planned_slice_scope_for_tool(work_request, work_package_kind, owned_file_globs),
          attrs =
-           optional_put(
-             %{
-               "title" => title,
-               "goal" => goal,
-               "work_package_kind" => work_package_kind,
-               "delivery_repo" => delivery_repo,
-               "target_base_branch" => target_base_branch,
-               "owned_file_globs" => owned_file_globs,
-               "forbidden_file_globs" => forbidden_file_globs,
-               "acceptance_criteria" => acceptance_criteria,
-               "validation_steps" => validation_steps,
-               "review_lanes" => review_lanes,
-               "stop_conditions" => stop_conditions
-             },
-             "branch_pattern",
-             branch_pattern
-           ),
+           %{
+             "title" => title,
+             "goal" => goal,
+             "work_package_kind" => work_package_kind,
+             "delivery_repo" => delivery_repo || work_request.repo,
+             "target_base_branch" => target_base_branch || work_request.base_branch,
+             "owned_file_globs" => owned_file_globs,
+             "forbidden_file_globs" => forbidden_file_globs,
+             "acceptance_criteria" => acceptance_criteria,
+             "validation_steps" => validation_steps,
+             "stop_conditions" => stop_conditions
+           }
+           |> optional_put_present("review_lanes", review_lanes, not is_nil(Map.get(arguments, "review_lanes")))
+           |> optional_put("branch_pattern", branch_pattern),
          {:ok, {planned_slice, updated_work_request}} <-
            mutate_product_tree(
              config.repo,

@@ -69,8 +69,12 @@ Design one PR-sized execution slice per worker unless the operator approves
 another shape. Each slice needs:
 
 - Outcome-focused title and goal.
-- Valid `work_package_kind`.
-- Owned globs, forbidden globs, target base branch, and branch strategy.
+- Owned globs. Keep this boundary explicit.
+- `work_package_kind` defaults to `standard_pr` for ordinary PR-backed work;
+  use `mcp` only for MCP servers, protocols, tools, or plugins.
+- Delivery repo and target base branch default to the claimed WorkRequest.
+  Branch pattern, forbidden globs, and review lanes may be omitted when their
+  safe empty or package-policy defaults are sufficient.
 - Acceptance criteria the worker can prove.
 - Validation commands or blocked-validation owner.
 - Review profile/provider requirements.
@@ -91,6 +95,11 @@ After claiming a WorkRequest, current-WR lifecycle tools may omit
 delivery closeout, runtime cleanup, worker-key revocation, and dispatch. Keep
 intentional sibling reads, status/question tools, durable decisions, and package
 tools explicit.
+
+For `add_work_request_planned_slice`, the claimed WorkRequest also supplies the
+default delivery repo and target base branch. The tool defaults the package
+kind to `standard_pr`; title, goal, owned globs, acceptance criteria,
+validation, and stop conditions remain explicit.
 
 Use product-plan node content, move, and completion tools separately: content
 changes title/description/kind, move changes parent/position, and completion

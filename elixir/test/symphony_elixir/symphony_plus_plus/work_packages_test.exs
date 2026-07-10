@@ -70,7 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackagesTest do
     legacy_package =
       WorkPackageFactory.attrs(
         id: "SYMPP-LEGACY-KIND-UPDATE",
-        kind: "standard_pr",
+        kind: "review_only",
         status: "ready_for_worker"
       )
       |> then(&struct!(WorkPackage, &1))
@@ -82,7 +82,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackagesTest do
                worktree_path: "C:/tmp/legacy-worktree"
              })
 
-    assert updated.kind == "standard_pr"
+    assert updated.kind == "review_only"
     assert updated.title == "Updated legacy title"
     assert updated.worktree_path == "C:/tmp/legacy-worktree"
   end
@@ -90,12 +90,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackagesTest do
   test "rejects updates that convert current packages to legacy kinds", %{repo: repo} do
     assert {:ok, package} = Repository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-LEGACY-KIND-CHANGE", kind: "hotfix"))
 
-    assert {:error, %Ecto.Changeset{} = changeset} = Repository.update(repo, package.id, %{kind: "standard_pr"})
+    assert {:error, %Ecto.Changeset{} = changeset} = Repository.update(repo, package.id, %{kind: "review_only"})
 
     assert "is invalid" in errors_on(changeset).kind
   end
 
   test "rejects noncanonical policy templates", %{repo: repo} do
+    assert {:ok, standard_pr} =
+             Repository.create(repo, WorkPackageFactory.attrs(kind: "standard_pr", policy_template: "standard_pr"))
+
+    assert standard_pr.policy_template == "standard_pr"
+
     assert {:ok, package} = Repository.create(repo, WorkPackageFactory.attrs(kind: "mcp", policy_template: "mcp"))
     assert package.policy_template == "mcp"
 

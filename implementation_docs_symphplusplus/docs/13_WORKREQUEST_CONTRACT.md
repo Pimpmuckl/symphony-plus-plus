@@ -21,6 +21,13 @@ advance a `ready_for_clarification`, `clarifying`, or `human_info_needed`
 WorkRequest with zero open questions to `ready_for_slicing` before it inserts
 the slice. Open questions still block slicing.
 
+After claiming one current WorkRequest, an architect may omit
+`work_request_id`, delivery repo, and target base branch. Ordinary PR work also
+defaults to `standard_pr`; use `mcp` for MCP server, protocol, tool, or plugin
+work. Branch pattern, forbidden globs, and review lanes may be omitted, while
+title, goal, owned globs, acceptance criteria, validation, and stop conditions
+remain explicit.
+
 Approved planned slices are dispatched with `work_request_id` and
 `planned_slice_id`. Dispatch creates a linked WorkPackage and returns worker
 bootstrap metadata for `claim_local_assignment`.

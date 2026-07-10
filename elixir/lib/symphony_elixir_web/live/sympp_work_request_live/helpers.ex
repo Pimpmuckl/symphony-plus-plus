@@ -133,7 +133,7 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
     defaults = %{
       "title" => "",
       "goal" => "",
-      "work_package_kind" => "mcp",
+      "work_package_kind" => "standard_pr",
       "target_base_branch" => value(work_request, :base_branch, ""),
       "branch_pattern" => ""
     }
@@ -156,6 +156,7 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
       Map.new(@planned_slice_list_fields, fn field ->
         {field, newline_list(Map.get(form, field, ""))}
       end)
+      |> then(fn attrs -> if attrs["review_lanes"] == [], do: Map.delete(attrs, "review_lanes"), else: attrs end)
 
     Map.merge(scalar_attrs, list_attrs)
   end

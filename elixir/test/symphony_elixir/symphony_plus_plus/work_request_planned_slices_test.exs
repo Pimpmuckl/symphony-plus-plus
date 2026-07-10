@@ -147,10 +147,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
              Repository.add_planned_slice(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-001", title: "Add validation", goal: "Reject malformed planned slices.")
+               planned_slice_attrs(
+                 id: "WRS-001",
+                 title: "Add validation",
+                 goal: "Reject malformed planned slices.",
+                 work_package_kind: "standard_pr"
+               )
+               |> Map.delete(:review_lanes)
              )
 
     assert second.sequence == 2
+    assert second.review_lanes == ["normal"]
     assert {:ok, [^first, ^second]} = Service.list_planned_slices(repo, work_request.id)
   end
 
@@ -978,14 +985,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
     assert repo.aggregate(AccessGrant, :count, :id) == 0
   end
 
-  test "planned slices reject non-executable WorkPackage kinds", %{repo: repo} do
+  test "planned slices reject legacy WorkPackage kinds", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-PLANNED-SLICE-KIND-REJECT", status: "ready_for_slicing")
 
     assert {:error, changeset} =
              Repository.add_planned_slice(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-PLANNED-SLICE-KIND-REJECT", work_package_kind: "standard_pr")
+               planned_slice_attrs(id: "WRS-PLANNED-SLICE-KIND-REJECT", work_package_kind: "review_only")
              )
 
     assert {"is invalid", _} = changeset.errors[:work_package_kind]
