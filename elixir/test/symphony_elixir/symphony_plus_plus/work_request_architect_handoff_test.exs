@@ -90,16 +90,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
     assert handoff.prompt =~
              "Claim first with `claim_local_architect_assignment` using `local_architect_claim.arguments`"
 
-    assert handoff.prompt =~ "read_work_request_product_tree"
-    assert handoff.prompt =~ "read_work_request_delivery_board"
+    assert handoff.prompt =~ "read_plan"
+    assert handoff.prompt =~ "read_delivery_board"
     assert handoff.prompt =~ "list_guidance_requests"
     assert handoff.prompt =~ "ask human-answerable clarification"
-    assert handoff.prompt =~ "ask_work_request_question"
+    assert handoff.prompt =~ "ask_question"
     assert handoff.prompt =~ "decision_prompt"
     assert handoff.prompt =~ "TL;DR/details/options/pros-cons/freeform"
-    assert handoff.prompt =~ "record_work_request_decision"
-    assert handoff.prompt =~ "add_work_request_planned_slice"
-    assert handoff.prompt =~ "dispatch_work_request_planned_slice(work_request_id, planned_slice_id)"
+    assert handoff.prompt =~ "record_decision"
+    assert handoff.prompt =~ "plan_slice"
+    assert handoff.prompt =~ "dispatch_slice(work_request_id, planned_slice_id)"
     assert handoff.prompt =~ "No wrapper node for one slice."
     assert handoff.prompt =~ "Never request raw secrets"
     assert String.length(handoff.prompt) < 2_300

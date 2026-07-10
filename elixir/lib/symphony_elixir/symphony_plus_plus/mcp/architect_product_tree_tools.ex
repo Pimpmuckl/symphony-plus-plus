@@ -40,15 +40,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @tools [
-    "ask_work_request_question",
-    "record_work_request_decision",
-    "add_work_request_planned_slice",
-    "upsert_work_request_product_plan_node_content",
-    "move_work_request_product_plan_node",
-    "set_work_request_product_plan_node_completion",
-    "move_work_request_planned_slice_to_product_node",
-    "approve_work_request_planned_slice",
-    "skip_work_request_planned_slice"
+    "ask_question",
+    "record_decision",
+    "plan_slice",
+    "upsert_plan_node",
+    "move_plan_node",
+    "set_plan_node_completion",
+    "move_slice_to_plan_node",
+    "approve_slice",
+    "skip_slice"
   ]
   @terminal_product_tree_completion_marks ["done", "deferred"]
 
@@ -56,7 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   def tools, do: @tools
 
   @spec call(String.t(), Config.t(), Session.t() | nil, map()) :: {:ok, map()} | {:error, integer(), String.t(), map()}
-  def call("ask_work_request_question", %Config{} = config, session, arguments) do
+  def call("ask_question", %Config{} = config, session, arguments) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, category} <- required_argument(arguments, "category"),
@@ -70,7 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              session,
              work_request_id,
              :question_create,
-             "ask_work_request_question"
+             "ask_question"
            ),
          {:ok, question_record} <-
            WorkRequestService.ask_question(
@@ -99,13 +99,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          }
        })}
     else
-      {:tool_error, reason} -> invalid_params_error("ask_work_request_question", reason)
-      {:error, :not_found} -> not_found_error("ask_work_request_question")
-      {:error, reason} -> architect_error(reason, "ask_work_request_question")
+      {:tool_error, reason} -> invalid_params_error("ask_question", reason)
+      {:error, :not_found} -> not_found_error("ask_question")
+      {:error, reason} -> architect_error(reason, "ask_question")
     end
   end
 
-  def call("record_work_request_decision", %Config{} = config, session, arguments) do
+  def call("record_decision", %Config{} = config, session, arguments) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, source_type} <- required_argument(arguments, "source_type"),
@@ -115,7 +115,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, created_by} <- required_argument(arguments, "created_by"),
          {:ok, source_id} <- optional_string_argument(arguments, "source_id"),
          {:ok, _work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :decision_record, "record_work_request_decision"),
+           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :decision_record, "record_decision"),
          {:ok, decision_record} <-
            WorkRequestService.record_decision(
              config.repo,
@@ -141,17 +141,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          "status" => %{"work_request_status" => updated_work_request.status}
        })}
     else
-      {:tool_error, reason} -> invalid_params_error("record_work_request_decision", reason)
-      {:error, :not_found} -> not_found_error("record_work_request_decision")
-      {:error, reason} -> architect_error(reason, "record_work_request_decision")
+      {:tool_error, reason} -> invalid_params_error("record_decision", reason)
+      {:error, :not_found} -> not_found_error("record_decision")
+      {:error, reason} -> architect_error(reason, "record_decision")
     end
   end
 
-  def call("add_work_request_planned_slice", %Config{} = config, session, arguments) do
+  def call("plan_slice", %Config{} = config, session, arguments) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
          {:ok, work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :planned_slice_create, "add_work_request_planned_slice"),
+           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :planned_slice_create, "plan_slice"),
          {:ok, title} <- required_argument(arguments, "title"),
          {:ok, goal} <- required_argument(arguments, "goal"),
          {:ok, work_package_kind} <- optional_string_argument(arguments, "work_package_kind", "standard_pr"),
@@ -185,7 +185,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
            mutate_product_tree(
              config.repo,
              work_request_id,
-             "add_work_request_planned_slice",
+             "plan_slice",
              session_claimed_by(session),
              fn -> add_planned_slice_and_reload_work_request(config.repo, work_request_id, attrs, filters) end
            ) do
@@ -200,15 +200,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          }
        })}
     else
-      {:tool_error, reason} -> invalid_params_error("add_work_request_planned_slice", reason)
-      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error("add_work_request_planned_slice", "invalid_planned_slice", changeset)
-      {:error, :not_found} -> not_found_error("add_work_request_planned_slice")
-      {:error, reason} -> architect_error(reason, "add_work_request_planned_slice")
+      {:tool_error, reason} -> invalid_params_error("plan_slice", reason)
+      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error("plan_slice", "invalid_planned_slice", changeset)
+      {:error, :not_found} -> not_found_error("plan_slice")
+      {:error, reason} -> architect_error(reason, "plan_slice")
     end
   end
 
-  def call("upsert_work_request_product_plan_node_content", %Config{} = config, session, arguments) do
-    tool = "upsert_work_request_product_plan_node_content"
+  def call("upsert_plan_node", %Config{} = config, session, arguments) do
+    tool = "upsert_plan_node"
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
@@ -243,8 +243,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("move_work_request_product_plan_node", %Config{} = config, session, arguments) do
-    tool = "move_work_request_product_plan_node"
+  def call("move_plan_node", %Config{} = config, session, arguments) do
+    tool = "move_plan_node"
     parent_id_supplied? = Map.has_key?(arguments, "parent_id")
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
@@ -276,8 +276,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("set_work_request_product_plan_node_completion", %Config{} = config, session, arguments) do
-    tool = "set_work_request_product_plan_node_completion"
+  def call("set_plan_node_completion", %Config{} = config, session, arguments) do
+    tool = "set_plan_node_completion"
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
@@ -316,8 +316,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("move_work_request_planned_slice_to_product_node", %Config{} = config, session, arguments) do
-    tool = "move_work_request_planned_slice_to_product_node"
+  def call("move_slice_to_plan_node", %Config{} = config, session, arguments) do
+    tool = "move_slice_to_plan_node"
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
@@ -361,9 +361,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("approve_work_request_planned_slice", %Config{} = config, session, arguments) do
+  def call("approve_slice", %Config{} = config, session, arguments) do
     mutate_work_request_planned_slice_status(
-      "approve_work_request_planned_slice",
+      "approve_slice",
       arguments,
       config.repo,
       session,
@@ -372,9 +372,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     )
   end
 
-  def call("skip_work_request_planned_slice", %Config{} = config, session, arguments) do
+  def call("skip_slice", %Config{} = config, session, arguments) do
     mutate_work_request_planned_slice_status(
-      "skip_work_request_planned_slice",
+      "skip_slice",
       arguments,
       config.repo,
       session,
@@ -674,13 +674,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     |> Map.delete("latest_revision")
   end
 
-  defp product_tree_revision_reason("add_work_request_planned_slice"), do: "Planned slice added to product tree through MCP."
-  defp product_tree_revision_reason("upsert_work_request_product_plan_node_content"), do: "Product plan node content changed through MCP."
-  defp product_tree_revision_reason("move_work_request_product_plan_node"), do: "Product plan node rearranged through MCP."
-  defp product_tree_revision_reason("set_work_request_product_plan_node_completion"), do: "Product plan node completion changed through MCP."
-  defp product_tree_revision_reason("move_work_request_planned_slice_to_product_node"), do: "Planned slice rearranged in product tree through MCP."
-  defp product_tree_revision_reason("approve_work_request_planned_slice"), do: "Planned slice approved in product tree through MCP."
-  defp product_tree_revision_reason("skip_work_request_planned_slice"), do: "Planned slice skipped in product tree through MCP."
+  defp product_tree_revision_reason("plan_slice"), do: "Planned slice added to product tree through MCP."
+  defp product_tree_revision_reason("upsert_plan_node"), do: "Product plan node content changed through MCP."
+  defp product_tree_revision_reason("move_plan_node"), do: "Product plan node rearranged through MCP."
+  defp product_tree_revision_reason("set_plan_node_completion"), do: "Product plan node completion changed through MCP."
+  defp product_tree_revision_reason("move_slice_to_plan_node"), do: "Planned slice rearranged in product tree through MCP."
+  defp product_tree_revision_reason("approve_slice"), do: "Planned slice approved in product tree through MCP."
+  defp product_tree_revision_reason("skip_slice"), do: "Planned slice skipped in product tree through MCP."
 
   defp run_architect_transaction(repo, fun) do
     case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do

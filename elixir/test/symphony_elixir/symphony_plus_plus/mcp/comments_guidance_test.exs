@@ -383,7 +383,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
           "jsonrpc" => "2.0",
           "id" => "local-operator-dispatch-denied",
           "method" => "tools/call",
-          "params" => %{"name" => "dispatch_work_request_planned_slice", "arguments" => %{}}
+          "params" => %{"name" => "dispatch_slice", "arguments" => %{}}
         },
         note_server
       )
@@ -458,7 +458,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
           "jsonrpc" => "2.0",
           "id" => "remote-work-request-read-denied",
           "method" => "tools/call",
-          "params" => %{"name" => "read_work_request_delivery_board", "arguments" => arguments}
+          "params" => %{"name" => "read_delivery_board", "arguments" => arguments}
         },
         local_mcp_server(remote_config, "remote-work-request-read-state")
       )

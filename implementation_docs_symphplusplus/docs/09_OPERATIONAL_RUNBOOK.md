@@ -66,7 +66,7 @@ after the singleton cutover.
 
 ## Worker Dispatch Check
 
-1. Architect dispatches a planned slice with `dispatch_work_request_planned_slice`.
+1. Architect dispatches a planned slice with `dispatch_slice`.
 2. Confirm the response includes `work_package.id` and `worker_bootstrap`.
 3. Prepare the worker's product-repo worktree with
    `prepare_work_package_worktree`. Pass the WorkPackage id; pass

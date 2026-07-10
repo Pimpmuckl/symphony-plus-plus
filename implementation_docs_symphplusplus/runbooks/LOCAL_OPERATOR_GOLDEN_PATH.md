@@ -19,8 +19,8 @@
 ## Architect Flow
 
 1. `read_work_request`
-2. `read_work_request_product_tree`
-3. `read_work_request_delivery_board`
+2. `read_plan`
+3. `read_delivery_board`
 4. Add/approve/dispatch planned slices.
 5. Record delivery closeout from PR or no-PR evidence.
 

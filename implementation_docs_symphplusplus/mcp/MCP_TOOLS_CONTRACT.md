@@ -176,29 +176,51 @@ Some names are shared across worker and architect sessions. For example,
 for architects; the live handler applies the role-specific authorization and
 target-scope checks.
 
+This release makes a clean public cutover to the concise planning names below.
+Superseded names are neither advertised nor accepted.
+
+| Superseded name | Current name |
+|---|---|
+| `read_work_request_product_tree` | `read_plan` |
+| `read_work_request_delivery_board` | `read_delivery_board` |
+| `ask_work_request_question` | `ask_question` |
+| `answer_work_request_question` | `answer_question` |
+| `answer_work_request_question_and_record_decision` | `answer_question_and_record_decision` |
+| `close_work_request_question` | `close_question` |
+| `record_work_request_decision` | `record_decision` |
+| `add_work_request_planned_slice` | `plan_slice` |
+| `upsert_work_request_product_plan_node_content` | `upsert_plan_node` |
+| `move_work_request_product_plan_node` | `move_plan_node` |
+| `set_work_request_product_plan_node_completion` | `set_plan_node_completion` |
+| `move_work_request_planned_slice_to_product_node` | `move_slice_to_plan_node` |
+| `approve_work_request_planned_slice` | `approve_slice` |
+| `skip_work_request_planned_slice` | `skip_slice` |
+| `mark_work_request_sliced` | `finish_slicing` |
+| `dispatch_work_request_planned_slice` | `dispatch_slice` |
+
 Clarification has no extra completion ceremony. After open clarification
 questions are answered or closed, architects may read the WorkRequest and call
-`add_work_request_planned_slice`; the tool safely advances
+`plan_slice`; the tool safely advances
 `ready_for_clarification`, `clarifying`, or `human_info_needed` WorkRequests to
 `ready_for_slicing` before inserting the slice. Open clarification questions
 still block the call with `open_questions`.
 
 Current-WorkRequest lifecycle tools may omit `work_request_id` after
 `claim_local_architect_assignment` has bound the session to exactly one
-WorkRequest. This compact path applies to `add_work_request_planned_slice`,
-`upsert_work_request_product_plan_node_content`,
-`move_work_request_product_plan_node`,
-`set_work_request_product_plan_node_completion`,
-`move_work_request_planned_slice_to_product_node`,
-`approve_work_request_planned_slice`, `skip_work_request_planned_slice`, and
-`mark_work_request_sliced`, plus delivery board/reconcile, planned-slice delivery
+WorkRequest. This compact path applies to `plan_slice`,
+`upsert_plan_node`,
+`move_plan_node`,
+`set_plan_node_completion`,
+`move_slice_to_plan_node`,
+`approve_slice`, `skip_slice`, and
+`finish_slicing`, plus delivery board/reconcile, planned-slice delivery
 closeout, runtime cleanup, worker-key revocation, and dispatch. Supplying
 `work_request_id` is still allowed and is checked against the same architect
 grant scope. Reads that can intentionally target sibling WorkRequests,
 status/question tools, durable decision tools, and package tools keep explicit
 target ids.
 
-`add_work_request_planned_slice` defaults ordinary PR-backed work to
+`plan_slice` defaults ordinary PR-backed work to
 `standard_pr`; reserve `mcp` for MCP servers, protocols, tools, or plugins.
 The selected WorkRequest supplies the default delivery repo and target base
 branch for its primary repo; pass the target base branch when selecting a
@@ -208,12 +230,12 @@ and stop conditions remain required. Without a single current WorkRequest,
 callers must supply `work_request_id` explicitly.
 
 Product-plan node authoring is split by intent: use
-`upsert_work_request_product_plan_node_content` for title, description, or kind,
-`move_work_request_product_plan_node` for parent or position, and
-`set_work_request_product_plan_node_completion` for completion marks and
+`upsert_plan_node` for title, description, or kind,
+`move_plan_node` for parent or position, and
+`set_plan_node_completion` for completion marks and
 required blocker closeout.
 
-`dispatch_work_request_planned_slice` requires only `planned_slice_id` once a
+`dispatch_slice` requires only `planned_slice_id` once a
 single current WorkRequest is claimed; `claimed_by` is optional. It creates the
 linked WorkPackage, mints a worker grant, and returns the same simple
 `claim_local_assignment` bootstrap shape with primary execution and product

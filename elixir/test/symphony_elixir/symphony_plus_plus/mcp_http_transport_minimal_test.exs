@@ -89,9 +89,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
           "mark_ready",
           "read_work_request",
           "list_guidance_requests",
-          "add_work_request_planned_slice",
-          "dispatch_work_request_planned_slice",
-          "read_work_request_delivery_board",
+          "plan_slice",
+          "dispatch_slice",
+          "read_delivery_board",
           "solo_attach",
           "solo_list",
           "solo_record_task_plan",
@@ -149,9 +149,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
           "mark_ready",
           "read_work_request",
           "list_guidance_requests",
-          "add_work_request_planned_slice",
-          "dispatch_work_request_planned_slice",
-          "read_work_request_delivery_board",
+          "plan_slice",
+          "dispatch_slice",
+          "read_delivery_board",
           "sympp.health"
         ] do
       assert tool in names

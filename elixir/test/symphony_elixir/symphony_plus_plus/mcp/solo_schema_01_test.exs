@@ -834,21 +834,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert get_in(tools_by_name, ["read_work_request", "inputSchema", "required"]) == ["work_request_id"]
     assert get_in(tools_by_name, ["read_work_request", "inputSchema", "properties", "work_request_id", "type"]) == "string"
     refute Map.has_key?(get_in(tools_by_name, ["read_work_request", "inputSchema", "properties"]), "include_planning_scratch")
-    assert get_in(tools_by_name, ["read_work_request_product_tree", "inputSchema", "required"]) == ["work_request_id"]
+    assert get_in(tools_by_name, ["read_plan", "inputSchema", "required"]) == ["work_request_id"]
 
-    assert get_in(tools_by_name, ["read_work_request_product_tree", "inputSchema", "properties", "view", "enum"]) == [
+    assert get_in(tools_by_name, ["read_plan", "inputSchema", "properties", "view", "enum"]) == [
              "nodes_only",
              "nodes_with_slice_refs",
              "nodes_with_slices"
            ]
 
-    refute Map.has_key?(get_in(tools_by_name, ["read_work_request_product_tree", "inputSchema", "properties"]), "include_planning_scratch")
+    refute Map.has_key?(get_in(tools_by_name, ["read_plan", "inputSchema", "properties"]), "include_planning_scratch")
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "required"]) == ["target_kind", "target_id", "body"]
     assert get_in(tools_by_name, ["list_comments", "inputSchema", "required"]) == ["target_kind", "target_id"]
     assert get_in(tools_by_name, ["resolve_comment", "inputSchema", "required"]) == ["comment_id"]
     assert get_in(tools_by_name, ["resolve_blocker", "inputSchema", "required"]) == ["blocker_id", "resolution", "summary", "idempotency_key"]
-    assert get_in(tools_by_name, ["read_work_request_delivery_board", "inputSchema", "required"]) == ["work_request_id"]
-    refute Map.has_key?(get_in(tools_by_name, ["read_work_request_delivery_board", "inputSchema", "properties"]), "include_planning_scratch")
+    assert get_in(tools_by_name, ["read_delivery_board", "inputSchema", "required"]) == ["work_request_id"]
+    refute Map.has_key?(get_in(tools_by_name, ["read_delivery_board", "inputSchema", "properties"]), "include_planning_scratch")
     assert get_in(tools_by_name, ["reconcile_work_request", "inputSchema", "required"]) == ["work_request_id"]
     assert get_in(tools_by_name, ["reconcile_work_request", "inputSchema", "properties", "apply", "type"]) == "boolean"
 
@@ -877,21 +877,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert get_in(revoke_schema, ["properties", "grant_id", "description"]) =~ "Raw worker secrets are never accepted or returned"
 
     assert get_in(tools_by_name, ["set_work_request_status", "inputSchema", "required"]) == ["work_request_id", "current_status", "next_status"]
-    assert get_in(tools_by_name, ["ask_work_request_question", "inputSchema", "required"]) == ["work_request_id", "category", "question", "why_needed"]
-    assert get_in(tools_by_name, ["ask_work_request_question", "inputSchema", "properties", "decision_prompt", "required"]) == ["tl_dr", "details", "options"]
+    assert get_in(tools_by_name, ["ask_question", "inputSchema", "required"]) == ["work_request_id", "category", "question", "why_needed"]
+    assert get_in(tools_by_name, ["ask_question", "inputSchema", "properties", "decision_prompt", "required"]) == ["tl_dr", "details", "options"]
 
-    assert get_in(tools_by_name, ["answer_work_request_question", "inputSchema", "required"]) == [
+    assert get_in(tools_by_name, ["answer_question", "inputSchema", "required"]) == [
              "work_request_id",
              "question_id",
              "answer"
            ]
 
-    assert get_in(tools_by_name, ["answer_work_request_question", "inputSchema", "properties", "answered_by", "type"]) == "string"
-    assert get_in(tools_by_name, ["answer_work_request_question", "inputSchema", "properties", "current_status", "description"]) =~ "Deprecated alias"
+    assert get_in(tools_by_name, ["answer_question", "inputSchema", "properties", "answered_by", "type"]) == "string"
+    assert get_in(tools_by_name, ["answer_question", "inputSchema", "properties", "current_status", "description"]) =~ "Deprecated alias"
     assert get_in(tools_by_name, ["escalate_guidance_request", "inputSchema", "properties", "decision_prompt", "required"]) == ["tl_dr", "details", "options"]
-    assert get_in(tools_by_name, ["close_work_request_question", "inputSchema", "required"]) == ["work_request_id", "question_id"]
+    assert get_in(tools_by_name, ["close_question", "inputSchema", "required"]) == ["work_request_id", "question_id"]
 
-    assert get_in(tools_by_name, ["answer_work_request_question_and_record_decision", "inputSchema", "required"]) == [
+    assert get_in(tools_by_name, ["answer_question_and_record_decision", "inputSchema", "required"]) == [
              "work_request_id",
              "question_id",
              "answer",
@@ -901,7 +901,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              "scope_impact"
            ]
 
-    assert get_in(tools_by_name, ["record_work_request_decision", "inputSchema", "required"]) == [
+    assert get_in(tools_by_name, ["record_decision", "inputSchema", "required"]) == [
              "work_request_id",
              "source_type",
              "decision",
@@ -910,10 +910,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              "created_by"
            ]
 
-    assert get_in(tools_by_name, ["record_work_request_decision", "inputSchema", "properties", "source_id", "type"]) == "string"
-    assert get_in(tools_by_name, ["record_work_request_decision", "inputSchema", "properties", "source_type", "enum"]) == DecisionLogEntry.source_types()
+    assert get_in(tools_by_name, ["record_decision", "inputSchema", "properties", "source_id", "type"]) == "string"
+    assert get_in(tools_by_name, ["record_decision", "inputSchema", "properties", "source_type", "enum"]) == DecisionLogEntry.source_types()
 
-    assert get_in(tools_by_name, ["add_work_request_planned_slice", "inputSchema", "required"]) == [
+    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "required"]) == [
              "work_request_id",
              "title",
              "goal",
@@ -923,49 +923,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              "stop_conditions"
            ]
 
-    assert get_in(tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "review_lanes", "items", "enum"]) == [
+    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "review_lanes", "items", "enum"]) == [
              "brief",
              "normal",
              "deep",
              "emergency"
            ]
 
-    assert get_in(tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "work_request_id", "description"]) =~
+    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "work_request_id", "description"]) =~
              "Required WorkRequest id"
 
-    assert get_in(tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "owned_file_globs", "type"]) == "array"
+    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "owned_file_globs", "type"]) == "array"
 
-    assert get_in(tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "owned_file_globs", "description"]) =~
+    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "owned_file_globs", "description"]) =~
              "`**` must be a complete path segment"
 
-    planned_slice_kinds = get_in(tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "work_package_kind", "enum"])
+    planned_slice_kinds = get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "work_package_kind", "enum"])
     assert planned_slice_kinds == WorkPackage.planned_slice_kinds()
     assert "standard_pr" in planned_slice_kinds
     assert "docs" in planned_slice_kinds
 
-    refute Map.has_key?(get_in(tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "forbidden_file_globs"]), "minItems")
-    assert get_in(tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "branch_pattern", "type"]) == "string"
+    refute Map.has_key?(get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "forbidden_file_globs"]), "minItems")
+    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "branch_pattern", "type"]) == "string"
 
-    assert get_in(tools_by_name, ["approve_work_request_planned_slice", "inputSchema", "required"]) == [
+    assert get_in(tools_by_name, ["approve_slice", "inputSchema", "required"]) == [
              "work_request_id",
              "planned_slice_id",
              "current_status"
            ]
 
-    assert get_in(tools_by_name, ["skip_work_request_planned_slice", "inputSchema", "required"]) == [
+    assert get_in(tools_by_name, ["skip_slice", "inputSchema", "required"]) == [
              "work_request_id",
              "planned_slice_id",
              "current_status"
            ]
 
-    assert get_in(tools_by_name, ["mark_work_request_sliced", "inputSchema", "required"]) == ["work_request_id", "current_status"]
+    assert get_in(tools_by_name, ["finish_slicing", "inputSchema", "required"]) == ["work_request_id", "current_status"]
 
-    assert get_in(tools_by_name, ["dispatch_work_request_planned_slice", "inputSchema", "required"]) == [
+    assert get_in(tools_by_name, ["dispatch_slice", "inputSchema", "required"]) == [
              "work_request_id",
              "planned_slice_id"
            ]
 
-    dispatch_properties = get_in(tools_by_name, ["dispatch_work_request_planned_slice", "inputSchema", "properties"])
+    dispatch_properties = get_in(tools_by_name, ["dispatch_slice", "inputSchema", "properties"])
     assert get_in(dispatch_properties, ["claimed_by", "type"]) == "string"
     refute Map.has_key?(dispatch_properties, "secret_handoff")
     refute Map.has_key?(dispatch_properties, "secret_store_dir")
@@ -1025,8 +1025,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
       |> Map.new(&{&1["name"], &1})
 
     assert Map.has_key?(tools_by_name, "list_work_requests")
-    assert Map.has_key?(tools_by_name, "add_work_request_planned_slice")
-    assert Map.has_key?(tools_by_name, "dispatch_work_request_planned_slice")
+    assert Map.has_key?(tools_by_name, "plan_slice")
+    assert Map.has_key?(tools_by_name, "dispatch_slice")
   end
 
   test "tools list advertises planned-slice dispatch when the ledger cannot be handed off", %{repo: repo} do
@@ -1049,8 +1049,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
       |> Map.new(&{&1["name"], &1})
 
     assert Map.has_key?(tools_by_name, "list_work_requests")
-    assert Map.has_key?(tools_by_name, "add_work_request_planned_slice")
-    assert Map.has_key?(tools_by_name, "dispatch_work_request_planned_slice")
+    assert Map.has_key?(tools_by_name, "plan_slice")
+    assert Map.has_key?(tools_by_name, "dispatch_slice")
   end
 
   test "tools list cannot receive legacy WorkRequest architect sessions from grant creation", %{repo: repo} do

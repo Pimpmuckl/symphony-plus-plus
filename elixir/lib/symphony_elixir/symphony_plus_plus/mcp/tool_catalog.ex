@@ -81,12 +81,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "revoke_child_worker_key",
     "list_work_requests",
     "read_work_request",
-    "read_work_request_product_tree",
+    "read_plan",
     "add_comment",
     "list_comments",
     "resolve_comment",
     "resolve_blocker",
-    "read_work_request_delivery_board",
+    "read_delivery_board",
     "reconcile_work_request",
     "cleanup_work_request_planned_slice_runtime",
     "record_planned_slice_delivery",
@@ -96,20 +96,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "answer_guidance_request",
     "escalate_guidance_request",
     "set_work_request_status",
-    "ask_work_request_question",
-    "answer_work_request_question",
-    "answer_work_request_question_and_record_decision",
-    "close_work_request_question",
-    "record_work_request_decision",
-    "add_work_request_planned_slice",
-    "upsert_work_request_product_plan_node_content",
-    "move_work_request_product_plan_node",
-    "set_work_request_product_plan_node_completion",
-    "move_work_request_planned_slice_to_product_node",
-    "approve_work_request_planned_slice",
-    "skip_work_request_planned_slice",
-    "mark_work_request_sliced",
-    "dispatch_work_request_planned_slice",
+    "ask_question",
+    "answer_question",
+    "answer_question_and_record_decision",
+    "close_question",
+    "record_decision",
+    "plan_slice",
+    "upsert_plan_node",
+    "move_plan_node",
+    "set_plan_node_completion",
+    "move_slice_to_plan_node",
+    "approve_slice",
+    "skip_slice",
+    "finish_slicing",
+    "dispatch_slice",
     "prepare_work_package_worktree",
     "cleanup_work_package_worktree",
     "read_child_status",
@@ -121,42 +121,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @work_request_policy_tools [
     "list_work_requests",
     "read_work_request",
-    "read_work_request_product_tree",
-    "read_work_request_delivery_board",
+    "read_plan",
+    "read_delivery_board",
     "set_work_request_status",
-    "ask_work_request_question",
-    "answer_work_request_question",
-    "answer_work_request_question_and_record_decision",
-    "close_work_request_question",
-    "record_work_request_decision",
-    "add_work_request_planned_slice",
-    "upsert_work_request_product_plan_node_content",
-    "move_work_request_product_plan_node",
-    "set_work_request_product_plan_node_completion",
-    "move_work_request_planned_slice_to_product_node",
-    "approve_work_request_planned_slice",
-    "skip_work_request_planned_slice",
-    "mark_work_request_sliced",
-    "dispatch_work_request_planned_slice"
+    "ask_question",
+    "answer_question",
+    "answer_question_and_record_decision",
+    "close_question",
+    "record_decision",
+    "plan_slice",
+    "upsert_plan_node",
+    "move_plan_node",
+    "set_plan_node_completion",
+    "move_slice_to_plan_node",
+    "approve_slice",
+    "skip_slice",
+    "finish_slicing",
+    "dispatch_slice"
   ]
   @current_work_request_write_tools [
-    "add_work_request_planned_slice",
-    "upsert_work_request_product_plan_node_content",
-    "move_work_request_product_plan_node",
-    "set_work_request_product_plan_node_completion",
-    "move_work_request_planned_slice_to_product_node",
-    "approve_work_request_planned_slice",
-    "skip_work_request_planned_slice",
-    "mark_work_request_sliced"
+    "plan_slice",
+    "upsert_plan_node",
+    "move_plan_node",
+    "set_plan_node_completion",
+    "move_slice_to_plan_node",
+    "approve_slice",
+    "skip_slice",
+    "finish_slicing"
   ]
   @current_work_request_tools @current_work_request_write_tools ++
                                 [
-                                  "read_work_request_delivery_board",
+                                  "read_delivery_board",
                                   "reconcile_work_request",
                                   "cleanup_work_request_planned_slice_runtime",
                                   "record_planned_slice_delivery",
                                   "revoke_planned_slice_worker_key",
-                                  "dispatch_work_request_planned_slice"
+                                  "dispatch_slice"
                                 ]
   @delivery_policy_tools [
     "reconcile_work_request",
@@ -339,12 +339,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp architect_tool_description("revoke_child_worker_key"), do: "Revoke one live child-worker grant for a same-phase child package in the architect grant's current phase."
   defp architect_tool_description("list_work_requests"), do: "List WorkRequests scoped to the architect grant's repo and base branch."
   defp architect_tool_description("read_work_request"), do: "Read a scoped WorkRequest with clarification questions, decisions, visible planned slices, and status summaries."
-  defp architect_tool_description("read_work_request_product_tree"), do: "Read the scoped WorkRequest V3 product-tree projection, with optional slice refs or full visible slice payloads."
+  defp architect_tool_description("read_plan"), do: "Read the scoped WorkRequest V3 product-tree projection, with optional slice refs or full visible slice payloads."
   defp architect_tool_description("add_comment"), do: "Add a policy-scoped comment to a claimed WorkRequest descendant package surface, or a narrow external comment to a visible WorkRequest."
   defp architect_tool_description("list_comments"), do: "List comments attached to a scoped WorkRequest, planned slice, or linked WorkPackage."
   defp architect_tool_description("resolve_comment"), do: "Resolve a policy-scoped comment attached to a claimed WorkRequest descendant package surface."
   defp architect_tool_description("resolve_blocker"), do: "Resolve a blocker event for a policy-scoped descendant WorkPackage."
-  defp architect_tool_description("read_work_request_delivery_board"), do: "Read the scoped WorkRequest delivery-board projection for visible planned-slice closeout without broad package visibility."
+  defp architect_tool_description("read_delivery_board"), do: "Read the scoped WorkRequest delivery-board projection for visible planned-slice closeout without broad package visibility."
   defp architect_tool_description("reconcile_work_request"), do: "Dry-run or apply deterministic WorkRequest delivery closeout repairs from structured PR/GitHub evidence."
 
   defp architect_tool_description("record_planned_slice_delivery") do
@@ -359,46 +359,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp architect_tool_description("answer_guidance_request"), do: "Answer an open package-scoped guidance request."
   defp architect_tool_description("escalate_guidance_request"), do: "Escalate an open guidance request to human_info_needed and project it as an active package blocker."
   defp architect_tool_description("set_work_request_status"), do: "Move a scoped WorkRequest between valid statuses with optimistic current-status checking."
-  defp architect_tool_description("ask_work_request_question"), do: "Add a clarification question to a scoped WorkRequest."
-  defp architect_tool_description("answer_work_request_question"), do: "Answer an open clarification question that belongs to a scoped WorkRequest."
-  defp architect_tool_description("answer_work_request_question_and_record_decision"), do: "Answer an open clarification question and atomically record the resulting WorkRequest decision."
-  defp architect_tool_description("close_work_request_question"), do: "Close an open clarification question that belongs to a scoped WorkRequest without recording an answer."
+  defp architect_tool_description("ask_question"), do: "Add a clarification question to a scoped WorkRequest."
+  defp architect_tool_description("answer_question"), do: "Answer an open clarification question that belongs to a scoped WorkRequest."
+  defp architect_tool_description("answer_question_and_record_decision"), do: "Answer an open clarification question and atomically record the resulting WorkRequest decision."
+  defp architect_tool_description("close_question"), do: "Close an open clarification question that belongs to a scoped WorkRequest without recording an answer."
 
-  defp architect_tool_description("record_work_request_decision"),
+  defp architect_tool_description("record_decision"),
     do: "Record a durable decision log entry on a scoped WorkRequest. source_type must be one of: #{Enum.join(DecisionLogEntry.source_types(), ", ")}."
 
-  defp architect_tool_description("add_work_request_planned_slice"),
+  defp architect_tool_description("plan_slice"),
     do: "Add a slice; standard_pr is ordinary PR work, while mcp is MCP server, protocol, tool, or plugin work."
 
-  defp architect_tool_description("upsert_work_request_product_plan_node_content") do
+  defp architect_tool_description("upsert_plan_node") do
     "Create or edit V3 product plan node content inside the claimed current WorkRequest. Do not create a plan node solely to wrap one slice. Leave simple slices direct unless the node groups multiple units or records a real product boundary."
   end
 
-  defp architect_tool_description("move_work_request_product_plan_node") do
+  defp architect_tool_description("move_plan_node") do
     "Reparent or reorder a V3 product plan node inside the claimed current WorkRequest."
   end
 
-  defp architect_tool_description("set_work_request_product_plan_node_completion") do
+  defp architect_tool_description("set_plan_node_completion") do
     "Set a V3 product plan node completion mark inside the claimed current WorkRequest. If setting completion_mark to done or deferred and descendant blockers are active, answer blocker_closeout before completing the node."
   end
 
-  defp architect_tool_description("move_work_request_planned_slice_to_product_node") do
+  defp architect_tool_description("move_slice_to_plan_node") do
     "Move a planned slice under a V3 product plan node in the claimed current WorkRequest, or unlink it back to the WorkRequest's direct slice list."
   end
 
-  defp architect_tool_description("approve_work_request_planned_slice") do
+  defp architect_tool_description("approve_slice") do
     "Approve a planned slice that belongs to the claimed current WorkRequest."
   end
 
-  defp architect_tool_description("skip_work_request_planned_slice") do
+  defp architect_tool_description("skip_slice") do
     "Skip a planned slice that belongs to the claimed current WorkRequest."
   end
 
-  defp architect_tool_description("mark_work_request_sliced") do
+  defp architect_tool_description("finish_slicing") do
     "Mark the claimed current WorkRequest sliced using the existing approved-slice requirement."
   end
 
-  defp architect_tool_description("dispatch_work_request_planned_slice") do
+  defp architect_tool_description("dispatch_slice") do
     "Dispatch one approved planned slice into a WorkPackage and redacted ledger-backed worker claim bootstrap."
   end
 
@@ -722,7 +722,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   def architect_tool_input_schema("read_work_request"), do: schema(%{"work_request_id" => string_schema()}, ["work_request_id"])
 
-  def architect_tool_input_schema("read_work_request_product_tree") do
+  def architect_tool_input_schema("read_plan") do
     schema(
       %{
         "work_request_id" => described_string_schema("Scoped WorkRequest id to project."),
@@ -745,7 +745,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("read_work_request_delivery_board") do
+  def architect_tool_input_schema("read_delivery_board") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema()
@@ -872,7 +872,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("ask_work_request_question") do
+  def architect_tool_input_schema("ask_question") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -886,7 +886,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("answer_work_request_question") do
+  def architect_tool_input_schema("answer_question") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -900,7 +900,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("answer_work_request_question_and_record_decision") do
+  def architect_tool_input_schema("answer_question_and_record_decision") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -920,7 +920,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("close_work_request_question") do
+  def architect_tool_input_schema("close_question") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -932,7 +932,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("record_work_request_decision") do
+  def architect_tool_input_schema("record_decision") do
     schema(
       %{
         "work_request_id" => string_schema(),
@@ -947,7 +947,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("add_work_request_planned_slice") do
+  def architect_tool_input_schema("plan_slice") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -981,7 +981,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("upsert_work_request_product_plan_node_content") do
+  def architect_tool_input_schema("upsert_plan_node") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -1001,7 +1001,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     })
   end
 
-  def architect_tool_input_schema("move_work_request_product_plan_node") do
+  def architect_tool_input_schema("move_plan_node") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -1017,7 +1017,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     |> always_validate(%{"anyOf" => [%{"required" => ["parent_id"]}, %{"required" => ["position"]}]})
   end
 
-  def architect_tool_input_schema("set_work_request_product_plan_node_completion") do
+  def architect_tool_input_schema("set_plan_node_completion") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -1030,7 +1030,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("move_work_request_planned_slice_to_product_node") do
+  def architect_tool_input_schema("move_slice_to_plan_node") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -1046,7 +1046,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema(name) when name in ["approve_work_request_planned_slice", "skip_work_request_planned_slice"] do
+  def architect_tool_input_schema(name) when name in ["approve_slice", "skip_slice"] do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -1057,7 +1057,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("mark_work_request_sliced") do
+  def architect_tool_input_schema("finish_slicing") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
@@ -1067,7 +1067,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("dispatch_work_request_planned_slice") do
+  def architect_tool_input_schema("dispatch_slice") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),

@@ -6,7 +6,7 @@ gates when present, and a mergeable green PR when a PR exists.
 
 ## Default Sequence
 
-1. Read `read_work_request_delivery_board()` when the claim has exactly one
+1. Read `read_delivery_board()` when the claim has exactly one
    current WorkRequest. Pass `work_request_id` when the session is unbound,
    multi-WorkRequest, or targeting another authorized WorkRequest.
 2. If the board shows merged PR evidence without a delivery outcome, dry-run
@@ -72,7 +72,7 @@ Fixture shape:
 
 Expected projection before closeout:
 
-- `read_work_request_delivery_board` preserves raw slice status `dispatched`.
+- `read_delivery_board` preserves raw slice status `dispatched`.
 - The linked package raw status remains visible as `ready_for_worker`.
 - If merged-PR evidence is present, the slice reports `Needs Closeout` rather
   than pretending the stale package card is still the human next action.

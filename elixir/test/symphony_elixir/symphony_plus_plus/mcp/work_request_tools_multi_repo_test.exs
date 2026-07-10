@@ -40,11 +40,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestToolsMultiRepoTest do
     }
 
     missing_base_response =
-      mcp_tool(repo, session, "add_work_request_planned_slice", Map.delete(add_args, "target_base_branch"))
+      mcp_tool(repo, session, "plan_slice", Map.delete(add_args, "target_base_branch"))
 
     assert get_in(missing_base_response, ["error", "data", "reason"]) == "missing_target_base_branch"
 
-    add_response = mcp_tool(repo, session, "add_work_request_planned_slice", add_args)
+    add_response = mcp_tool(repo, session, "plan_slice", add_args)
 
     add_payload = get_in(add_response, ["result", "structuredContent"])
     planned_slice_id = get_in(add_payload, ["planned_slice", "id"])
@@ -53,7 +53,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestToolsMultiRepoTest do
     assert get_in(add_payload, ["planned_slice", "target_base_branch"]) == delivery_base
 
     approve_response =
-      mcp_tool(repo, session, "approve_work_request_planned_slice", %{
+      mcp_tool(repo, session, "approve_slice", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => planned_slice_id,
         "current_status" => "planned"
