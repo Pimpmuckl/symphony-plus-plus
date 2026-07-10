@@ -234,7 +234,9 @@ export function DashboardSettingsDialog({
     ? "Shows the sticky repo, WR, and plan-node path while scrolling."
     : "Board rows scroll without the sticky context path.";
   const welcomeLabel = showWelcomeToast ? "Shows the welcome modal on dashboard load." : "Welcome modal is hidden.";
-  const openOnBootLabel = openDashboardOnBoot ? "Opens the dashboard when the local server starts." : "Local server starts without opening a browser.";
+  const openOnBootLabel = openDashboardOnBoot
+    ? "Opens once when Codex connects and no dashboard is already open."
+    : "Codex connects without opening a browser.";
 
   return (
     <>
@@ -287,10 +289,10 @@ export function DashboardSettingsDialog({
                   onSave={onSoloSessionDeleteAfterDaysChange}
                 />
                 <SettingsSwitch
-                  ariaLabel="Open dashboard on boot"
+                  ariaLabel="Open dashboard with Codex"
                   checked={openDashboardOnBoot}
                   description={openOnBootLabel}
-                  label="Open dashboard on boot"
+                  label="Open dashboard with Codex"
                   onChange={onOpenDashboardOnBootChange}
                 />
               </>

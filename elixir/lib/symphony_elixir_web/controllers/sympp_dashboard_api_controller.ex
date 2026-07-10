@@ -20,6 +20,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Service, as: GuidanceRequestService
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
@@ -633,13 +634,22 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   def operator_dashboard_events(conn, _params) do
     with true <- local_operator_api_request?(conn),
          {:ok, %Decision{}} <- authorize_local_operator_policy(conn, :dashboard_read, Target.new(:dashboard)),
+         :ok <- OperatorDashboardOpener.ensure_started(),
          :ok <- DashboardPubSub.subscribe() do
-      conn
-      |> Conn.put_resp_header("cache-control", "no-cache")
-      |> Conn.put_resp_header("connection", "keep-alive")
-      |> Conn.put_resp_content_type("text/event-stream")
-      |> Conn.send_chunked(200)
-      |> stream_dashboard_events()
+      conn =
+        conn
+        |> Conn.put_resp_header("cache-control", "no-cache")
+        |> Conn.put_resp_header("connection", "keep-alive")
+        |> Conn.put_resp_content_type("text/event-stream")
+        |> Conn.send_chunked(200)
+
+      OperatorDashboardOpener.dashboard_connected()
+
+      try do
+        stream_dashboard_events(conn)
+      after
+        OperatorDashboardOpener.dashboard_disconnected()
+      end
     else
       false -> error_response(conn, :unauthorized)
       {:error, reason} -> error_response(conn, reason)

@@ -9,6 +9,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
 
   use GenServer
 
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
+
   @default_ttl_ms 10 * 60 * 1_000
   @default_sweep_ms 30 * 1_000
   @default_shutdown_delay_ms 1_000
@@ -27,6 +29,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
+
+    opts =
+      Keyword.put_new(
+        opts,
+        :dashboard_opener,
+        if(name == __MODULE__, do: OperatorDashboardOpener, else: nil)
+      )
+
     GenServer.start_link(__MODULE__, Keyword.delete(opts, :name), name: name)
   end
 
@@ -77,6 +87,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
 
     state = %{
       leases: %{},
+      dashboard_opener: Keyword.get(opts, :dashboard_opener),
       ttl_ms: option(opts, :ttl_ms, :mcp_client_lease_ttl_ms, @default_ttl_ms),
       sweep_ms: option(opts, :sweep_ms, :mcp_client_lease_sweep_ms, @default_sweep_ms),
       shutdown_delay_ms: shutdown_delay_ms,
@@ -96,7 +107,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
     state =
       state
       |> cancel_shutdown()
-      |> upsert_lease(client_id)
+      |> record_lease(client_id)
 
     {:reply, {:ok, summary(state)}, state}
   end
@@ -105,7 +116,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
     state =
       state
       |> cancel_shutdown()
-      |> upsert_lease(client_id)
+      |> record_lease(client_id)
 
     {:reply, {:ok, summary(state)}, state}
   end
@@ -115,21 +126,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
 
     state =
       state
-      |> prune(now)
-      |> Map.update!(:leases, &Map.delete(&1, client_id))
+      |> prune_and_notify_idle(now)
+      |> delete_lease(client_id)
       |> maybe_schedule_shutdown()
 
     {:reply, {:ok, summary(state)}, state}
   end
 
   def handle_call(:active_count, _from, state) do
-    state = prune(state, now_ms())
+    state = prune_and_notify_idle(state, now_ms())
     {:reply, {:ok, summary(state)}, state}
   end
 
   @impl true
   def handle_info(:sweep, state) do
-    state = prune(state, now_ms())
+    state = prune_and_notify_idle(state, now_ms())
 
     schedule_sweep(state)
     {:noreply, maybe_schedule_shutdown(state)}
@@ -189,7 +200,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
   end
 
   defp start_direct_lease_store do
-    case GenServer.start(__MODULE__, [], name: __MODULE__) do
+    case OperatorDashboardOpener.ensure_started() do
+      :ok -> start_direct_lease_store_with_opener()
+      {:error, _reason} -> {:error, :client_lease_unavailable}
+    end
+  end
+
+  defp start_direct_lease_store_with_opener do
+    case GenServer.start(__MODULE__, [dashboard_opener: OperatorDashboardOpener], name: __MODULE__) do
       {:ok, _pid} -> :ok
       {:error, {:already_started, _pid}} -> :ok
       {:error, _reason} -> {:error, :client_lease_unavailable}
@@ -226,14 +244,47 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases do
   defp lease_action(%{"action" => action}) when action in @actions, do: {:ok, action}
   defp lease_action(_payload), do: {:error, :invalid_action}
 
-  defp upsert_lease(state, client_id) do
+  defp record_lease(state, client_id) do
     now = now_ms()
+    state = prune_and_notify_idle(state, now)
+    first_client? = map_size(state.leases) == 0
+
+    state =
+      state
+      |> Map.put(:lease_seen?, true)
+      |> Map.update!(:leases, &Map.put(&1, client_id, %{last_seen_ms: now}))
+
+    if first_client?, do: notify_dashboard_opener(state, :client_attached)
+    state
+  end
+
+  defp delete_lease(state, client_id) do
+    had_clients? = map_size(state.leases) > 0
+    state = Map.update!(state, :leases, &Map.delete(&1, client_id))
+
+    if had_clients? and map_size(state.leases) == 0,
+      do: notify_dashboard_opener(state, :clients_idle)
 
     state
-    |> prune(now)
-    |> Map.put(:lease_seen?, true)
-    |> Map.update!(:leases, &Map.put(&1, client_id, %{last_seen_ms: now}))
   end
+
+  defp prune_and_notify_idle(state, now) do
+    had_clients? = map_size(state.leases) > 0
+    state = prune(state, now)
+
+    if had_clients? and map_size(state.leases) == 0,
+      do: notify_dashboard_opener(state, :clients_idle)
+
+    state
+  end
+
+  defp notify_dashboard_opener(%{dashboard_opener: nil}, _event), do: :ok
+
+  defp notify_dashboard_opener(%{dashboard_opener: opener}, :client_attached),
+    do: OperatorDashboardOpener.client_attached(opener)
+
+  defp notify_dashboard_opener(%{dashboard_opener: opener}, :clients_idle),
+    do: OperatorDashboardOpener.clients_idle(opener)
 
   defp maybe_schedule_shutdown(%{shutdown_on_idle?: false} = state), do: state
   defp maybe_schedule_shutdown(%{lease_seen?: false} = state), do: state

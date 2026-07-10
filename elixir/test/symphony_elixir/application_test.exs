@@ -11,6 +11,7 @@ defmodule SymphonyElixir.ApplicationTest do
       refute SymphonyElixir.Orchestrator in children
       assert SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore in children
       assert SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases in children
+      assert SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener in children
       assert {SymphonyElixir.HttpServer, host: "127.0.0.1"} in children
       refute SymphonyElixir.HttpServer in children
       refute SymphonyElixir.StatusDashboard in children
@@ -79,6 +80,7 @@ defmodule SymphonyElixir.ApplicationTest do
 
       assert SymphonyElixir.WorkflowStore in children
       assert SymphonyElixir.Orchestrator in children
+      assert SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener in children
     end)
   end
 

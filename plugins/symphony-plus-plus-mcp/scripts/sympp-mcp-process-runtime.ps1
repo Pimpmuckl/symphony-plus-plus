@@ -234,7 +234,7 @@ function Get-ArtifactBackendCommand($ArtifactRuntime, $Plan, [string]$DashboardO
 }
 
 function Start-Backend($Plan, [string]$DashboardOrigin, [string]$ElixirDir, [string]$Launcher, [string]$MixCommand, [string]$MiseCommand, [string]$LogDir, [int]$TimeoutSec, [string]$ExpectedContractFingerprint, $ArtifactRuntime = $null, [bool]$ShutdownOnIdle = $false) {
-  $args = @("sympp.cockpit", "--host", "127.0.0.1", "--port", [string]$Plan.port)
+  $args = @("sympp.cockpit", "--host", "127.0.0.1", "--port", [string]$Plan.port, "--no-open-dashboard")
   if (-not [string]::IsNullOrWhiteSpace($DashboardOrigin)) {
     $args += @("--dashboard-origin", $DashboardOrigin)
   }

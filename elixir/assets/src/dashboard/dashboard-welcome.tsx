@@ -65,7 +65,7 @@ export function DashboardWelcomeDialog({
           </label>
           <label className="flex items-center gap-3 text-foreground">
             <input type="checkbox" checked={dontOpenOnBoot} onChange={(event) => setEditedDontOpenOnBoot(event.target.checked)} />
-            <span>Don't open dashboard on boot</span>
+            <span>Don't open dashboard when Codex starts</span>
           </label>
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
         </div>

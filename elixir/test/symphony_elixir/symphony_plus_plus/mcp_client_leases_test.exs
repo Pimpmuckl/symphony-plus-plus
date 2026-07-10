@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPClientLeasesTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
 
   test "tracks clients by lease id" do
     server = start_supervised!({ClientLeases, name: :"#{__MODULE__}.tracks"})
@@ -11,6 +12,47 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPClientLeasesTest do
     assert {:ok, %{active_client_count: 2}} = ClientLeases.attach("client-b", server)
     assert {:ok, %{active_client_count: 1}} = ClientLeases.detach("client-a", server)
     assert ClientLeases.active_count(server) == 1
+  end
+
+  test "opens the dashboard once when the first client attaches after idle" do
+    parent = self()
+
+    opener = start_opener("once", parent)
+
+    server =
+      start_lease_server("dashboard-once",
+        dashboard_opener: opener,
+        ttl_ms: 1_000
+      )
+
+    assert {:ok, %{active_client_count: 1}} = ClientLeases.attach("client-a", server)
+    assert_receive :dashboard_opened, 100
+
+    assert {:ok, %{active_client_count: 2}} = ClientLeases.attach("client-b", server)
+    refute_receive :dashboard_opened, 20
+
+    assert {:ok, %{active_client_count: 1}} = ClientLeases.detach("client-a", server)
+    assert {:ok, %{active_client_count: 0}} = ClientLeases.detach("client-b", server)
+    assert {:ok, %{active_client_count: 1}} = ClientLeases.attach("client-c", server)
+    assert_receive :dashboard_opened, 100
+  end
+
+  test "does not open when a dashboard event stream is already connected" do
+    parent = self()
+
+    opener = start_opener("connected", parent)
+
+    server =
+      start_lease_server("dashboard-connected",
+        dashboard_opener: opener,
+        ttl_ms: 1_000
+      )
+
+    OperatorDashboardOpener.dashboard_connected(self(), opener)
+    :sys.get_state(opener)
+
+    assert {:ok, %{active_client_count: 1}} = ClientLeases.attach("client-a", server)
+    refute_receive :dashboard_opened, 20
   end
 
   test "stale leases are pruned without runtime shutdown authority" do
@@ -139,5 +181,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPClientLeasesTest do
       |> Keyword.merge(extra_opts)
 
     start_supervised!({ClientLeases, opts})
+  end
+
+  defp start_opener(name, parent) do
+    opts = [
+      name: :"#{__MODULE__}.opener.#{name}",
+      open_delay_ms: 1,
+      open_fun: fn -> send(parent, :dashboard_opened) end
+    ]
+
+    start_supervised!({OperatorDashboardOpener, opts})
   end
 end
