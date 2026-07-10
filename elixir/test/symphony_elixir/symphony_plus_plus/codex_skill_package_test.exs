@@ -51,7 +51,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
           "WR delivery board",
           "Decisions are rationale",
           "Delivery closeout records lifecycle truth",
-          "read_work_request_delivery_board",
+          "read_delivery_board",
           "record_planned_slice_delivery",
           "reconcile_work_request",
           "PR-size or line-budget",
@@ -68,7 +68,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     end
 
     for marker <- [
-          "read_work_request_delivery_board(work_request_id)",
+          "read_delivery_board(work_request_id)",
           "record_planned_slice_delivery(work_request_id, planned_slice_id, outcome, idempotency_key, evidence)",
           "`completed_no_pr`",
           "`evidence.completed_no_pr`",

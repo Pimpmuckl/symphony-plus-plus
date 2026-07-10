@@ -38,16 +38,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert payload["launch_prompt"] =~ "agent_context: architect_handoff_reference"
     assert payload["launch_prompt"] =~ "Use `symphony-plus-plus-mcp:symphony-architect`"
     assert payload["launch_prompt"] =~ "Claim first with `claim_local_architect_assignment`"
-    assert payload["launch_prompt"] =~ "read_work_request_product_tree"
-    assert payload["launch_prompt"] =~ "read_work_request_delivery_board"
+    assert payload["launch_prompt"] =~ "read_plan"
+    assert payload["launch_prompt"] =~ "read_delivery_board"
     assert payload["launch_prompt"] =~ "list_guidance_requests"
     assert payload["launch_prompt"] =~ "ask human-answerable clarification"
-    assert payload["launch_prompt"] =~ "ask_work_request_question"
+    assert payload["launch_prompt"] =~ "ask_question"
     assert payload["launch_prompt"] =~ "decision_prompt"
     assert payload["launch_prompt"] =~ "TL;DR/details/options/pros-cons/freeform"
-    assert payload["launch_prompt"] =~ "record_work_request_decision"
-    assert payload["launch_prompt"] =~ "add_work_request_planned_slice"
-    assert payload["launch_prompt"] =~ "dispatch_work_request_planned_slice(work_request_id, planned_slice_id)"
+    assert payload["launch_prompt"] =~ "record_decision"
+    assert payload["launch_prompt"] =~ "plan_slice"
+    assert payload["launch_prompt"] =~ "dispatch_slice(work_request_id, planned_slice_id)"
     assert payload["launch_prompt"] =~ "No wrapper node for one slice."
     assert String.length(payload["launch_prompt"]) < 2_300
     assert get_in(payload, ["architect_handoff", "agent_context"]) =~ "agent_context: architect_handoff_reference"
@@ -99,7 +99,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     claimed_tools_response = Server.handle(%{"jsonrpc" => "2.0", "id" => "claimed-architect-tools", "method" => "tools/list", "params" => %{}}, claimed_server)
     claimed_tools_by_name = Map.new(get_in(claimed_tools_response, ["result", "tools"]), &{&1["name"], &1})
 
-    assert get_in(claimed_tools_by_name, ["add_work_request_planned_slice", "inputSchema", "required"]) == [
+    assert Enum.all?(
+             [
+               "read_plan",
+               "read_delivery_board",
+               "ask_question",
+               "answer_question",
+               "answer_question_and_record_decision",
+               "close_question",
+               "record_decision",
+               "plan_slice",
+               "upsert_plan_node",
+               "move_plan_node",
+               "set_plan_node_completion",
+               "move_slice_to_plan_node",
+               "approve_slice",
+               "skip_slice",
+               "finish_slicing",
+               "dispatch_slice"
+             ],
+             &Map.has_key?(claimed_tools_by_name, &1)
+           )
+
+    old_name_response =
+      Server.handle(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "superseded-architect-tool",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "read_work_request_product_tree",
+            "arguments" => %{"work_request_id" => get_in(payload, ["work_request", "id"])}
+          }
+        },
+        claimed_server
+      )
+
+    assert get_in(old_name_response, ["error", "code"]) == -32_601
+    assert get_in(old_name_response, ["error", "data", "tool"]) == "read_work_request_product_tree"
+
+    assert get_in(claimed_tools_by_name, ["plan_slice", "inputSchema", "required"]) == [
              "title",
              "goal",
              "owned_file_globs",
@@ -108,25 +147,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
              "stop_conditions"
            ]
 
-    assert get_in(claimed_tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "work_package_kind", "default"]) ==
+    assert get_in(claimed_tools_by_name, ["plan_slice", "inputSchema", "properties", "work_package_kind", "default"]) ==
              "standard_pr"
 
-    assert get_in(claimed_tools_by_name, ["add_work_request_planned_slice", "description"]) =~ "mcp is MCP server"
+    assert get_in(claimed_tools_by_name, ["plan_slice", "description"]) =~ "mcp is MCP server"
 
-    assert get_in(claimed_tools_by_name, ["add_work_request_planned_slice", "inputSchema", "properties", "work_request_id", "description"]) =~
+    assert get_in(claimed_tools_by_name, ["plan_slice", "inputSchema", "properties", "work_request_id", "description"]) =~
              "claimed architect WorkRequest"
 
-    assert get_in(claimed_tools_by_name, ["approve_work_request_planned_slice", "inputSchema", "required"]) == [
+    assert get_in(claimed_tools_by_name, ["approve_slice", "inputSchema", "required"]) == [
              "planned_slice_id",
              "current_status"
            ]
 
-    assert get_in(claimed_tools_by_name, ["skip_work_request_planned_slice", "inputSchema", "required"]) == [
+    assert get_in(claimed_tools_by_name, ["skip_slice", "inputSchema", "required"]) == [
              "planned_slice_id",
              "current_status"
            ]
 
-    assert get_in(claimed_tools_by_name, ["mark_work_request_sliced", "inputSchema", "required"]) == ["current_status"]
+    assert get_in(claimed_tools_by_name, ["finish_slicing", "inputSchema", "required"]) == ["current_status"]
 
     {default_owner_response, _default_owner_server} =
       Server.handle_state(
@@ -519,7 +558,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       "stop_conditions" => ["Do not bypass open questions."]
     }
 
-    add_response = mcp_tool(repo, session, "add_work_request_planned_slice", add_args)
+    add_response = mcp_tool(repo, session, "plan_slice", add_args)
     add_payload = get_in(add_response, ["result", "structuredContent"])
 
     assert add_payload["work_request"]["status"] == "ready_for_slicing"
@@ -537,7 +576,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert {:ok, _open_question} =
              WorkRequestRepository.ask_question(repo, blocked.id, work_request_question_attrs(id: "WRQ-MCP-WR-OPEN-QUESTION-SLICE"))
 
-    blocked_response = mcp_tool(repo, session, "add_work_request_planned_slice", Map.put(add_args, "work_request_id", blocked.id))
+    blocked_response = mcp_tool(repo, session, "plan_slice", Map.put(add_args, "work_request_id", blocked.id))
 
     assert get_in(blocked_response, ["error", "data", "reason"]) == "open_questions"
     assert get_in(blocked_response, ["error", "data", "message"]) =~ "Answer or close all open clarification questions"
@@ -693,7 +732,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert read_text =~ "WorkRequest MCP reads are scoped and redacted."
     assert read_text =~ "mix test test/symphony_elixir/symphony_plus_plus/mcp"
 
-    board_response = mcp_tool(repo, session, "read_work_request_delivery_board", %{"work_request_id" => work_request.id})
+    board_response = mcp_tool(repo, session, "read_delivery_board", %{"work_request_id" => work_request.id})
     board_text = get_in(board_response, ["result", "content", Access.at(0), "text"])
 
     assert get_in(board_response, ["result", "structuredContent", "delivery_board", "slices", Access.at(0), "work_package", "blocker_state", "active?"]) == true
@@ -747,14 +786,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert get_in(missing_read_denied, ["error", "data", "reason_code"]) == "insufficient_capability"
 
     board_denied =
-      mcp_tool(repo, insufficient_session, "read_work_request_delivery_board", %{"work_request_id" => insufficient_target.id})
+      mcp_tool(repo, insufficient_session, "read_delivery_board", %{"work_request_id" => insufficient_target.id})
 
     assert get_in(board_denied, ["error", "code"]) == -32_003
     assert get_in(board_denied, ["error", "data", "reason"]) == "insufficient_capability"
     assert get_in(board_denied, ["error", "data", "reason_code"]) == "insufficient_capability"
 
     missing_board_denied =
-      mcp_tool(repo, insufficient_session, "read_work_request_delivery_board", %{"work_request_id" => "WR-MCP-WR-AUTHZ-MISSING"})
+      mcp_tool(repo, insufficient_session, "read_delivery_board", %{"work_request_id" => "WR-MCP-WR-AUTHZ-MISSING"})
 
     assert get_in(missing_board_denied, ["error", "code"]) == -32_003
     assert get_in(missing_board_denied, ["error", "data", "reason"]) == "insufficient_capability"
@@ -866,7 +905,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert get_in(hidden_read_response, ["error", "data", "reason"]) == "not_found"
     refute inspect(hidden_read_response) =~ hidden.id
 
-    hidden_board_response = mcp_tool(repo, session, "read_work_request_delivery_board", %{"work_request_id" => hidden.id})
+    hidden_board_response = mcp_tool(repo, session, "read_delivery_board", %{"work_request_id" => hidden.id})
     assert get_in(hidden_board_response, ["error", "code"]) == -32_004
     assert get_in(hidden_board_response, ["error", "data", "reason"]) == "not_found"
     refute inspect(hidden_board_response) =~ hidden.id

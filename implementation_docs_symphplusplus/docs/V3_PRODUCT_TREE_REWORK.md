@@ -151,27 +151,27 @@ This branch introduces the v3 foundation:
 - `sympp_product_tree_revisions`
 - backend repository and projection modules
 - `product_tree` on WorkRequest detail payloads
-- `read_work_request_product_tree` MCP read projection for agent planning
+- `read_plan` MCP read projection for agent planning
 - cockpit WorkRequest rows collapsed by default
 - expanded arbitrary nested plan-node tree with linked slice rows
 - Vite port override for isolated preview servers
 
 Architect-facing MCP mutation tools maintain product trees:
 
-- `read_work_request_product_tree` reads the current scoped product tree without
+- `read_plan` reads the current scoped product tree without
   direct ledger queries. `nodes_only` returns product plan nodes, the default
   `nodes_with_slice_refs` includes compact slice id/status refs, and
   `nodes_with_slices` includes visible planned-slice payloads. Completion and
   attention rollups use scoped delivery-board operational state for linked
   WorkPackages.
-- `upsert_work_request_product_plan_node_content` creates product plan nodes
+- `upsert_plan_node` creates product plan nodes
   and edits their title, description, or node kind inside a scoped WorkRequest.
-- `move_work_request_product_plan_node` reparents or reorders product plan nodes
+- `move_plan_node` reparents or reorders product plan nodes
   inside a scoped WorkRequest.
-- `set_work_request_product_plan_node_completion` updates product plan node
+- `set_plan_node_completion` updates product plan node
   completion marks and uses the existing blocker closeout guard for terminal
   marks.
-- `move_work_request_planned_slice_to_product_node` moves a planned slice under
+- `move_slice_to_plan_node` moves a planned slice under
   a product plan node, or unlinks it back to the WorkRequest's direct slice
   list.
 

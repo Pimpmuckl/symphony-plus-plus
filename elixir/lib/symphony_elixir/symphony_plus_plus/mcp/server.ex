@@ -84,8 +84,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @local_trusted_work_request_read_tools [
     "list_work_requests",
     "read_work_request",
-    "read_work_request_product_tree",
-    "read_work_request_delivery_board"
+    "read_plan",
+    "read_delivery_board"
   ]
   @local_assignment_claim_tool ToolCatalog.local_assignment_claim_tool()
   @local_architect_assignment_claim_tool ToolCatalog.local_architect_assignment_claim_tool()
@@ -1725,12 +1725,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_tool_capability("revoke_child_worker_key"), do: "revoke:child_worker_key"
   defp architect_tool_capability("list_work_requests"), do: "read:work_request"
   defp architect_tool_capability("read_work_request"), do: "read:work_request"
-  defp architect_tool_capability("read_work_request_product_tree"), do: "read:work_request"
+  defp architect_tool_capability("read_plan"), do: "read:work_request"
   defp architect_tool_capability("add_comment"), do: "write:work_request"
   defp architect_tool_capability("list_comments"), do: "read:work_request"
   defp architect_tool_capability("resolve_comment"), do: "write:work_request"
   defp architect_tool_capability("resolve_blocker"), do: "write:work_request"
-  defp architect_tool_capability("read_work_request_delivery_board"), do: "read:work_request"
+  defp architect_tool_capability("read_delivery_board"), do: "read:work_request"
   defp architect_tool_capability("reconcile_work_request"), do: "read:work_request"
 
   defp architect_tool_capability(tool) when tool in ["cleanup_work_request_planned_slice_runtime", "record_planned_slice_delivery", "revoke_planned_slice_worker_key"],
@@ -1741,20 +1741,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_tool_capability("answer_guidance_request"), do: "write:guidance_request"
   defp architect_tool_capability("escalate_guidance_request"), do: "write:guidance_request"
   defp architect_tool_capability("set_work_request_status"), do: "write:work_request"
-  defp architect_tool_capability("ask_work_request_question"), do: "write:work_request"
-  defp architect_tool_capability("answer_work_request_question"), do: "write:work_request"
-  defp architect_tool_capability("answer_work_request_question_and_record_decision"), do: "write:work_request"
-  defp architect_tool_capability("close_work_request_question"), do: "write:work_request"
-  defp architect_tool_capability("record_work_request_decision"), do: "write:work_request"
-  defp architect_tool_capability("add_work_request_planned_slice"), do: "write:work_request"
-  defp architect_tool_capability("upsert_work_request_product_plan_node_content"), do: "write:work_request"
-  defp architect_tool_capability("move_work_request_product_plan_node"), do: "write:work_request"
-  defp architect_tool_capability("set_work_request_product_plan_node_completion"), do: "write:work_request"
-  defp architect_tool_capability("move_work_request_planned_slice_to_product_node"), do: "write:work_request"
-  defp architect_tool_capability("approve_work_request_planned_slice"), do: "write:work_request"
-  defp architect_tool_capability("skip_work_request_planned_slice"), do: "write:work_request"
-  defp architect_tool_capability("mark_work_request_sliced"), do: "write:work_request"
-  defp architect_tool_capability("dispatch_work_request_planned_slice"), do: "dispatch:work_request"
+  defp architect_tool_capability("ask_question"), do: "write:work_request"
+  defp architect_tool_capability("answer_question"), do: "write:work_request"
+  defp architect_tool_capability("answer_question_and_record_decision"), do: "write:work_request"
+  defp architect_tool_capability("close_question"), do: "write:work_request"
+  defp architect_tool_capability("record_decision"), do: "write:work_request"
+  defp architect_tool_capability("plan_slice"), do: "write:work_request"
+  defp architect_tool_capability("upsert_plan_node"), do: "write:work_request"
+  defp architect_tool_capability("move_plan_node"), do: "write:work_request"
+  defp architect_tool_capability("set_plan_node_completion"), do: "write:work_request"
+  defp architect_tool_capability("move_slice_to_plan_node"), do: "write:work_request"
+  defp architect_tool_capability("approve_slice"), do: "write:work_request"
+  defp architect_tool_capability("skip_slice"), do: "write:work_request"
+  defp architect_tool_capability("finish_slicing"), do: "write:work_request"
+  defp architect_tool_capability("dispatch_slice"), do: "dispatch:work_request"
   defp architect_tool_capability("prepare_work_package_worktree"), do: "dispatch:work_request"
   defp architect_tool_capability("cleanup_work_package_worktree"), do: "dispatch:work_request"
   defp architect_tool_capability("read_phase_board"), do: "read:phase"

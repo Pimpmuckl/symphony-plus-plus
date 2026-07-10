@@ -32,10 +32,10 @@ longer a primary human-facing product board unit.
 
 Reorganization is agent-driven through MCP tools:
 
-- `upsert_work_request_product_plan_node_content`
-- `move_work_request_product_plan_node`
-- `set_work_request_product_plan_node_completion`
-- `move_work_request_planned_slice_to_product_node`
+- `upsert_plan_node`
+- `move_plan_node`
+- `set_plan_node_completion`
+- `move_slice_to_plan_node`
 
 Do not add human-facing reorganize UI for V3 cutover unless a later product
 decision explicitly reopens that scope.

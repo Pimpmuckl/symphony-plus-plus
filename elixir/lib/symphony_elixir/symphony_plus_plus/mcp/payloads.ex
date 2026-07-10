@@ -80,8 +80,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
     }
   end
 
-  @spec dispatch_work_request_planned_slice_payload(map(), map()) :: map()
-  def dispatch_work_request_planned_slice_payload(
+  @spec dispatch_slice_payload(map(), map()) :: map()
+  def dispatch_slice_payload(
         %{
           work_request: %WorkRequest{} = work_request,
           planned_slice: %PlannedSlice{} = planned_slice,

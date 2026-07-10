@@ -232,7 +232,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
           "id" => "stale-reclaim-other-write",
           "method" => "tools/call",
           "params" => %{
-            "name" => "record_work_request_decision",
+            "name" => "record_decision",
             "arguments" => %{
               "work_request_id" => other_work_request.id,
               "source_type" => "architect",
@@ -675,7 +675,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
           "id" => "same-repo-write",
           "method" => "tools/call",
           "params" => %{
-            "name" => "record_work_request_decision",
+            "name" => "record_decision",
             "arguments" => %{
               "work_request_id" => same_repo.id,
               "source_type" => "architect",

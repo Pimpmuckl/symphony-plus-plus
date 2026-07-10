@@ -15,8 +15,8 @@ WorkRequest id.
 
 3. Include `claimed_by` only when the operator supplied a stable architect
 identity.
-4. Call `read_work_request`, `read_work_request_product_tree`, and
-`read_work_request_delivery_board` before slicing or dispatch.
+4. Call `read_work_request`, `read_plan`, and
+`read_delivery_board` before slicing or dispatch.
 
 The claim may recover stale handoff scope when the local ledger still proves
 one matching WorkRequest, repo, base branch, anchor package, phase id, and
@@ -32,7 +32,7 @@ unless the node groups multiple units or records a real product boundary.
 
 ## Dispatch
 
-Dispatch planned slices with `dispatch_work_request_planned_slice` using only
+Dispatch planned slices with `dispatch_slice` using only
 `work_request_id`, `planned_slice_id`, and optional `claimed_by`. The response
 creates the worker WorkPackage and returns a non-secret `worker_bootstrap`
 object for `claim_local_assignment`.

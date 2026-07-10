@@ -39,7 +39,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
 
     assert Map.has_key?(tools_by_name, "list_work_requests")
     assert Map.has_key?(tools_by_name, "read_work_request")
-    assert Map.has_key?(tools_by_name, "read_work_request_delivery_board")
+    assert Map.has_key?(tools_by_name, "read_delivery_board")
 
     {list_response, list_server} =
       Server.handle_state(
@@ -97,7 +97,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
           "id" => "local-read-delivery-board",
           "method" => "tools/call",
           "params" => %{
-            "name" => "read_work_request_delivery_board",
+            "name" => "read_delivery_board",
             "arguments" => %{"work_request_id" => work_request.id}
           }
         },
@@ -123,7 +123,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
           "id" => "local-read-mutation-denied",
           "method" => "tools/call",
           "params" => %{
-            "name" => "add_work_request_planned_slice",
+            "name" => "plan_slice",
             "arguments" => %{
               "work_request_id" => work_request.id,
               "title" => "Denied local mutation",
@@ -188,7 +188,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       mcp_tool(
         repo,
         session,
-        "dispatch_work_request_planned_slice",
+        "dispatch_slice",
         %{
           "work_request_id" => work_request.id,
           "planned_slice_id" => approved_slice.id,
@@ -285,7 +285,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     counts_before = {repo.aggregate(WorkPackage, :count), repo.aggregate(AccessGrant, :count)}
 
     response =
-      mcp_tool(repo, session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, session, "dispatch_slice", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => approved_slice.id,
         "claimed_by" => "worker-dispatch-removed-legacy",
@@ -336,7 +336,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
              )
 
     out_of_scope_response =
-      mcp_tool(repo, session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, session, "dispatch_slice", %{
         "work_request_id" => sibling.id,
         "planned_slice_id" => sibling_slice.id,
         "claimed_by" => "worker-dispatch-1"
@@ -348,7 +348,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     refute inspect(out_of_scope_response) =~ sibling_slice.id
 
     missing_slice_response =
-      mcp_tool(repo, session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, session, "dispatch_slice", %{
         "work_request_id" => in_scope.id,
         "planned_slice_id" => "WRS-MCP-WR-DISPATCH-MISSING",
         "claimed_by" => "worker-dispatch-1"
@@ -358,7 +358,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     assert get_in(missing_slice_response, ["error", "data", "reason"]) == "not_found"
 
     planned_response =
-      mcp_tool(repo, session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, session, "dispatch_slice", %{
         "work_request_id" => in_scope.id,
         "planned_slice_id" => planned_slice.id,
         "claimed_by" => "worker-dispatch-1"
@@ -386,7 +386,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     counts_before_invalid_glob = {repo.aggregate(WorkPackage, :count), repo.aggregate(AccessGrant, :count)}
 
     invalid_glob_response =
-      mcp_tool(repo, session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, session, "dispatch_slice", %{
         "work_request_id" => in_scope.id,
         "planned_slice_id" => approved_invalid_glob_slice.id,
         "claimed_by" => "worker-dispatch-invalid-glob"
@@ -419,7 +419,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       try do
         Application.put_env(:symphony_elixir, :sympp_repo_database, configured_live_database)
 
-        mcp_tool(repo, session, "dispatch_work_request_planned_slice", %{
+        mcp_tool(repo, session, "dispatch_slice", %{
           "work_request_id" => in_scope.id,
           "planned_slice_id" => approved_live_database_slice.id,
           "claimed_by" => "worker-dispatch-1"
@@ -449,7 +449,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       mcp_tool(
         repo,
         session,
-        "dispatch_work_request_planned_slice",
+        "dispatch_slice",
         %{
           "work_request_id" => in_scope.id,
           "planned_slice_id" => approved_blank_database_slice.id,
@@ -481,7 +481,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
              WorkRequestRepository.approve_planned_slice(repo, in_scope.id, delivery_base_slice.id, "planned")
 
     delivery_base_response =
-      mcp_tool(repo, session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, session, "dispatch_slice", %{
         "work_request_id" => in_scope.id,
         "planned_slice_id" => approved_delivery_base_slice.id,
         "claimed_by" => "worker-dispatch-delivery-base"

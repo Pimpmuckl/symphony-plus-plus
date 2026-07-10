@@ -11,7 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads,
     only: [
       dispatch_link_recovery_payload: 1,
-      dispatch_work_request_planned_slice_payload: 2,
+      dispatch_slice_payload: 2,
       json_safe_payload: 1,
       worktree_lifecycle_payload: 3
     ]
@@ -52,14 +52,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   @tools [
     "list_work_requests",
     "read_work_request",
-    "read_work_request_product_tree",
-    "read_work_request_delivery_board",
+    "read_plan",
+    "read_delivery_board",
     "set_work_request_status",
-    "answer_work_request_question",
-    "answer_work_request_question_and_record_decision",
-    "close_work_request_question",
-    "mark_work_request_sliced",
-    "dispatch_work_request_planned_slice",
+    "answer_question",
+    "answer_question_and_record_decision",
+    "close_question",
+    "finish_slicing",
+    "dispatch_slice",
     "prepare_work_package_worktree",
     "cleanup_work_package_worktree"
   ]
@@ -173,44 +173,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     end
   end
 
-  defp call_tool("read_work_request_product_tree", config, nil, arguments, opts) do
-    with :ok <- authorize_local_trusted_work_request_read_tool_call(opts, "read_work_request_product_tree"),
-         {:ok, work_request_id, view} <- read_work_request_product_tree_arguments(arguments),
+  defp call_tool("read_plan", config, nil, arguments, opts) do
+    with :ok <- authorize_local_trusted_work_request_read_tool_call(opts, "read_plan"),
+         {:ok, work_request_id, view} <- read_plan_arguments(arguments),
          {:ok, work_request, scope} <- WorkRequestScope.local_trusted_work_request_read_scope(config.repo, work_request_id),
-         {:ok, result} <- read_work_request_product_tree_result(config.repo, work_request, scope, scope, view) do
+         {:ok, result} <- read_plan_result(config.repo, work_request, scope, scope, view) do
       {:ok, result}
     else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request_product_tree", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("read_work_request_product_tree")
+      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_plan", "reason" => reason}}
+      {:error, :not_found} -> not_found_error("read_plan")
       {:error, code, message, data} -> {:error, code, message, data}
-      {:error, reason} -> architect_error(reason, "read_work_request_product_tree")
+      {:error, reason} -> architect_error(reason, "read_plan")
     end
   end
 
-  defp call_tool("read_work_request_product_tree", config, %Session{} = session, arguments, _opts) do
+  defp call_tool("read_plan", config, %Session{} = session, arguments, _opts) do
     repo_scope_opts = WorkRequestScope.work_request_repo_scope_opts(config)
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id, view} <- read_work_request_product_tree_arguments(arguments),
+         {:ok, work_request_id, view} <- read_plan_arguments(arguments),
          {:ok, work_request, filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(
              config.repo,
              session,
              work_request_id,
              :work_request_read,
-             "read_work_request_product_tree",
+             "read_plan",
              repo_scope_opts
            ),
-         {:ok, result} <- read_work_request_product_tree_result(config.repo, work_request, filters, scope, view, repo_scope_opts) do
+         {:ok, result} <- read_plan_result(config.repo, work_request, filters, scope, view, repo_scope_opts) do
       {:ok, result}
     else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request_product_tree", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("read_work_request_product_tree")
-      {:error, reason} -> architect_error(reason, "read_work_request_product_tree")
+      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_plan", "reason" => reason}}
+      {:error, :not_found} -> not_found_error("read_plan")
+      {:error, reason} -> architect_error(reason, "read_plan")
     end
   end
 
-  defp call_tool("read_work_request_delivery_board", config, %Session{} = session, arguments, _opts) do
+  defp call_tool("read_delivery_board", config, %Session{} = session, arguments, _opts) do
     repo_scope_opts = WorkRequestScope.work_request_repo_scope_opts(config)
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
@@ -221,7 +221,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
              session,
              work_request_id,
              :delivery_board_read,
-             "read_work_request_delivery_board",
+             "read_delivery_board",
              repo_scope_opts
            ),
          {:ok, planned_slices} <- WorkRequestService.list_planned_slices(config.repo, work_request_id),
@@ -234,14 +234,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
       {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_delivery_board)}
     else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request_delivery_board", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("read_work_request_delivery_board")
-      {:error, reason} -> architect_error(reason, "read_work_request_delivery_board")
+      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_delivery_board", "reason" => reason}}
+      {:error, :not_found} -> not_found_error("read_delivery_board")
+      {:error, reason} -> architect_error(reason, "read_delivery_board")
     end
   end
 
-  defp call_tool("read_work_request_delivery_board", config, nil, arguments, opts) do
-    with :ok <- authorize_local_trusted_work_request_read_tool_call(opts, "read_work_request_delivery_board"),
+  defp call_tool("read_delivery_board", config, nil, arguments, opts) do
+    with :ok <- authorize_local_trusted_work_request_read_tool_call(opts, "read_delivery_board"),
          {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, work_request, filters} <- WorkRequestScope.local_trusted_work_request_read_scope(config.repo, work_request_id),
          {:ok, planned_slices} <- WorkRequestService.list_planned_slices(config.repo, work_request_id),
@@ -254,10 +254,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
       {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_delivery_board)}
     else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_work_request_delivery_board", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("read_work_request_delivery_board")
+      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_delivery_board", "reason" => reason}}
+      {:error, :not_found} -> not_found_error("read_delivery_board")
       {:error, code, message, data} -> {:error, code, message, data}
-      {:error, reason} -> architect_error(reason, "read_work_request_delivery_board")
+      {:error, reason} -> architect_error(reason, "read_delivery_board")
     end
   end
 
@@ -285,7 +285,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     end
   end
 
-  defp call_tool("answer_work_request_question", config, session, arguments, _opts) do
+  defp call_tool("answer_question", config, session, arguments, _opts) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, question_id} <- required_argument(arguments, "question_id"),
@@ -293,7 +293,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          {:ok, answer} <- required_argument(arguments, "answer"),
          {:ok, answered_by} <- optional_string_argument(arguments, "answered_by", session_claimed_by(session)),
          {:ok, _work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :question_answer, "answer_work_request_question"),
+           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :question_answer, "answer_question"),
          {:ok, _question} <- WorkRequestScope.scoped_work_request_question(config.repo, work_request_id, question_id),
          {:ok, question_record} <-
            WorkRequestService.answer_question(config.repo, question_id, expected_question_status, %{
@@ -313,13 +313,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          }
        })}
     else
-      {:tool_error, reason} -> invalid_params_error("answer_work_request_question", reason)
-      {:error, :not_found} -> not_found_error("answer_work_request_question")
-      {:error, reason} -> architect_error(reason, "answer_work_request_question")
+      {:tool_error, reason} -> invalid_params_error("answer_question", reason)
+      {:error, :not_found} -> not_found_error("answer_question")
+      {:error, reason} -> architect_error(reason, "answer_question")
     end
   end
 
-  defp call_tool("answer_work_request_question_and_record_decision", config, session, arguments, _opts) do
+  defp call_tool("answer_question_and_record_decision", config, session, arguments, _opts) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, question_id} <- required_argument(arguments, "question_id"),
@@ -338,7 +338,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
              session,
              work_request_id,
              :question_answer,
-             "answer_work_request_question_and_record_decision"
+             "answer_question_and_record_decision"
            ),
          :ok <-
            WorkRequestScope.authorize_work_request_policy(
@@ -346,7 +346,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
              session,
              :decision_record,
              work_request,
-             "answer_work_request_question_and_record_decision"
+             "answer_question_and_record_decision"
            ),
          {:ok, _question} <- WorkRequestScope.scoped_work_request_question(config.repo, work_request_id, question_id),
          {:ok, %{decision: decision_record, question: question_record}} <-
@@ -374,19 +374,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          }
        })}
     else
-      {:tool_error, reason} -> invalid_params_error("answer_work_request_question_and_record_decision", reason)
-      {:error, :not_found} -> not_found_error("answer_work_request_question_and_record_decision")
-      {:error, reason} -> architect_error(reason, "answer_work_request_question_and_record_decision")
+      {:tool_error, reason} -> invalid_params_error("answer_question_and_record_decision", reason)
+      {:error, :not_found} -> not_found_error("answer_question_and_record_decision")
+      {:error, reason} -> architect_error(reason, "answer_question_and_record_decision")
     end
   end
 
-  defp call_tool("close_work_request_question", config, session, arguments, _opts) do
+  defp call_tool("close_question", config, session, arguments, _opts) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, question_id} <- required_argument(arguments, "question_id"),
          {:ok, expected_question_status} <- expected_question_status_argument(arguments),
          {:ok, _work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :question_close, "close_work_request_question"),
+           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :question_close, "close_question"),
          {:ok, _question} <- WorkRequestScope.scoped_work_request_question(config.repo, work_request_id, question_id),
          {:ok, question_record} <- WorkRequestService.close_question(config.repo, question_id, expected_question_status),
          {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(config.repo, work_request_id, filters) do
@@ -402,18 +402,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          }
        })}
     else
-      {:tool_error, reason} -> invalid_params_error("close_work_request_question", reason)
-      {:error, :not_found} -> not_found_error("close_work_request_question")
-      {:error, reason} -> architect_error(reason, "close_work_request_question")
+      {:tool_error, reason} -> invalid_params_error("close_question", reason)
+      {:error, :not_found} -> not_found_error("close_question")
+      {:error, reason} -> architect_error(reason, "close_question")
     end
   end
 
-  defp call_tool("mark_work_request_sliced", config, session, arguments, _opts) do
+  defp call_tool("finish_slicing", config, session, arguments, _opts) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
          {:ok, current_status} <- required_argument(arguments, "current_status"),
          {:ok, _work_request, _filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, "mark_work_request_sliced"),
+           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, "finish_slicing"),
          {:ok, updated_work_request} <- WorkRequestService.mark_sliced(config.repo, work_request_id, current_status) do
       {:ok,
        ToolResult.tool_result(%{
@@ -425,13 +425,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          }
        })}
     else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "mark_work_request_sliced", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("mark_work_request_sliced")
-      {:error, reason} -> architect_error(reason, "mark_work_request_sliced")
+      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "finish_slicing", "reason" => reason}}
+      {:error, :not_found} -> not_found_error("finish_slicing")
+      {:error, reason} -> architect_error(reason, "finish_slicing")
     end
   end
 
-  defp call_tool("dispatch_work_request_planned_slice", config, session, arguments, _opts) do
+  defp call_tool("dispatch_slice", config, session, arguments, _opts) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
          {:ok, planned_slice_id} <- required_argument(arguments, "planned_slice_id"),
@@ -443,16 +443,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
              work_request_id,
              planned_slice_id,
              :planned_slice_dispatch,
-             "dispatch_work_request_planned_slice"
+             "dispatch_slice"
            ),
          :ok <- require_approved_dispatch_planned_slice(planned_slice),
          {:ok, handoff_opts, dispatch_opts} <- dispatch_planned_slice_bootstrap_opts(config, claimed_by),
          {:ok, dispatch} <- PlannedSliceDispatch.dispatch(config.repo, work_request_id, planned_slice_id, handoff_opts, dispatch_opts) do
-      {:ok, ToolResult.tool_result(dispatch_work_request_planned_slice_payload(dispatch, scope))}
+      {:ok, ToolResult.tool_result(dispatch_slice_payload(dispatch, scope))}
     else
-      {:tool_error, reason} -> invalid_params_error("dispatch_work_request_planned_slice", reason)
-      {:error, :not_found} -> not_found_error("dispatch_work_request_planned_slice")
-      {:error, reason} -> dispatch_work_request_planned_slice_error(reason)
+      {:tool_error, reason} -> invalid_params_error("dispatch_slice", reason)
+      {:error, :not_found} -> not_found_error("dispatch_slice")
+      {:error, reason} -> dispatch_slice_error(reason)
     end
   end
 
@@ -523,14 +523,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     |> LocalTrustedTools.authorize(tool)
   end
 
-  defp read_work_request_product_tree_arguments(arguments) do
+  defp read_plan_arguments(arguments) do
     with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, view} <- optional_product_tree_view(arguments) do
       {:ok, work_request_id, view}
     end
   end
 
-  defp read_work_request_product_tree_result(
+  defp read_plan_result(
          repo,
          %WorkRequest{} = work_request,
          filters,
@@ -561,36 +561,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp require_approved_dispatch_planned_slice(%PlannedSlice{status: status}),
     do: {:error, {:invalid_planned_slice_status, status}}
 
-  defp dispatch_work_request_planned_slice_error({:invalid_planned_slice_status, _status}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_work_request_planned_slice", "reason" => "invalid_planned_slice_status"}}
+  defp dispatch_slice_error({:invalid_planned_slice_status, _status}) do
+    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_slice", "reason" => "invalid_planned_slice_status"}}
   end
 
-  defp dispatch_work_request_planned_slice_error({:invalid_work_request_status, _status}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_work_request_planned_slice", "reason" => "invalid_work_request_status"}}
+  defp dispatch_slice_error({:invalid_work_request_status, _status}) do
+    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_slice", "reason" => "invalid_work_request_status"}}
   end
 
-  defp dispatch_work_request_planned_slice_error({:planned_slice_scope_violation, errors}) do
-    invalid_params_error("dispatch_work_request_planned_slice", {:planned_slice_scope_violation, errors})
+  defp dispatch_slice_error({:planned_slice_scope_violation, errors}) do
+    invalid_params_error("dispatch_slice", {:planned_slice_scope_violation, errors})
   end
 
-  defp dispatch_work_request_planned_slice_error({:unsupported_branch_pattern, branch_pattern, reason}) do
-    invalid_params_error("dispatch_work_request_planned_slice", {:branch_pattern, branch_pattern, reason})
+  defp dispatch_slice_error({:unsupported_branch_pattern, branch_pattern, reason}) do
+    invalid_params_error("dispatch_slice", {:branch_pattern, branch_pattern, reason})
   end
 
-  defp dispatch_work_request_planned_slice_error({:kind_not_dispatchable, _kind}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_work_request_planned_slice", "reason" => "kind_not_dispatchable"}}
+  defp dispatch_slice_error({:kind_not_dispatchable, _kind}) do
+    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_slice", "reason" => "kind_not_dispatchable"}}
   end
 
-  defp dispatch_work_request_planned_slice_error({:dispatch_link_failed, _reason, recovery}) do
+  defp dispatch_slice_error({:dispatch_link_failed, _reason, recovery}) do
     {:error, -32_000, "Server error",
      %{
-       "tool" => "dispatch_work_request_planned_slice",
+       "tool" => "dispatch_slice",
        "reason" => "dispatch_link_failed",
        "recovery" => dispatch_link_recovery_payload(recovery)
      }}
   end
 
-  defp dispatch_work_request_planned_slice_error(reason), do: architect_error(reason, "dispatch_work_request_planned_slice")
+  defp dispatch_slice_error(reason), do: architect_error(reason, "dispatch_slice")
 
   defp append_worktree_lifecycle_audit(repo, %Session{} = session, work_package_id, source_tool, result) do
     PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, work_package_id, %{

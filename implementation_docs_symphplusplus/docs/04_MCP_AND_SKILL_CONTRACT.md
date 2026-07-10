@@ -46,7 +46,7 @@ compact successful cleanup result and leaves audit detail in
 
 ## Dispatch
 
-`dispatch_work_request_planned_slice(work_request_id, planned_slice_id,
+`dispatch_slice(work_request_id, planned_slice_id,
 claimed_by?)` returns a `worker_bootstrap` payload for
 `claim_local_assignment`. Workers should not need repository root, helper
 script, private file, or raw secret metadata.
@@ -72,16 +72,16 @@ blockers must be resolved or kept active as part of a finish transition.
 
 After `claim_local_architect_assignment`, planning writes that only target the
 claimed current WorkRequest may omit `work_request_id`:
-`add_work_request_planned_slice`, `upsert_work_request_product_plan_node_content`,
-`move_work_request_product_plan_node`,
-`set_work_request_product_plan_node_completion`,
-`move_work_request_planned_slice_to_product_node`,
-`approve_work_request_planned_slice`, `skip_work_request_planned_slice`, and
-`mark_work_request_sliced`. Reads, lists, delivery closeout, dispatch,
+`plan_slice`, `upsert_plan_node`,
+`move_plan_node`,
+`set_plan_node_completion`,
+`move_slice_to_plan_node`,
+`approve_slice`, `skip_slice`, and
+`finish_slicing`. Reads, lists, delivery closeout, dispatch,
 status/question tools, durable decision tools, and package tools still require
 their explicit target ids.
 
-For ordinary PR-backed work, `add_work_request_planned_slice` defaults
+For ordinary PR-backed work, `plan_slice` defaults
 `work_package_kind` to `standard_pr`, delivery repo and target base branch to
 the selected WorkRequest's primary repo scope, and omitted review lanes to the
 package policy. Pass the target base branch when selecting a secondary delivery
@@ -98,7 +98,7 @@ completion marks and blocker closeout.
 Architect delivery closeout uses:
 
 ```text
-read_work_request_delivery_board(work_request_id)
+read_delivery_board(work_request_id)
 cleanup_work_request_planned_slice_runtime(work_request_id, planned_slice_id, outcome, reason, ...)
 record_planned_slice_delivery(work_request_id, planned_slice_id, outcome, idempotency_key, evidence)
 reconcile_work_request

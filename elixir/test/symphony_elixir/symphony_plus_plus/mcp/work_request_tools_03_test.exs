@@ -311,7 +311,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     grant_work_request_scope!(repo, session, work_request.id)
 
     response =
-      mcp_tool(repo, session, "mark_work_request_sliced", %{
+      mcp_tool(repo, session, "finish_slicing", %{
         "work_request_id" => work_request.id,
         "current_status" => "ready_for_slicing"
       })
@@ -353,7 +353,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       "stop_conditions" => ["Stop before dispatch."]
     }
 
-    add_response = mcp_tool(repo, session, "add_work_request_planned_slice", add_args)
+    add_response = mcp_tool(repo, session, "plan_slice", add_args)
     assert get_in(add_response, ["error", "code"]) == -32_602
     assert get_in(add_response, ["error", "data", "reason"]) == "invalid_status"
     assert {:ok, []} = WorkRequestRepository.list_planned_slices(repo, work_request.id)
@@ -361,7 +361,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert {:ok, planned_slice} =
              WorkRequestRepository.add_planned_slice(repo, work_request.id, Map.delete(add_args, "work_request_id"))
 
-    for tool <- ["approve_work_request_planned_slice", "skip_work_request_planned_slice"] do
+    for tool <- ["approve_slice", "skip_slice"] do
       response =
         mcp_tool(repo, session, tool, %{
           "work_request_id" => work_request.id,
@@ -405,7 +405,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     remove_grant_scope_type!(repo, session, "repo")
 
     response =
-      mcp_tool(repo, session, "approve_work_request_planned_slice", %{
+      mcp_tool(repo, session, "approve_slice", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => planned_slice.id,
         "current_status" => "planned"
@@ -446,7 +446,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
              )
 
     read_only_response =
-      mcp_tool(repo, read_session, "ask_work_request_question", %{
+      mcp_tool(repo, read_session, "ask_question", %{
         "work_request_id" => read_only_work_request.id,
         "category" => "scope",
         "question" => "Question?",
@@ -458,7 +458,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(read_only_response, ["error", "data", "reason_code"]) == "insufficient_capability"
 
     read_only_slice_response =
-      mcp_tool(repo, read_session, "add_work_request_planned_slice", %{
+      mcp_tool(repo, read_session, "plan_slice", %{
         "work_request_id" => read_only_work_request.id,
         "title" => "Denied slice",
         "goal" => "Capability check.",
@@ -477,7 +477,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(read_only_slice_response, ["error", "data", "reason_code"]) == "insufficient_capability"
 
     read_only_dispatch_response =
-      mcp_tool(repo, read_session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, read_session, "dispatch_slice", %{
         "work_request_id" => read_only_work_request.id,
         "planned_slice_id" => read_only_slice.id,
         "claimed_by" => "worker-1"
@@ -555,7 +555,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(drift_response, ["error", "data", "reason"]) == "outside_session_scope"
 
     drift_slice_response =
-      mcp_tool(repo, drift_session, "mark_work_request_sliced", %{
+      mcp_tool(repo, drift_session, "finish_slicing", %{
         "work_request_id" => drift_work_request.id,
         "current_status" => "ready_for_slicing"
       })
@@ -564,7 +564,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(drift_slice_response, ["error", "data", "reason"]) == "outside_session_scope"
 
     drift_dispatch_response =
-      mcp_tool(repo, drift_session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, drift_session, "dispatch_slice", %{
         "work_request_id" => drift_work_request.id,
         "planned_slice_id" => drift_planned_slice.id,
         "claimed_by" => "worker-1"
@@ -600,7 +600,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(revoked_response, ["error", "data", "reason"]) == "revoked"
 
     revoked_slice_response =
-      mcp_tool(repo, revoked_session, "mark_work_request_sliced", %{
+      mcp_tool(repo, revoked_session, "finish_slicing", %{
         "work_request_id" => revoked_work_request.id,
         "current_status" => "ready_for_slicing"
       })
@@ -609,7 +609,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(revoked_slice_response, ["error", "data", "reason"]) == "revoked"
 
     revoked_dispatch_response =
-      mcp_tool(repo, revoked_session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, revoked_session, "dispatch_slice", %{
         "work_request_id" => revoked_work_request.id,
         "planned_slice_id" => "WRS-MCP-WR-MUTATE-REVOKED",
         "claimed_by" => "worker-1"
@@ -652,7 +652,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(worker_response, ["error", "data", "reason_code"]) == "insufficient_role"
 
     worker_slice_response =
-      mcp_tool(repo, worker_session, "mark_work_request_sliced", %{
+      mcp_tool(repo, worker_session, "finish_slicing", %{
         "work_request_id" => worker_work_request.id,
         "current_status" => "ready_for_slicing"
       })
@@ -661,7 +661,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(worker_slice_response, ["error", "data", "reason_code"]) == "insufficient_role"
 
     worker_dispatch_response =
-      mcp_tool(repo, worker_session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, worker_session, "dispatch_slice", %{
         "work_request_id" => worker_work_request.id,
         "planned_slice_id" => worker_planned_slice.id,
         "claimed_by" => "worker-1"
@@ -682,7 +682,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(anonymous_response, ["error", "data", "action"]) == "claim_local_architect_assignment"
 
     anonymous_slice_response =
-      mcp_tool(repo, nil, "mark_work_request_sliced", %{
+      mcp_tool(repo, nil, "finish_slicing", %{
         "work_request_id" => "WR-MCP-WR-MISSING",
         "current_status" => "ready_for_slicing"
       })
@@ -692,7 +692,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(anonymous_slice_response, ["error", "data", "action"]) == "claim_local_architect_assignment"
 
     anonymous_dispatch_response =
-      mcp_tool(repo, nil, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, nil, "dispatch_slice", %{
         "work_request_id" => "WR-MCP-WR-MISSING",
         "planned_slice_id" => "WRS-MCP-WR-MISSING",
         "claimed_by" => "worker-1"
@@ -735,7 +735,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
              )
 
     answer_response =
-      mcp_tool(repo, session, "answer_work_request_question", %{
+      mcp_tool(repo, session, "answer_question", %{
         "work_request_id" => work_request.id,
         "question_id" => sibling_question.id,
         "current_status" => "open",
@@ -748,7 +748,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     refute inspect(answer_response) =~ sibling.id
 
     close_response =
-      mcp_tool(repo, session, "close_work_request_question", %{
+      mcp_tool(repo, session, "close_question", %{
         "work_request_id" => work_request.id,
         "question_id" => sibling_question.id,
         "current_status" => "open"
@@ -795,7 +795,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
              )
 
     approve_response =
-      mcp_tool(repo, session, "approve_work_request_planned_slice", %{
+      mcp_tool(repo, session, "approve_slice", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => sibling_slice.id,
         "current_status" => "planned"
@@ -806,7 +806,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     refute inspect(approve_response) =~ sibling.id
 
     skip_response =
-      mcp_tool(repo, session, "skip_work_request_planned_slice", %{
+      mcp_tool(repo, session, "skip_slice", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => sibling_slice.id,
         "current_status" => "planned"

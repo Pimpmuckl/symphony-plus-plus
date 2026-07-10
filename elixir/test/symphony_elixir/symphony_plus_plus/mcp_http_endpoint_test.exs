@@ -347,7 +347,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     assert "get_current_assignment" in tool_names
     assert "read_work_request" in tool_names
-    assert "dispatch_work_request_planned_slice" in tool_names
+    assert "dispatch_slice" in tool_names
     refute "solo_attach" in tool_names
 
     read =
@@ -631,7 +631,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     delivery_board =
       post_json(
-        tool_call_request("local-architect-delivery-board", "read_work_request_delivery_board", %{"work_request_id" => work_request.id}),
+        tool_call_request("local-architect-delivery-board", "read_delivery_board", %{"work_request_id" => work_request.id}),
         [{"mcp-session-id", session_id}]
       )
 

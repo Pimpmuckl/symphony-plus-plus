@@ -71,7 +71,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     sibling_read_response = mcp_tool(repo, session, "read_work_request", %{"work_request_id" => sibling.id})
     assert get_in(sibling_read_response, ["result", "structuredContent", "work_request", "id"]) == sibling.id
 
-    sibling_board_response = mcp_tool(repo, session, "read_work_request_delivery_board", %{"work_request_id" => sibling.id})
+    sibling_board_response = mcp_tool(repo, session, "read_delivery_board", %{"work_request_id" => sibling.id})
     assert get_in(sibling_board_response, ["result", "structuredContent", "work_request", "id"]) == sibling.id
 
     other_base_read_response = mcp_tool(repo, session, "read_work_request", %{"work_request_id" => other_base.id})
@@ -91,7 +91,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute inspect(sibling_status_response) =~ sibling.id
 
     sibling_question_response =
-      mcp_tool(repo, session, "ask_work_request_question", %{
+      mcp_tool(repo, session, "ask_question", %{
         "work_request_id" => sibling.id,
         "category" => "scope",
         "question" => "Can the sibling be mutated?",
@@ -102,7 +102,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(sibling_question_response, ["error", "data", "reason"]) == "not_found"
 
     sibling_decision_response =
-      mcp_tool(repo, session, "record_work_request_decision", %{
+      mcp_tool(repo, session, "record_decision", %{
         "work_request_id" => sibling.id,
         "source_type" => "architect",
         "decision" => "Mutate sibling",
@@ -115,7 +115,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(sibling_decision_response, ["error", "data", "reason"]) == "not_found"
 
     sibling_add_slice_response =
-      mcp_tool(repo, session, "add_work_request_planned_slice", %{
+      mcp_tool(repo, session, "plan_slice", %{
         "work_request_id" => sibling.id,
         "title" => "Sibling mutation",
         "goal" => "This should be denied.",
@@ -133,7 +133,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(sibling_add_slice_response, ["error", "data", "reason"]) == "not_found"
 
     sibling_approve_response =
-      mcp_tool(repo, session, "approve_work_request_planned_slice", %{
+      mcp_tool(repo, session, "approve_slice", %{
         "work_request_id" => sibling.id,
         "planned_slice_id" => sibling_slice.id,
         "current_status" => "planned"
@@ -143,7 +143,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(sibling_approve_response, ["error", "data", "reason"]) == "not_found"
 
     sibling_skip_response =
-      mcp_tool(repo, session, "skip_work_request_planned_slice", %{
+      mcp_tool(repo, session, "skip_slice", %{
         "work_request_id" => sibling.id,
         "planned_slice_id" => sibling_slice.id,
         "current_status" => "planned"
@@ -159,7 +159,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
              })
 
     sibling_upsert_response =
-      mcp_tool(repo, session, "upsert_work_request_product_plan_node_content", %{
+      mcp_tool(repo, session, "upsert_plan_node", %{
         "work_request_id" => sibling.id,
         "title" => "Sibling node mutation"
       })
@@ -168,7 +168,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(sibling_upsert_response, ["error", "data", "reason"]) == "not_found"
 
     sibling_move_response =
-      mcp_tool(repo, session, "move_work_request_planned_slice_to_product_node", %{
+      mcp_tool(repo, session, "move_slice_to_plan_node", %{
         "work_request_id" => sibling.id,
         "planned_slice_id" => sibling_slice.id,
         "product_tree_node_id" => sibling_node.id
@@ -178,7 +178,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(sibling_move_response, ["error", "data", "reason"]) == "not_found"
 
     sibling_mark_response =
-      mcp_tool(repo, session, "mark_work_request_sliced", %{
+      mcp_tool(repo, session, "finish_slicing", %{
         "work_request_id" => sibling.id,
         "current_status" => "ready_for_slicing"
       })
@@ -187,7 +187,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(sibling_mark_response, ["error", "data", "reason"]) == "not_found"
 
     sibling_dispatch_response =
-      mcp_tool(repo, session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, session, "dispatch_slice", %{
         "work_request_id" => sibling.id,
         "planned_slice_id" => sibling_slice.id,
         "claimed_by" => "sibling-worker"
@@ -256,12 +256,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       "stop_conditions" => ["Stop before dispatch."]
     }
 
-    missing_context_response = mcp_tool(repo, session, "add_work_request_planned_slice", add_args)
+    missing_context_response = mcp_tool(repo, session, "plan_slice", add_args)
     assert get_in(missing_context_response, ["error", "data", "reason"]) == "missing_work_request_id"
 
     grant_work_request_scope!(repo, session, work_request.id)
 
-    add_response = mcp_tool(repo, session, "add_work_request_planned_slice", add_args)
+    add_response = mcp_tool(repo, session, "plan_slice", add_args)
     add_payload = get_in(add_response, ["result", "structuredContent"])
     planned_slice_id = get_in(add_payload, ["planned_slice", "id"])
 
@@ -277,7 +277,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert planned_slice.review_lanes == ["normal"]
 
     unsafe_omission_response =
-      mcp_tool(repo, session, "add_work_request_planned_slice", Map.delete(add_args, "owned_file_globs"))
+      mcp_tool(repo, session, "plan_slice", Map.delete(add_args, "owned_file_globs"))
 
     assert get_in(unsafe_omission_response, ["error", "data", "reason"]) == "missing_owned_file_globs"
 
@@ -285,7 +285,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       mcp_tool(
         repo,
         session,
-        "add_work_request_planned_slice",
+        "plan_slice",
         Map.merge(add_args, %{
           "title" => "Current WorkRequest skipped slice",
           "goal" => "Create a second current WorkRequest slice."
@@ -295,7 +295,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     skip_slice_id = get_in(skip_add_response, ["result", "structuredContent", "planned_slice", "id"])
 
     node_response =
-      mcp_tool(repo, session, "upsert_work_request_product_plan_node_content", %{
+      mcp_tool(repo, session, "upsert_plan_node", %{
         "title" => "Current WorkRequest product node"
       })
 
@@ -305,7 +305,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert node_payload["work_request"]["id"] == work_request.id
 
     move_response =
-      mcp_tool(repo, session, "move_work_request_planned_slice_to_product_node", %{
+      mcp_tool(repo, session, "move_slice_to_plan_node", %{
         "planned_slice_id" => planned_slice_id,
         "product_tree_node_id" => node_id
       })
@@ -313,7 +313,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(move_response, ["result", "structuredContent", "product_tree_slice_link", "work_request_id"]) == work_request.id
 
     approve_response =
-      mcp_tool(repo, session, "approve_work_request_planned_slice", %{
+      mcp_tool(repo, session, "approve_slice", %{
         "planned_slice_id" => planned_slice_id,
         "current_status" => "planned"
       })
@@ -321,18 +321,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(approve_response, ["result", "structuredContent", "planned_slice", "status"]) == "approved"
 
     skip_response =
-      mcp_tool(repo, session, "skip_work_request_planned_slice", %{
+      mcp_tool(repo, session, "skip_slice", %{
         "planned_slice_id" => skip_slice_id,
         "current_status" => "planned"
       })
 
     assert get_in(skip_response, ["result", "structuredContent", "planned_slice", "status"]) == "skipped"
 
-    board_response = mcp_tool(repo, session, "read_work_request_delivery_board", %{})
+    board_response = mcp_tool(repo, session, "read_delivery_board", %{})
     assert get_in(board_response, ["result", "structuredContent", "work_request", "id"]) == work_request.id
 
     mark_response =
-      mcp_tool(repo, session, "mark_work_request_sliced", %{
+      mcp_tool(repo, session, "finish_slicing", %{
         "current_status" => "ready_for_slicing"
       })
 
@@ -346,7 +346,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(read_missing_response, ["error", "data", "reason"]) == "missing_work_request_id"
 
     dispatch_response =
-      mcp_tool(repo, session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, session, "dispatch_slice", %{
         "planned_slice_id" => planned_slice_id,
         "claimed_by" => "current-wr-worker"
       })
@@ -555,7 +555,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     grant_work_request_scope!(repo, session, work_request.id)
 
     content_with_topology =
-      mcp_tool(repo, session, "upsert_work_request_product_plan_node_content", %{
+      mcp_tool(repo, session, "upsert_plan_node", %{
         "work_request_id" => work_request.id,
         "title" => "Content only",
         "parent_id" => "ptn-parent"
@@ -565,7 +565,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(content_with_topology, ["error", "data", "arguments"]) == ["parent_id"]
 
     move_with_content =
-      mcp_tool(repo, session, "move_work_request_product_plan_node", %{
+      mcp_tool(repo, session, "move_plan_node", %{
         "work_request_id" => work_request.id,
         "product_tree_node_id" => "ptn-child",
         "parent_id" => nil,
@@ -576,7 +576,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(move_with_content, ["error", "data", "arguments"]) == ["title"]
 
     completion_with_topology =
-      mcp_tool(repo, session, "set_work_request_product_plan_node_completion", %{
+      mcp_tool(repo, session, "set_plan_node_completion", %{
         "work_request_id" => work_request.id,
         "product_tree_node_id" => "ptn-child",
         "completion_mark" => "done",
@@ -709,7 +709,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       ])
 
     node_response =
-      mcp_tool(repo, session, "upsert_work_request_product_plan_node_content", %{
+      mcp_tool(repo, session, "upsert_plan_node", %{
         "work_request_id" => work_request.id,
         "title" => "Blocked plan node"
       })
@@ -717,7 +717,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     product_tree_node_id = get_in(node_response, ["result", "structuredContent", "product_plan_node", "id"])
 
     move_response =
-      mcp_tool(repo, session, "move_work_request_planned_slice_to_product_node", %{
+      mcp_tool(repo, session, "move_slice_to_plan_node", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => planned_slice.id,
         "product_tree_node_id" => product_tree_node_id
@@ -728,7 +728,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     append_active_blocker!(repo, work_package.id, "node-blocker")
 
     missing_closeout_response =
-      mcp_tool(repo, session, "set_work_request_product_plan_node_completion", %{
+      mcp_tool(repo, session, "set_plan_node_completion", %{
         "work_request_id" => work_request.id,
         "product_tree_node_id" => product_tree_node_id,
         "completion_mark" => "done"
@@ -737,7 +737,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(missing_closeout_response, ["error", "data", "reason_code"]) == "blocker_closeout_required"
 
     resolved_response =
-      mcp_tool(repo, session, "set_work_request_product_plan_node_completion", %{
+      mcp_tool(repo, session, "set_plan_node_completion", %{
         "work_request_id" => work_request.id,
         "product_tree_node_id" => product_tree_node_id,
         "completion_mark" => "done",
@@ -758,7 +758,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     append_active_blocker!(repo, work_package.id, "node-blocker", idempotency_key: "node-blocker-reraised")
 
     reraised_resolved_response =
-      mcp_tool(repo, session, "set_work_request_product_plan_node_completion", %{
+      mcp_tool(repo, session, "set_plan_node_completion", %{
         "work_request_id" => work_request.id,
         "product_tree_node_id" => product_tree_node_id,
         "completion_mark" => "done",
@@ -839,7 +839,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     sibling_read_response = mcp_tool(repo, session, "read_work_request", %{"work_request_id" => equivalent_sibling.id})
     assert get_in(sibling_read_response, ["result", "structuredContent", "work_request", "id"]) == equivalent_sibling.id
 
-    sibling_board_response = mcp_tool(repo, session, "read_work_request_delivery_board", %{"work_request_id" => equivalent_sibling.id})
+    sibling_board_response = mcp_tool(repo, session, "read_delivery_board", %{"work_request_id" => equivalent_sibling.id})
     assert get_in(sibling_board_response, ["result", "structuredContent", "work_request", "id"]) == equivalent_sibling.id
 
     other_repo_read_response = mcp_tool(repo, session, "read_work_request", %{"work_request_id" => other_repo.id})
@@ -863,7 +863,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(sibling_status_response, ["error", "data", "reason"]) == "not_found"
 
     sibling_approve_response =
-      mcp_tool(repo, session, "approve_work_request_planned_slice", %{
+      mcp_tool(repo, session, "approve_slice", %{
         "work_request_id" => equivalent_sibling.id,
         "planned_slice_id" => sibling_slice.id,
         "current_status" => "planned"
@@ -1094,7 +1094,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert persisted_work_request.status == "clarifying"
 
     ask_response =
-      mcp_tool(repo, session, "ask_work_request_question", %{
+      mcp_tool(repo, session, "ask_question", %{
         "work_request_id" => work_request.id,
         "category" => "scope",
         "question" => "Can the implementation use Bearer raw_secret_value?",
@@ -1127,7 +1127,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute inspect(ask_response) =~ "raw_secret_value"
 
     wrong_status_response =
-      mcp_tool(repo, session, "answer_work_request_question", %{
+      mcp_tool(repo, session, "answer_question", %{
         "work_request_id" => work_request.id,
         "question_id" => question_id,
         "expected_question_status" => "ready_for_slicing",
@@ -1140,7 +1140,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(wrong_status_response, ["error", "data", "got"]) == "ready_for_slicing"
 
     malformed_status_response =
-      mcp_tool(repo, session, "answer_work_request_question", %{
+      mcp_tool(repo, session, "answer_question", %{
         "work_request_id" => work_request.id,
         "question_id" => question_id,
         "expected_question_status" => 123,
@@ -1151,7 +1151,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(malformed_status_response, ["error", "data", "got"]) == "non_string"
 
     answer_response =
-      mcp_tool(repo, session, "answer_work_request_question", %{
+      mcp_tool(repo, session, "answer_question", %{
         "work_request_id" => work_request.id,
         "question_id" => question_id,
         "answer" => "Use signed URL https://example.test/path?sig=raw_secret_value instead."
@@ -1163,7 +1163,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute inspect(answer_response) =~ "raw_secret_value"
 
     close_ask_response =
-      mcp_tool(repo, session, "ask_work_request_question", %{
+      mcp_tool(repo, session, "ask_question", %{
         "work_request_id" => work_request.id,
         "category" => "acceptance",
         "question" => "Can the stale branch be ignored?",
@@ -1173,7 +1173,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     close_question_id = get_in(close_ask_response, ["result", "structuredContent", "clarification_question", "id"])
 
     close_response =
-      mcp_tool(repo, session, "close_work_request_question", %{
+      mcp_tool(repo, session, "close_question", %{
         "work_request_id" => work_request.id,
         "question_id" => close_question_id,
         "current_status" => "open"
@@ -1182,7 +1182,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(close_response, ["result", "structuredContent", "clarification_question", "status"]) == "closed"
 
     combined_ask_response =
-      mcp_tool(repo, session, "ask_work_request_question", %{
+      mcp_tool(repo, session, "ask_question", %{
         "work_request_id" => work_request.id,
         "category" => "product",
         "question" => "Should we keep this backend-only?",
@@ -1192,7 +1192,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     combined_question_id = get_in(combined_ask_response, ["result", "structuredContent", "clarification_question", "id"])
 
     combined_response =
-      mcp_tool(repo, session, "answer_work_request_question_and_record_decision", %{
+      mcp_tool(repo, session, "answer_question_and_record_decision", %{
         "work_request_id" => work_request.id,
         "question_id" => combined_question_id,
         "answer" => "Keep it backend-only.",
@@ -1208,7 +1208,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(combined_payload, ["decision_log_entry", "source_id"]) == combined_question_id
 
     decision_response =
-      mcp_tool(repo, session, "record_work_request_decision", %{
+      mcp_tool(repo, session, "record_decision", %{
         "work_request_id" => work_request.id,
         "source_type" => "architect",
         "source_id" => "comment-1",
@@ -1230,7 +1230,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert Enum.map(decisions, & &1.source_id) == [combined_question_id, "comment-1"]
   end
 
-  test "ask_work_request_question rejects malformed decision prompts without echoing nested input", %{repo: repo} do
+  test "ask_question rejects malformed decision prompts without echoing nested input", %{repo: repo} do
     {anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-BAD-PROMPT", [
         "write:work_request"
@@ -1247,7 +1247,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     grant_work_request_scope!(repo, session, work_request.id)
 
     response =
-      mcp_tool(repo, session, "ask_work_request_question", %{
+      mcp_tool(repo, session, "ask_question", %{
         "work_request_id" => work_request.id,
         "category" => "scope",
         "question" => "Can the implementation continue?",
@@ -1280,7 +1280,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     grant_work_request_scope!(repo, session, work_request.id)
 
     response =
-      mcp_tool(repo, session, "ask_work_request_question", %{
+      mcp_tool(repo, session, "ask_question", %{
         "work_request_id" => work_request.id,
         "category" => "scope",
         "question" => "Should this move status automatically?",
@@ -1341,7 +1341,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       mcp_tool(
         repo,
         session,
-        "add_work_request_planned_slice",
+        "plan_slice",
         Map.merge(add_args, %{
           "title" => "Invalid raw_secret_value slice",
           "goal" => "Do not echo raw_secret_value in changeset errors.",
@@ -1377,7 +1377,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       mcp_tool(
         repo,
         session,
-        "add_work_request_planned_slice",
+        "plan_slice",
         Map.merge(add_args, %{
           "title" => "Invalid docs scope",
           "goal" => "Docs kind cannot own code paths.",
@@ -1403,7 +1403,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       mcp_tool(
         repo,
         session,
-        "add_work_request_planned_slice",
+        "plan_slice",
         Map.put(add_args, "branch_pattern", "feat/live-triggers-v1-native-audio-evidence-*")
       )
 
@@ -1420,7 +1420,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     assert {:ok, []} = WorkRequestRepository.list_planned_slices(repo, work_request.id)
 
-    add_response = mcp_tool(repo, session, "add_work_request_planned_slice", add_args)
+    add_response = mcp_tool(repo, session, "plan_slice", add_args)
     add_payload = get_in(add_response, ["result", "structuredContent"])
     planned_slice_id = get_in(add_payload, ["planned_slice", "id"])
 
@@ -1438,7 +1438,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       mcp_tool(
         repo,
         session,
-        "add_work_request_planned_slice",
+        "plan_slice",
         Map.merge(add_args, %{
           "title" => "Skipped follow-up",
           "goal" => "Record a slice that can be skipped.",
@@ -1449,7 +1449,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     skip_slice_id = get_in(skip_add_response, ["result", "structuredContent", "planned_slice", "id"])
 
     approve_response =
-      mcp_tool(repo, session, "approve_work_request_planned_slice", %{
+      mcp_tool(repo, session, "approve_slice", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => planned_slice_id,
         "current_status" => "planned"
@@ -1465,7 +1465,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
            }
 
     skip_response =
-      mcp_tool(repo, session, "skip_work_request_planned_slice", %{
+      mcp_tool(repo, session, "skip_slice", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => skip_slice_id,
         "current_status" => "planned"
@@ -1476,7 +1476,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute Map.has_key?(skip_payload["planned_slice"], "branch_pattern")
 
     mark_response =
-      mcp_tool(repo, session, "mark_work_request_sliced", %{
+      mcp_tool(repo, session, "finish_slicing", %{
         "work_request_id" => work_request.id,
         "current_status" => "ready_for_slicing"
       })
@@ -1524,7 +1524,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
              )
 
     node_response =
-      mcp_tool(repo, session, "upsert_work_request_product_plan_node_content", %{
+      mcp_tool(repo, session, "upsert_plan_node", %{
         "work_request_id" => work_request.id,
         "title" => "Backend product layer",
         "node_kind" => "layer"
@@ -1539,7 +1539,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert node_payload["scope"] == %{"repo" => anchor.repo, "base_branch" => anchor.base_branch}
 
     positioned_node_response =
-      mcp_tool(repo, session, "move_work_request_product_plan_node", %{
+      mcp_tool(repo, session, "move_plan_node", %{
         "work_request_id" => work_request.id,
         "product_tree_node_id" => product_tree_node_id,
         "position" => 2
@@ -1549,7 +1549,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute Map.has_key?(get_in(positioned_node_response, ["result", "structuredContent"]), "product_tree")
 
     child_response =
-      mcp_tool(repo, session, "upsert_work_request_product_plan_node_content", %{
+      mcp_tool(repo, session, "upsert_plan_node", %{
         "work_request_id" => work_request.id,
         "title" => "Nested cleanup"
       })
@@ -1557,7 +1557,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     child_node_id = get_in(child_response, ["result", "structuredContent", "product_plan_node", "id"])
 
     nested_child_response =
-      mcp_tool(repo, session, "move_work_request_product_plan_node", %{
+      mcp_tool(repo, session, "move_plan_node", %{
         "work_request_id" => work_request.id,
         "product_tree_node_id" => child_node_id,
         "parent_id" => product_tree_node_id
@@ -1567,7 +1567,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute Map.has_key?(get_in(nested_child_response, ["result", "structuredContent"]), "product_tree")
 
     root_child_response =
-      mcp_tool(repo, session, "move_work_request_product_plan_node", %{
+      mcp_tool(repo, session, "move_plan_node", %{
         "work_request_id" => work_request.id,
         "product_tree_node_id" => child_node_id,
         "parent_id" => ""
@@ -1577,7 +1577,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute Map.has_key?(get_in(root_child_response, ["result", "structuredContent"]), "product_tree")
 
     nested_again_response =
-      mcp_tool(repo, session, "move_work_request_product_plan_node", %{
+      mcp_tool(repo, session, "move_plan_node", %{
         "work_request_id" => work_request.id,
         "product_tree_node_id" => child_node_id,
         "parent_id" => product_tree_node_id
@@ -1586,7 +1586,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(nested_again_response, ["result", "structuredContent", "product_plan_node", "parent_id"]) == product_tree_node_id
 
     content_edit_response =
-      mcp_tool(repo, session, "upsert_work_request_product_plan_node_content", %{
+      mcp_tool(repo, session, "upsert_plan_node", %{
         "work_request_id" => work_request.id,
         "product_tree_node_id" => child_node_id,
         "description" => "A content-only edit keeps topology unchanged."
@@ -1595,7 +1595,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(content_edit_response, ["result", "structuredContent", "product_plan_node", "parent_id"]) == product_tree_node_id
 
     explicit_root_response =
-      mcp_tool(repo, session, "move_work_request_product_plan_node", %{
+      mcp_tool(repo, session, "move_plan_node", %{
         "work_request_id" => work_request.id,
         "product_tree_node_id" => child_node_id,
         "parent_id" => ""
@@ -1605,7 +1605,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute Map.has_key?(get_in(explicit_root_response, ["result", "structuredContent"]), "product_tree")
 
     move_response =
-      mcp_tool(repo, session, "move_work_request_planned_slice_to_product_node", %{
+      mcp_tool(repo, session, "move_slice_to_plan_node", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => planned_slice.id,
         "product_tree_node_id" => product_tree_node_id,
@@ -1622,7 +1622,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute Map.has_key?(move_payload, "product_tree")
 
     approve_response =
-      mcp_tool(repo, session, "approve_work_request_planned_slice", %{
+      mcp_tool(repo, session, "approve_slice", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => planned_slice.id,
         "current_status" => "planned"
@@ -1631,7 +1631,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(approve_response, ["result", "structuredContent", "planned_slice", "status"]) == "approved"
 
     dispatch_response =
-      mcp_tool(repo, session, "dispatch_work_request_planned_slice", %{
+      mcp_tool(repo, session, "dispatch_slice", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => planned_slice.id,
         "claimed_by" => "product-tree-worker"
@@ -1663,7 +1663,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
              })
 
     read_refs_response =
-      mcp_tool(repo, session, "read_work_request_product_tree", %{
+      mcp_tool(repo, session, "read_plan", %{
         "work_request_id" => work_request.id
       })
 
@@ -1687,7 +1687,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute Map.has_key?(read_refs_tree, "slices")
 
     read_nodes_response =
-      mcp_tool(repo, session, "read_work_request_product_tree", %{
+      mcp_tool(repo, session, "read_plan", %{
         "work_request_id" => work_request.id,
         "view" => "nodes_only"
       })
@@ -1703,7 +1703,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert read_nodes_tree["omitted_slice_count"] == 2
 
     read_full_response =
-      mcp_tool(repo, session, "read_work_request_product_tree", %{
+      mcp_tool(repo, session, "read_plan", %{
         "work_request_id" => work_request.id,
         "view" => "nodes_with_slices"
       })
@@ -1719,7 +1719,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert read_full_text =~ "nodes_with_slices"
 
     direct_response =
-      mcp_tool(repo, session, "move_work_request_planned_slice_to_product_node", %{
+      mcp_tool(repo, session, "move_slice_to_plan_node", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => planned_slice.id,
         "product_tree_node_id" => ""
@@ -1732,7 +1732,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute Map.has_key?(direct_payload, "product_tree")
 
     direct_read_response =
-      mcp_tool(repo, session, "read_work_request_product_tree", %{
+      mcp_tool(repo, session, "read_plan", %{
         "work_request_id" => work_request.id,
         "view" => "nodes_with_slice_refs"
       })
@@ -1772,13 +1772,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert {:ok, _clarifying} = WorkRequestRepository.update_status(repo, work_request.id, "ready_for_slicing", "clarifying")
 
     upsert_response =
-      mcp_tool(repo, session, "upsert_work_request_product_plan_node_content", %{
+      mcp_tool(repo, session, "upsert_plan_node", %{
         "work_request_id" => work_request.id,
         "title" => "Should not be accepted"
       })
 
     move_response =
-      mcp_tool(repo, session, "move_work_request_planned_slice_to_product_node", %{
+      mcp_tool(repo, session, "move_slice_to_plan_node", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => planned_slice.id,
         "product_tree_node_id" => product_node.id
@@ -1807,7 +1807,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     delivery_base = "feature/integration-base"
 
     add_response =
-      mcp_tool(repo, session, "add_work_request_planned_slice", %{
+      mcp_tool(repo, session, "plan_slice", %{
         "work_request_id" => work_request.id,
         "title" => "Integration branch delivery",
         "goal" => "Prepare a worker from a delivery base different from the parent WorkRequest base.",
@@ -1859,7 +1859,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute table_exists?(repo, "sympp_product_tree_nodes")
 
     add_response =
-      mcp_tool(repo, session, "add_work_request_planned_slice", %{
+      mcp_tool(repo, session, "plan_slice", %{
         "work_request_id" => work_request.id,
         "title" => "Pre-V3 planned slice",
         "goal" => "Keep core WorkRequest planning usable before product-tree migration.",
@@ -1880,7 +1880,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(add_payload, ["planned_slice", "status"]) == "planned"
 
     approve_response =
-      mcp_tool(repo, session, "approve_work_request_planned_slice", %{
+      mcp_tool(repo, session, "approve_slice", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => planned_slice_id,
         "current_status" => "planned"
@@ -1923,7 +1923,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       "stop_conditions" => ["Stop before dispatch."]
     }
 
-    add_response = mcp_tool(repo, session, "add_work_request_planned_slice", add_args)
+    add_response = mcp_tool(repo, session, "plan_slice", add_args)
 
     assert get_in(add_response, ["error", "code"]) == -32_602
     assert get_in(add_response, ["error", "data", "reason"]) == "planned_slice_scope_violation"
@@ -1938,7 +1938,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
              WorkRequestRepository.add_planned_slice(repo, work_request.id, Map.delete(add_args, "work_request_id"))
 
     approve_response =
-      mcp_tool(repo, session, "approve_work_request_planned_slice", %{
+      mcp_tool(repo, session, "approve_slice", %{
         "work_request_id" => work_request.id,
         "planned_slice_id" => planned_slice.id,
         "current_status" => "planned"
