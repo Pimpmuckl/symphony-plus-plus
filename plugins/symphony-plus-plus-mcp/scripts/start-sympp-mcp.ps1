@@ -946,34 +946,6 @@ function Write-RuntimeState([string]$Path, $State) {
   [System.IO.File]::WriteAllText($Path, "$json`n", $utf8NoBom)
 }
 
-function Resolve-BridgeLeaseDir([string]$RuntimeFile) {
-  return [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $RuntimeFile) "codex-plugin-leases"))
-}
-
-function New-BridgeLease([string]$RuntimeFile, $BackendPlan, $DashboardPlan, [string]$RuntimeKey) {
-  $leaseDir = Resolve-BridgeLeaseDir $RuntimeFile
-  New-Item -ItemType Directory -Path $leaseDir -Force | Out-Null
-  $leasePath = Join-Path $leaseDir ("bridge-$PID-$([guid]::NewGuid().ToString('N')).json")
-  $lease = [pscustomobject]@{
-    pid = $PID
-    created_at = (Get-Date).ToString("o")
-    runtime_key = $RuntimeKey
-    runtime_kind = if ($BackendPlan.managed -eq $true) { "managed" } else { [string]$BackendPlan.status }
-    source_revision = $BackendPlan.source_revision
-    backend_url = $BackendPlan.url
-    dashboard_origin = $DashboardPlan.origin
-  }
-  $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-  [System.IO.File]::WriteAllText($leasePath, (($lease | ConvertTo-Json -Depth 8) + "`n"), $utf8NoBom)
-  return $leasePath
-}
-
-function Remove-BridgeLease([string]$LeasePath) {
-  if (-not [string]::IsNullOrWhiteSpace($LeasePath)) {
-    Remove-Item -LiteralPath $LeasePath -Force -ErrorAction SilentlyContinue
-  }
-}
-
 function Get-ProcessCommandLine([int]$ProcessId) {
   if ($ProcessId -le 0) {
     return $null
@@ -1011,48 +983,6 @@ function Test-ProcessAlive([int]$ProcessId) {
   }
 
   return $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
-}
-
-function Test-BridgeLeaseActive($Lease) {
-  if ($null -eq $Lease -or -not $Lease.PSObject.Properties["pid"]) {
-    return $false
-  }
-
-  $leasePid = 0
-  if (-not [int]::TryParse([string]$Lease.pid, [ref]$leasePid) -or $leasePid -le 0) {
-    return $false
-  }
-
-  if (-not (Test-ProcessAlive $leasePid)) {
-    return $false
-  }
-
-  $commandLine = Get-ProcessCommandLine $leasePid
-  return -not [string]::IsNullOrWhiteSpace($commandLine) -and $commandLine -match "start-sympp-mcp\.(ps1|cmd)"
-}
-
-function Get-ActiveBridgeLeases([string]$RuntimeFile) {
-  $leaseDir = Resolve-BridgeLeaseDir $RuntimeFile
-  if (-not (Test-Path -LiteralPath $leaseDir -PathType Container)) {
-    return @()
-  }
-
-  $active = [System.Collections.Generic.List[object]]::new()
-  foreach ($leasePath in @(Get-ChildItem -LiteralPath $leaseDir -Filter "bridge-*.json" -File -ErrorAction SilentlyContinue)) {
-    $lease = $null
-    try {
-      $lease = Get-Content -LiteralPath $leasePath.FullName -Raw | ConvertFrom-Json
-    } catch {
-    }
-
-    if (Test-BridgeLeaseActive $lease) {
-      $active.Add([pscustomobject]@{ path = $leasePath.FullName; lease = $lease })
-    } else {
-      Remove-Item -LiteralPath $leasePath.FullName -Force -ErrorAction SilentlyContinue
-    }
-  }
-
-  return @($active)
 }
 
 function Test-BridgeLeaseMatchesRuntimeKey($Lease, [string]$RuntimeKey) {
@@ -1496,6 +1426,10 @@ function Stop-ManagedServersIfUnused([string]$RuntimeFile, [string]$RuntimeKey) 
     }
 
     $stateKey = Get-RuntimeStateKey $state
+    $activeLeases = @(Get-ActiveBridgeLeases $RuntimeFile)
+    if ((Test-ActiveLegacyBridgeLease $activeLeases) -or (Test-ActiveBridgeLeaseForRuntimeKey $activeLeases $RuntimeKey)) {
+      return
+    }
     if ([System.StringComparer]::OrdinalIgnoreCase.Equals($stateKey, $RuntimeKey)) {
       [void](Stop-CurrentManagedRuntimeStateEntries $state $activeLeases)
     }
@@ -1723,6 +1657,73 @@ function New-DisabledDashboardPlan([string]$Status, [string]$Error = $null) {
   }
 }
 
+function Resolve-LocalWarmAttachIdentity {
+  param(
+    $RuntimeState,
+    [string]$PluginRoot,
+    [int]$BackendPort,
+    [int]$DashboardPort,
+    [bool]$BackendPortExplicit,
+    [bool]$DashboardPortExplicit,
+    [string]$ConfiguredBackendUrl,
+    [string]$ConfiguredDashboardOrigin
+  )
+
+  if ($null -eq $RuntimeState -or $null -eq $RuntimeState.backend -or $null -eq $RuntimeState.frontend -or
+      -not $RuntimeState.PSObject.Properties["plugin_root"] -or
+      [string]::IsNullOrWhiteSpace([string]$RuntimeState.plugin_root)) {
+    return $null
+  }
+  try {
+    $recordedPluginRoot = [System.IO.Path]::GetFullPath([string]$RuntimeState.plugin_root)
+    $currentPluginRoot = [System.IO.Path]::GetFullPath($PluginRoot)
+  } catch {
+    return $null
+  }
+  if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($recordedPluginRoot, $currentPluginRoot)) { return $null }
+
+  $expectedContract = Normalize-McpContractFingerprint ([string]$RuntimeState.backend.expected_contract_fingerprint)
+  $actualContract = Normalize-McpContractFingerprint ([string]$RuntimeState.backend.contract_fingerprint)
+  if ([string]::IsNullOrWhiteSpace($expectedContract) -or
+      -not [System.StringComparer]::OrdinalIgnoreCase.Equals($expectedContract, $actualContract)) {
+    return $null
+  }
+
+  $backendUrl = [string]$RuntimeState.backend.url
+  $dashboardOrigin = [string]$RuntimeState.frontend.origin
+  if ([string]::IsNullOrWhiteSpace($backendUrl)) {
+    return $null
+  }
+  $backendUrl = $backendUrl.TrimEnd("/")
+  $dashboardOrigin = if ([string]::IsNullOrWhiteSpace($dashboardOrigin)) { $null } else { $dashboardOrigin.TrimEnd("/") }
+  try {
+    Assert-LoopbackHttpOrigin $backendUrl "recorded Symphony++ backend"
+    if ($dashboardOrigin) { Assert-LoopbackHttpOrigin $dashboardOrigin "recorded Symphony++ dashboard" }
+  } catch {
+    return $null
+  }
+
+  if (($BackendPortExplicit -and $BackendPort -gt 0 -and (Get-PortFromOrigin $backendUrl) -ne $BackendPort) -or
+      ($DashboardPortExplicit -and $DashboardPort -gt 0 -and (-not $dashboardOrigin -or (Get-PortFromOrigin $dashboardOrigin) -ne $DashboardPort)) -or
+      (-not [string]::IsNullOrWhiteSpace($ConfiguredBackendUrl) -and
+       -not (Test-EndpointMatches $backendUrl $ConfiguredBackendUrl)) -or
+      (-not [string]::IsNullOrWhiteSpace($ConfiguredDashboardOrigin) -and (-not $dashboardOrigin -or
+       -not (Test-EndpointMatches $dashboardOrigin $ConfiguredDashboardOrigin)))) {
+    return $null
+  }
+
+  $runtimeKey = New-RuntimeKey $backendUrl $dashboardOrigin $actualContract
+  if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals((Get-RuntimeStateKey $RuntimeState), $runtimeKey)) {
+    return $null
+  }
+
+  return [pscustomobject]@{
+    runtime_key = $runtimeKey
+    source_revision = [string]$RuntimeState.backend.source_revision
+    contract_fingerprint = $actualContract
+  }
+}
+
 function Resolve-FastAttachRuntimePlan {
   param(
     $RuntimeState,
@@ -1749,29 +1750,36 @@ function Resolve-FastAttachRuntimePlan {
     return $null
   }
 
+  $artifactStaticRuntime = [string]$RuntimeState.runtime_mode -eq "artifact" -and
+    $RuntimeState.backend.managed -eq $true -and
+    [string]$RuntimeState.frontend.status -eq "artifact_static" -and
+    (Test-EndpointMatches ([string]$RuntimeState.backend.url) ([string]$RuntimeState.frontend.origin))
   $managedRuntime = $RuntimeState.backend.managed -eq $true -and $RuntimeState.frontend.managed -eq $true
+  $headlessManagedRuntime = $RuntimeState.backend.managed -eq $true -and
+    [string]::IsNullOrWhiteSpace([string]$RuntimeState.frontend.origin) -and
+    [string]$RuntimeState.frontend.status -match "^(disabled|failed)"
   $externalLoopbackRuntime = Test-RuntimeStateExternalLoopback $RuntimeState
-  if (-not $managedRuntime -and -not $externalLoopbackRuntime) {
+  if (-not $managedRuntime -and -not $headlessManagedRuntime -and -not $artifactStaticRuntime -and -not $externalLoopbackRuntime) {
     return $null
   }
 
   $backendUrl = [string]$RuntimeState.backend.url
   $dashboardOrigin = [string]$RuntimeState.frontend.origin
-  if ([string]::IsNullOrWhiteSpace($backendUrl) -or [string]::IsNullOrWhiteSpace($dashboardOrigin)) {
+  if ([string]::IsNullOrWhiteSpace($backendUrl) -or (-not $headlessManagedRuntime -and [string]::IsNullOrWhiteSpace($dashboardOrigin))) {
     return $null
   }
 
   $backendUrl = $backendUrl.TrimEnd("/")
-  $dashboardOrigin = $dashboardOrigin.TrimEnd("/")
+  $dashboardOrigin = if ([string]::IsNullOrWhiteSpace($dashboardOrigin)) { $null } else { $dashboardOrigin.TrimEnd("/") }
   try {
     Assert-LoopbackHttpOrigin $backendUrl "recorded Symphony++ backend"
-    Assert-LoopbackHttpOrigin $dashboardOrigin "recorded Symphony++ dashboard"
+    if (-not $headlessManagedRuntime) { Assert-LoopbackHttpOrigin $dashboardOrigin "recorded Symphony++ dashboard" }
   } catch {
     return $null
   }
 
   if (-not (Test-PortSelectionAllowsReuse $PreferredBackendPort $backendUrl $true) -or
-      -not (Test-PortSelectionAllowsReuse $PreferredDashboardPort $dashboardOrigin $true)) {
+      (-not $headlessManagedRuntime -and -not (Test-PortSelectionAllowsReuse $PreferredDashboardPort $dashboardOrigin $true))) {
     return $null
   }
 
@@ -1781,13 +1789,16 @@ function Resolve-FastAttachRuntimePlan {
   }
   Write-CompatibleSourceMismatchDiagnostic $backendUrl $backendHealth $ExpectedSourceRevision
 
-  $dashboardHealthy = if ($null -ne $DashboardHealthyOverride) { [bool]$DashboardHealthyOverride } else { Test-HealthySymppDashboard $dashboardOrigin }
+  $dashboardSharesBackend = Test-EndpointMatches $backendUrl $dashboardOrigin
+  $dashboardHealthy = if ($headlessManagedRuntime -or $dashboardSharesBackend) { $true } elseif ($null -ne $DashboardHealthyOverride) { [bool]$DashboardHealthyOverride } else { Test-HealthySymppDashboard $dashboardOrigin }
   if (-not $dashboardHealthy) {
     return $null
   }
 
   $dashboardProxyMatches =
-    if ($null -ne $DashboardProxyMatchesOverride) {
+    if ($headlessManagedRuntime -or $dashboardSharesBackend) {
+      $true
+    } elseif ($null -ne $DashboardProxyMatchesOverride) {
       [bool]$DashboardProxyMatchesOverride
     } else {
       Test-SymppDashboardMcpProxyMatches $dashboardOrigin $ExpectedContractFingerprint
@@ -1796,9 +1807,9 @@ function Resolve-FastAttachRuntimePlan {
     return $null
   }
 
-  $planStatus = if ($managedRuntime) { "fast_attach" } else { "external_loopback" }
-  $backendPlan = New-ReusedBackendPlan $planStatus $backendUrl $backendHealth $managedRuntime $RuntimeState.backend.pid
-  $dashboardPlan = New-ReusedDashboardPlan $planStatus $dashboardOrigin $managedRuntime $RuntimeState.frontend.pid
+  $planStatus = if ($managedRuntime -or $headlessManagedRuntime -or $artifactStaticRuntime) { "fast_attach" } else { "external_loopback" }
+  $backendPlan = New-ReusedBackendPlan $planStatus $backendUrl $backendHealth ($RuntimeState.backend.managed -eq $true) $RuntimeState.backend.pid
+  $dashboardPlan = if ($headlessManagedRuntime) { New-DisabledDashboardPlan ([string]$RuntimeState.frontend.status) ([string]$RuntimeState.frontend.error) } else { New-ReusedDashboardPlan $planStatus $dashboardOrigin ($RuntimeState.frontend.managed -eq $true) $RuntimeState.frontend.pid }
   $runtimeKey = New-RuntimeKey $backendPlan.url $dashboardPlan.origin $backendHealth.contract_fingerprint
   if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals((Get-RuntimeStateKey $RuntimeState), $runtimeKey)) {
     return $null
@@ -1808,6 +1819,60 @@ function Resolve-FastAttachRuntimePlan {
     backend_plan = $backendPlan
     dashboard_plan = $dashboardPlan
     runtime_key = $runtimeKey
+  }
+}
+
+function Invoke-WarmAttachFromRuntimeState {
+  param(
+    [string]$RuntimeFile,
+    [string]$PluginRoot,
+    [int]$BackendPort,
+    [int]$DashboardPort,
+    [bool]$BackendPortExplicit,
+    [bool]$DashboardPortExplicit,
+    [string]$ConfiguredBackendUrl,
+    [string]$ConfiguredDashboardOrigin,
+    [int]$BridgeTimeout,
+    [int]$ClientHeartbeatInterval
+  )
+
+  $runtimeState = Read-RuntimeState $RuntimeFile
+  $identity = Resolve-LocalWarmAttachIdentity $runtimeState $PluginRoot $BackendPort $DashboardPort $BackendPortExplicit $DashboardPortExplicit $ConfiguredBackendUrl $ConfiguredDashboardOrigin
+  if ($null -eq $identity) {
+    return $false
+  }
+
+  $recordedHealth = New-SymppBackendHealth $true $identity.source_revision "recorded" $true $true $true "ok" $identity.contract_fingerprint
+  $provisionalPlan = Resolve-FastAttachRuntimePlan $runtimeState $identity.source_revision $identity.contract_fingerprint 0 0 $false $false $null $null $recordedHealth $true $true
+  if ($null -eq $provisionalPlan) {
+    return $false
+  }
+
+  # Publish before probing so a concurrent last-detach cleanup sees this client.
+  $leasePath = New-BridgeLease $RuntimeFile $provisionalPlan.backend_plan $provisionalPlan.dashboard_plan $provisionalPlan.runtime_key
+  $attached = $false
+  try {
+    $confirmedState = Read-RuntimeState $RuntimeFile
+    $confirmedIdentity = Resolve-LocalWarmAttachIdentity $confirmedState $PluginRoot $BackendPort $DashboardPort $BackendPortExplicit $DashboardPortExplicit $ConfiguredBackendUrl $ConfiguredDashboardOrigin
+    if ($null -eq $confirmedIdentity -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals($identity.runtime_key, $confirmedIdentity.runtime_key)) {
+      return $false
+    }
+
+    $confirmedPlan = Resolve-FastAttachRuntimePlan $confirmedState $confirmedIdentity.source_revision $confirmedIdentity.contract_fingerprint 0 0 $false $false $null $null
+    if ($null -eq $confirmedPlan) {
+      return $false
+    }
+
+    $attached = $true
+    Write-Diagnostic "Symphony++ MCP bridge attached: backend=$($confirmedPlan.backend_plan.url) dashboard=$($confirmedPlan.dashboard_plan.url) runtime=$RuntimeFile"
+    Invoke-HttpMcpBridge $confirmedPlan.backend_plan.mcp_url $BridgeTimeout (New-McpClientLeaseId) $ClientHeartbeatInterval
+    return $true
+  } finally {
+    Remove-BridgeLease $leasePath
+    if ($attached) {
+      Stop-ManagedServersIfUnused $RuntimeFile $identity.runtime_key
+    }
   }
 }
 
@@ -1893,12 +1958,25 @@ if ($Help) {
 
 
 $pluginRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+$runtimeFile = Resolve-RuntimeFile
+$bridgeMode = Get-EnvMode "SYMPP_MCP_BRIDGE_MODE" "http" @("http", "direct_stdio")
+if (-not $ValidateOnly -and $bridgeMode -eq "http" -and [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT)) {
+  $warmBackendPortExplicit = -not [string]::IsNullOrWhiteSpace($env:SYMPP_BACKEND_PORT)
+  $warmDashboardPortExplicit = -not [string]::IsNullOrWhiteSpace($env:SYMPP_DASHBOARD_PORT)
+  $warmBackendPort = Get-EnvInteger "SYMPP_BACKEND_PORT" $DefaultBackendPort 0 65535
+  $warmDashboardPort = Get-EnvInteger "SYMPP_DASHBOARD_PORT" $DefaultDashboardPort 0 65535
+  $warmBridgeTimeout = Get-EnvInteger "SYMPP_MCP_HTTP_TIMEOUT_SEC" 300 1 3600
+  $warmHeartbeatInterval = Get-EnvInteger "SYMPP_MCP_CLIENT_HEARTBEAT_SEC" 300 5 540
+  if (Invoke-WarmAttachFromRuntimeState $runtimeFile $pluginRoot $warmBackendPort $warmDashboardPort $warmBackendPortExplicit $warmDashboardPortExplicit $env:SYMPP_BACKEND_URL $env:SYMPP_DASHBOARD_ORIGIN $warmBridgeTimeout $warmHeartbeatInterval) {
+    exit 0
+  }
+}
+
 $expectedContractFingerprint = Resolve-ExpectedMcpContractFingerprint $pluginRoot
 if ([string]::IsNullOrWhiteSpace($expectedContractFingerprint)) {
   throw "Symphony++ MCP launcher expected MCP contract fingerprint could not be resolved from contract JSON or runtime artifact manifest."
 }
 $expectedSourceRevision = Resolve-ExpectedSourceRevision $pluginRoot
-$bridgeMode = Get-EnvMode "SYMPP_MCP_BRIDGE_MODE" "http" @("http", "direct_stdio")
 $artifactRuntimeAllowed = if ($bridgeMode -eq "direct_stdio") { $false } else { Test-ArtifactRuntimeAllowed $pluginRoot }
 $artifactRuntime = $null
 $runtimeMode = "source"
@@ -1962,7 +2040,6 @@ if (-not $ValidateOnly) {
     Set-SymppDefaultMixBuildRoot $repoRoot $launcher "mcp" $pluginRoot
   }
 }
-$runtimeFile = Resolve-RuntimeFile
 $logDir = Resolve-LogDir
 
 if ($artifactValidationLaunchable) {
@@ -2095,56 +2172,6 @@ $dashboardPlan = $null
 $bridgeLeasePath = $null
 $runtimeKey = $null
 $supersededStates = @()
-
-$fastAttachCandidate = Resolve-FastAttachRuntimePlan `
-  (Read-RuntimeState $runtimeFile) `
-  $expectedSourceRevision `
-  $expectedContractFingerprint `
-  $backendPort `
-  $dashboardPort `
-  $backendPortExplicit `
-  $dashboardPortExplicit `
-  $env:SYMPP_BACKEND_URL `
-  $env:SYMPP_DASHBOARD_ORIGIN
-if ($null -ne $fastAttachCandidate) {
-  $fastAttachLock = Enter-FileLock (Resolve-StartupLockFile $runtimeFile) $startupLockTimeout
-  try {
-    $fastAttachState = Read-RuntimeState $runtimeFile
-    $fastAttachPlan = Resolve-FastAttachRuntimePlan `
-      $fastAttachState `
-      $expectedSourceRevision `
-      $expectedContractFingerprint `
-      $backendPort `
-      $dashboardPort `
-      $backendPortExplicit `
-      $dashboardPortExplicit `
-      $env:SYMPP_BACKEND_URL `
-      $env:SYMPP_DASHBOARD_ORIGIN
-    if ($null -ne $fastAttachPlan) {
-      $supersededStates = Stop-SupersededRuntimeStatesIfUnused $runtimeFile (Get-SupersededRuntimeStates $fastAttachState)
-      Set-SupersededRuntimeStates $fastAttachState $supersededStates
-      Write-RuntimeState $runtimeFile $fastAttachState
-
-      $backendPlan = $fastAttachPlan.backend_plan
-      $dashboardPlan = $fastAttachPlan.dashboard_plan
-      $runtimeKey = $fastAttachPlan.runtime_key
-      $bridgeLeasePath = New-BridgeLease $runtimeFile $backendPlan $dashboardPlan $runtimeKey
-    }
-  } finally {
-    Exit-FileLock $fastAttachLock
-  }
-
-  if ($null -ne $bridgeLeasePath) {
-    try {
-      Write-Diagnostic "Symphony++ MCP bridge attached: backend=$($backendPlan.url) dashboard=$($dashboardPlan.url) runtime=$runtimeFile"
-      Invoke-HttpMcpBridge $backendPlan.mcp_url $bridgeTimeout (New-McpClientLeaseId) $clientHeartbeatInterval
-    } finally {
-      Remove-BridgeLease $bridgeLeasePath
-      Stop-ManagedServersIfUnused $runtimeFile $runtimeKey
-    }
-    exit 0
-  }
-}
 
 $startupLock = Enter-FileLock (Resolve-StartupLockFile $runtimeFile) $startupLockTimeout
 try {
