@@ -9,6 +9,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
   alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @redacted "[REDACTED]"
@@ -180,6 +181,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
   defp review_suite_payload(%State{work_package: %WorkPackage{} = work_package} = state) do
     case Templates.expand(policy_key(work_package)) do
       {:ok, template} ->
+        template = effective_review_policy(state, template)
+
         %{
           "policy_template" => template.template,
           "required_gates" => template.required_gates,
@@ -192,6 +195,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
         %{"policy_template" => policy_key(work_package), "error" => "unknown_policy_template"}
     end
   end
+
+  defp effective_review_policy(%State{review_suite_required_profiles: profiles}, template) when is_list(profiles) do
+    ReviewProfiles.apply_required_profiles(template, profiles)
+  end
+
+  defp effective_review_policy(%State{}, template), do: template
 
   defp review_suite_required_profiles(%State{review_suite_required_profiles: profiles}, _template) when is_list(profiles), do: redacted_profiles(profiles)
   defp review_suite_required_profiles(%State{}, template), do: template.review_suite.required

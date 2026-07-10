@@ -74,6 +74,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
           product_description: String.t() | nil,
           engineering_scope: String.t() | nil,
           allowed_file_globs: [String.t()] | nil,
+          review_lanes: [String.t()] | nil,
           policy_template: String.t() | nil,
           acceptance_criteria: [String.t()] | nil,
           worktree_path: String.t() | nil,
@@ -95,6 +96,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     field(:product_description, :string)
     field(:engineering_scope, :string)
     field(:allowed_file_globs, StringList, default: [])
+    field(:review_lanes, StringList)
     field(:policy_template, :string)
     field(:acceptance_criteria, StringList, default: [])
     field(:worktree_path, :string)
@@ -162,6 +164,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
       :product_description,
       :engineering_scope,
       :allowed_file_globs,
+      :review_lanes,
       :policy_template,
       :acceptance_criteria,
       :worktree_path,

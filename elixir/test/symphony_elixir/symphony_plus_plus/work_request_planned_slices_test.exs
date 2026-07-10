@@ -3,12 +3,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
 
   alias Ecto.Adapters.SQL
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
+  alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.CreateWork
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -707,6 +711,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
     assert create_work.work_package.engineering_scope =~ "Review profiles:"
     assert create_work.work_package.engineering_scope =~ "Forbidden file globs:"
     assert create_work.work_package.engineering_scope =~ "Stop conditions:"
+    assert create_work.virtual_files["task_plan.md"] =~ ~r/Required review profiles:\n\s*- normal/
+    assert create_work.virtual_files["review_suite.md"] =~ "- review_normal"
+    assert create_work.virtual_files["review_suite.md"] =~ "- review_normal_green"
 
     refute Map.has_key?(create_work.worker_grant, :secret)
     refute Map.has_key?(create_work.worker_grant, :display_key)
@@ -788,6 +795,63 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
     assert {:ok, persisted} = Repository.get_planned_slice(repo, work_request.id, approved.id)
     assert persisted.status == "dispatched"
     assert persisted.work_package_id == create_work.work_package.id
+  end
+
+  test "dispatch projects a standard PR review-lane override coherently", %{repo: repo, database_path: database_path} do
+    work_request = create_work_request!(repo, id: "WR-DISPATCH-BRIEF-STANDARD", status: "ready_for_slicing")
+
+    assert {:ok, planned} =
+             Repository.add_planned_slice(
+               repo,
+               work_request.id,
+               planned_slice_attrs(
+                 id: "WRS-DISPATCH-BRIEF-STANDARD",
+                 work_package_kind: "standard_pr",
+                 review_lanes: ["brief"]
+               )
+             )
+
+    assert {:ok, approved} = Repository.approve_planned_slice(repo, work_request.id, planned.id, "planned")
+
+    assert {:ok, dispatch} =
+             PlannedSliceDispatch.dispatch(
+               repo,
+               work_request.id,
+               approved.id,
+               dispatch_handoff_opts(database_path, "worker-dispatch-brief-standard")
+             )
+
+    creation = dispatch.creation
+    assert creation.work_package.kind == "standard_pr"
+    assert creation.policy.review_suite.required == ["brief"]
+    assert "review_brief" in creation.policy.required_gates
+    assert "review_brief_green" in creation.policy.readiness_requirements
+
+    creation_files = creation.virtual_files
+    assert creation_files["task_plan.md"] =~ ~r/Required review profiles:\n\s*- brief/
+    assert creation_files["context.md"] =~ ~r/Review profiles:\n\s*- brief/
+    assert creation_files["review_suite.md"] =~ "- Required: brief"
+
+    assert {:ok, {["brief"], []}} = ReviewLanes.required(repo, creation.work_package)
+
+    assert {:ok, state} = PlanningRepository.get_render_state(repo, creation.work_package.id)
+    assert {:ok, later_context} = Renderer.render_state(state, "context.md")
+    assert {:ok, later_task_plan} = Renderer.render_state(state, "task_plan.md")
+    assert {:ok, later_review_suite} = Renderer.render_state(state, "review_suite.md")
+
+    assert later_context == creation_files["context.md"]
+    assert later_task_plan == creation_files["task_plan.md"]
+    assert later_review_suite == creation_files["review_suite.md"]
+
+    assert {:ok, review_payload} = WorkerContext.virtual_file_payload(state, "review_suite.md", [])
+    review_suite = review_payload["review_suite"]
+    assert review_suite["required_review_profiles"] == ["brief"]
+    assert "review_brief" in review_suite["required_gates"]
+    assert "review_brief_green" in review_suite["readiness_requirements"]
+
+    refute Enum.any?(creation_files, fn {_name, contents} -> String.contains?(contents, "normal") end)
+    refute inspect(PlannedSliceDispatch.response_payload(dispatch)) =~ "normal"
+    refute inspect(review_payload) =~ "normal"
   end
 
   test "dispatch orchestration creates packages from secondary WorkRequest repo scopes", %{repo: repo, database_path: database_path} do

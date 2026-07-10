@@ -257,37 +257,52 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     end)
   end
 
-  test "normal review evidence satisfies brief readiness lanes", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-REVIEW-NORMAL-FOR-BRIEF", kind: "quick_fix", status: "ci_waiting")
-             )
+  test "brief and stronger review evidence satisfy brief readiness lanes", %{repo: repo} do
+    Enum.with_index(["brief", "normal", "deep"], 1)
+    |> Enum.each(fn {provided_profile, index} ->
+      package_id = "SYMPP-REVIEW-#{String.upcase(provided_profile)}-FOR-BRIEF"
+      head_sha = "brief-head-#{index}"
 
-    require_review_lanes!(repo, package, ["brief"])
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+      assert {:ok, package} =
+               WorkPackageRepository.create(
+                 repo,
+                 WorkPackageFactory.attrs(id: package_id, kind: "quick_fix", status: "ci_waiting")
+               )
 
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-REVIEW-NORMAL-FOR-BRIEF/worker", "head_sha" => "brief-head"})
+      require_review_lanes!(repo, package, ["brief"])
+      assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+      assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-#{index}")
+      session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready quick fix review package",
-      "tests" => ["mix test"],
-      "artifacts" => ["review.txt"],
-      "head_sha" => "brief-head",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "clean"}]
-    })
+      missing_response =
+        MCPHarness.request(
+          %{"jsonrpc" => "2.0", "id" => "missing-#{provided_profile}-for-brief", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
+          repo: repo,
+          session: session
+        )
 
-    ready_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-normal-for-brief", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
+      assert "review_lanes_complete" in get_in(missing_response, ["error", "data", "missing"])
 
-    assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
+      attach_tool(repo, session, "attach_branch", %{"branch" => "agent/#{package_id}/worker", "head_sha" => head_sha})
+
+      attach_tool(repo, session, "submit_review_package", %{
+        "summary" => "Ready quick fix review package",
+        "tests" => ["mix test"],
+        "artifacts" => ["review.txt"],
+        "head_sha" => head_sha,
+        "acceptance_criteria_met" => true,
+        "reviews" => [%{"lane" => provided_profile, "verdict" => "clean"}]
+      })
+
+      ready_response =
+        MCPHarness.request(
+          %{"jsonrpc" => "2.0", "id" => "ready-#{provided_profile}-for-brief", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
+          repo: repo,
+          session: session
+        )
+
+      assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
+    end)
   end
 
   test "exact failed review package lane blocks stronger passing aliases", %{repo: repo} do

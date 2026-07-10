@@ -146,7 +146,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDispatch do
       "product_description" => work_request.human_description,
       "engineering_scope" => engineering_scope(work_request, planned_slice),
       "allowed_file_globs" => planned_slice.owned_file_globs || [],
-      "acceptance_criteria" => planned_slice.acceptance_criteria || []
+      "acceptance_criteria" => planned_slice.acceptance_criteria || [],
+      "review_lanes" => planned_slice.review_lanes || []
     }
     |> drop_nil_values()
   end

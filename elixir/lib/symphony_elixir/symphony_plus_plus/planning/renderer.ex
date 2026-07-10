@@ -9,6 +9,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
   alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @virtual_files [
@@ -38,9 +39,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
     end
   end
 
-  @spec render_all(Repository.repo(), String.t()) :: {:ok, %{String.t() => String.t()}} | {:error, error()}
-  def render_all(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
+  @spec render_all(Repository.repo(), String.t(), keyword()) :: {:ok, %{String.t() => String.t()}} | {:error, error()}
+  def render_all(repo, work_package_id, opts \\ []) when is_atom(repo) and is_binary(work_package_id) do
     with {:ok, state} <- Repository.get_render_state(repo, work_package_id) do
+      state = maybe_put_required_review_profiles(state, opts)
+
       rendered =
         Map.new(@virtual_files, fn file_name ->
           {:ok, markdown} = render_state(state, file_name)
@@ -146,6 +149,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
   defp review_suite_markdown(%State{work_package: work_package} = state) do
     case Templates.expand(policy_key(work_package)) do
       {:ok, template} ->
+        template = effective_review_policy(state, template)
+
         [
           "# Review Suite",
           "",
@@ -174,8 +179,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
     end
   end
 
-  defp review_suite_required_profiles(%State{review_suite_required_profiles: profiles}, _template) when is_list(profiles), do: Redactor.redact_output(profiles)
+  defp effective_review_policy(%State{review_suite_required_profiles: profiles}, template) when is_list(profiles) do
+    ReviewProfiles.apply_required_profiles(template, profiles)
+  end
+
+  defp effective_review_policy(%State{}, template), do: template
+
+  defp review_suite_required_profiles(%State{review_suite_required_profiles: profiles}, _template) when is_list(profiles),
+    do: Redactor.redact_output(profiles)
+
   defp review_suite_required_profiles(%State{}, template), do: template.review_suite.required
+
+  defp maybe_put_required_review_profiles(%State{} = state, opts) do
+    case Keyword.fetch(opts, :review_suite_required_profiles) do
+      {:ok, profiles} ->
+        %State{state | review_suite_required_profiles: ReviewProfiles.normalize_review_suite_profiles(profiles)}
+
+      :error ->
+        state
+    end
+  end
 
   defp handoff_markdown(%State{} = state) do
     [

@@ -11,6 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Server}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -455,6 +456,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     refute Map.has_key?(payload.worker_grant, :secret_hash)
     refute json =~ "raw_secret_bootstrap_response"
     refute json =~ "hash-should-not-leak"
+  end
+
+  test "direct create-work review lanes remain durable", %{repo: repo} do
+    assert {:ok, creation} =
+             CreateWork.create(repo, %{
+               kind: "standard_pr",
+               repo: "kraken",
+               base_branch: "main",
+               title: "Use a brief direct review",
+               acceptance_criteria: ["Direct review guidance remains coherent."],
+               review_lanes: ["brief"]
+             })
+
+    assert creation.work_package.review_lanes == ["brief"]
+    assert CreateWork.response_payload(creation).work_package.review_lanes == ["brief"]
+    assert creation.virtual_files["review_suite.md"] =~ "- review_brief"
+    refute creation.virtual_files["review_suite.md"] =~ "review_normal"
+    assert {:ok, {["brief"], []}} = ReviewLanes.required(repo, creation.work_package)
+
+    assert {:ok, later_review_suite} = Renderer.render(repo, creation.work_package.id, "review_suite.md")
+    assert later_review_suite == creation.virtual_files["review_suite.md"]
   end
 
   test "response payload preserves nil worker grant", %{repo: repo} do

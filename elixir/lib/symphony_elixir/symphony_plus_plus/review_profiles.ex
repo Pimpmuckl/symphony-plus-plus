@@ -75,6 +75,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewProfiles do
     end
   end
 
+  @spec apply_required_profiles(map(), [String.t()]) :: map()
+  def apply_required_profiles(policy, required_profiles) when is_map(policy) and is_list(required_profiles) do
+    required_profiles = normalize_review_suite_profiles(required_profiles)
+
+    policy
+    |> Map.update!(:required_gates, &replace_profile_requirements(&1, required_profiles, :gate))
+    |> Map.update!(:readiness_requirements, &replace_profile_requirements(&1, required_profiles, :readiness))
+    |> Map.update!(:review_suite, &Map.put(&1, :required, required_profiles))
+  end
+
   @spec normalize_profile(term()) :: String.t() | nil
   def normalize_profile(profile) when is_binary(profile) do
     profile = profile |> String.trim() |> String.downcase() |> String.replace("-", "_")
@@ -218,6 +228,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewProfiles do
   end
 
   defp profile_rank(profile), do: Enum.find_index(@profile_order, &(&1 == profile)) || -1
+
+  defp replace_profile_requirements(requirements, profiles, kind) do
+    replacements = Enum.map(profiles, &profile_requirement(&1, kind))
+
+    case Enum.split_while(requirements, &is_nil(requirement_profile(&1, kind))) do
+      {before, []} -> before ++ replacements
+      {before, [_first | rest]} -> before ++ replacements ++ Enum.reject(rest, &requirement_profile(&1, kind))
+    end
+  end
+
+  defp profile_requirement(profile, :gate), do: "review_#{profile}"
+  defp profile_requirement(profile, :readiness), do: "review_#{profile}_green"
+
+  defp requirement_profile("review_" <> profile, :gate), do: normalize_review_suite_profile(profile)
+
+  defp requirement_profile("review_" <> requirement, :readiness) do
+    if String.ends_with?(requirement, "_green") do
+      requirement
+      |> String.replace_suffix("_green", "")
+      |> normalize_review_suite_profile()
+    end
+  end
+
+  defp requirement_profile(_requirement, _kind), do: nil
 
   defp review_suite_payload_profiles(payload) do
     [Map.get(payload, "profile"), Map.get(payload, "lane")]

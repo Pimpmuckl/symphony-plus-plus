@@ -32,6 +32,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes do
   end
 
   @spec policy_required(WorkPackage.t()) :: [String.t()]
+  def policy_required(%WorkPackage{review_lanes: review_lanes}) when is_list(review_lanes) do
+    ReviewProfiles.normalize_review_suite_profiles(review_lanes)
+  end
+
   def policy_required(%WorkPackage{} = work_package) do
     case LifecycleService.policy_for(work_package) do
       {:ok, policy} ->

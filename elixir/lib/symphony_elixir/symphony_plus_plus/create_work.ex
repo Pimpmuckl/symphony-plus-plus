@@ -15,6 +15,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
   alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints
@@ -39,6 +40,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
           | :invalid_kind
           | :invalid_policy_template
           | :invalid_request
+          | :invalid_review_lanes
           | :invalid_work_package_id
           | :missing_acceptance_criteria
           | :missing_allowed_file_globs
@@ -65,6 +67,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
          {:ok, policy_templates} <- explicit_policy_templates(attrs),
          {:ok, kind} <- normalize_kind(attrs, policy_templates),
          {:ok, policy_key, policy} <- policy_for(kind, policy_templates),
+         {:ok, review_lanes} <- normalize_optional_review_lanes(attrs),
          {:ok, acceptance_criteria} <- normalize_acceptance_criteria(Map.get(attrs, "acceptance_criteria", [])),
          {:ok, allowed_file_globs} <- normalize_allowed_file_globs(Map.get(attrs, "allowed_file_globs", [])),
          :ok <- require_acceptance_criteria(policy, acceptance_criteria),
@@ -88,7 +91,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
        |> Map.put("allowed_file_globs", allowed_file_globs)
        |> Map.put("parent_id", nil)
        |> Map.put("status", "ready_for_worker")
-       |> Map.put("policy", policy)}
+       |> maybe_put_review_lanes(review_lanes)
+       |> Map.put("policy", effective_policy(policy, review_lanes))}
     end
   end
 
@@ -121,6 +125,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   def error_message(:invalid_kind), do: "kind must be a nonblank string when provided"
   def error_message(:invalid_policy_template), do: "policy_template/review_suite_template must be nonblank strings when provided"
   def error_message(:invalid_request), do: "Create-work request must be an object"
+  def error_message(:invalid_review_lanes), do: "review_lanes must contain only supported Review Suite profiles"
   def error_message(:invalid_work_package_id), do: "id must be a nonblank string when provided"
   def error_message(:missing_acceptance_criteria), do: "acceptance_criteria is required for this work kind"
   def error_message(:missing_allowed_file_globs), do: "allowed_file_globs is required for docs and scope-guard policy templates"
@@ -173,13 +178,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
 
   defp create_transaction(repo, request) do
     policy = Map.fetch!(request, "policy")
+    required_review_profiles = Map.get(request, "review_lanes", policy.review_suite.required)
     work_package_attrs = Map.drop(request, ["policy"])
 
     with {:ok, work_package} <- WorkPackageRepository.create(repo, work_package_attrs),
          {:ok, _scope_node} <- append_scope_plan_node(repo, work_package),
          {:ok, _review_node} <- append_review_plan_node(repo, work_package, policy),
          {:ok, minted} <- mint_worker_grant(repo, work_package.id, policy),
-         {:ok, virtual_files} <- Renderer.render_all(repo, work_package.id) do
+         {:ok, virtual_files} <- Renderer.render_all(repo, work_package.id, review_suite_required_profiles: required_review_profiles) do
       {:ok,
        %{
          work_package: work_package,
@@ -302,6 +308,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
       product_description: work_package.product_description,
       engineering_scope: work_package.engineering_scope,
       allowed_file_globs: work_package.allowed_file_globs,
+      review_lanes: work_package.review_lanes,
       policy_template: work_package.policy_template,
       acceptance_criteria: work_package.acceptance_criteria,
       status: work_package.status,
@@ -575,6 +582,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   defp normalize_acceptance_criteria(_criteria), do: {:error, :invalid_acceptance_criteria}
 
   defp normalize_allowed_file_globs(globs), do: normalize_string_list(globs, :invalid_allowed_file_globs)
+
+  defp normalize_optional_review_lanes(attrs) do
+    case Map.fetch(attrs, "review_lanes") do
+      :error ->
+        {:ok, :policy_default}
+
+      {:ok, nil} ->
+        {:ok, :policy_default}
+
+      {:ok, lanes} when is_list(lanes) ->
+        normalized = Enum.map(lanes, &ReviewProfiles.normalize_review_suite_profile/1)
+
+        if Enum.all?(normalized, &is_binary/1) do
+          {:ok, Enum.uniq(normalized)}
+        else
+          {:error, :invalid_review_lanes}
+        end
+
+      {:ok, _lanes} ->
+        {:error, :invalid_review_lanes}
+    end
+  end
+
+  defp effective_policy(policy, :policy_default), do: policy
+  defp effective_policy(policy, review_lanes), do: ReviewProfiles.apply_required_profiles(policy, review_lanes)
+
+  defp maybe_put_review_lanes(request, :policy_default), do: request
+  defp maybe_put_review_lanes(request, review_lanes), do: Map.put(request, "review_lanes", review_lanes)
 
   defp normalize_acceptance_criterion(value) when is_binary(value), do: String.trim(value)
   defp normalize_acceptance_criterion(_value), do: :invalid
