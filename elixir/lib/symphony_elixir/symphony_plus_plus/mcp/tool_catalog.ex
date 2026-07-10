@@ -115,11 +115,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "read_child_status",
     "approve_scope_expansion",
     "read_phase_board",
-    "request_child_replan",
     "approve_child_ready_state",
-    "merge_child_into_phase",
-    "split_work_package",
-    "publish_phase_update"
+    "merge_child_into_phase"
   ]
   @work_request_policy_tools [
     "list_work_requests",
@@ -168,12 +165,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "revoke_planned_slice_worker_key"
   ]
   @work_request_product_tree_views ["nodes_only", "nodes_with_slice_refs", "nodes_with_slices"]
-  @phase7_stub_architect_tools [
-    "request_child_replan",
-    "split_work_package",
-    "publish_phase_update"
-  ]
-
   @type tool_name :: String.t()
   @type input_schema :: map()
   @type tool_spec :: map()
@@ -245,9 +236,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   @spec work_request_product_tree_views() :: [String.t()]
   def work_request_product_tree_views, do: @work_request_product_tree_views
-
-  @spec phase7_stub_architect_tools() :: [tool_name()]
-  def phase7_stub_architect_tools, do: @phase7_stub_architect_tools
 
   defp health_tool_spec do
     %{
@@ -426,10 +414,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp architect_tool_description("read_phase_board"), do: "Read the architect grant's scoped phase board."
   defp architect_tool_description("approve_child_ready_state"), do: "Approve a ready phase-child package for merge into the architect's phase."
   defp architect_tool_description("merge_child_into_phase"), do: "Record a local phase merge artifact and mark a phase child merged into the architect's phase."
-
-  defp architect_tool_description(name) when name in @phase7_stub_architect_tools do
-    "Phase 7 architect tool #{name}; authorization is enforced, but behavior is not implemented yet."
-  end
 
   @spec solo_tool_input_schema(tool_name()) :: input_schema()
   def solo_tool_input_schema(name), do: SoloTools.input_schema(name)
@@ -1131,10 +1115,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   def architect_tool_input_schema("read_phase_board"), do: schema(%{"phase_id" => string_schema()}, ["phase_id"])
 
-  def architect_tool_input_schema("request_child_replan") do
-    schema(%{"work_package_id" => string_schema(), "reason" => markdown_string_schema("Human-facing replan reason in Markdown.")}, ["work_package_id", "reason"])
-  end
-
   def architect_tool_input_schema("approve_child_ready_state") do
     schema(
       %{"work_package_id" => string_schema(), "rationale" => markdown_string_schema("Human-facing merge approval rationale in Markdown."), "request_id" => string_schema()},
@@ -1144,14 +1124,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   def architect_tool_input_schema("merge_child_into_phase"),
     do: schema(%{"work_package_id" => string_schema(), "merge_artifact" => merge_artifact_schema()}, ["work_package_id", "merge_artifact"])
-
-  def architect_tool_input_schema("split_work_package") do
-    schema(%{"work_package_id" => string_schema(), "child_specs" => nonempty_object_array_schema()}, ["work_package_id", "child_specs"])
-  end
-
-  def architect_tool_input_schema("publish_phase_update") do
-    schema(%{"phase_id" => string_schema(), "update" => object_schema()}, ["phase_id", "update"])
-  end
 
   defp delivery_runtime_tool_input_schema("cleanup_work_request_planned_slice_runtime") do
     schema(
@@ -1246,6 +1218,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
       Enum.map(@bootstrap_tools, &bootstrap_tool_spec/1)
   end
 
+  @spec startup_tool_specs(:full | :worker | :architect | :coordinator | :solo, Config.t()) :: [tool_spec()]
+  def startup_tool_specs(:full, %Config{} = config), do: unbound_tool_specs_for_config(config)
+
+  def startup_tool_specs(:worker, %Config{}) do
+    [worker_tool_spec(@local_assignment_claim_tool) | worker_session_tool_specs()]
+    |> lean_tool_specs()
+  end
+
+  def startup_tool_specs(:architect, %Config{}) do
+    [local_architect_assignment_claim_tool_spec() | architect_session_tool_specs(current_work_request?: true)]
+    |> lean_tool_specs()
+  end
+
+  def startup_tool_specs(profile, %Config{}) when profile in [:coordinator, :solo] do
+    [health_tool_spec(), assignment_release_tool_spec() | Enum.map(@solo_tools, &solo_tool_spec/1)]
+    |> lean_tool_specs()
+  end
+
   defp local_assignment_claim_tool_specs(%Config{}), do: [worker_tool_spec(@local_assignment_claim_tool)]
 
   defp local_architect_assignment_claim_tool_specs(%Config{}), do: [local_architect_assignment_claim_tool_spec()]
@@ -1300,6 +1290,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   end
 
   defp shared_worker_architect_tool_spec(name), do: architect_tool_spec(name)
+
+  defp lean_tool_specs(specs), do: Enum.map(specs, &lean_tool_spec/1)
+
+  defp lean_tool_spec(%{"name" => name, "description" => "Symphony++ worker tool " <> name_and_period} = spec) do
+    if name_and_period == name <> ".", do: Map.drop(spec, ["title", "description"]), else: Map.delete(spec, "title")
+  end
+
+  defp lean_tool_spec(spec), do: Map.delete(spec, "title")
+
   @spec local_operator_tool_specs() :: [tool_spec()]
   def local_operator_tool_specs, do: Enum.map(@local_operator_tools, &local_operator_tool_spec/1)
 
@@ -1467,7 +1466,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp string_array_schema, do: %{"type" => "array", "items" => nonblank_string_schema()}
   defp described_string_array_schema(description), do: Map.put(string_array_schema(), "description", description)
   defp review_suite_profile_array_schema, do: %{"type" => "array", "items" => string_enum_schema(ReviewProfiles.review_suite_profiles())}
-  defp nonempty_object_array_schema, do: %{"type" => "array", "minItems" => 1, "items" => object_schema()}
 
   defp changed_files_schema,
     do: %{"anyOf" => [%{"type" => "array", "items" => %{"anyOf" => [nonblank_string_schema(), object_schema()]}}, nonnegative_integer_schema()]}

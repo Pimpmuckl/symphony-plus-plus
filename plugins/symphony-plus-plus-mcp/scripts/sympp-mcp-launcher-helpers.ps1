@@ -294,6 +294,132 @@ function Resolve-StartupLockFile([string]$RuntimeFile) {
   return [System.IO.Path]::GetFullPath((Join-Path $runtimeDir "codex-plugin.lock"))
 }
 
+function Resolve-BridgeLeaseDir([string]$RuntimeFile) {
+  return [System.IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $RuntimeFile) "codex-plugin-leases"))
+}
+
+function Get-ProcessStartIdentity($Process) {
+  try {
+    return [string]$Process.StartTime.ToUniversalTime().Ticks
+  } catch {
+    return $null
+  }
+}
+
+function Get-ProcessIdentityMap([int[]]$ProcessIds) {
+  $identities = @{}
+  $ids = @($ProcessIds | Where-Object { $_ -gt 0 } | Select-Object -Unique)
+  if ($ids.Count -eq 0) {
+    return $identities
+  }
+
+  foreach ($process in @(Get-Process -Id $ids -ErrorAction SilentlyContinue)) {
+    $identities[[string]$process.Id] = [pscustomobject]@{
+      exists = $true
+      start_time_utc_ticks = Get-ProcessStartIdentity $process
+    }
+  }
+  return $identities
+}
+
+function New-BridgeLease([string]$RuntimeFile, $BackendPlan, $DashboardPlan, [string]$RuntimeKey) {
+  $leaseDir = Resolve-BridgeLeaseDir $RuntimeFile
+  New-Item -ItemType Directory -Path $leaseDir -Force | Out-Null
+  $leasePath = Join-Path $leaseDir ("bridge-$PID-$([guid]::NewGuid().ToString('N')).json")
+  $temporaryPath = "$leasePath.tmp"
+  $process = Get-Process -Id $PID -ErrorAction Stop
+  $lease = [pscustomobject]@{
+    pid = $PID
+    process_start_time_utc_ticks = Get-ProcessStartIdentity $process
+    created_at = [DateTimeOffset]::UtcNow.ToString("o")
+    runtime_key = $RuntimeKey
+    runtime_kind = if ($BackendPlan.managed -eq $true) { "managed" } else { [string]$BackendPlan.status }
+    source_revision = $BackendPlan.source_revision
+    backend_url = $BackendPlan.url
+    dashboard_origin = $DashboardPlan.origin
+  }
+  $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+  try {
+    [System.IO.File]::WriteAllText($temporaryPath, (($lease | ConvertTo-Json -Depth 8) + "`n"), $utf8NoBom)
+    [System.IO.File]::Move($temporaryPath, $leasePath)
+  } finally {
+    Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+  }
+  return $leasePath
+}
+
+function Remove-BridgeLease([string]$LeasePath) {
+  if (-not [string]::IsNullOrWhiteSpace($LeasePath)) {
+    Remove-Item -LiteralPath $LeasePath -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Test-BridgeLeaseActive($Lease, $ProcessIdentities) {
+  if ($null -eq $Lease -or -not $Lease.PSObject.Properties["pid"]) {
+    return $false
+  }
+
+  $leasePid = 0
+  if (-not [int]::TryParse([string]$Lease.pid, [ref]$leasePid) -or $leasePid -le 0 -or
+      -not $ProcessIdentities.ContainsKey([string]$leasePid)) {
+    return $false
+  }
+
+  $processIdentity = $ProcessIdentities[[string]$leasePid]
+  $actualStart = [string]$processIdentity.start_time_utc_ticks
+  if ($Lease.PSObject.Properties["process_start_time_utc_ticks"] -and
+      -not [string]::IsNullOrWhiteSpace([string]$Lease.process_start_time_utc_ticks)) {
+    return [string]::IsNullOrWhiteSpace($actualStart) -or
+      [System.StringComparer]::Ordinal.Equals([string]$Lease.process_start_time_utc_ticks, $actualStart)
+  }
+
+  # Legacy leases have no exact start identity. Keep a live pre-lease process,
+  # but reject a reused PID whose process started after the lease was created.
+  if (-not [string]::IsNullOrWhiteSpace($actualStart) -and $Lease.PSObject.Properties["created_at"]) {
+    $createdAt = [DateTimeOffset]::MinValue
+    $startTicks = 0L
+    if ([DateTimeOffset]::TryParse([string]$Lease.created_at, [ref]$createdAt) -and
+        [long]::TryParse($actualStart, [ref]$startTicks)) {
+      return $startTicks -le $createdAt.UtcDateTime.Ticks
+    }
+  }
+
+  return $true
+}
+
+function Get-ActiveBridgeLeases([string]$RuntimeFile) {
+  $leaseDir = Resolve-BridgeLeaseDir $RuntimeFile
+  if (-not (Test-Path -LiteralPath $leaseDir -PathType Container)) {
+    return @()
+  }
+
+  $candidates = [System.Collections.Generic.List[object]]::new()
+  foreach ($leasePath in @(Get-ChildItem -LiteralPath $leaseDir -Filter "bridge-*.json" -File -ErrorAction SilentlyContinue)) {
+    $lease = $null
+    try {
+      $lease = Get-Content -LiteralPath $leasePath.FullName -Raw | ConvertFrom-Json
+    } catch {
+    }
+    $candidates.Add([pscustomobject]@{ path = $leasePath.FullName; lease = $lease })
+  }
+
+  $processIds = @($candidates | ForEach-Object {
+      $leasePid = 0
+      if ($null -ne $_.lease -and [int]::TryParse([string]$_.lease.pid, [ref]$leasePid)) { $leasePid }
+    })
+  $processIdentities = Get-ProcessIdentityMap $processIds
+  $active = [System.Collections.Generic.List[object]]::new()
+  foreach ($candidate in $candidates) {
+    if (Test-BridgeLeaseActive $candidate.lease $processIdentities) {
+      $active.Add($candidate)
+    } else {
+      Remove-Item -LiteralPath $candidate.path -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  return @($active)
+}
+
 function Enter-FileLock([string]$LockPath, [int]$TimeoutSec) {
   $lockDir = Split-Path -Parent $LockPath
   New-Item -ItemType Directory -Force -Path $lockDir | Out-Null

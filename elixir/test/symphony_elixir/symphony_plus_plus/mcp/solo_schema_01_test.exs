@@ -811,10 +811,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
         "dispatch:work_request",
         "approve:child_ready_state",
         "approve:scope_expansion",
-        "request:child_replan",
-        "merge:child_into_phase",
-        "split:child_work_package",
-        "publish:phase_update"
+        "merge:child_into_phase"
       ])
 
     server = Server.new(test_mcp_config(repo), initialized: true, session: session)
@@ -1006,7 +1003,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert get_in(tools_by_name, ["revoke_child_worker_key", "inputSchema", "properties", "grant_id", "type"]) == "string"
     assert get_in(tools_by_name, ["merge_child_into_phase", "inputSchema", "required"]) == ["work_package_id", "merge_artifact"]
     assert get_in(tools_by_name, ["merge_child_into_phase", "inputSchema", "properties", "merge_artifact", "required"]) == ["status", "uri"]
-    assert get_in(tools_by_name, ["split_work_package", "inputSchema", "properties", "child_specs", "minItems"]) == 1
   end
 
   test "tools list advertises planned-slice dispatch even when repo_root is not configured", %{repo: repo} do

@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "mcp_contract_fingerprint": "b4d8b9f075e75f111f6920c2651b2351b81c8fa980d8aa6151a5c274f00a4b63",
+  "mcp_contract_fingerprint": "d71a218be40cb3e98f53db042ff94090a9b37212e6a1da1a1ea6e6ae767a1825",
   "schema_source": "ToolCatalog owns the live runtime tool surfaces. This JSON publishes those names plus the canonical MCP contract fingerprint for scripts, docs, and release artifacts.",
   "compatibility_policy": "Version 3 intentionally replaces the legacy verbose contract shape with discovery_policy, claim_policy, resources, and tool_schemas. Consumers should migrate by reading role tool names from discovery_policy and per-tool arguments from tool_schemas.",
   "human_text_policy": "Human-facing long text fields are Markdown unless a field is explicitly a compact label, status, identifier, branch, PR URL, or other machine-readable value. Dashboard renderers must not turn raw Markdown HTML into executable or trusted HTML.",
@@ -66,11 +66,8 @@
         "read_child_status",
         "approve_scope_expansion",
         "read_phase_board",
-        "request_child_replan",
         "approve_child_ready_state",
-        "merge_child_into_phase",
-        "split_work_package",
-        "publish_phase_update"
+        "merge_child_into_phase"
       ],
       "worker_tools": [
         "get_current_assignment",
@@ -183,11 +180,8 @@
       "read_child_status",
       "approve_scope_expansion",
       "read_phase_board",
-      "request_child_replan",
       "approve_child_ready_state",
-      "merge_child_into_phase",
-      "split_work_package",
-      "publish_phase_update"
+      "merge_child_into_phase"
     ],
     "authorization_policy": "tools/list is session-shape discovery, not authorization. Calls still require the matching local claim, role, capability, scope, lifecycle state, and handler-specific validation."
   },
@@ -344,10 +338,7 @@
     {"name": "read_child_status", "required_arguments": ["work_package_id"], "optional_arguments": []},
     {"name": "approve_scope_expansion", "required_arguments": ["allowed_file_globs", "rationale", "work_package_id"], "optional_arguments": ["request_id"]},
     {"name": "read_phase_board", "required_arguments": ["phase_id"], "optional_arguments": []},
-    {"name": "request_child_replan", "required_arguments": ["reason", "work_package_id"], "optional_arguments": []},
     {"name": "approve_child_ready_state", "required_arguments": ["rationale", "work_package_id"], "optional_arguments": ["request_id"]},
-    {"name": "merge_child_into_phase", "required_arguments": ["merge_artifact", "work_package_id"], "optional_arguments": []},
-    {"name": "split_work_package", "required_arguments": ["child_specs", "work_package_id"], "optional_arguments": []},
-    {"name": "publish_phase_update", "required_arguments": ["phase_id", "update"], "optional_arguments": []}
+    {"name": "merge_child_into_phase", "required_arguments": ["merge_artifact", "work_package_id"], "optional_arguments": []}
   ]
 }
