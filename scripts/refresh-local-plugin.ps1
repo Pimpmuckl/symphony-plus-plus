@@ -424,26 +424,20 @@ function Assert-CachePluginConfig([string]$TargetRoot, [string]$ExpectedVersion)
   if ($null -eq $server) {
     throw "Installed MCP config does not define symphony_plus_plus in a documented MCP config shape: $mcpConfigPath"
   }
-  if (@($server.PSObject.Properties.Name) -contains "url") {
-    throw "Installed opt-in MCP server must use the command-backed launcher, not a URL-only endpoint: $mcpConfigPath"
+  if ($server.url -ne "http://127.0.0.1:19998/mcp") {
+    throw "Installed opt-in MCP server must use the singleton loopback endpoint http://127.0.0.1:19998/mcp: $mcpConfigPath"
   }
-  if ($server.type -ne "stdio") {
-    throw "Installed opt-in MCP server must declare type 'stdio': $mcpConfigPath"
+  if ($server.startup_timeout_sec -ne 10) {
+    throw "Installed opt-in MCP server startup_timeout_sec must be 10: $mcpConfigPath"
   }
-  if ($server.command -ne "cmd.exe") {
-    throw "Installed opt-in MCP server command must be cmd.exe so the launcher can resolve pwsh or powershell.exe: $mcpConfigPath"
-  }
-  if ($server.cwd -ne ".") {
-    throw "Installed opt-in MCP server cwd must be '.': $mcpConfigPath"
+  if ($server.tool_timeout_sec -ne 300) {
+    throw "Installed opt-in MCP server tool_timeout_sec must be 300: $mcpConfigPath"
   }
 
-  $args = @($server.args)
-  if ($args -notcontains "/c") {
-    throw "Installed opt-in MCP server args must launch the command wrapper through cmd.exe /c: $mcpConfigPath"
-  }
-  $hasStartWrapper = @($args | Where-Object { [string]$_ -match "scripts[\\/]start-sympp-mcp\.cmd" }).Count -gt 0
-  if (-not $hasStartWrapper) {
-    throw "Installed opt-in MCP server args must reference scripts/start-sympp-mcp.cmd: $mcpConfigPath"
+  foreach ($stdioProperty in @("type", "command", "args", "cwd", "env")) {
+    if (@($server.PSObject.Properties.Name) -contains $stdioProperty) {
+      throw "Installed opt-in MCP server must not define stdio property '$stdioProperty': $mcpConfigPath"
+    }
   }
 }
 
