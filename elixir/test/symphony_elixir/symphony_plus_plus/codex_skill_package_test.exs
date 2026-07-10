@@ -742,6 +742,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     end
   end
 
+  test "high-concurrency gate keeps its fast package contract" do
+    powershell = System.find_executable("pwsh") || System.find_executable("powershell.exe") || System.find_executable("powershell")
+
+    if powershell do
+      test_script = Path.join(@repo_root, "plugins/symphony-plus-plus-mcp/tests/end-to-end/run-performance-gate-tests.ps1")
+      {output, status} = System.cmd(powershell, ["-NoProfile", "-File", test_script], stderr_to_stdout: true)
+
+      assert status == 0, output
+      assert output =~ "Performance gate parsing, structured output, threshold failures, and cutover contract passed."
+    end
+  end
+
   test "MCP contract pins the server-reported agent-facing contract fingerprint" do
     launcher = File.read!(@mcp_plugin_start_script_path)
     fingerprint = Server.mcp_contract_identity()["fingerprint"]
