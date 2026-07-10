@@ -18,10 +18,10 @@ slices, and dispatch approved planned slices through the normal ledger-backed
 local assignment flow.
 
 Architect MCP sessions can mutate the optional product tree with
-`upsert_work_request_product_plan_node_content`,
-`move_work_request_product_plan_node`,
-`set_work_request_product_plan_node_completion`, and
-`move_work_request_planned_slice_to_product_node` while the WorkRequest is in an
+`upsert_plan_node`,
+`move_plan_node`,
+`set_plan_node_completion`, and
+`move_slice_to_plan_node` while the WorkRequest is in an
 authoring status. Copied-ledger preview and migration flows may still seed plan
 nodes through helpers, but helper seeding is not the normal architect authoring
 path. Automatic question generation, automatic slicing/planning, live Linear

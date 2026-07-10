@@ -87,13 +87,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshContractTest d
 
     tool_schemas = Map.new(contract["tool_schemas"], &{&1["name"], &1})
 
-    assert get_in(tool_schemas, ["record_work_request_decision", "argument_constraints", "source_type"]) ==
+    assert get_in(tool_schemas, ["record_decision", "argument_constraints", "source_type"]) ==
              DecisionLogEntry.source_types()
 
-    assert get_in(tool_schemas, ["add_work_request_planned_slice", "argument_constraints", "work_package_kind"]) ==
+    assert get_in(tool_schemas, ["plan_slice", "argument_constraints", "work_package_kind"]) ==
              WorkPackage.planned_slice_kinds()
 
-    planned_slice_tool = Map.fetch!(tool_schemas, "add_work_request_planned_slice")
+    planned_slice_tool = Map.fetch!(tool_schemas, "plan_slice")
 
     assert planned_slice_tool["required_arguments"] == [
              "acceptance_criteria",

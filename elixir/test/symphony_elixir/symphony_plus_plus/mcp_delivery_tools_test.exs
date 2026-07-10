@@ -94,7 +94,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert get_in(sibling_response, ["error", "data", "reason"]) == "outside_session_scope"
 
     board_response =
-      mcp_tool(repo, session, "read_work_request_delivery_board", %{
+      mcp_tool(repo, session, "read_delivery_board", %{
         "work_request_id" => work_request.id
       })
 
@@ -122,7 +122,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     refute inspect(closeout_response) =~ evidence_query_value
 
     read_closed_response =
-      mcp_tool(repo, session, "read_work_request_delivery_board", %{
+      mcp_tool(repo, session, "read_delivery_board", %{
         "work_request_id" => work_request.id
       })
 
@@ -213,7 +213,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       create_work_request_architect_session(repo, work_request, ArchitectHandoff.capabilities())
 
     board_response =
-      mcp_tool(repo, session, "read_work_request_delivery_board", %{
+      mcp_tool(repo, session, "read_delivery_board", %{
         "work_request_id" => work_request.id
       })
 
@@ -251,7 +251,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert closeout_payload["planned_slice_delivery"]["outcome"] == "completed_no_pr"
 
     read_closed_response =
-      mcp_tool(repo, session, "read_work_request_delivery_board", %{
+      mcp_tool(repo, session, "read_delivery_board", %{
         "work_request_id" => work_request.id
       })
 
@@ -1606,7 +1606,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
   defp delivery_board_payload_for(repo, session, %WorkRequest{} = work_request) do
     response =
-      mcp_tool(repo, session, "read_work_request_delivery_board", %{
+      mcp_tool(repo, session, "read_delivery_board", %{
         "work_request_id" => work_request.id
       })
 

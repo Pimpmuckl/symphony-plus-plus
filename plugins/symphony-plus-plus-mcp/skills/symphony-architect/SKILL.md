@@ -23,7 +23,7 @@ packages yourself.
    `action`; if it returns `work_request_terminal`, ask the local operator to
    restore the WorkRequest or start a new one.
 2. For WorkRequest lanes, read `read_work_request(work_request_id)`,
-   `read_work_request_product_tree(work_request_id, view?)`, and
+   `read_plan(work_request_id, view?)`, and
    `list_guidance_requests(work_request_id?)` before slicing or rearranging
    product nodes. The WorkRequest guidance filter requires the usual
    `read:work_request` grant.
@@ -43,14 +43,14 @@ that as presentation only: tool arguments remain JSON/schema-native, and
 - Ask focused product/architecture questions before slicing when intent,
   compatibility, branch strategy, acceptance, validation, or ownership is
   unclear.
-- Use `ask_work_request_question` with `decision_prompt` for material choices;
+- Use `ask_question` with `decision_prompt` for material choices;
   use plain questions for simple facts.
-- Record durable decisions with `record_work_request_decision`. Valid
+- Record durable decisions with `record_decision`. Valid
   `source_type`: `human`, `architect`, `operator`, `ask_pro_advisory`.
 - Escalate to `human_info_needed` when the human must decide. Do not choose
   product behavior just to keep work moving.
 - Once open questions are answered or closed, continue straight to
-  `read_work_request` and `add_work_request_planned_slice`; no separate
+  `read_work_request` and `plan_slice`; no separate
   clarification-complete status tool is required. Open questions still block
   slicing.
 
@@ -59,7 +59,7 @@ that as presentation only: tool arguments remain JSON/schema-native, and
 For larger WorkRequests, use product plan nodes to make human progress legible
 before or alongside slice planning. Product plan nodes are optional and may be
 nested however the product needs; do not force a fixed layer/capability shape.
-Use `read_work_request_product_tree` instead of direct ledger queries when you
+Use `read_plan` instead of direct ledger queries when you
 need existing node/link state; choose `nodes_only` for product plan outline,
 `nodes_with_slice_refs` for slice id mapping, and `nodes_with_slices` when
 slice bodies are needed. Product-tree rollups reflect scoped delivery-board
@@ -86,18 +86,18 @@ another shape. Each slice needs:
 - Dependencies and recorded decisions needed to avoid scope drift.
 
 After claiming a WorkRequest, current-WR lifecycle tools may omit
-`work_request_id`: `add_work_request_planned_slice`,
-`upsert_work_request_product_plan_node_content`,
-`move_work_request_product_plan_node`,
-`set_work_request_product_plan_node_completion`,
-`move_work_request_planned_slice_to_product_node`,
-`approve_work_request_planned_slice`, `skip_work_request_planned_slice`, and
-`mark_work_request_sliced`, plus delivery board/reconcile, planned-slice
+`work_request_id`: `plan_slice`,
+`upsert_plan_node`,
+`move_plan_node`,
+`set_plan_node_completion`,
+`move_slice_to_plan_node`,
+`approve_slice`, `skip_slice`, and
+`finish_slicing`, plus delivery board/reconcile, planned-slice
 delivery closeout, runtime cleanup, worker-key revocation, and dispatch. Keep
 intentional sibling reads, status/question tools, durable decisions, and package
 tools explicit.
 
-For `add_work_request_planned_slice`, the selected WorkRequest also supplies
+For `plan_slice`, the selected WorkRequest also supplies
 the default primary delivery repo and target base branch. Pass the target base
 branch with a secondary delivery repo. The tool defaults the package kind to
 `standard_pr`; title, goal, owned globs, acceptance criteria, validation, and
@@ -112,7 +112,7 @@ slices. Mark the WorkRequest sliced once approved slices cover the request.
 
 ## Dispatch
 
-Dispatch only approved slices with `dispatch_work_request_planned_slice`.
+Dispatch only approved slices with `dispatch_slice`.
 For normal planned-slice dispatch, worker bootstrap is ledger-backed:
 `worker_bootstrap.type=ledger_claim`, `mode=local_assignment`, and
 `claim.tool=claim_local_assignment`. Dispatch first to create the WorkPackage,
@@ -163,7 +163,7 @@ loop; send important findings back to the worker.
 
 ## Delivery Closeout
 
-Use `read_work_request_delivery_board` as the WR delivery board after dispatch.
+Use `read_delivery_board` as the WR delivery board after dispatch.
 Decisions are rationale. Delivery closeout records lifecycle truth.
 
 For merged PR evidence, use `reconcile_work_request` first, then

@@ -376,23 +376,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
   defp work_request_policy_action("list_work_requests"), do: :work_request_read
   defp work_request_policy_action("read_work_request"), do: :work_request_read
-  defp work_request_policy_action("read_work_request_product_tree"), do: :work_request_read
-  defp work_request_policy_action("read_work_request_delivery_board"), do: :delivery_board_read
+  defp work_request_policy_action("read_plan"), do: :work_request_read
+  defp work_request_policy_action("read_delivery_board"), do: :delivery_board_read
   defp work_request_policy_action("set_work_request_status"), do: :work_request_update
-  defp work_request_policy_action("ask_work_request_question"), do: :question_create
-  defp work_request_policy_action("answer_work_request_question"), do: :question_answer
-  defp work_request_policy_action("answer_work_request_question_and_record_decision"), do: :question_answer
-  defp work_request_policy_action("close_work_request_question"), do: :question_close
-  defp work_request_policy_action("record_work_request_decision"), do: :decision_record
-  defp work_request_policy_action("add_work_request_planned_slice"), do: :planned_slice_create
-  defp work_request_policy_action("upsert_work_request_product_plan_node_content"), do: :work_request_update
-  defp work_request_policy_action("move_work_request_product_plan_node"), do: :work_request_update
-  defp work_request_policy_action("set_work_request_product_plan_node_completion"), do: :work_request_update
-  defp work_request_policy_action("move_work_request_planned_slice_to_product_node"), do: :work_request_update
-  defp work_request_policy_action("approve_work_request_planned_slice"), do: :planned_slice_approve
-  defp work_request_policy_action("skip_work_request_planned_slice"), do: :planned_slice_skip
-  defp work_request_policy_action("mark_work_request_sliced"), do: :work_request_update
-  defp work_request_policy_action("dispatch_work_request_planned_slice"), do: :planned_slice_dispatch
+  defp work_request_policy_action("ask_question"), do: :question_create
+  defp work_request_policy_action("answer_question"), do: :question_answer
+  defp work_request_policy_action("answer_question_and_record_decision"), do: :question_answer
+  defp work_request_policy_action("close_question"), do: :question_close
+  defp work_request_policy_action("record_decision"), do: :decision_record
+  defp work_request_policy_action("plan_slice"), do: :planned_slice_create
+  defp work_request_policy_action("upsert_plan_node"), do: :work_request_update
+  defp work_request_policy_action("move_plan_node"), do: :work_request_update
+  defp work_request_policy_action("set_plan_node_completion"), do: :work_request_update
+  defp work_request_policy_action("move_slice_to_plan_node"), do: :work_request_update
+  defp work_request_policy_action("approve_slice"), do: :planned_slice_approve
+  defp work_request_policy_action("skip_slice"), do: :planned_slice_skip
+  defp work_request_policy_action("finish_slicing"), do: :work_request_update
+  defp work_request_policy_action("dispatch_slice"), do: :planned_slice_dispatch
 
   defp repo_scope_read_action?(action), do: action in [:work_request_read, :delivery_board_read]
 

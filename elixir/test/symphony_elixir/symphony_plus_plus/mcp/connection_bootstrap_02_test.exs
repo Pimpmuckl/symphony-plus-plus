@@ -232,11 +232,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
 
     refute Map.has_key?(unbound_tools_by_name, "upsert_work_request_product_plan_node")
 
-    assert get_in(unbound_tools_by_name, ["upsert_work_request_product_plan_node_content", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["upsert_plan_node", "inputSchema", "required"]) == [
              "work_request_id"
            ]
 
-    content_schema = get_in(unbound_tools_by_name, ["upsert_work_request_product_plan_node_content", "inputSchema"])
+    content_schema = get_in(unbound_tools_by_name, ["upsert_plan_node", "inputSchema"])
     content_properties = get_in(content_schema, ["properties"])
     assert get_in(content_properties, ["work_request_id", "description"]) =~ "Required WorkRequest id"
     assert Map.has_key?(content_properties, "title")
@@ -248,18 +248,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
              %{"anyOf" => [%{"required" => ["title"]}, %{"required" => ["description"]}, %{"required" => ["node_kind"]}]}
            ]
 
-    assert get_in(unbound_tools_by_name, ["upsert_work_request_product_plan_node_content", "description"]) =~ "explicit WorkRequest"
-    refute get_in(unbound_tools_by_name, ["upsert_work_request_product_plan_node_content", "description"]) =~ "claimed current WorkRequest"
+    assert get_in(unbound_tools_by_name, ["upsert_plan_node", "description"]) =~ "explicit WorkRequest"
+    refute get_in(unbound_tools_by_name, ["upsert_plan_node", "description"]) =~ "claimed current WorkRequest"
 
-    assert get_in(unbound_tools_by_name, ["upsert_work_request_product_plan_node_content", "description"]) =~
+    assert get_in(unbound_tools_by_name, ["upsert_plan_node", "description"]) =~
              "Do not create a plan node solely to wrap one slice."
 
-    assert get_in(unbound_tools_by_name, ["move_work_request_product_plan_node", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["move_plan_node", "inputSchema", "required"]) == [
              "work_request_id",
              "product_tree_node_id"
            ]
 
-    move_node_schema = get_in(unbound_tools_by_name, ["move_work_request_product_plan_node", "inputSchema"])
+    move_node_schema = get_in(unbound_tools_by_name, ["move_plan_node", "inputSchema"])
     move_node_properties = get_in(move_node_schema, ["properties"])
     assert get_in(move_node_properties, ["product_tree_node_id", "minLength"]) == 1
     assert get_in(move_node_properties, ["product_tree_node_id", "pattern"]) == "\\S"
@@ -272,20 +272,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
              %{"required" => ["position"]}
            ]
 
-    assert get_in(unbound_tools_by_name, ["set_work_request_product_plan_node_completion", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["set_plan_node_completion", "inputSchema", "required"]) == [
              "work_request_id",
              "product_tree_node_id",
              "completion_mark"
            ]
 
-    completion_properties = get_in(unbound_tools_by_name, ["set_work_request_product_plan_node_completion", "inputSchema", "properties"])
+    completion_properties = get_in(unbound_tools_by_name, ["set_plan_node_completion", "inputSchema", "properties"])
     assert get_in(completion_properties, ["product_tree_node_id", "minLength"]) == 1
     assert get_in(completion_properties, ["product_tree_node_id", "pattern"]) == "\\S"
     assert Map.has_key?(completion_properties, "blocker_closeout")
     refute Map.has_key?(completion_properties, "title")
     refute Map.has_key?(completion_properties, "parent_id")
 
-    assert get_in(unbound_tools_by_name, ["move_work_request_planned_slice_to_product_node", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["move_slice_to_plan_node", "inputSchema", "required"]) == [
              "work_request_id",
              "planned_slice_id"
            ]
@@ -297,7 +297,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
              "idempotency_key"
            ]
 
-    assert get_in(unbound_tools_by_name, ["dispatch_work_request_planned_slice", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["dispatch_slice", "inputSchema", "required"]) == [
              "work_request_id",
              "planned_slice_id"
            ]
