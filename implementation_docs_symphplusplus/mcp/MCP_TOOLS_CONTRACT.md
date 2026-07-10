@@ -201,10 +201,11 @@ target ids.
 `add_work_request_planned_slice` defaults ordinary PR-backed work to
 `standard_pr`; reserve `mcp` for MCP servers, protocols, tools, or plugins.
 The selected WorkRequest supplies the default delivery repo and target base
-branch. Branch pattern, forbidden globs, and review lanes may be omitted, while
-title, goal, owned globs, acceptance criteria, validation, and stop conditions
-remain required. Without a single current WorkRequest, callers must supply
-`work_request_id` explicitly.
+branch for its primary repo; pass the target base branch when selecting a
+secondary delivery repo. Branch pattern, forbidden globs, and review lanes may
+be omitted, while title, goal, owned globs, acceptance criteria, validation,
+and stop conditions remain required. Without a single current WorkRequest,
+callers must supply `work_request_id` explicitly.
 
 Product-plan node authoring is split by intent: use
 `upsert_work_request_product_plan_node_content` for title, description, or kind,

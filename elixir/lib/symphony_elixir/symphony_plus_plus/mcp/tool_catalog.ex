@@ -973,7 +973,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         "delivery_repo" => described_string_schema("Optional delivery repo for this planned slice. Defaults to the parent WorkRequest primary repo and must be listed in the WorkRequest repo scopes."),
         "target_base_branch" =>
           described_string_schema(
-            "Optional delivery base branch for the planned slice and created WorkPackage. Defaults to the parent WorkRequest base branch; worktree preparation must use the effective package base branch."
+            "Optional delivery base branch for the planned slice and created WorkPackage. Defaults to the selected WorkRequest base branch for its primary repo; pass it when selecting a secondary delivery repo. Worktree preparation must use the effective package base branch."
           ),
         "owned_file_globs" =>
           described_string_array_schema(

@@ -130,15 +130,13 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
   def planned_slice_form(attrs \\ %{}, work_request \\ %{}) do
     attrs = normalize_keys(attrs)
 
-    defaults = %{
+    %{
       "title" => "",
       "goal" => "",
       "work_package_kind" => "standard_pr",
       "target_base_branch" => value(work_request, :base_branch, ""),
       "branch_pattern" => ""
     }
-
-    defaults
     |> Map.merge(Map.take(attrs, @planned_slice_scalar_fields))
     |> Map.merge(planned_slice_list_form_values(attrs))
   end

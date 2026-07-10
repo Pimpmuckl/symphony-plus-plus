@@ -497,9 +497,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
                kind: "product",
                repo: "kraken",
                base_branch: "main",
-               title: "Polish account summary",
-               acceptance_criteria: ["Summary copy is updated."],
-               policy_template: "hotfix"
+               title: "Polish account summary"
              })
 
     assert CreateWork.error_message(:kind_not_dispatchable) =~ "standard_pr (ordinary PR work)"

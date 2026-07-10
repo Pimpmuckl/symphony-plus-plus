@@ -150,11 +150,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   def call("add_work_request_planned_slice", %Config{} = config, session, arguments) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
+         {:ok, work_request, filters, scope} <-
+           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :planned_slice_create, "add_work_request_planned_slice"),
          {:ok, title} <- required_argument(arguments, "title"),
          {:ok, goal} <- required_argument(arguments, "goal"),
          {:ok, work_package_kind} <- optional_string_argument(arguments, "work_package_kind", "standard_pr"),
-         {:ok, delivery_repo} <- optional_string_argument(arguments, "delivery_repo"),
-         {:ok, target_base_branch} <- optional_string_argument(arguments, "target_base_branch"),
+         {:ok, delivery_repo} <- optional_string_argument(arguments, "delivery_repo", work_request.repo),
+         {:ok, target_base_branch} <- target_branch(arguments, delivery_repo, work_request),
          {:ok, owned_file_globs} <- required_string_array(arguments, "owned_file_globs"),
          {:ok, forbidden_file_globs} <- optional_string_list_argument(arguments, "forbidden_file_globs"),
          {:ok, acceptance_criteria} <- required_string_array(arguments, "acceptance_criteria"),
@@ -163,16 +165,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, stop_conditions} <- required_string_array(arguments, "stop_conditions"),
          {:ok, branch_pattern} <- optional_string_argument(arguments, "branch_pattern"),
          :ok <- require_supported_branch_pattern(branch_pattern),
-         {:ok, work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :planned_slice_create, "add_work_request_planned_slice"),
          :ok <- validate_planned_slice_scope_for_tool(work_request, work_package_kind, owned_file_globs),
          attrs =
            %{
              "title" => title,
              "goal" => goal,
              "work_package_kind" => work_package_kind,
-             "delivery_repo" => delivery_repo || work_request.repo,
-             "target_base_branch" => target_base_branch || work_request.base_branch,
+             "delivery_repo" => delivery_repo,
+             "target_base_branch" => target_base_branch,
              "owned_file_globs" => owned_file_globs,
              "forbidden_file_globs" => forbidden_file_globs,
              "acceptance_criteria" => acceptance_criteria,
@@ -382,6 +382,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
       :planned_slice_skip
     )
   end
+
+  defp target_branch(args, repo, %{repo: repo, base_branch: branch}), do: optional_string_argument(args, "target_base_branch", branch)
+  defp target_branch(args, _repo, _work_request), do: required_argument(args, "target_base_branch")
 
   defp add_planned_slice_and_reload_work_request(repo, work_request_id, attrs, filters) do
     with {:ok, planned_slice} <- WorkRequestService.add_planned_slice_for_authoring(repo, work_request_id, attrs),

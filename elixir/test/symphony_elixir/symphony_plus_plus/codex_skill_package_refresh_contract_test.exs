@@ -92,5 +92,45 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshContractTest d
 
     assert get_in(tool_schemas, ["add_work_request_planned_slice", "argument_constraints", "work_package_kind"]) ==
              WorkPackage.planned_slice_kinds()
+
+    planned_slice_tool = Map.fetch!(tool_schemas, "add_work_request_planned_slice")
+
+    assert planned_slice_tool["required_arguments"] == [
+             "acceptance_criteria",
+             "goal",
+             "owned_file_globs",
+             "stop_conditions",
+             "title",
+             "validation_steps",
+             "work_request_id"
+           ]
+
+    assert planned_slice_tool["optional_arguments"] == [
+             "branch_pattern",
+             "delivery_repo",
+             "forbidden_file_globs",
+             "review_lanes",
+             "target_base_branch",
+             "work_package_kind"
+           ]
+
+    assert planned_slice_tool["current_work_request_required_arguments"] == [
+             "acceptance_criteria",
+             "goal",
+             "owned_file_globs",
+             "stop_conditions",
+             "title",
+             "validation_steps"
+           ]
+
+    assert planned_slice_tool["current_work_request_optional_arguments"] == [
+             "branch_pattern",
+             "delivery_repo",
+             "forbidden_file_globs",
+             "review_lanes",
+             "target_base_branch",
+             "work_package_kind",
+             "work_request_id"
+           ]
   end
 end

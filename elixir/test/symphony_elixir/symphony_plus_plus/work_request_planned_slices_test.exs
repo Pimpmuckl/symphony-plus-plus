@@ -134,14 +134,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
              Service.add_planned_slice(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-002", title: "Implement persistence", review_lanes: ["normal"])
+               planned_slice_attrs(id: "WRS-002", title: "Document persistence", work_package_kind: "docs")
+               |> Map.delete(:review_lanes)
              )
 
     assert first.work_request_id == work_request.id
     assert first.sequence == 1
-    assert first.title == "Implement persistence"
+    assert first.title == "Document persistence"
     assert first.status == "planned"
-    assert first.review_lanes == ["normal"]
+    assert first.review_lanes == ["brief"]
 
     assert {:ok, second} =
              Repository.add_planned_slice(

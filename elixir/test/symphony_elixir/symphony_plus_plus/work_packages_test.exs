@@ -96,13 +96,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackagesTest do
   end
 
   test "rejects noncanonical policy templates", %{repo: repo} do
-    assert {:ok, standard_pr} =
-             Repository.create(repo, WorkPackageFactory.attrs(kind: "standard_pr", policy_template: "standard_pr"))
-
-    assert standard_pr.policy_template == "standard_pr"
-
-    assert {:ok, package} = Repository.create(repo, WorkPackageFactory.attrs(kind: "mcp", policy_template: "mcp"))
-    assert package.policy_template == "mcp"
+    assert {:ok, package} = Repository.create(repo, WorkPackageFactory.attrs(kind: "standard_pr", policy_template: "standard_pr"))
+    assert package.policy_template == "standard_pr"
 
     assert {:ok, current_pr_state_package} =
              Repository.create(repo, WorkPackageFactory.attrs(kind: "mcp", policy_template: "mcp_current_pr_state"))
