@@ -255,6 +255,8 @@ function Start-Backend($Plan, [string]$DashboardOrigin, [string]$ElixirDir, [str
     }
   }
 
+  $command.environment["SYMPP_DEFER_DASHBOARD_OPEN"] = "1"
+
   if ($ShutdownOnIdle) {
     $command.environment["SYMPP_MCP_SHUTDOWN_ON_IDLE"] = "1"
   }

@@ -1,3 +1,4 @@
+System.put_env("SYMPP_OPEN_DASHBOARD", "0")
 ExUnit.start()
 
 if System.get_env("SYMPHONY_RUN_LIVE_E2E") != "1" do

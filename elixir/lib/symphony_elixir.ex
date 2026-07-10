@@ -35,7 +35,8 @@ defmodule SymphonyElixir.Application do
   def children do
     [
       {Phoenix.PubSub, name: SymphonyElixir.PubSub},
-      {Task.Supervisor, name: SymphonyElixir.TaskSupervisor}
+      {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
+      SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
     ] ++
       legacy_daemon_children() ++
       mcp_runtime_children()
@@ -57,8 +58,7 @@ defmodule SymphonyElixir.Application do
       [
         SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore,
         SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases,
-        {SymphonyElixir.HttpServer, host: "127.0.0.1"},
-        SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
+        {SymphonyElixir.HttpServer, host: "127.0.0.1"}
       ]
     else
       [

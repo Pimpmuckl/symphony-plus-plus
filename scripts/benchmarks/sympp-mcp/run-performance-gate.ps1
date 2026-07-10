@@ -267,6 +267,7 @@ try {
   $environment = @{} + $paths + @{
     SYMPP_REPO_ROOT = $repoRoot; SYMPP_RUNTIME_FILE = $runtimeFile; SYMPP_DATABASE = $database
     SYMPP_BACKEND_PORT = $backendPort; SYMPP_DASHBOARD_PORT = $dashboardPort; SYMPP_DASHBOARD_ORIGIN = "http://127.0.0.1:$dashboardPort"; SYMPP_AUTOSTART_FRONTEND = "0"
+    SYMPP_OPEN_DASHBOARD = "0"
     SYMPP_MCP_BRIDGE_MODE = "http"; SYMPP_SOURCE_FALLBACK = "1"; SYMPP_ARTIFACT_RUNTIME = "0"
     SYMPP_LAUNCHER = "direct"; SYMPP_ELIXIR_SETUP_TIMEOUT_SEC = "900"; HEX_OFFLINE = "1"
   }

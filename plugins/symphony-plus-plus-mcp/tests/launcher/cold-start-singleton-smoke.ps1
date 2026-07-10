@@ -83,6 +83,7 @@ try {
     SYMPP_REPO_ROOT = $repoRoot; SYMPP_HOME = Join-Path $tempRoot "runtime-home"
     SYMPP_RUNTIME_FILE = $runtimeFile; SYMPP_LOG_DIR = $logDir; SYMPP_DATABASE = $database
     SYMPP_BACKEND_PORT = [string]$backendPort; SYMPP_DASHBOARD_PORT = [string]$dashboardPort
+    SYMPP_OPEN_DASHBOARD = "0"
     SYMPP_AUTOSTART_FRONTEND = "0"; SYMPP_MCP_BRIDGE_MODE = "http"; SYMPP_SOURCE_FALLBACK = "1"
     SYMPP_ARTIFACT_RUNTIME = "0"; SYMPP_LAUNCHER = "direct"; SYMPP_ELIXIR_SETUP_TIMEOUT_SEC = "600"
     MIX_BUILD_ROOT = $mixBuildRoot; MIX_HOME = $mixHome; HEX_HOME = $hexHome; HEX_OFFLINE = "1"
