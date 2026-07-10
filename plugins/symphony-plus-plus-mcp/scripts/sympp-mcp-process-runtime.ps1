@@ -234,7 +234,7 @@ function Get-ArtifactBackendCommand($ArtifactRuntime, $Plan, [string]$DashboardO
 }
 
 function Start-Backend($Plan, [string]$DashboardOrigin, [string]$ElixirDir, [string]$Launcher, [string]$MixCommand, [string]$MiseCommand, [string]$LogDir, [int]$TimeoutSec, [string]$ExpectedContractFingerprint, $ArtifactRuntime = $null, [bool]$ShutdownOnIdle = $false) {
-  $args = @("sympp.cockpit", "--host", "127.0.0.1", "--port", [string]$Plan.port, "--no-open-dashboard")
+  $args = @("sympp.cockpit", "--host", "127.0.0.1", "--port", [string]$Plan.port)
   if (-not [string]::IsNullOrWhiteSpace($DashboardOrigin)) {
     $args += @("--dashboard-origin", $DashboardOrigin)
   }
@@ -254,6 +254,8 @@ function Start-Backend($Plan, [string]$DashboardOrigin, [string]$ElixirDir, [str
       environment = @{}
     }
   }
+
+  $command.environment["SYMPP_DEFER_DASHBOARD_OPEN"] = "1"
 
   if ($ShutdownOnIdle) {
     $command.environment["SYMPP_MCP_SHUTDOWN_ON_IDLE"] = "1"

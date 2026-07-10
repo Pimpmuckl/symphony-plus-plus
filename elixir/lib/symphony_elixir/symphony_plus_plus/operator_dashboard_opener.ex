@@ -12,6 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener do
 
   @board_path "/sympp/board"
   @default_open_delay_ms 5_000
+  @open_dashboard_override_config_key :sympp_open_dashboard_override
   @operator_bootstrap_config_key :sympp_local_operator_bootstrap_token
   @operator_bootstrap_param "operator_bootstrap"
 
@@ -126,9 +127,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener do
   end
 
   defp open_dashboard_on_boot?(opts) do
-    case System.get_env("SYMPP_OPEN_DASHBOARD") do
-      value when is_binary(value) -> truthy?(value)
-      _unset -> open_dashboard_from_settings?(opts)
+    endpoint_config = Application.get_env(:symphony_elixir, Endpoint, [])
+
+    case Keyword.get(endpoint_config, @open_dashboard_override_config_key) do
+      enabled when is_boolean(enabled) ->
+        enabled
+
+      _unset ->
+        case System.get_env("SYMPP_OPEN_DASHBOARD") do
+          value when is_binary(value) -> truthy?(value)
+          _unset -> open_dashboard_from_settings?(opts)
+        end
     end
   end
 

@@ -36,6 +36,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpenerTest do
              )
   end
 
+  test "cockpit disable wins over environment and settings" do
+    System.put_env("SYMPP_OPEN_DASHBOARD", "1")
+    endpoint_config = Application.get_env(:symphony_elixir, Endpoint, [])
+    Application.put_env(:symphony_elixir, Endpoint, Keyword.put(endpoint_config, :sympp_open_dashboard_override, false))
+
+    assert :ok =
+             OperatorDashboardOpener.open_once(
+               port: 54_321,
+               settings_reader: fn -> flunk("settings should not be read") end,
+               opener: fn _url -> flunk("browser should not open") end
+             )
+  end
+
   test "settings read failures fail closed" do
     System.delete_env("SYMPP_OPEN_DASHBOARD")
 

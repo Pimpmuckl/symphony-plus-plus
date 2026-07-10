@@ -16,10 +16,12 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
     previous_endpoint_config = Application.get_env(:symphony_elixir, Endpoint, [])
     previous_dashboard_origin = System.get_env("SYMPP_DASHBOARD_ORIGIN")
     previous_open_dashboard = System.get_env("SYMPP_OPEN_DASHBOARD")
+    previous_defer_dashboard_open = System.get_env("SYMPP_DEFER_DASHBOARD_OPEN")
 
     Mix.shell(Mix.Shell.Process)
     System.delete_env("SYMPP_DASHBOARD_ORIGIN")
     System.delete_env("SYMPP_OPEN_DASHBOARD")
+    System.delete_env("SYMPP_DEFER_DASHBOARD_OPEN")
     ensure_cockpit_dashboard_asset!()
 
     on_exit(fn ->
@@ -28,6 +30,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
       Application.put_env(:symphony_elixir, Endpoint, previous_endpoint_config)
       restore_system_env("SYMPP_DASHBOARD_ORIGIN", previous_dashboard_origin)
       restore_system_env("SYMPP_OPEN_DASHBOARD", previous_open_dashboard)
+      restore_system_env("SYMPP_DEFER_DASHBOARD_OPEN", previous_defer_dashboard_open)
       stop_endpoint()
     end)
 
@@ -76,6 +79,9 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
       assert endpoint_config[:sympp_repo] == Repo
       assert endpoint_config[:server] == false
       assert endpoint_config[:sympp_dashboard_origin] == "http://127.0.0.1:5174"
+
+      assert CockpitTask.endpoint_config_for_test(open_dashboard: false)[:sympp_open_dashboard_override] == false
+      assert CockpitTask.endpoint_config_for_test(open_dashboard: true)[:sympp_open_dashboard_override] == true
 
       assert CockpitTask.cockpit_url_for_test(token_opts, 4567) ==
                "http://127.0.0.1:5174/sympp/board?operator_bootstrap=test-bootstrap-token"
@@ -288,6 +294,28 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
       assert_received {:operator_dashboard_opened, dashboard_url}
       assert dashboard_url =~ ~r{http://127\.0\.0\.1:5174/sympp/board\?operator_bootstrap=[^&]+}
       assert_received {:mix_shell, :info, ["Bootstrap URL browser open attempted; token redacted from logs."]}
+    after
+      File.rm(database_path)
+    end
+  end
+
+  test "managed backend defers the immediate dashboard open" do
+    database_path = WorkPackageFactory.database_path()
+    System.put_env("SYMPP_DEFER_DASHBOARD_OPEN", "1")
+
+    try do
+      assert {:ok, opts} = CockpitTask.parse_args_for_test(["--database", database_path, "--port", "0", "--open-dashboard"])
+
+      opts =
+        Keyword.put(opts, :operator_dashboard_opener, fn url ->
+          send(self(), {:operator_dashboard_opened, url})
+          :ok
+        end)
+
+      CockpitTask.run_cockpit_for_test(opts, fn -> :ok end)
+
+      refute_received {:operator_dashboard_opened, _url}
+      assert_received {:mix_shell, :info, ["Dashboard browser open deferred until an MCP client connects."]}
     after
       File.rm(database_path)
     end

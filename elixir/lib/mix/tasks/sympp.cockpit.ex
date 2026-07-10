@@ -19,7 +19,9 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   @board_path "/sympp/board"
   @operator_bootstrap_param "operator_bootstrap"
   @operator_bootstrap_config_key :sympp_local_operator_bootstrap_token
+  @open_dashboard_override_config_key :sympp_open_dashboard_override
   @open_dashboard_env "SYMPP_OPEN_DASHBOARD"
+  @defer_dashboard_open_env "SYMPP_DEFER_DASHBOARD_OPEN"
   @switches [
     database: :string,
     host: :string,
@@ -318,9 +320,18 @@ defmodule Mix.Tasks.Sympp.Cockpit do
       sympp_local_operator: true
     )
     |> Keyword.delete(:sympp_dashboard_origin)
+    |> Keyword.delete(@open_dashboard_override_config_key)
+    |> maybe_put_open_dashboard_override(opts)
     |> maybe_put_operator_bootstrap_token(opts)
     |> maybe_put_dashboard_origin(opts)
     |> maybe_force_default_repo(opts)
+  end
+
+  defp maybe_put_open_dashboard_override(endpoint_config, opts) do
+    case Keyword.fetch(opts, :open_dashboard) do
+      {:ok, enabled} when is_boolean(enabled) -> Keyword.put(endpoint_config, @open_dashboard_override_config_key, enabled)
+      :error -> endpoint_config
+    end
   end
 
   defp maybe_put_operator_bootstrap_token(endpoint_config, opts) do
@@ -515,7 +526,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   end
 
   defp maybe_open_operator_dashboard(opts, port) do
-    if Keyword.get(opts, :open_dashboard, false) do
+    if Keyword.get(opts, :open_dashboard, false) and not defer_dashboard_open?() do
       open_operator_dashboard(opts, port)
     else
       :ok
@@ -523,12 +534,14 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   end
 
   defp dashboard_open_message(opts) do
-    if Keyword.get(opts, :open_dashboard, false) do
-      "Bootstrap URL browser open attempted; token redacted from logs."
-    else
-      "Dashboard browser auto-open disabled; pass --open-dashboard or set #{@open_dashboard_env}=1 to open it."
+    cond do
+      defer_dashboard_open?() -> "Dashboard browser open deferred until an MCP client connects."
+      Keyword.get(opts, :open_dashboard, false) -> "Bootstrap URL browser open attempted; token redacted from logs."
+      true -> "Dashboard browser auto-open disabled; pass --open-dashboard or set #{@open_dashboard_env}=1 to open it."
     end
   end
+
+  defp defer_dashboard_open?, do: System.get_env(@defer_dashboard_open_env) == "1"
 
   defp open_operator_dashboard(opts, port) do
     opener = Keyword.get(opts, :operator_dashboard_opener, &default_open_operator_dashboard/1)
