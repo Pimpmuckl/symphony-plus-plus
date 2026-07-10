@@ -215,11 +215,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant do
         "write:guidance_request",
         "write:phase_plan",
         "approve:scope_expansion",
-        "request:child_replan",
         "approve:child_ready_state",
-        "merge:child_into_phase",
-        "split:child_work_package",
-        "publish:phase_update"
+        "merge:child_into_phase"
       ]
   end
 
