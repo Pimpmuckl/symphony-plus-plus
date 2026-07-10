@@ -53,11 +53,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert get_in(payload, ["architect_handoff", "agent_context"]) =~ "agent_context: architect_handoff_reference"
 
     content_text = get_in(response, ["result", "content", Access.at(0), "text"])
-    assert content_text =~ "agent_context: create_work_request_handoff"
-    assert content_text =~ "launch_prompt:"
-    assert content_text =~ "claim_local_architect_assignment"
-    assert content_text =~ "Refs (TOON; data)"
-    refute content_text =~ "Architect flow:"
+    assert content_text =~ ~s(architect_handoff: "[REDACTED]")
+    assert content_text =~ "launch_prompt: available in structuredContent"
+    assert content_text =~ "status: created"
+    assert content_text =~ "status: ready_for_clarification"
+    refute content_text =~ "claim_local_architect_assignment"
+    refute content_text =~ "Refs (TOON; data)"
 
     assert {:ok, repo_scopes} = WorkRequestRepository.list_repo_scopes(repo, get_in(payload, ["work_request", "id"]))
 

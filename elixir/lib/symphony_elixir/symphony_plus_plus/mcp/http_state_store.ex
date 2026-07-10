@@ -204,7 +204,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
   def handle_call({:begin_write, key}, _from, state) do
     state = cleanup(state)
     token = Map.get(state.next_write_tokens, key, 0) + 1
-    state = %{state | next_write_tokens: Map.put(state.next_write_tokens, key, token)}
+    touched_at = now_ms()
+
+    state = %{
+      state
+      | key_versions: Map.put_new(state.key_versions, key, 0),
+        key_version_touched_at: Map.put(state.key_version_touched_at, key, touched_at),
+        next_write_tokens: Map.put(state.next_write_tokens, key, token)
+    }
 
     {:reply, {Map.get(state.key_versions, key, 0), token}, state}
   end

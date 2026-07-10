@@ -34,12 +34,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   end
 
   def tool_specs_for_server(%{session_refresh_required: true, config: %Config{} = config} = server) do
-    {:ok, dedupe_tool_specs(claimable_tool_specs(config) ++ local_trusted_tool_specs(server))}
+    specs = dedupe_tool_specs(claimable_tool_specs(config) ++ local_trusted_tool_specs(server))
+    {:ok, ToolCatalog.lean_tool_specs(specs)}
   end
 
   def tool_specs_for_server(%{config: %Config{} = config, session: session} = server) do
     with {:ok, specs} <- tool_specs_for_session(config, session) do
-      {:ok, dedupe_tool_specs(advertised_tool_specs(specs, server) ++ local_trusted_tool_specs(server))}
+      specs = dedupe_tool_specs(advertised_tool_specs(specs, server) ++ local_trusted_tool_specs(server))
+      {:ok, ToolCatalog.lean_tool_specs(specs)}
     end
   end
 
@@ -91,7 +93,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
         file_name,
         uri,
         agent_text?: worker_session?(session),
-        canonical_agent_text?: Keyword.get(opts, :surface_profile, :full) != :full
+        canonical_agent_text?: Keyword.get(opts, :mode, :stdio) == :http or Keyword.get(opts, :surface_profile, :full) != :full
       )
     else
       {:error, {:authorization_policy_denied, %Decision{} = decision}} -> MCPError.from_decision(decision, uri)
