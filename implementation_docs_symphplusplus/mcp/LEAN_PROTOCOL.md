@@ -49,8 +49,8 @@ unchanged.
 
 | Profile | Tools before | Bytes before | Tokens before | Tools after | Bytes after | Tokens after |
 |---|---:|---:|---:|---:|---:|---:|
-| full | 76 | 54,191 | 13,548 | 76 | 50,705 | 12,677 |
-| default | 76 | 54,191 | 13,548 | 76 | 50,705 | 12,677 |
+| full | 76 | 54,437 | 13,610 | 76 | 50,951 | 12,738 |
+| default | 76 | 54,437 | 13,610 | 76 | 50,951 | 12,738 |
 
 Representative results use fixed redacted fixtures for claim, a 40-line read,
 and progress append:
