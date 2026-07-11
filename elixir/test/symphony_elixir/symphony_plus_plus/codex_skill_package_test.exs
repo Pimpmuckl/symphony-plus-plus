@@ -292,9 +292,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     assert manifest["name"] == "symphony-plus-plus"
     assert manifest["version"] == @plugin_version
     assert Version.compare(@plugin_version, "0.1.1") == :gt
-    assert manifest["skills"] == "./skills-default/"
+    assert manifest["skills"] == "./skills/"
     refute Map.has_key?(manifest, "mcpServers")
     assert manifest["interface"]["displayName"] == "Symphony++"
+    assert manifest["interface"]["category"] == "Developer Tools"
     assert manifest["interface"]["composerIcon"] == "./assets/splusplus-logo.png"
     assert manifest["interface"]["logo"] == "./assets/splusplus-logo.png"
     assert manifest["description"] =~ "MCP-free"
@@ -303,7 +304,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     refute manifest["description"] =~ "WorkPackage"
     refute manifest["interface"]["shortDescription"] =~ "WorkPackage"
     refute File.exists?(@plugin_mcp_path)
-    refute File.exists?(@plugin_skills_dir)
+    assert File.exists?(@plugin_skills_dir)
+    refute File.exists?(@plugin_legacy_skills_dir)
     assert File.exists?(@plugin_icon_path)
     assert File.read!(@plugin_default_solo_skill_path) =~ "name: symphony-solo-session"
     assert File.read!(@plugin_default_solo_skill_path) =~ "ordinary single-agent work, non-MCP worker tasks"
@@ -334,12 +336,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
 
     assert Enum.any?(marketplace["plugins"], fn plugin ->
              plugin["name"] == "symphony-plus-plus" and
-               plugin["source"] == %{"source" => "local", "path" => "./plugins/symphony-plus-plus"}
+               plugin["source"] == %{"source" => "local", "path" => "./plugins/symphony-plus-plus"} and
+               plugin["category"] == "Developer Tools"
            end)
 
     assert Enum.any?(marketplace["plugins"], fn plugin ->
              plugin["name"] == "symphony-plus-plus-mcp" and
-               plugin["source"] == %{"source" => "local", "path" => "./plugins/symphony-plus-plus-mcp"}
+               plugin["source"] == %{"source" => "local", "path" => "./plugins/symphony-plus-plus-mcp"} and
+               plugin["category"] == "Developer Tools"
            end)
 
     assert File.exists?(@refresh_script_path)
@@ -351,7 +355,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     assert File.read!(@plugin_readme_path) =~ "isolated development Codex homes only"
     assert File.read!(@plugin_readme_path) =~ "intentionally skill-only"
     assert File.read!(@plugin_readme_path) =~ "does not declare `mcpServers`"
-    assert File.read!(@plugin_readme_path) =~ "skills-default/"
+    assert File.read!(@plugin_readme_path) =~ "standard root `skills/` directory"
     assert File.read!(@plugin_readme_path) =~ "`codex review`"
     assert File.read!(@plugin_readme_path) =~ "plugins/symphony-plus-plus-mcp"
     assert File.read!(@plugin_readme_path) =~ "diagnose-mcp-lifecycle.ps1"
@@ -410,7 +414,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     assert File.read!(@refresh_script_path) =~ "SymppPluginPackageNames"
     assert File.read!(@refresh_script_path) =~ "PSObject.Properties.Name) -contains \"mcpServers\""
     assert File.read!(@refresh_script_path) =~ "scripts/sympp-solo.ps1"
-    assert File.read!(@refresh_script_path) =~ "skills-default"
+    assert File.read!(@refresh_script_path) =~ "legacy skills-default directory"
     assert File.read!(@refresh_script_path) =~ "\"assets\""
     assert File.read!(@refresh_script_path) =~ "Remove-GeneratedLocalCacheEntry"
     assert File.read!(@refresh_script_path) =~ "Removed stale generated Symphony++ local plugin cache"
@@ -556,6 +560,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     assert manifest["mcpServers"] == "./.mcp.json"
     assert manifest["description"] =~ "Full Symphony++ MCP-backed"
     assert manifest["interface"]["displayName"] == "Symphony++ MCP"
+    assert manifest["interface"]["category"] == "Developer Tools"
     assert manifest["interface"]["composerIcon"] == "./assets/splusplus-logo.png"
     assert manifest["interface"]["logo"] == "./assets/splusplus-logo.png"
     assert File.read!(@mcp_plugin_icon_path) == File.read!(@plugin_icon_path)

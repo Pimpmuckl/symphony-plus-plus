@@ -38,7 +38,7 @@ local source path below only for isolated plugin development:
     "installation": "AVAILABLE",
     "authentication": "ON_USE"
   },
-  "category": "Coding"
+  "category": "Developer Tools"
 }
 ```
 
@@ -93,12 +93,10 @@ to this default plugin. Current Codex host behavior can eagerly start
 plugin-bundled MCP servers for generic sessions, review-suite lanes, and
 `codex review` calls whenever the plugin is enabled; that creates needless S++
 Elixir process churn when the session does not explicitly need S++ tools.
-The default manifest points at `skills-default/`, which exposes only MCP-free
-base skills: Solo Session, worker, and coordinator. The default package
-intentionally does not ship a root `skills/` directory, so Codex hosts that scan
-package folders directly cannot surface the MCP-dependent WorkPackage or
-architect skills from the default plugin. Those skills ship only in the sibling
-opt-in MCP plugin.
+The default manifest points at the standard root `skills/` directory, which
+contains only MCP-free base skills: Solo Session, worker, and coordinator. The
+MCP-dependent WorkPackage and architect skills ship only in the sibling opt-in
+MCP plugin.
 
 The default plugin source and refreshed default cache must not contain root
 `.mcp.json`. Planned-slice WorkPackage workers should use the ledger-backed

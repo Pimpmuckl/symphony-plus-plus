@@ -43,17 +43,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshTest do
           refreshed_manifest_path = published_plugin_cache_path(temp_codex_home, [cache_name, ".codex-plugin", "plugin.json"])
           refreshed_mcp_path = published_plugin_cache_path(temp_codex_home, [cache_name, ".mcp.json"])
           refreshed_icon_path = published_plugin_cache_path(temp_codex_home, [cache_name, "assets", "splusplus-logo.png"])
-          default_skill_path = published_plugin_cache_path(temp_codex_home, [cache_name, "skills-default", "symphony-solo-session", "SKILL.md"])
-          default_worker_skill_path = published_plugin_cache_path(temp_codex_home, [cache_name, "skills-default", "symphony-worker", "SKILL.md"])
-          default_coordinator_skill_path = published_plugin_cache_path(temp_codex_home, [cache_name, "skills-default", "symphony-coordinator", "SKILL.md"])
-          root_skills_path = published_plugin_cache_path(temp_codex_home, [cache_name, "skills"])
+          default_skill_path = published_plugin_cache_path(temp_codex_home, [cache_name, "skills", "symphony-solo-session", "SKILL.md"])
+          default_worker_skill_path = published_plugin_cache_path(temp_codex_home, [cache_name, "skills", "symphony-worker", "SKILL.md"])
+          default_coordinator_skill_path = published_plugin_cache_path(temp_codex_home, [cache_name, "skills", "symphony-coordinator", "SKILL.md"])
+          legacy_skills_path = published_plugin_cache_path(temp_codex_home, [cache_name, "skills-default"])
           source_hint_path = published_plugin_cache_path(temp_codex_home, [cache_name, ".sympp-source-root"])
           generated_marker_path = published_plugin_cache_path(temp_codex_home, [cache_name, ".sympp-generated-cache"])
 
           refreshed_manifest = refreshed_manifest_path |> File.read!() |> Jason.decode!()
           assert refreshed_manifest["name"] == "symphony-plus-plus"
           assert refreshed_manifest["version"] == @plugin_version
-          assert refreshed_manifest["skills"] == "./skills-default/"
+          assert refreshed_manifest["skills"] == "./skills/"
           refute Map.has_key?(refreshed_manifest, "mcpServers")
           assert refreshed_manifest["interface"]["composerIcon"] == "./assets/splusplus-logo.png"
           assert refreshed_manifest["interface"]["logo"] == "./assets/splusplus-logo.png"
@@ -61,7 +61,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshTest do
           assert File.read!(default_skill_path) == File.read!(@plugin_default_solo_skill_path)
           assert File.read!(default_worker_skill_path) == File.read!(@plugin_default_worker_skill_path)
           assert File.read!(default_coordinator_skill_path) == File.read!(@plugin_default_coordinator_skill_path)
-          refute File.exists?(root_skills_path)
+          refute File.exists?(legacy_skills_path)
           refute File.exists?(refreshed_mcp_path)
           refute File.exists?(source_hint_path)
           assert File.read!(generated_marker_path) =~ "generated_by=refresh-local-plugin.ps1"
