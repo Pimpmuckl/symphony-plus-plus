@@ -92,6 +92,30 @@ describe("dashboard runtime mutation helpers", () => {
     });
   });
 
+  it("keeps hydrated sections visible while a refresh defers their replacements", () => {
+    const dashboard = {
+      ...dashboardWithRequest({ id: "wr-1", title: "Hydrated" }),
+      archived_work_requests: { work_requests: [{ id: "wr-old", title: "Archived" }], total_count: 1 },
+      solo_sessions: { solo_sessions: [{ id: "solo-1" }], total_count: 1 },
+      deferred: { dashboard_sections: false },
+    } satisfies DashboardPayload;
+
+    const merged = mergeDashboardPayload(dashboard, {
+      board: { groups: { created: [{ id: "pkg-1", title: "Fresh package" }] } },
+      work_requests: { work_requests: [{ id: "wr-1", title: "Fresh card" }], total_count: 1 },
+      archived_work_requests: { work_requests: [], total_count: 0 },
+      solo_sessions: { solo_sessions: [], total_count: 0 },
+      work_request_details: [],
+      deferred: { dashboard_sections: true },
+    });
+
+    expect(merged?.board?.groups?.created?.[0]).toMatchObject({ id: "pkg-1" });
+    expect(merged?.work_requests?.work_requests?.[0]).toMatchObject({ title: "Fresh card" });
+    expect(merged?.archived_work_requests).toBe(dashboard.archived_work_requests);
+    expect(merged?.solo_sessions).toBe(dashboard.solo_sessions);
+    expect(merged?.work_request_details).toBe(dashboard.work_request_details);
+  });
+
   it("uses the local operator API base for dashboard events", () => {
     expect(dashboardEventsUrl()).toBe("/api/v1/sympp/operator/dashboard/events");
   });

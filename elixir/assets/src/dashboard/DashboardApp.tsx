@@ -122,7 +122,7 @@ function useDashboardController() {
         throw new Error(fallbackMessage);
       }
       if (loadMutationVersion !== mutationVersionRef.current) return nextDashboard;
-      setDashboard(nextDashboard);
+      setDashboard(mergeDashboardPayload(dashboardRef.current, nextDashboard));
       setConnectionIssue(null);
       setError(null);
       return nextDashboard;

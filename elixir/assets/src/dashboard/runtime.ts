@@ -424,7 +424,16 @@ function removeWorkRequestDetails(details: WorkRequestDetail[] | undefined, work
 
 export function mergeDashboardPayload(dashboard: DashboardPayload | null, patch: DashboardPayload | null | undefined): DashboardPayload | null {
   if (!dashboard || !patch) return patch ?? dashboard;
-  return { ...dashboard, ...patch };
+
+  const deferredSections = patch.deferred?.dashboard_sections
+    ? {
+        archived_work_requests: dashboard.archived_work_requests,
+        solo_sessions: dashboard.solo_sessions,
+        work_request_details: dashboard.work_request_details,
+      }
+    : {};
+
+  return { ...dashboard, ...patch, ...deferredSections };
 }
 
 function patchWorkRequestCards(cards: WorkRequestCard[], workRequest: WorkRequestMutationPatch, archive: boolean) {
