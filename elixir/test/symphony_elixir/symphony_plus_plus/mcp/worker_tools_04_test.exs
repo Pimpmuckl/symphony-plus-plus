@@ -50,7 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "tests" => ["mix test"],
       "artifacts" => ["old-head-review.txt"],
       "head_sha" => "old-head",
-      "reviews" => [%{"lane" => "brief", "verdict" => "green"}]
+      "reviews" => [%{"lane" => "fast", "verdict" => "green"}]
     })
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-BRANCH-HEAD-REVIEW/worker", "head_sha" => "new-head"})
@@ -1158,7 +1158,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
               "tests" => ["mix test"],
               "artifacts" => ["old-pr-head-review.txt"],
               "head_sha" => "head-a",
-              "reviews" => [%{"lane" => "brief", "verdict" => "green"}]
+              "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
             }
           }
         },
@@ -1173,7 +1173,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "tests" => ["mix test"],
       "artifacts" => ["latest-branch-head-review.txt"],
       "head_sha" => "head-b",
-      "reviews" => [%{"lane" => "brief", "verdict" => "green"}]
+      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
     })
 
     ready_response =

@@ -66,19 +66,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert quick_fix.constraints.expiry_seconds == nil
     assert quick_fix.constraints.planning_depth == "brief"
     assert quick_fix.constraints.terminal_readiness_status == "ready_for_merge"
-    assert "review_brief_green" in quick_fix.readiness_requirements
+    assert "review_normal_green" in quick_fix.readiness_requirements
 
     assert {:ok, hotfix} = Templates.expand("hotfix")
     assert hotfix.constraints.expiry_seconds == nil
-    assert hotfix.review_suite.required == ["emergency"]
+    assert hotfix.review_suite.required == ["fast"]
     assert hotfix.constraints.terminal_readiness_status == "ready_for_merge"
 
     assert {:ok, docs} = Templates.expand("docs")
     assert docs.constraints.expiry_seconds == nil
     assert docs.constraints.planning_depth == "brief"
-    assert docs.review_suite.required == ["brief"]
+    assert docs.review_suite.required == ["normal"]
     assert docs.constraints.terminal_readiness_status == "ready_for_merge"
-    assert docs.readiness_requirements == ["tests_passed", "review_brief_green"]
+    assert docs.readiness_requirements == ["tests_passed", "review_normal_green"]
 
     assert {:ok, phase_child} = Templates.expand("phase_child")
     assert phase_child.constraints.expiry_seconds == nil

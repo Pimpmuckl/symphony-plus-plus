@@ -2447,16 +2447,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   end
 
   test "ready package detail follows linked planned-slice review lanes", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-DASH-BRIEF-READY", status: "ready_for_slicing")
+    work_request = create_work_request!(repo, id: "WR-DASH-FAST-READY", status: "ready_for_slicing")
 
     assert {:ok, planned} =
              WorkRequestRepository.add_planned_slice(
                repo,
                work_request.id,
                planned_slice_attrs(
-                 id: "WRS-DASH-BRIEF-READY",
-                 title: "Brief review dashboard readiness",
-                 review_lanes: ["brief"]
+                 id: "WRS-DASH-FAST-READY",
+                 title: "Fast review dashboard readiness",
+                 review_lanes: ["fast"]
                )
              )
 
@@ -2464,7 +2464,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     work_package =
       create_matching_work_package!(repo, work_request, approved,
-        id: "SYMPP-DASH-BRIEF-READY",
+        id: "SYMPP-DASH-FAST-READY",
         status: "ready_for_merge",
         policy_template: "mcp"
       )
@@ -2472,15 +2472,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert {:ok, _linked} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", work_package.id)
 
     secret = create_architect_grant_secret(repo, work_package.id)
-    append_ready_evidence_with_review_artifacts(repo, work_package, ["review-brief-log.txt"])
+    append_ready_evidence_with_review_artifacts(repo, work_package, ["review-fast-log.txt"])
 
     append_review_package(
       repo,
       work_package,
-      ["review-brief-log.txt"],
+      ["review-fast-log.txt"],
       ~U[2026-05-05 00:00:05Z],
       "abc123",
-      [%{lane: "brief", verdict: "green"}]
+      [%{lane: "fast", verdict: "green"}]
     )
 
     payload = json_response(get(auth_conn(secret), "/api/v1/sympp/work-packages/#{work_package.id}"), 200)
@@ -2498,7 +2498,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              WorkRequestRepository.add_planned_slice(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-DASH-DUPLICATE-LINK-A", review_lanes: ["brief"])
+               planned_slice_attrs(id: "WRS-DASH-DUPLICATE-LINK-A", review_lanes: ["fast"])
              )
 
     assert {:ok, first_approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, first_planned.id, "planned")
@@ -2519,15 +2519,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     assert {:ok, _linked} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, first_approved.id, "approved", work_package.id)
 
-    append_ready_evidence_with_review_artifacts(repo, work_package, ["review-brief-log.txt"])
+    append_ready_evidence_with_review_artifacts(repo, work_package, ["review-fast-log.txt"])
 
     append_review_package(
       repo,
       work_package,
-      ["review-brief-log.txt"],
+      ["review-fast-log.txt"],
       ~U[2026-05-05 00:00:05Z],
       "abc123",
-      [%{lane: "brief", verdict: "green"}]
+      [%{lane: "fast", verdict: "green"}]
     )
 
     drop_planned_slice_work_package_unique_index!(repo)
@@ -2680,7 +2680,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  anchor: "phase_gate-abc123",
                  status: "passed",
                  verdict: "green",
-                 summary: "brief and normal green",
+                 summary: "fast and normal green",
                  lane: "normal",
                  reviewer: "Bearer raw-review-token"
                }
@@ -2782,7 +2782,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  tests: "mix test",
                  artifacts: ["review-log.txt"],
                  reviews: [
-                   %{lane: "brief", verdict: "green"},
+                   %{lane: "fast", verdict: "green"},
                    %{lane: "normal", verdict: "green"}
                  ],
                  head_sha: "abc123"
@@ -2829,7 +2829,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              PlanningRepository.append_progress_event(repo, %{
                work_package_id: work_package.id,
                summary: "Old review green",
-               status: "review_brief_green",
+               status: "review_fast_green",
                payload: %{},
                created_at: DateTime.add(timestamp, 2, :second)
              })
@@ -2859,7 +2859,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  id: "SYMPP-RUNTIME-LATEST-REVIEW-PROFILE",
                  kind: "quick_fix",
                  status: "ready_for_merge",
-                 policy_template: "quick_fix"
+                 policy_template: "quick_fix",
+                 review_lanes: ["fast"]
                )
              )
 
@@ -2884,11 +2885,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                created_at: DateTime.add(timestamp, 2, :second)
              })
 
-    assert {:ok, _brief_review} =
+    assert {:ok, _fast_review} =
              PlanningRepository.append_progress_event(repo, %{
                work_package_id: work_package.id,
-               summary: "Brief review failed",
-               status: "review_brief_failed",
+               summary: "Fast review failed",
+               status: "review_fast_failed",
                payload: %{},
                created_at: DateTime.add(timestamp, 3, :second)
              })
@@ -3397,7 +3398,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  "tests" => ["mix test"],
                  "artifacts" => ["review.txt"],
                  "acceptance_criteria_met" => true,
-                 "reviews" => [%{"lane" => "brief", "verdict" => "green"}, %{"lane" => "normal", "verdict" => "green"}]
+                 "reviews" => [%{"lane" => "fast", "verdict" => "green"}, %{"lane" => "normal", "verdict" => "green"}]
                },
                created_at: DateTime.add(timestamp, 4, :second)
              })
@@ -7269,7 +7270,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       forbidden_file_globs: ["elixir/lib/symphony_elixir_web/live/**"],
       acceptance_criteria: ["WorkRequest dashboard API reads are scoped and redacted."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/dashboard_api_test.exs"],
-      review_lanes: ["brief", "normal"],
+      review_lanes: ["fast", "normal"],
       stop_conditions: ["Stop before UI or dispatch wiring."]
     }
 
@@ -7491,7 +7492,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
   defp append_review_package(repo, work_package, artifacts, created_at, head_sha) do
     append_review_package(repo, work_package, artifacts, created_at, head_sha, [
-      %{lane: "brief", verdict: "green"},
+      %{lane: "fast", verdict: "green"},
       %{lane: "normal", verdict: "green"}
     ])
   end

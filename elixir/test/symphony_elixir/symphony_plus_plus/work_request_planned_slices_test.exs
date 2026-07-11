@@ -14,6 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes
   alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
@@ -146,7 +147,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
     assert first.sequence == 1
     assert first.title == "Document persistence"
     assert first.status == "planned"
-    assert first.review_lanes == ["brief"]
+    assert first.review_lanes == ["normal"]
 
     assert {:ok, second} =
              Repository.add_planned_slice(
@@ -798,16 +799,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
   end
 
   test "dispatch projects a standard PR review-lane override coherently", %{repo: repo, database_path: database_path} do
-    work_request = create_work_request!(repo, id: "WR-DISPATCH-BRIEF-STANDARD", status: "ready_for_slicing")
+    work_request = create_work_request!(repo, id: "WR-DISPATCH-FAST-STANDARD", status: "ready_for_slicing")
 
     assert {:ok, planned} =
              Repository.add_planned_slice(
                repo,
                work_request.id,
                planned_slice_attrs(
-                 id: "WRS-DISPATCH-BRIEF-STANDARD",
+                 id: "WRS-DISPATCH-FAST-STANDARD",
                  work_package_kind: "standard_pr",
-                 review_lanes: ["brief"]
+                 review_lanes: ["fast"]
                )
              )
 
@@ -818,21 +819,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
                repo,
                work_request.id,
                approved.id,
-               dispatch_handoff_opts(database_path, "worker-dispatch-brief-standard")
+               dispatch_handoff_opts(database_path, "worker-dispatch-fast-standard")
              )
 
     creation = dispatch.creation
     assert creation.work_package.kind == "standard_pr"
-    assert creation.policy.review_suite.required == ["brief"]
-    assert "review_brief" in creation.policy.required_gates
-    assert "review_brief_green" in creation.policy.readiness_requirements
+    assert creation.policy.review_suite.required == ["fast"]
+    assert "review_fast" in creation.policy.required_gates
+    assert "review_fast_green" in creation.policy.readiness_requirements
 
     creation_files = creation.virtual_files
-    assert creation_files["task_plan.md"] =~ ~r/Required review profiles:\n\s*- brief/
-    assert creation_files["context.md"] =~ ~r/Review profiles:\n\s*- brief/
-    assert creation_files["review_suite.md"] =~ "- Required: brief"
+    assert creation_files["task_plan.md"] =~ ~r/Required review profiles:\n\s*- fast/
+    assert creation_files["context.md"] =~ ~r/Review profiles:\n\s*- fast/
+    assert creation_files["review_suite.md"] =~ "- Required: fast"
 
-    assert {:ok, {["brief"], []}} = ReviewLanes.required(repo, creation.work_package)
+    assert {:ok, {["fast"], []}} = ReviewLanes.required(repo, creation.work_package)
 
     assert {:ok, state} = PlanningRepository.get_render_state(repo, creation.work_package.id)
     assert {:ok, later_context} = Renderer.render_state(state, "context.md")
@@ -845,9 +846,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
 
     assert {:ok, review_payload} = WorkerContext.virtual_file_payload(state, "review_suite.md", [])
     review_suite = review_payload["review_suite"]
-    assert review_suite["required_review_profiles"] == ["brief"]
-    assert "review_brief" in review_suite["required_gates"]
-    assert "review_brief_green" in review_suite["readiness_requirements"]
+    assert review_suite["required_review_profiles"] == ["fast"]
+    assert "review_fast" in review_suite["required_gates"]
+    assert "review_fast_green" in review_suite["readiness_requirements"]
 
     refute Enum.any?(creation_files, fn {_name, contents} -> String.contains?(contents, "normal") end)
     refute inspect(PlannedSliceDispatch.response_payload(dispatch)) =~ "normal"
@@ -957,7 +958,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
                  forbidden_file_globs: [],
                  acceptance_criteria: ["Operator docs describe the flow."],
                  validation_steps: ["markdownlint docs/operator-flow.md"],
-                 review_lanes: ["brief"],
+                 review_lanes: ["normal"],
                  stop_conditions: ["Stop before runtime behavior changes."]
                )
              )
@@ -1266,6 +1267,66 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
     assert index_partial?(repo, "sympp_work_request_planned_slices", "sympp_work_request_planned_slices_work_package_id_unique_index")
   end
 
+  test "review-mode migration updates only active WorkRequest requirements and preserves evidence" do
+    database_path = WorkPackageFactory.database_path()
+    {:ok, pid} = Repo.start_link(database: database_path, name: nil, pool_size: 1, log: false)
+    original_repo = Repo.put_dynamic_repo(pid)
+
+    try do
+      pre_cutover_migration = 20_260_711_010_000
+
+      assert pre_cutover_migration in Ecto.Migrator.run(Repo, Migrations.all(), :up,
+               to: pre_cutover_migration,
+               log: false
+             )
+
+      active = create_work_request!(Repo, id: "WR-REVIEW-MODES-ACTIVE", status: "ready_for_slicing")
+      completed = create_work_request!(Repo, id: "WR-REVIEW-MODES-COMPLETED", status: "ready_for_slicing")
+      archived = create_work_request!(Repo, id: "WR-REVIEW-MODES-ARCHIVED", status: "ready_for_slicing")
+
+      active_pair = create_legacy_review_requirement_pair!(Repo, active, "ACTIVE", ["brief", "normal", "emergency", "fast"])
+      completed_pair = create_legacy_review_requirement_pair!(Repo, completed, "COMPLETED", ["brief"])
+      archived_pair = create_legacy_review_requirement_pair!(Repo, archived, "ARCHIVED", ["emergency"])
+
+      now = DateTime.utc_now(:microsecond)
+      completed |> Ecto.Changeset.change(completed_at: now) |> Repo.update!()
+      archived |> Ecto.Changeset.change(archived_at: now) |> Repo.update!()
+
+      historical_payload = %{
+        "type" => "review_suite_result",
+        "suite" => "review-suite",
+        "profile" => "brief",
+        "lane" => "emergency",
+        "status" => "passed",
+        "verdict" => "clean"
+      }
+
+      assert {:ok, evidence} =
+               PlanningRepository.append_progress_event(Repo, %{
+                 "work_package_id" => active_pair.package.id,
+                 "summary" => "Historical review evidence",
+                 "status" => "review_suite_passed",
+                 "payload" => historical_payload
+               })
+
+      cutover_migration = 20_260_711_200_000
+      assert cutover_migration in Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false)
+
+      assert Repo.get!(PlannedSlice, active_pair.slice.id).review_lanes == ["normal", "fast"]
+      assert Repo.get!(WorkPackage, active_pair.package.id).review_lanes == ["normal", "fast"]
+      assert Repo.get!(PlannedSlice, completed_pair.slice.id).review_lanes == ["brief"]
+      assert Repo.get!(WorkPackage, completed_pair.package.id).review_lanes == ["brief"]
+      assert Repo.get!(PlannedSlice, archived_pair.slice.id).review_lanes == ["emergency"]
+      assert Repo.get!(WorkPackage, archived_pair.package.id).review_lanes == ["emergency"]
+      assert Repo.get!(ProgressEvent, evidence.id).payload == historical_payload
+      assert Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false) == []
+    after
+      Repo.put_dynamic_repo(original_repo)
+      GenServer.stop(pid)
+      File.rm(database_path)
+    end
+  end
+
   defp create_work_request!(repo, overrides \\ []) do
     assert {:ok, work_request} = Repository.create(repo, work_request_attrs(overrides))
     work_request
@@ -1296,6 +1357,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
       |> Keyword.merge(overrides)
 
     create_work_package!(repo, attrs)
+  end
+
+  defp create_legacy_review_requirement_pair!(repo, work_request, suffix, review_lanes) do
+    package = create_work_package!(repo, id: "SYMPP-REVIEW-MODES-#{suffix}", kind: "mcp", review_lanes: ["normal"])
+
+    assert {:ok, slice} =
+             Repository.add_planned_slice(
+               repo,
+               work_request.id,
+               planned_slice_attrs(id: "WRS-REVIEW-MODES-#{suffix}", review_lanes: ["normal"])
+             )
+
+    encoded = Jason.encode!(review_lanes)
+
+    repo.query!("UPDATE sympp_work_packages SET review_lanes = ? WHERE id = ?", [encoded, package.id])
+
+    repo.query!(
+      "UPDATE sympp_work_request_planned_slices SET review_lanes = ?, work_package_id = ? WHERE id = ?",
+      [encoded, package.id, slice.id]
+    )
+
+    %{package: package, slice: slice}
   end
 
   defp dispatch_handoff_opts(database_path, claimed_by) do

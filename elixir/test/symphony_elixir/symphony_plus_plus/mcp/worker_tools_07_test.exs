@@ -38,9 +38,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     })
 
     attach_tool(repo, session, "append_progress", %{
-      "summary" => "Docs brief review green",
-      "status" => "review_brief_green",
-      "idempotency_key" => "docs-review-brief"
+      "summary" => "Docs normal review green",
+      "status" => "review_normal_green",
+      "idempotency_key" => "docs-review-normal"
     })
 
     ready_response =
@@ -66,7 +66,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
       "tests" => ["mix test"],
       "artifacts" => ["branchless-review.txt"],
       "head_sha" => "standalone-head",
-      "reviews" => [%{"lane" => "brief", "verdict" => "green"}]
+      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
     })
 
     ready_response =
@@ -94,7 +94,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
       "tests" => ["mix test"],
       "artifacts" => ["hotfix-review.txt"],
       "head_sha" => "hotfix-head",
-      "reviews" => [%{"lane" => "emergency", "verdict" => "green"}]
+      "reviews" => [%{"lane" => "fast", "verdict" => "green"}]
     })
 
     ready_response =

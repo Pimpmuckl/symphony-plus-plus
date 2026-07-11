@@ -25,9 +25,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
         planning_depth: "brief",
         terminal_readiness_status: "ready_for_merge"
       },
-      required_gates: ["focused_tests", "review_brief"],
-      readiness_requirements: ["implementation_complete", "tests_passed", "review_brief_green"],
-      review_suite: %{required: ["brief"], optional: ["normal"]}
+      required_gates: ["focused_tests", "review_normal"],
+      readiness_requirements: ["implementation_complete", "tests_passed", "review_normal_green"],
+      review_suite: %{required: ["normal"], optional: ["deep"]}
     },
     "hotfix" => %{
       template: "hotfix",
@@ -36,9 +36,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
         planning_depth: "incident",
         terminal_readiness_status: "ready_for_merge"
       },
-      required_gates: ["focused_tests", "review_emergency", "human_merge"],
-      readiness_requirements: ["implementation_complete", "tests_passed", "review_emergency_green"],
-      review_suite: %{required: ["emergency"], optional: []}
+      required_gates: ["focused_tests", "review_fast", "human_merge"],
+      readiness_requirements: ["implementation_complete", "tests_passed", "review_fast_green"],
+      review_suite: %{required: ["fast"], optional: []}
     },
     "docs" => %{
       template: "docs",
@@ -47,9 +47,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
         planning_depth: "brief",
         terminal_readiness_status: "ready_for_merge"
       },
-      required_gates: ["focused_tests", "review_brief"],
-      readiness_requirements: ["tests_passed", "review_brief_green"],
-      review_suite: %{required: ["brief"], optional: ["normal"]}
+      required_gates: ["focused_tests", "review_normal"],
+      readiness_requirements: ["tests_passed", "review_normal_green"],
+      review_suite: %{required: ["normal"], optional: ["deep"]}
     },
     "adapter" => %{
       template: "adapter",
@@ -173,7 +173,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
       },
       required_gates: ["findings_documented", "recommendation_artifact_recorded"],
       readiness_requirements: ["findings_complete", "recommendation_artifact_recorded"],
-      review_suite: %{required: [], optional: ["brief"]}
+      review_suite: %{required: [], optional: ["normal"]}
     }
   }
 

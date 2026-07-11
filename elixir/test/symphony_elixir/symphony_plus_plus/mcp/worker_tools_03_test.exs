@@ -153,11 +153,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
 
     attach_tool(repo, session, "submit_review_package", %{
       "summary" => "Ready",
-      "tests" => ["mix test", "brief green"],
-      "artifacts" => ["review-brief-log.txt"],
+      "tests" => ["mix test", "fast green"],
+      "artifacts" => ["review-fast-log.txt"],
       "head_sha" => "abc123",
       "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "brief", "verdict" => "green"}]
+      "reviews" => [%{"lane" => "fast", "verdict" => "green"}]
     })
 
     repo.delete_all(Artifact)
@@ -223,10 +223,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
         "artifacts" => ["review-log.txt"],
         "head_sha" => "abc123",
         "acceptance_criteria_met" => true,
-        "reviews" => [%{"lane" => " Brief ", "verdict" => " Green ", "note" => "typo"}]
+        "reviews" => [%{"lane" => " Fast ", "verdict" => " Green ", "note" => "typo"}]
       })
 
-    assert response_progress_payload(repo, extra_review_key_response)["reviews"] == [%{"lane" => "brief", "verdict" => "green"}]
+    assert response_progress_payload(repo, extra_review_key_response)["reviews"] == [%{"lane" => "fast", "verdict" => "green"}]
 
     duplicate_review_lane_response =
       MCPHarness.request(
@@ -243,8 +243,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
               "head_sha" => "abc123",
               "acceptance_criteria_met" => true,
               "reviews" => [
-                %{"lane" => " brief ", "verdict" => "red"},
-                %{"lane" => "brief", "verdict" => "green"}
+                %{"lane" => " fast ", "verdict" => "red"},
+                %{"lane" => "fast", "verdict" => "green"}
               ]
             }
           }
@@ -315,7 +315,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
               "artifacts" => ["review-log.txt"],
               "head_sha" => "abc123",
               "acceptance_criteria_met" => true,
-              "reviews" => %{"lane" => "brief", "verdict" => "green"}
+              "reviews" => %{"lane" => "fast", "verdict" => "green"}
             }
           }
         },
@@ -339,7 +339,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
               "artifacts" => ["review-log.txt"],
               "head_sha" => "abc123",
               "acceptance_criteria_met" => "true",
-              "reviews" => [%{"lane" => "brief", "verdict" => "green"}]
+              "reviews" => [%{"lane" => "fast", "verdict" => "green"}]
             }
           }
         },
@@ -452,7 +452,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
       "artifacts" => ["review-log.txt"],
       "head_sha" => "abc123",
       "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "brief", "verdict" => "green"}]
+      "reviews" => [%{"lane" => "fast", "verdict" => "green"}]
     })
 
     latest_missing_lane_response =
@@ -570,7 +570,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
       "artifacts" => ["review-log.txt"],
       "head_sha" => "def456",
       "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => " review_t2 ", "verdict" => " green "}]
+      "reviews" => [%{"lane" => " normal ", "verdict" => " green "}]
     })
 
     assert {:ok, pending_plan_node} =
@@ -641,7 +641,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
               "artifacts" => ["red-after-ready.txt"],
               "head_sha" => "def456",
               "acceptance_criteria_met" => false,
-              "reviews" => [%{"lane" => "brief", "verdict" => "red"}]
+              "reviews" => [%{"lane" => "fast", "verdict" => "red"}]
             }
           }
         },
@@ -803,7 +803,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
                  id: "WRS-REVIEW-SUITE-ALIAS",
                  target_base_branch: work_request.base_branch,
                  branch_pattern: branch,
-                 review_lanes: ["review_suite normal"]
+                 review_lanes: ["normal"]
                )
              )
 

@@ -924,10 +924,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
            ]
 
     assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "review_lanes", "items", "enum"]) == [
-             "brief",
+             "fast",
              "normal",
-             "deep",
-             "emergency"
+             "deep"
            ]
 
     assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "work_request_id", "description"]) =~

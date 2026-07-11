@@ -3,8 +3,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewProfiles do
 
   @passing_statuses ["passed", "pass", "green", "success"]
   @passing_verdicts ["green", "clean", "passed", "pass", "success", "approved"]
-  @profile_order ["brief", "normal", "deep"]
-  @review_suite_profiles ["brief", "normal", "deep", "emergency"]
+  @profile_order ["fast", "normal", "deep"]
+  @review_suite_profiles @profile_order
   @profile_aliases %{
     "github" => "github",
     "github review" => "github",
@@ -12,20 +12,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewProfiles do
     "github pr review" => "github",
     "github_pr_review" => "github",
     "review_github" => "github",
-    "review_brief" => "brief",
     "review_deep" => "deep",
-    "review_emergency" => "emergency",
+    "review_emergency" => "fast",
+    "review_fast" => "fast",
     "review_normal" => "normal",
-    "review_suite_brief" => "brief",
     "review_suite_deep" => "deep",
-    "review_suite_emergency" => "emergency",
+    "review_suite_emergency" => "fast",
+    "review_suite_fast" => "fast",
     "review_suite_normal" => "normal",
-    "review_suite_t1" => "brief",
-    "review_suite_t2" => "normal",
-    "review_t1" => "brief",
-    "review_t2" => "normal",
-    "t1" => "brief",
-    "t2" => "normal"
+    "emergency" => "fast"
   }
 
   @spec passing_statuses() :: [String.t()]
@@ -68,12 +63,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewProfiles do
   def normalize_review_suite_profiles(_profiles), do: []
 
   @spec normalize_review_suite_profile(term()) :: String.t() | nil
-  def normalize_review_suite_profile(profile) do
-    case normalize_profile(profile) do
+  def normalize_review_suite_profile(profile) when is_binary(profile) do
+    case normalize_profile_label(profile) do
       profile when profile in @review_suite_profiles -> profile
       _profile -> nil
     end
   end
+
+  def normalize_review_suite_profile(_profile), do: nil
 
   @spec apply_required_profiles(map(), [String.t()]) :: map()
   def apply_required_profiles(policy, required_profiles) when is_map(policy) and is_list(required_profiles) do
@@ -87,7 +84,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewProfiles do
 
   @spec normalize_profile(term()) :: String.t() | nil
   def normalize_profile(profile) when is_binary(profile) do
-    profile = profile |> String.trim() |> String.downcase() |> String.replace("-", "_")
+    profile = normalize_profile_label(profile)
 
     Map.get(@profile_aliases, profile) || review_suite_profile_alias(profile) || profile
   end
@@ -200,7 +197,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewProfiles do
   def satisfying_profiles(required) do
     case normalize_profile(required) do
       nil -> []
-      "brief" -> ["brief", "normal", "deep"]
+      "fast" -> ["fast", "normal", "deep"]
       "normal" -> ["normal", "deep"]
       "deep" -> ["deep"]
       profile -> [profile]
@@ -269,8 +266,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewProfiles do
 
   defp legacy_green_statuses(profile), do: Enum.map(legacy_status_prefixes(profile), &"#{&1}_green")
 
-  defp legacy_status_prefixes("brief"), do: ["review_t1"]
-  defp legacy_status_prefixes("normal"), do: ["review_t2"]
+  defp legacy_status_prefixes("fast"), do: ["review_emergency"]
   defp legacy_status_prefixes(_profile), do: []
 
   defp review_suite_profile_alias(profile) do
@@ -280,11 +276,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewProfiles do
     end
   end
 
-  defp review_suite_profile(profile) when profile in ["t1", "brief"], do: "brief"
-  defp review_suite_profile(profile) when profile in ["t2", "normal"], do: "normal"
+  defp review_suite_profile("fast"), do: "fast"
+  defp review_suite_profile("normal"), do: "normal"
   defp review_suite_profile("deep"), do: "deep"
-  defp review_suite_profile("emergency"), do: "emergency"
+  defp review_suite_profile("emergency"), do: "fast"
+  defp review_suite_profile("brief"), do: "brief"
   defp review_suite_profile(_profile), do: nil
+
+  defp normalize_profile_label(profile) do
+    profile |> String.trim() |> String.downcase() |> String.replace("-", "_")
+  end
 
   defp normalize_suite_label(label) do
     label

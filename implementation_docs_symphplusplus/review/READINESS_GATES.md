@@ -36,7 +36,7 @@ for release-candidate evidence.
 
 - Owned globs are documentation-only: they must live under documentation roots or target documentation-file globs.
 - Docs validation evidence is recorded as focused test evidence.
-- Brief review evidence is recorded.
+- Normal review evidence is recorded.
 - PR, findings, and investigation recommendation artifacts are not required by default.
 
 ## Investigation additional gates
