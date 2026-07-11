@@ -1,7 +1,8 @@
 import type { ActiveBlockingEdge, GuidanceItem, PlannedSlice, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
-import { AlertTriangle, MessageSquareText } from "lucide-react";
+import { AlertTriangle, GitBranch, MessageSquareText } from "lucide-react";
 
 import { operationalBadgeVariant, operationalLabel, sliceCardTone, sliceLane, sliceOperationalState } from "@/lib/operational-state";
+import { uniqueNonEmpty } from "@/lib/collections";
 import { updateMotionAttributes } from "@/components/dashboard/motion-utils";
 import type { CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
 import { openBlockersForSlices, openGuidanceForSlice } from "./workstream-board-actions";
@@ -11,6 +12,7 @@ import { EntityCountChips, ProgressStateIcon, RowBadgeSlot, SliceKindSlot } from
 import { sliceUpdateKey } from "./update-animations";
 import { contextPathValue } from "./workstream-context-path";
 import type { ContextPathPart } from "./workstream-context-path";
+import { repoDisplayName, repoIdentityKey } from "./dashboard-persistence";
 
 export function DirectSliceGroup({
   detail,
@@ -95,6 +97,7 @@ export function ProductSliceRow({
   const openSliceDetail = () => onSelectCard({ kind: "slice", detail, slice, pkg });
   const openGuidance = () => openGuidanceForSlice(detail, slice, pkg, guidanceItems, onSelectGuidance, onSelectCard);
   const openBlockers = () => openBlockersForSlices(detail, [slice], packageById, activeBlockerCountBySliceId, activeBlockingEdges, onSelectCard);
+  const targetContext = sliceTargetContext(detail, slice, pkg);
 
   return (
     <div
@@ -104,7 +107,16 @@ export function ProductSliceRow({
     >
       <ProgressStateIcon state={progressIconState} attentionState={progressAttentionState} progress={progress} label={sliceLabel} />
       <button type="button" className="v3-slice-main-button" onClick={openSliceDetail}>
-        <span>{slice.title || slice.id}</span>
+        {targetContext ? (
+          <span className="v3-request-title-group">
+            <span className="v3-request-title">{slice.title || slice.id}</span>
+            <span className="v3-request-meta">
+              <GitBranch className="size-3.5" />
+              <span>{targetContext.repo}</span>
+              <span>{targetContext.branch}</span>
+            </span>
+          </span>
+        ) : <span>{slice.title || slice.id}</span>}
       </button>
       <EntityCountChips
         reserveEmpty
@@ -119,4 +131,15 @@ export function ProductSliceRow({
       <SliceKindSlot detail={detail} slice={slice} pkg={pkg} onSelectCard={onSelectCard} />
     </div>
   );
+}
+
+function sliceTargetContext(detail: WorkRequestDetail, slice: PlannedSlice, pkg?: WorkPackageCard) {
+  const request = detail.work_request;
+  const packageRepoRecorded = pkg ? uniqueNonEmpty([pkg.repo_key, pkg.repo, pkg.repo_display]).length > 0 : false;
+  const repoDiffers = packageRepoRecorded ? repoIdentityKey(pkg) !== repoIdentityKey(request) : false;
+  const requestBranch = uniqueNonEmpty([request.base_branch])[0] ?? "main";
+  const targetBranch = uniqueNonEmpty([slice.target_base_branch, pkg?.base_branch, requestBranch])[0] ?? requestBranch;
+
+  if (!repoDiffers && targetBranch === requestBranch) return null;
+  return { repo: repoDiffers ? repoDisplayName(pkg) : repoDisplayName(request), branch: targetBranch };
 }

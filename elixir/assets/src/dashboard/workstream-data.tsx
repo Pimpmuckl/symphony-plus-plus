@@ -15,15 +15,6 @@ export function requestDetailsByRepoKey(details: WorkRequestDetail[]) {
   }, new Map());
 }
 
-export function linkedPackageIdsForDetails(details: WorkRequestDetail[]) {
-  return details.reduce<Set<string>>((ids, detail) => {
-    (detail.planned_slices || []).forEach((slice) => {
-      if (slice.work_package_id) ids.add(slice.work_package_id);
-    });
-    return ids;
-  }, new Set());
-}
-
 export function packageSelectionIndex(details: WorkRequestDetail[], packages: WorkPackageCard[]) {
   const packageById = new Map(packages.map((pkg) => [pkg.id, pkg]));
   const selections = new Map<string, CardDetailSelection>();
@@ -63,15 +54,6 @@ export function sortWorkRequestDetails(details: WorkRequestDetail[]) {
     const rightTime = sortableTime(right.work_request.inserted_at || right.work_request.updated_at);
     if (leftTime !== rightTime) return leftTime - rightTime;
     return (left.work_request.title || left.work_request.id).localeCompare(right.work_request.title || right.work_request.id);
-  });
-}
-
-export function sortPackages(packages: WorkPackageCard[]) {
-  return sortedCopy(packages, (left, right) => {
-    const leftTime = sortableTime(left.latest_progress_at || left.updated_at);
-    const rightTime = sortableTime(right.latest_progress_at || right.updated_at);
-    if (leftTime !== rightTime) return rightTime - leftTime;
-    return (left.title || left.id).localeCompare(right.title || right.id);
   });
 }
 
