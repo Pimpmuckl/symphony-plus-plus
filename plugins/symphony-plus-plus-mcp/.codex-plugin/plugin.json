@@ -1,6 +1,6 @@
 {
   "name": "symphony-plus-plus-mcp",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Full Symphony++ MCP-backed planning, WorkPackage, and architect workflows for dedicated Codex sessions.",
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
@@ -9,7 +9,7 @@
     "shortDescription": "Opt-in Symphony++ MCP orchestration for dedicated Codex sessions",
     "longDescription": "Use this opt-in plugin for dedicated Symphony++ MCP sessions. It includes the baseline Solo, worker, and coordinator skills plus architect and WorkPackage workflows. On Codex startup it launches or reuses the local Symphony++ backend and dashboard, then bridges MCP over the local HTTP endpoint. Generic, review, and non-MCP planning sessions should use the default skill-only Symphony++ plugin instead.",
     "developerName": "Jonathan",
-    "category": "Coding",
+    "category": "Developer Tools",
     "capabilities": ["Read", "Write"],
     "composerIcon": "./assets/splusplus-logo.png",
     "logo": "./assets/splusplus-logo.png"

@@ -389,8 +389,13 @@ function Assert-CachePluginConfig([string]$TargetRoot, [string]$ExpectedVersion)
   Assert-PathInside $mcpConfigPath $TargetRoot "Installed plugin reference .mcp.json path resolves outside this cache"
   if ($PluginName -eq "symphony-plus-plus") {
     $rootSkillsPath = Join-Path $TargetRoot "skills"
-    if (Test-Path -LiteralPath $rootSkillsPath) {
-      throw "Default installed plugin cache must not contain root skills; keep WorkPackage and architect skills in symphony-plus-plus-mcp: $rootSkillsPath"
+    if (-not (Test-Path -LiteralPath $rootSkillsPath)) {
+      throw "Default installed plugin cache is missing the standard root skills directory: $rootSkillsPath"
+    }
+
+    $legacyDefaultSkillsPath = Join-Path $TargetRoot "skills-default"
+    if (Test-Path -LiteralPath $legacyDefaultSkillsPath) {
+      throw "Default installed plugin cache still contains the legacy skills-default directory: $legacyDefaultSkillsPath"
     }
 
     if (Test-Path -LiteralPath $mcpConfigPath) {
@@ -398,7 +403,7 @@ function Assert-CachePluginConfig([string]$TargetRoot, [string]$ExpectedVersion)
     }
 
     foreach ($requiredDefaultSkill in @("symphony-solo-session", "symphony-worker", "symphony-coordinator")) {
-      $requiredDefaultSkillPath = Join-Path $TargetRoot "skills-default/$requiredDefaultSkill/SKILL.md"
+      $requiredDefaultSkillPath = Join-Path $TargetRoot "skills/$requiredDefaultSkill/SKILL.md"
       if (-not (Test-Path -LiteralPath $requiredDefaultSkillPath)) {
         throw "Default installed plugin cache is missing MCP-free base skill '$requiredDefaultSkill': $requiredDefaultSkillPath"
       }
