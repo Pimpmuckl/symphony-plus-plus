@@ -8,14 +8,13 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
 import { clarificationGuidanceItem } from "./dashboard-data";
 import { firstParagraph, stripMarkdown } from "./dashboard-text";
-import { finishedRequestChildrenStorageKey, sortPackages, sortPlannedSlices, sortWorkRequestDetails } from "./workstream-data";
+import { finishedRequestChildrenStorageKey, sortPlannedSlices, sortWorkRequestDetails } from "./workstream-data";
 import { activeBlockerEntityCounts, productTreeCounts, requestProgress, rootProductSliceIds } from "./workstream-progress";
 import { productNodeState, requestBoardState, rowProgressAttentionState, rowProgressIconState } from "./workstream-row-state";
 import { EntityCountChips, EntityKindSlot, ProductNodeHeader, ProgressPill, RequestHeaderActions, RowBadgeSlot } from "./workstream-row-ui";
 import { openBlockersForRequest, openBlockersForSlices, openGuidanceForSlices, productNodeSubtreeSlices, requestGuidanceItem } from "./workstream-board-actions";
 import { requestUpdateKey } from "./update-animations";
 import { dashboardPrefersReducedMotion, updateMotionAttributes } from "@/components/dashboard/motion-utils";
-import { UnlinkedExecutionSection } from "./workstream-unlinked-section";
 import { useAutoCollapseWhenDone } from "./workstream-auto-collapse";
 import { WorkstreamContextBar } from "./workstream-context-bar";
 import { contextPathValue } from "./workstream-context-path";
@@ -44,7 +43,6 @@ export function WorkstreamBoard({
   repoLabel,
   repoDetails,
   packages,
-  unlinkedPackages,
   activeBlockingEdges,
   guidanceItems,
   onSelectGuidance,
@@ -60,7 +58,6 @@ export function WorkstreamBoard({
   repoLabel: string;
   repoDetails: WorkRequestDetail[];
   packages: WorkPackageCard[];
-  unlinkedPackages: WorkPackageCard[];
   activeBlockingEdges: ActiveBlockingEdge[];
   guidanceItems: GuidanceItem[];
   onSelectGuidance: (item: GuidanceItem) => void;
@@ -76,7 +73,6 @@ export function WorkstreamBoard({
   const [renderDetails, exitingRequestIds] = useExitingRequestDetails(repoDetails);
   const sortedDetails = useMemo(() => sortWorkRequestDetails(renderDetails), [renderDetails]);
   const sortedActiveDetails = useMemo(() => sortWorkRequestDetails(repoDetails), [repoDetails]);
-  const sortedUnlinkedPackages = useMemo(() => sortPackages(unlinkedPackages), [unlinkedPackages]);
   const packageById = useMemo(() => new Map(packages.map((pkg) => [pkg.id, pkg])), [packages]);
   const blockerCounts = useMemo(() => activeBlockerEntityCounts(activeBlockingEdges, repoDetails), [activeBlockingEdges, repoDetails]);
   const boardRef = useRef<HTMLDivElement | null>(null);
@@ -113,9 +109,6 @@ export function WorkstreamBoard({
             />
           );
         })}
-        {sortedUnlinkedPackages.length > 0 ? (
-          <UnlinkedExecutionSection packages={sortedUnlinkedPackages} onSelectCard={onSelectCard} updateAnimations={updateAnimations} />
-        ) : null}
       </div>
     </div>
   );

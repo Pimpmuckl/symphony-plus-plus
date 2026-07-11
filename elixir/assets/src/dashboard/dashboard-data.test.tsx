@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { activeBlockerItems, FINISHED_HIGHLIGHT_LIMIT, recentFinishedHighlights } from "./dashboard-data";
+import { activeBlockerItems, FINISHED_HIGHLIGHT_LIMIT, recentFinishedHighlights, repoSummaries } from "./dashboard-data";
 import { RepoSummaryStrip } from "./repo-workstream";
 import type { ActiveBlockingEdge, WorkPackageCard, WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
 import type { RepoSummary } from "./dashboard-data";
@@ -204,6 +204,21 @@ describe("dashboard data helpers", () => {
 
     expect(items).toHaveLength(1);
     expect(items[0]?.id).toBe(edge.id);
+  });
+
+  it("keeps linked cross-repo packages with their owning WorkRequest", () => {
+    const request: WorkRequestCard = { id: "wr-primary", repo: "primary-repo", base_branch: "main" };
+    const linkedPackage: WorkPackageCard = { id: "pkg-child", repo: "child-repo", base_branch: "release" };
+    const standalonePackage: WorkPackageCard = { id: "pkg-standalone", repo: "orphan-repo", base_branch: "main" };
+    const detail: WorkRequestDetail = {
+      work_request: request,
+      planned_slices: [{ id: "slice-child", work_request_id: request.id, work_package_id: linkedPackage.id, target_base_branch: "release" }],
+    };
+
+    const repos = repoSummaries([linkedPackage, standalonePackage], [request], [], [], [detail]);
+
+    expect(repos).toHaveLength(1);
+    expect(repos[0]).toMatchObject({ repo: "primary-repo", baseBranches: ["main"], packages: [linkedPackage] });
   });
 
   it("hides zero plan and attention plates from repo summaries", () => {

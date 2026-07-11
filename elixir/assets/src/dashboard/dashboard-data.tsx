@@ -339,6 +339,13 @@ export function repoSummaries(
 ): RepoSummary[] {
   const repos = new Map<string, RepoSummary>();
   const packageById = new Map(packages.map((pkg) => [pkg.id, pkg]));
+  const packageOwner = new Map<string, WorkRequestCard>();
+
+  details.forEach((detail) => {
+    (detail.planned_slices || []).forEach((slice) => {
+      if (slice.work_package_id) packageOwner.set(slice.work_package_id, detail.work_request);
+    });
+  });
 
   const ensure = (identity: RepoIdentitySource): RepoSummary => {
     const repoKey = repoIdentityKey(identity);
@@ -371,9 +378,11 @@ export function repoSummaries(
   });
 
   packages.forEach((pkg) => {
-    const summary = ensure(pkg);
+    const owner = packageOwner.get(pkg.id);
+    if (!owner) return;
+
+    const summary = ensure(owner);
     summary.packages.push(pkg);
-    addBranch(summary, pkg.base_branch);
   });
 
   sessions.forEach((session) => {
