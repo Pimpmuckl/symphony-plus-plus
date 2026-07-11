@@ -257,11 +257,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     end)
   end
 
-  test "brief and stronger review evidence satisfy brief readiness lanes", %{repo: repo} do
-    Enum.with_index(["brief", "normal", "deep"], 1)
+  test "legacy emergency and supported profiles satisfy fast readiness lanes", %{repo: repo} do
+    Enum.with_index(["emergency", "fast", "normal", "deep"], 1)
     |> Enum.each(fn {provided_profile, index} ->
-      package_id = "SYMPP-REVIEW-#{String.upcase(provided_profile)}-FOR-BRIEF"
-      head_sha = "brief-head-#{index}"
+      package_id = "SYMPP-REVIEW-#{String.upcase(provided_profile)}-FOR-FAST"
+      head_sha = "fast-head-#{index}"
 
       assert {:ok, package} =
                WorkPackageRepository.create(
@@ -269,14 +269,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                  WorkPackageFactory.attrs(id: package_id, kind: "quick_fix", status: "ci_waiting")
                )
 
-      require_review_lanes!(repo, package, ["brief"])
+      require_review_lanes!(repo, package, ["fast"])
       assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
       assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-#{index}")
       session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
       missing_response =
         MCPHarness.request(
-          %{"jsonrpc" => "2.0", "id" => "missing-#{provided_profile}-for-brief", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
+          %{"jsonrpc" => "2.0", "id" => "missing-#{provided_profile}-for-fast", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
           repo: repo,
           session: session
         )
@@ -296,7 +296,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
 
       ready_response =
         MCPHarness.request(
-          %{"jsonrpc" => "2.0", "id" => "ready-#{provided_profile}-for-brief", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
+          %{"jsonrpc" => "2.0", "id" => "ready-#{provided_profile}-for-fast", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
           repo: repo,
           session: session
         )
@@ -312,7 +312,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                WorkPackageFactory.attrs(id: "SYMPP-REVIEW-EXACT-FAIL-BLOCKS", kind: "quick_fix", status: "ci_waiting")
              )
 
-    require_review_lanes!(repo, package, ["brief"])
+    require_review_lanes!(repo, package, ["fast"])
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -327,7 +327,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
       "acceptance_criteria_met" => true,
       "reviews" => [
         %{"lane" => "deep", "verdict" => "clean"},
-        %{"lane" => "brief", "verdict" => "failed"}
+        %{"lane" => "fast", "verdict" => "failed"}
       ]
     })
 
@@ -381,15 +381,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-REVIEW-DEEP-BEATS-BRIEF-FAIL", kind: "quick_fix", status: "ci_waiting")
+               WorkPackageFactory.attrs(id: "SYMPP-REVIEW-DEEP-BEATS-FAST-FAIL", kind: "quick_fix", status: "ci_waiting")
              )
 
-    require_review_lanes!(repo, package, ["brief"])
+    require_review_lanes!(repo, package, ["fast"])
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-REVIEW-DEEP-BEATS-BRIEF-FAIL/worker", "head_sha" => "generic-review-head"})
+    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-REVIEW-DEEP-BEATS-FAST-FAIL/worker", "head_sha" => "generic-review-head"})
 
     attach_tool(repo, session, "append_progress", %{
       "summary" => "Focused tests passed",
@@ -404,14 +404,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     })
 
     attach_tool(repo, session, "append_progress", %{
-      "summary" => "Later brief review passed",
-      "status" => "review_brief_green",
-      "idempotency_key" => "generic-review-brief-green"
+      "summary" => "Later fast review passed",
+      "status" => "review_fast_green",
+      "idempotency_key" => "generic-review-fast-green"
     })
 
     ready_response =
       MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-deep-beats-brief-fail", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
+        %{"jsonrpc" => "2.0", "id" => "ready-deep-beats-fast-fail", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
         repo: repo,
         session: session
       )
@@ -419,9 +419,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     assert "review_lanes_complete" in get_in(ready_response, ["error", "data", "missing"])
 
     attach_tool(repo, session, "append_progress", %{
-      "summary" => "Brief review passed after failure",
-      "status" => "review_brief_green",
-      "idempotency_key" => "generic-review-brief-regreen"
+      "summary" => "Fast review passed after failure",
+      "status" => "review_fast_green",
+      "idempotency_key" => "generic-review-fast-regreen"
     })
 
     attach_tool(repo, session, "append_progress", %{
@@ -432,7 +432,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
 
     stronger_fail_response =
       MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-brief-green-normal-fail", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
+        %{"jsonrpc" => "2.0", "id" => "ready-fast-green-normal-fail", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
         repo: repo,
         session: session
       )
@@ -704,18 +704,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     attach_tool(repo, session, "attach_review_suite_result", %{
       "head_sha" => head_sha,
       "suite" => "review-suite",
-      "anchor" => "brief-round",
-      "summary" => "Later brief review clean",
+      "anchor" => "fast-round",
+      "summary" => "Later fast review clean",
       "status" => "passed",
       "verdict" => "clean",
-      "profile" => "brief"
+      "profile" => "fast"
     })
 
     assert {:ok, _later_failed_event} =
              PlanningRepository.append_progress_event(repo, %{
                "work_package_id" => package.id,
-               "idempotency_key" => "attach_review_suite_result:#{package.id}:later-brief-fail",
-               "summary" => "Later brief review-suite result failed",
+               "idempotency_key" => "attach_review_suite_result:#{package.id}:later-fast-fail",
+               "summary" => "Later fast review-suite result failed",
                "status" => "review_suite_failed",
                "payload" => %{
                  "type" => "review_suite_result",
@@ -723,11 +723,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                  "work_package_id" => package.id,
                  "head_sha" => head_sha,
                  "suite" => "review-suite",
-                 "anchor" => "brief-round-failed",
-                 "summary" => "Later brief review failed",
+                 "anchor" => "fast-round-failed",
+                 "summary" => "Later fast review failed",
                  "status" => "failed",
                  "verdict" => "red",
-                 "profile" => "brief"
+                 "profile" => "fast"
                }
              })
 
@@ -751,7 +751,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                WorkPackageFactory.attrs(id: "SYMPP-REVIEW-SUITE-EXACT-FAIL", kind: "quick_fix", status: "ci_waiting")
              )
 
-    require_review_lanes!(repo, package, ["brief"])
+    require_review_lanes!(repo, package, ["fast"])
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -773,12 +773,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                "kind" => "review_suite"
              })
 
-    assert {:ok, _brief_failed_event} =
+    assert {:ok, _fast_failed_event} =
              PlanningRepository.append_progress_event(repo, %{
                "created_at" => ~U[2026-05-05 00:00:00Z],
-               "idempotency_key" => "attach_review_suite_result:#{package.id}:brief-fail",
+               "idempotency_key" => "attach_review_suite_result:#{package.id}:fast-fail",
                "status" => "review_suite_failed",
-               "summary" => "Brief review-suite result failed",
+               "summary" => "Fast review-suite result failed",
                "work_package_id" => package.id,
                "payload" => %{
                  "type" => "review_suite_result",
@@ -786,11 +786,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                  "work_package_id" => package.id,
                  "head_sha" => head_sha,
                  "suite" => "review-suite",
-                 "anchor" => "brief-fail",
-                 "summary" => "Brief review suite failed",
+                 "anchor" => "fast-fail",
+                 "summary" => "Fast review suite failed",
                  "status" => "failed",
                  "verdict" => "red",
-                 "profile" => "brief"
+                 "profile" => "fast"
                }
              })
 
@@ -908,13 +908,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     assert "review_lanes_complete" in get_in(ready_response, ["error", "data", "missing"])
   end
 
-  test "latest stronger Review Suite failure blocks older weaker pass", %{repo: repo} do
-    head_sha = "review-suite-weaker-pass-stronger-fail-head"
+  test "legacy brief Review Suite evidence does not satisfy normal", %{repo: repo} do
+    head_sha = "review-suite-legacy-brief-head"
 
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-REVIEW-SUITE-WEAKER-PASS-STRONGER-FAIL", kind: "quick_fix", status: "ci_waiting")
+               WorkPackageFactory.attrs(id: "SYMPP-REVIEW-SUITE-LEGACY-BRIEF", kind: "quick_fix", status: "ci_waiting")
              )
 
     require_review_lanes!(repo, package, ["normal"])
@@ -922,12 +922,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-REVIEW-SUITE-WEAKER-PASS-STRONGER-FAIL/worker", "head_sha" => head_sha})
+    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-REVIEW-SUITE-LEGACY-BRIEF/worker", "head_sha" => head_sha})
 
     attach_tool(repo, session, "append_progress", %{
       "summary" => "Focused tests passed",
       "status" => "tests_passed",
-      "idempotency_key" => "review-suite-weaker-pass-stronger-fail-tests"
+      "idempotency_key" => "review-suite-legacy-brief-tests"
     })
 
     assert {:ok, _artifact} =
@@ -943,7 +943,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
              PlanningRepository.append_progress_event(repo, %{
                "work_package_id" => package.id,
                "idempotency_key" => "attach_review_suite_result:#{package.id}:brief-pass",
-               "summary" => "Brief review-suite result passed",
+               "summary" => "Legacy brief review-suite result passed",
                "status" => "review_suite_passed",
                "created_at" => ~U[2026-05-05 00:00:00Z],
                "payload" => %{
@@ -953,37 +953,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools06Test do
                  "head_sha" => head_sha,
                  "suite" => "review-suite",
                  "anchor" => "brief-pass",
-                 "summary" => "Brief review suite passed",
+                 "summary" => "Legacy brief review suite passed",
                  "status" => "passed",
                  "verdict" => "clean",
                  "profile" => "brief"
                }
              })
 
-    assert {:ok, _normal_failed_event} =
-             PlanningRepository.append_progress_event(repo, %{
-               "work_package_id" => package.id,
-               "idempotency_key" => "attach_review_suite_result:#{package.id}:normal-fail",
-               "summary" => "Normal review-suite result failed",
-               "status" => "review_suite_failed",
-               "created_at" => ~U[2026-05-05 00:00:10Z],
-               "payload" => %{
-                 "type" => "review_suite_result",
-                 "source_tool" => "attach_review_suite_result",
-                 "work_package_id" => package.id,
-                 "head_sha" => head_sha,
-                 "suite" => "review-suite",
-                 "anchor" => "normal-fail",
-                 "summary" => "Normal review suite failed",
-                 "status" => "failed",
-                 "verdict" => "red",
-                 "profile" => "normal"
-               }
-             })
-
     ready_response =
       MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-review-suite-weaker-pass-stronger-fail", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
+        %{"jsonrpc" => "2.0", "id" => "ready-review-suite-legacy-brief", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
         repo: repo,
         session: session
       )

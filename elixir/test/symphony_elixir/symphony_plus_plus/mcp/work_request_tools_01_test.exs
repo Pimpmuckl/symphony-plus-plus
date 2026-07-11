@@ -485,7 +485,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
              "WRS-MCP-WR-SKIPPED"
            ]
 
-    assert Enum.at(read_payload["planned_slices"], 0)["review_lanes"] == ["brief", "normal"]
+    assert Enum.at(read_payload["planned_slices"], 0)["review_lanes"] == ["fast", "normal"]
 
     assert read_payload["summary"] == %{
              "open_question_count" => 1,

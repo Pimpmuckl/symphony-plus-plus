@@ -17,12 +17,12 @@ export function reviewLaneLabel(lane: string) {
   switch (normalizeReviewLane(lane)) {
     case "brief":
       return "Brief";
+    case "fast":
+      return "Fast";
     case "normal":
       return "Normal";
     case "deep":
       return "Deep";
-    case "emergency":
-      return "Emergency";
     case "review_deslop":
       return "Review-Deslop";
     case "review_github":
@@ -76,18 +76,17 @@ function normalizeReviewLane(lane: string) {
   const normalized = normalizedReviewMode(lane).trim().toLowerCase().replace(/-/g, "_");
 
   switch (normalized) {
-    case "review_t1":
-    case "t1":
     case "review_brief":
       return "brief";
-    case "review_t2":
-    case "t2":
     case "review_normal":
       return "normal";
     case "review_deep":
       return "deep";
+    case "emergency":
     case "review_emergency":
-      return "emergency";
+      return "fast";
+    case "review_fast":
+      return "fast";
     default:
       return normalized;
   }

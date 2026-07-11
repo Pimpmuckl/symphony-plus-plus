@@ -166,7 +166,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
       forbidden_file_globs: ["elixir/lib/symphony_elixir_web/live/**"],
       acceptance_criteria: ["WorkRequest dashboard API reads are scoped and redacted."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/dashboard_api_test.exs"],
-      review_lanes: ["brief", "normal"],
+      review_lanes: ["fast", "normal"],
       stop_conditions: ["Stop before UI or dispatch wiring."]
     }
 

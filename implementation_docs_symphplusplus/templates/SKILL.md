@@ -85,7 +85,7 @@ other compact labels plain.
   `attach_review_suite_result(round_id)` only when recording review evidence
   before the finish call.
 - If Review Suite is installed, run the current orchestrator with the required
-  profile: `review.py --mode brief|normal|deep|emergency`.
+  profile: `review.py --mode fast|normal|deep`.
 - If Review Suite is not installed, use the package-approved review provider
   and record review progress through `append_progress`; include a payload such
   as `type=review_progress`, `provider`, `profile`, `step_current`,

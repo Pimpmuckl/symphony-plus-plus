@@ -697,7 +697,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
 
     assert hotfix_markdown =~ "Policy template: `hotfix`"
     assert hotfix_markdown =~ "human_merge"
-    assert hotfix_markdown =~ "- Required: emergency"
+    assert hotfix_markdown =~ "- Required: fast"
     assert phase_child_markdown =~ "Policy template: `phase_child`"
     assert phase_child_markdown =~ "package_acceptance"
     assert phase_child_markdown =~ "- Optional: deep"

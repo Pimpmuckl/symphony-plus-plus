@@ -407,7 +407,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     assert creation.work_package.parent_id == nil
     assert creation.work_package.status == "ready_for_worker"
     assert creation.policy.template == "quick_fix"
-    assert creation.policy.review_suite.required == ["brief"]
+    assert creation.policy.review_suite.required == ["normal"]
     assert creation.virtual_files["context.md"] =~ "- Status: `ready_for_worker`"
     assert creation.virtual_files["handoff.md"] =~ "- Status: `ready_for_worker`"
     refute creation.virtual_files["context.md"] =~ "- Status: `created`"
@@ -466,14 +466,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
                base_branch: "main",
                title: "Use a brief direct review",
                acceptance_criteria: ["Direct review guidance remains coherent."],
-               review_lanes: ["brief"]
+               review_lanes: ["fast"]
              })
 
-    assert creation.work_package.review_lanes == ["brief"]
-    assert CreateWork.response_payload(creation).work_package.review_lanes == ["brief"]
-    assert creation.virtual_files["review_suite.md"] =~ "- review_brief"
+    assert creation.work_package.review_lanes == ["fast"]
+    assert CreateWork.response_payload(creation).work_package.review_lanes == ["fast"]
+    assert creation.virtual_files["review_suite.md"] =~ "- review_fast"
     refute creation.virtual_files["review_suite.md"] =~ "review_normal"
-    assert {:ok, {["brief"], []}} = ReviewLanes.required(repo, creation.work_package)
+    assert {:ok, {["fast"], []}} = ReviewLanes.required(repo, creation.work_package)
 
     assert {:ok, later_review_suite} = Renderer.render(repo, creation.work_package.id, "review_suite.md")
     assert later_review_suite == creation.virtual_files["review_suite.md"]
@@ -631,7 +631,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     assert creation.work_package.parent_id == nil
     assert creation.work_package.status == "ready_for_worker"
     assert creation.policy.template == "hotfix"
-    assert creation.policy.review_suite.required == ["emergency"]
+    assert creation.policy.review_suite.required == ["fast"]
 
     config = local_mcp_config(repo)
     server = local_mcp_server(config, "hotfix-worker-state")
@@ -843,7 +843,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
       "tests" => ["mix test test/symphony_elixir/symphony_plus_plus/create_work_test.exs"],
       "artifacts" => ["review-suite/SYMPP-P4-003-fake-hotfix-review.json"],
       "head_sha" => head_sha,
-      "reviews" => [%{"lane" => "emergency", "verdict" => "green"}]
+      "reviews" => [%{"lane" => "fast", "verdict" => "green"}]
     })
 
     ready_response =

@@ -502,7 +502,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
 
     brief_only_response =
       MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-review-suite-brief-only", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
+        %{"jsonrpc" => "2.0", "id" => "ready-review-suite-fast-only", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
         repo: repo,
         session: session
       )

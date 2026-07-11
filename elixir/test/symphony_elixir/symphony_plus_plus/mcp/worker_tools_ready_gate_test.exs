@@ -207,11 +207,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
                  goal: "Keep readiness aligned with the planned slice review profile.",
                  work_package_kind: "mcp",
                  target_base_branch: "main",
-                 branch_pattern: "agent/brief-ready-slice",
+                 branch_pattern: "agent/fast-ready-slice",
                  owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
                  acceptance_criteria: ["Brief review evidence is enough for this slice."],
                  validation_steps: ["mix test worker_tools_ready_gate_test.exs"],
-                 review_lanes: ["brief"],
+                 review_lanes: ["fast"],
                  stop_conditions: ["Stop before broad lifecycle rewrites."]
                )
              )
@@ -242,16 +242,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/brief-ready-slice", "head_sha" => "brief-head"})
-    attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/392", "head_sha" => "brief-head"})
+    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/fast-ready-slice", "head_sha" => "fast-head"})
+    attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/392", "head_sha" => "fast-head"})
 
     attach_tool(repo, session, "submit_review_package", %{
       "summary" => "Brief review passed",
       "tests" => ["mix test worker_tools_ready_gate_test.exs"],
-      "artifacts" => ["review-brief-log.txt"],
-      "head_sha" => "brief-head",
+      "artifacts" => ["review-fast-log.txt"],
+      "head_sha" => "fast-head",
       "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "brief", "verdict" => "green"}]
+      "reviews" => [%{"lane" => "fast", "verdict" => "green"}]
     })
 
     ready_response =
@@ -265,7 +265,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     refute Map.has_key?(get_in(ready_response, ["result", "structuredContent"]), "warnings")
   end
 
-  test "planned-slice review lanes reject non Review Suite profiles", %{repo: repo} do
+  test "planned-slice review lanes reject retired and non-mode profiles", %{repo: repo} do
     work_request =
       create_work_request!(
         repo,
@@ -275,17 +275,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
         base_branch: "main"
       )
 
-    assert {:error, changeset} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               work_request_planned_slice_attrs(
-                 id: "WRS-GITHUB-READY-SLICE",
-                 review_lanes: ["review_github"]
+    for {profile, index} <- Enum.with_index(["review_github", "brief", "emergency", "review_t1", "review_t2"]) do
+      assert {:error, changeset} =
+               WorkRequestRepository.add_planned_slice(
+                 repo,
+                 work_request.id,
+                 work_request_planned_slice_attrs(
+                   id: "WRS-INVALID-REVIEW-MODE-#{index}",
+                   review_lanes: [profile]
+                 )
                )
-             )
 
-    assert {"must be one of: brief, normal, deep, emergency", _metadata} = Keyword.fetch!(changeset.errors, :review_lanes)
+      assert {"must be one of: fast, normal, deep", _metadata} = Keyword.fetch!(changeset.errors, :review_lanes)
+    end
   end
 
   test "planned-slice review lanes ignore invalid legacy values", %{repo: repo} do
@@ -297,7 +299,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
 
     {required_lanes, warnings} = ReviewLanes.required_from_planned_slice_lanes(package, ["brief", "raw_secret_review_lane"])
 
-    assert required_lanes == ["brief"]
+    assert required_lanes == []
     assert warnings == []
   end
 
@@ -359,7 +361,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
              WorkRequestRepository.add_planned_slice(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(id: "WRS-DUPLICATE-REVIEW-LANES-A", review_lanes: ["brief"])
+               work_request_planned_slice_attrs(id: "WRS-DUPLICATE-REVIEW-LANES-A", review_lanes: ["fast"])
              )
 
     assert {:ok, normal_slice} =
@@ -418,7 +420,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
                  owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
                  acceptance_criteria: ["Failure details do not leak lane values."],
                  validation_steps: ["mix test worker_tools_ready_gate_test.exs"],
-                 review_lanes: ["brief"],
+                 review_lanes: ["fast"],
                  stop_conditions: ["Stop before broad lifecycle rewrites."]
                )
              )
@@ -529,9 +531,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     })
 
     attach_tool(repo, session, "append_progress", %{
-      "summary" => "brief review green",
-      "status" => "review_brief_green",
-      "idempotency_key" => "quick-fix-review-brief"
+      "summary" => "normal review green",
+      "status" => "review_normal_green",
+      "idempotency_key" => "quick-fix-review-normal"
     })
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-READY-QUICK-FIX/worker", "head_sha" => "quick-fix-head-b"})
@@ -554,9 +556,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     })
 
     attach_tool(repo, session, "append_progress", %{
-      "summary" => "brief review green for latest head",
-      "status" => "review_brief_green",
-      "idempotency_key" => "quick-fix-review-brief-head-b"
+      "summary" => "normal review green for latest head",
+      "status" => "review_normal_green",
+      "idempotency_key" => "quick-fix-review-normal-head-b"
     })
 
     attach_tool(repo, session, "append_progress", %{
@@ -566,9 +568,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     })
 
     attach_tool(repo, session, "append_progress", %{
-      "summary" => "brief review red after latest green",
-      "status" => "review_brief_red",
-      "idempotency_key" => "quick-fix-review-brief-head-b-red"
+      "summary" => "normal review red after latest green",
+      "status" => "review_normal_red",
+      "idempotency_key" => "quick-fix-review-normal-head-b-red"
     })
 
     stale_green_response =
@@ -589,9 +591,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     })
 
     attach_tool(repo, session, "append_progress", %{
-      "summary" => "brief review green after red",
-      "status" => "review_brief_green",
-      "idempotency_key" => "quick-fix-review-brief-head-b-regreen"
+      "summary" => "normal review green after red",
+      "status" => "review_normal_green",
+      "idempotency_key" => "quick-fix-review-normal-head-b-regreen"
     })
 
     ready_response =

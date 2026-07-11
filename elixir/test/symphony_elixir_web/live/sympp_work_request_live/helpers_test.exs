@@ -12,6 +12,6 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.HelpersTest do
     attrs = Helpers.planned_slice_attrs(%{"review_lanes" => " \n "})
     refute Map.has_key?(attrs, "review_lanes")
 
-    assert Helpers.planned_slice_attrs(%{"review_lanes" => "brief\nnormal"})["review_lanes"] == ["brief", "normal"]
+    assert Helpers.planned_slice_attrs(%{"review_lanes" => "fast\nnormal"})["review_lanes"] == ["fast", "normal"]
   end
 end

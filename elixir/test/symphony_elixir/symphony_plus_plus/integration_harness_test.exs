@@ -75,7 +75,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     attach_branch(repo, session, "agent/SYMPP-P8-001/hotfix", head_sha)
     attach_pr(repo, session, "https://github.com/nextide/symphony-plus-plus/pull/8001", head_sha)
     sync_fake_github(repo, session, 8001, head_sha, ["elixir/lib/symphony_elixir/cache.ex"])
-    submit_fake_review_package(repo, session, head_sha, ["emergency"])
+    submit_fake_review_package(repo, session, head_sha, ["fast"])
 
     response = mcp_tool(repo, session, "mark_ready", %{})
 

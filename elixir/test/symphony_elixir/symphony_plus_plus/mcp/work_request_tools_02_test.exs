@@ -1333,7 +1333,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       "forbidden_file_globs" => [],
       "acceptance_criteria" => ["MCP planned-slice mutation succeeds."],
       "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
-      "review_lanes" => ["brief", "normal"],
+      "review_lanes" => ["fast", "normal"],
       "stop_conditions" => ["Stop before dispatch."]
     }
 
@@ -1358,7 +1358,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
              "field" => "review_lanes",
              "message" => "must be Review Suite profiles only; GitHub review lanes do not belong here",
              "reason" => "invalid_review_lanes",
-             "allowed_values" => ["brief", "normal", "deep", "emergency"]
+             "allowed_values" => ["fast", "normal", "deep"]
            } = Enum.find(validation_errors, &(&1["field"] == "review_lanes"))
 
     assert %{

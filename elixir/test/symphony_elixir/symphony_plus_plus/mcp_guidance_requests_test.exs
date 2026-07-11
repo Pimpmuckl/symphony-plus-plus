@@ -823,7 +823,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
       forbidden_file_globs: ["elixir/assets/**"],
       acceptance_criteria: ["Guidance remains answerable through the owning architect."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/mcp_guidance_requests_test.exs"],
-      review_lanes: ["brief"],
+      review_lanes: ["normal"],
       stop_conditions: ["Do not broaden guidance visibility across WorkRequests."]
     }
 
