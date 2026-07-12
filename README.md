@@ -4,10 +4,6 @@ Symphony++ gives Codex agents a local planning board, MCP tools, and a
 dashboard for coordinating real work across WorkRequests, WorkPackages,
 reviews, blockers, and delivery evidence.
 
-Use it through the Codex marketplace. The installed plugin owns the runtime;
-normal Codex sessions should not point at this source checkout, a worktree, or
-local cache overrides.
-
 ## Install
 
 Add the marketplace once:
