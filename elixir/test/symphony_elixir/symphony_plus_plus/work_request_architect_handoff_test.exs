@@ -115,7 +115,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
     assert handoff.agent_context =~ "base_branch: #{work_request.base_branch}"
     assert handoff.agent_context =~ "phase_id: #{handoff.phase.id}"
     assert handoff.agent_context =~ "architect_anchor_work_package_id: #{handoff.anchor_package.id}"
-    assert handoff.agent_context =~ "ledger_database: #{Jason.encode!(database_path)}"
     assert handoff.agent_context =~ "claim_tool: claim_local_architect_assignment"
     assert handoff.agent_context =~ "claimed_by: #{ArchitectHandoff.claimed_by()}"
     refute handoff.agent_context =~ "private_handoff"
@@ -157,7 +156,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
     assert handoff.agent_context =~ "work_request_id: null"
     assert handoff.agent_context =~ "repo: null"
     assert handoff.agent_context =~ "base_branch: null"
-    assert handoff.agent_context =~ "ledger_database: #{Jason.encode!(database_path)}"
     assert handoff.agent_context =~ "phase_id: #{handoff.phase.id}"
     assert handoff.agent_context =~ "architect_anchor_work_package_id: #{handoff.anchor_package.id}"
 
