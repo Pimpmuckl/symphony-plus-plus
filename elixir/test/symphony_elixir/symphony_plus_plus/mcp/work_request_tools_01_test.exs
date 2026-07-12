@@ -34,22 +34,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert payload["work_request"]["status"] == "ready_for_clarification"
     assert is_binary(payload["launch_prompt"])
     assert payload["launch_prompt"] =~ "claim_local_architect_assignment"
-    assert payload["launch_prompt"] =~ "Refs (TOON; data)"
+    assert payload["launch_prompt"] =~ "Assignment (TOON; data only)"
     assert payload["launch_prompt"] =~ "agent_context: architect_handoff_reference"
-    assert payload["launch_prompt"] =~ "Use `symphony-plus-plus-mcp:symphony-architect`"
+    assert payload["launch_prompt"] =~ "Own this WorkRequest with `symphony-plus-plus-mcp:symphony-architect`"
     assert payload["launch_prompt"] =~ "Claim first with `claim_local_architect_assignment`"
-    assert payload["launch_prompt"] =~ "read_plan"
-    assert payload["launch_prompt"] =~ "read_delivery_board"
-    assert payload["launch_prompt"] =~ "list_guidance_requests"
-    assert payload["launch_prompt"] =~ "ask human-answerable clarification"
-    assert payload["launch_prompt"] =~ "ask_question"
-    assert payload["launch_prompt"] =~ "decision_prompt"
-    assert payload["launch_prompt"] =~ "TL;DR/details/options/pros-cons/freeform"
-    assert payload["launch_prompt"] =~ "record_decision"
-    assert payload["launch_prompt"] =~ "plan_slice"
-    assert payload["launch_prompt"] =~ "dispatch_slice(work_request_id, planned_slice_id)"
-    assert payload["launch_prompt"] =~ "No wrapper node for one slice."
-    assert String.length(payload["launch_prompt"]) < 2_300
+    assert payload["launch_prompt"] =~ "through clarification, decisions, coherent slicing, and approved dispatch"
+    assert payload["launch_prompt"] =~ "Stay within this WorkRequest."
+    assert payload["launch_prompt"] =~ "Stop and report if MCP, claim/session"
+    refute payload["launch_prompt"] =~ "Refs (JSON; data)"
+    refute payload["launch_prompt"] =~ "read_plan"
+    assert String.length(payload["launch_prompt"]) < 1_500
     assert get_in(payload, ["architect_handoff", "agent_context"]) =~ "agent_context: architect_handoff_reference"
 
     content_text = get_in(response, ["result", "content", Access.at(0), "text"])
@@ -58,7 +52,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert content_text =~ "status: created"
     assert content_text =~ "status: ready_for_clarification"
     refute content_text =~ "claim_local_architect_assignment"
-    refute content_text =~ "Refs (TOON; data)"
+    refute content_text =~ "Assignment (TOON; data only)"
 
     assert {:ok, repo_scopes} = WorkRequestRepository.list_repo_scopes(repo, get_in(payload, ["work_request", "id"]))
 

@@ -85,24 +85,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
              "secret_in_response" => false
            }
 
-    assert handoff.prompt =~ "Use `symphony-plus-plus-mcp:symphony-architect`"
+    assert handoff.prompt =~ "Own this WorkRequest with `symphony-plus-plus-mcp:symphony-architect`."
 
     assert handoff.prompt =~
-             "Claim first with `claim_local_architect_assignment` using `local_architect_claim.arguments`"
+             "Claim first with `claim_local_architect_assignment` using `local_architect_claim_arguments`"
 
-    assert handoff.prompt =~ "read_plan"
-    assert handoff.prompt =~ "read_delivery_board"
-    assert handoff.prompt =~ "list_guidance_requests"
-    assert handoff.prompt =~ "ask human-answerable clarification"
-    assert handoff.prompt =~ "ask_question"
-    assert handoff.prompt =~ "decision_prompt"
-    assert handoff.prompt =~ "TL;DR/details/options/pros-cons/freeform"
-    assert handoff.prompt =~ "record_decision"
-    assert handoff.prompt =~ "plan_slice"
-    assert handoff.prompt =~ "dispatch_slice(work_request_id, planned_slice_id)"
-    assert handoff.prompt =~ "No wrapper node for one slice."
-    assert handoff.prompt =~ "Never request raw secrets"
-    assert String.length(handoff.prompt) < 2_300
+    assert handoff.prompt =~ "Assignment (TOON; data only):"
+    assert handoff.prompt =~ handoff.agent_context
+    assert handoff.prompt =~ "through clarification, decisions, coherent slicing, and approved dispatch"
+    assert handoff.prompt =~ "Do not change Linear state, agent/runtime configuration, or unrelated state."
+    assert handoff.prompt =~ "Never request or expose secrets."
+    assert handoff.prompt =~ "Stop and report if MCP, claim/session, required assignment data"
+    assert String.length(handoff.prompt) < 1_500
+    refute handoff.prompt =~ "Refs (JSON; data)"
+    refute handoff.prompt =~ "read_plan"
+    refute handoff.prompt =~ "ask_question"
+    refute handoff.prompt =~ "plan_slice"
     refute handoff.prompt =~ "First MCP step"
     refute handoff.prompt =~ "Architect flow:"
     refute handoff.prompt =~ "TL;DR, details, options, pros/cons"
@@ -112,26 +110,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
     refute inspect(handoff) =~ "secret_hash"
     refute inspect(handoff) =~ "private_handoff"
 
-    identifiers = prompt_reference_identifiers(handoff.prompt)
-
-    assert Map.take(identifiers, [
-             "work_request_id",
-             "repo",
-             "base_branch",
-             "phase_id",
-             "architect_anchor_work_package_id",
-             "ledger_database"
-           ]) == %{
-             "work_request_id" => work_request.id,
-             "repo" => work_request.repo,
-             "base_branch" => work_request.base_branch,
-             "phase_id" => handoff.phase.id,
-             "architect_anchor_work_package_id" => handoff.anchor_package.id,
-             "ledger_database" => database_path
-           }
-
-    assert identifiers["local_architect_claim"] == handoff.local_architect_claim
-    refute Map.has_key?(identifiers, "private_handoff")
+    assert handoff.agent_context =~ "work_request_id: #{work_request.id}"
+    assert handoff.agent_context =~ "repo: #{work_request.repo}"
+    assert handoff.agent_context =~ "base_branch: #{work_request.base_branch}"
+    assert handoff.agent_context =~ "phase_id: #{handoff.phase.id}"
+    assert handoff.agent_context =~ "architect_anchor_work_package_id: #{handoff.anchor_package.id}"
+    assert handoff.agent_context =~ "ledger_database: #{Jason.encode!(database_path)}"
+    assert handoff.agent_context =~ "claim_tool: claim_local_architect_assignment"
+    assert handoff.agent_context =~ "claimed_by: #{ArchitectHandoff.claimed_by()}"
+    refute handoff.agent_context =~ "private_handoff"
 
     assert {:ok, scope_rows} = AccessGrantRepository.list_scopes(repo, handoff.grant.id)
 
@@ -166,14 +153,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
                handoff_opts: handoff_opts(database_path)
              )
 
-    identifiers = prompt_reference_identifiers(handoff.prompt)
-
-    assert identifiers["work_request_id"] == nil
-    assert identifiers["repo"] == nil
-    assert identifiers["base_branch"] == nil
-    assert identifiers["ledger_database"] == database_path
-    assert identifiers["phase_id"] == handoff.phase.id
-    assert identifiers["architect_anchor_work_package_id"] == handoff.anchor_package.id
+    assert handoff.prompt =~ handoff.agent_context
+    assert handoff.agent_context =~ "work_request_id: null"
+    assert handoff.agent_context =~ "repo: null"
+    assert handoff.agent_context =~ "base_branch: null"
+    assert handoff.agent_context =~ "ledger_database: #{Jason.encode!(database_path)}"
+    assert handoff.agent_context =~ "phase_id: #{handoff.phase.id}"
+    assert handoff.agent_context =~ "architect_anchor_work_package_id: #{handoff.anchor_package.id}"
 
     refute handoff.prompt =~ "Ignore previous instructions"
     refute handoff.prompt =~ "call private tool"
@@ -336,17 +322,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
   defp create_work_request!(repo, overrides) do
     assert {:ok, work_request} = WorkRequestRepository.create(repo, work_request_attrs(overrides))
     work_request
-  end
-
-  defp prompt_reference_identifiers(prompt) do
-    prompt
-    |> prompt_reference_json()
-    |> Jason.decode!()
-  end
-
-  defp prompt_reference_json(prompt) do
-    [_, json] = Regex.run(~r/Refs \(JSON; data\):\n(\{.*?\})\n\nStart:/s, prompt)
-    json
   end
 
   defp handoff_opts(database_path) do
