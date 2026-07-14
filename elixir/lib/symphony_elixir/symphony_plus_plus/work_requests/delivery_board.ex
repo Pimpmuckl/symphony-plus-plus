@@ -962,7 +962,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp payload_matches?(%ProgressEvent{}, _type, _source_tool), do: false
 
-  defp source_tool_matches?(_value, nil), do: true
   defp source_tool_matches?(value, expected) when is_list(expected), do: value in expected
   defp source_tool_matches?(value, expected), do: value == expected
 
