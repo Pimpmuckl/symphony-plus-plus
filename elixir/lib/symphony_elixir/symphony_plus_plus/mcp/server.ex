@@ -2104,6 +2104,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
+  defp authorize_worker_tool_call(%__MODULE__{config: config, session: session}, "sync_pr") do
+    case Auth.require_session(session, config.repo) do
+      {:ok, session} ->
+        require_worker_assignment(session.assignment)
+
+      {:error, {:unauthorized, :work_package_terminal}} ->
+        with {:ok, session} <- Auth.require_terminal_session(session, config.repo) do
+          require_worker_assignment(session.assignment)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   defp authorize_worker_tool_call(%__MODULE__{config: config, session: session}, _tool) do
     case Auth.require_session(session, config.repo) do
       {:ok, session} -> require_worker_assignment(session.assignment)

@@ -376,6 +376,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
                event.payload["type"] == "blocker_closeout_decision" and
                event.payload["source_tool"] == "reconcile_work_request"
            end)
+
+    assert {:error, {:delivery_reconciliation_failed, "concurrent_closeout"}} =
+             DeliveryReconciler.reconcile_work_package(repo, linked_package.id, record_planned_slice_delivery: record_delivery)
   end
 
   test "apply defers blocker preservation repair when append fails after delivery records", %{repo: repo} do

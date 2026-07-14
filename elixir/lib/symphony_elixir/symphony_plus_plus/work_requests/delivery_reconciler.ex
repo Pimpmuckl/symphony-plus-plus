@@ -41,6 +41,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
     end
   end
 
+  @spec reconcile_work_package(module(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def reconcile_work_package(repo, work_package_id, opts \\ [])
+      when is_atom(repo) and is_binary(work_package_id) and is_list(opts) do
+    case repo.one(from(planned_slice in PlannedSlice, where: planned_slice.work_package_id == ^work_package_id, limit: 1)) do
+      nil ->
+        {:ok, %{status: "not_linked", work_package_id: work_package_id}}
+
+      %PlannedSlice{} = planned_slice ->
+        opts = opts |> Keyword.put(:mode, :apply) |> Keyword.put(:planned_slices, [planned_slice])
+
+        repo
+        |> reconcile(planned_slice.work_request_id, opts)
+        |> require_successful_reconciliation()
+    end
+  end
+
+  defp require_successful_reconciliation({:ok, %{error_count: 0}} = result), do: result
+
+  defp require_successful_reconciliation({:ok, %{results: results}}) do
+    reason = results |> Enum.find(&(&1.status == "error")) |> then(&(&1 && &1.reason))
+    {:error, {:delivery_reconciliation_failed, reason || "unknown_delivery_error"}}
+  end
+
+  defp require_successful_reconciliation(result), do: result
+
   defp mode(:dry_run), do: {:ok, :dry_run}
   defp mode("dry_run"), do: {:ok, :dry_run}
   defp mode("dry-run"), do: {:ok, :dry_run}

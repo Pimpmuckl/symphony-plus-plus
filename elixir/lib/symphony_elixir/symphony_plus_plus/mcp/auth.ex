@@ -6,6 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Auth do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
 
   @type denial :: :unauthorized | :forbidden | {:service_unavailable, term()} | {:unauthorized, term()}
 
@@ -45,6 +46,43 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Auth do
   def require_session(nil, repo) when is_atom(repo), do: {:error, :unauthorized}
 
   def require_session(_session, repo) when is_atom(repo), do: {:error, {:unauthorized, :invalid_session}}
+
+  @spec require_terminal_session(Session.t() | nil, module()) :: {:ok, Session.t()} | {:error, denial()}
+  def require_terminal_session(%Session{} = session, repo) when is_atom(repo) do
+    case fetch_grant(repo, session.assignment.grant_id) do
+      {:ok, %AccessGrant{} = grant} ->
+        with :ok <- require_proof(session, grant),
+             :ok <- require_merged_package(repo, grant),
+             {:ok, live_session} <- session_from_grant(repo, grant, proof_hash: session.proof_hash) do
+          {:ok, live_session}
+        else
+          {:error, {:scope_lookup_failed, reason}} -> {:error, {:service_unavailable, {:scope_lookup_failed, reason}}}
+          {:error, reason} -> {:error, {:unauthorized, reason}}
+        end
+
+      {:ok, unexpected} ->
+        {:error, {:service_unavailable, {:unexpected_grant_lookup_result, term_type(unexpected)}}}
+
+      {:error, :not_found} ->
+        {:error, {:unauthorized, :not_found}}
+
+      {:error, reason} ->
+        {:error, {:service_unavailable, {:grant_lookup_failed, reason}}}
+    end
+  rescue
+    error -> {:error, {:service_unavailable, {:revalidation_failed, error.__struct__}}}
+  end
+
+  def require_terminal_session(nil, repo) when is_atom(repo), do: {:error, :unauthorized}
+  def require_terminal_session(_session, repo) when is_atom(repo), do: {:error, {:unauthorized, :invalid_session}}
+
+  defp require_merged_package(repo, %AccessGrant{work_package_id: work_package_id}) do
+    case WorkPackageRepository.get(repo, work_package_id) do
+      {:ok, %{status: "merged"}} -> :ok
+      {:ok, _work_package} -> {:error, :work_package_terminal}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   @spec require_live_session_grant(Session.t() | nil, module()) :: :ok | {:error, denial() | term()}
   def require_live_session_grant(%Session{} = session, repo) when is_atom(repo) do
