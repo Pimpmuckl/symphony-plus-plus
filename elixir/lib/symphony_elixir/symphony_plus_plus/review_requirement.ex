@@ -3,13 +3,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewRequirement do
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
 
-  @max_args_bytes 16_384
   @max_args_depth 8
+  @max_encoded_bytes 16_384
 
   @type error_reason ::
           :invalid_review_requirement
           | :review_requirement_args_too_deep
-          | :review_requirement_args_too_large
+          | :review_requirement_too_large
           | :sensitive_review_requirement
 
   @spec normalize(term()) :: {:ok, map() | nil} | {:error, error_reason()}
@@ -24,13 +24,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewRequirement do
          {:ok, args} <- normalize_args(Map.get(requirement, "args")) do
       normalized = %{"type" => type} |> maybe_put_args(args)
 
-      if Redactor.redact_output(normalized) == normalized,
-        do: {:ok, normalized},
-        else: {:error, :sensitive_review_requirement}
+      cond do
+        Redactor.redact_output(normalized) != normalized -> {:error, :sensitive_review_requirement}
+        byte_size(Jason.encode!(normalized)) > @max_encoded_bytes -> {:error, :review_requirement_too_large}
+        true -> {:ok, normalized}
+      end
     else
-      {:error, reason}
-      when reason in [:review_requirement_args_too_deep, :review_requirement_args_too_large] ->
-        {:error, reason}
+      {:error, :review_requirement_args_too_deep} = error ->
+        error
 
       _invalid ->
         {:error, :invalid_review_requirement}
@@ -45,7 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewRequirement do
       {:ok, ^requirement} -> nil
       {:ok, _normalized} -> "must use string keys and a trimmed non-empty type"
       {:error, :review_requirement_args_too_deep} -> "args must not exceed #{@max_args_depth} nested containers"
-      {:error, :review_requirement_args_too_large} -> "args must not exceed #{@max_args_bytes} encoded bytes"
+      {:error, :review_requirement_too_large} -> "must not exceed #{@max_encoded_bytes} encoded bytes"
       {:error, :sensitive_review_requirement} -> "must not contain secrets"
       {:error, :invalid_review_requirement} -> "must contain a non-empty type and optional args object"
     end
@@ -56,15 +57,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewRequirement do
   defp normalize_args(args) when is_map(args) do
     normalized = Redactor.json_safe(args)
 
-    with true <- within_depth?(normalized, @max_args_depth),
-         {:ok, encoded} <- Jason.encode(normalized) do
-      if byte_size(encoded) <= @max_args_bytes,
-        do: {:ok, normalized},
-        else: {:error, :review_requirement_args_too_large}
-    else
-      false -> {:error, :review_requirement_args_too_deep}
-      {:error, _reason} -> {:error, :invalid_review_requirement}
-    end
+    if within_depth?(normalized, @max_args_depth),
+      do: {:ok, normalized},
+      else: {:error, :review_requirement_args_too_deep}
   end
 
   defp normalize_args(_args), do: {:error, :invalid_review_requirement}

@@ -1140,7 +1140,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
                )
              )
 
-    assert "args must not exceed 16384 encoded bytes" in errors_on(oversized_review_changeset).review_requirement
+    assert "must not exceed 16384 encoded bytes" in errors_on(oversized_review_changeset).review_requirement
+
+    assert {:error, %Ecto.Changeset{} = oversized_type_changeset} =
+             Repository.add_planned_slice(
+               repo,
+               work_request.id,
+               planned_slice_attrs(
+                 id: "WRS-OVERSIZED-REVIEW-TYPE",
+                 review_requirement: %{"type" => String.duplicate("x", 16_385)}
+               )
+             )
+
+    assert "must not exceed 16384 encoded bytes" in errors_on(oversized_type_changeset).review_requirement
 
     deeply_nested_args = Enum.reduce(1..9, "leaf", fn depth, nested -> %{"level_#{depth}" => nested} end)
 
