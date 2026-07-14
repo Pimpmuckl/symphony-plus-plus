@@ -157,10 +157,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
 
   defp validate_review_requirement(changeset) do
     validate_change(changeset, :review_requirement, fn :review_requirement, requirement ->
-      case ReviewRequirement.normalize(requirement) do
-        {:ok, normalized} -> if normalized == requirement, do: [], else: [review_requirement: "must use string keys and a trimmed non-empty type"]
-        {:error, :sensitive_review_requirement} -> [review_requirement: "must not contain secrets"]
-        {:error, :invalid_review_requirement} -> [review_requirement: "must contain a non-empty type and optional args object"]
+      case ReviewRequirement.validation_error(requirement) do
+        nil -> []
+        message -> [review_requirement: message]
       end
     end)
   end

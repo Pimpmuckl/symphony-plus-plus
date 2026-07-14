@@ -3,6 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   import Ecto.Query, only: [from: 2]
 
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
@@ -504,7 +505,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       %WorkPackage{} = work_package ->
         events = Map.get(context.progress_events, work_package_id, [])
         activity = Map.get(context.activity_contexts, work_package_id, WorkPackageActivity.empty_context())
-        metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events)
+        metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events, work_package)
 
         %{
           raw_status: work_package.status,
@@ -557,7 +558,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       %WorkPackage{} = work_package ->
         events = Map.get(context.progress_events, work_package_id, [])
         activity = Map.get(context.activity_contexts, work_package_id, WorkPackageActivity.empty_context())
-        metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events)
+        metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events, work_package)
 
         %{
           id: work_package.id,
@@ -582,14 +583,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     end
   end
 
-  defp metadata_from_progress_events(events) do
+  defp metadata_from_progress_events(events, %WorkPackage{} = work_package) do
+    branch = latest_payload(events, "branch", "attach_branch")
+
     %{
-      branch: latest_payload(events, "branch", "attach_branch"),
+      branch: branch,
       pr: latest_pr_payload(events),
       review_package: latest_payload(events, "review_package", "submit_review_package"),
-      review_completion: latest_payload(events, "review_completion", "complete_review")
+      review_completion: current_review_completion(events, work_package, branch)
     }
   end
+
+  defp current_review_completion(events, %WorkPackage{review_requirement: requirement} = work_package, branch)
+       when is_map(requirement) do
+    case map_value(branch, "head_sha") do
+      head_sha when is_binary(head_sha) ->
+        case MetadataProjection.latest_review_completion_event(events, work_package.id, head_sha, requirement) do
+          %ProgressEvent{payload: payload} -> payload
+          nil -> nil
+        end
+
+      _head_sha ->
+        nil
+    end
+  end
+
+  defp current_review_completion(_events, %WorkPackage{}, _branch), do: nil
 
   defp review_summary(metadata) do
     %{

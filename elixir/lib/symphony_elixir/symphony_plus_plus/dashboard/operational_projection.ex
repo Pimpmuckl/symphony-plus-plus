@@ -161,9 +161,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     )
   end
 
-  @spec readiness_context(repo(), WorkPackage.t(), [PlanNode.t()], [ProgressEvent.t()], [term()], [term()]) :: map()
+  @spec readiness_context(
+          repo(),
+          WorkPackage.t(),
+          [PlanNode.t()],
+          [ProgressEvent.t()],
+          [term()],
+          [term()]
+        ) :: map()
   def readiness_context(repo, %WorkPackage{} = work_package, plan_nodes, progress_events, artifacts, findings) do
-    readiness_context(repo, work_package, plan_nodes, progress_events, artifacts, findings, work_package.review_requirement)
+    readiness_context(
+      repo,
+      work_package,
+      plan_nodes,
+      progress_events,
+      artifacts,
+      findings,
+      work_package.review_requirement
+    )
   end
 
   @spec readiness_context(
@@ -175,7 +190,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
           [term()],
           term()
         ) :: map()
-  def readiness_context(repo, %WorkPackage{} = work_package, plan_nodes, progress_events, artifacts, findings, review_requirement) do
+  def readiness_context(
+        repo,
+        %WorkPackage{} = work_package,
+        plan_nodes,
+        progress_events,
+        artifacts,
+        findings,
+        review_requirement
+      ) do
     %{
       repo: repo,
       work_package: work_package,
@@ -196,8 +219,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     |> missing_readiness_gates()
   end
 
-  @spec metadata([ProgressEvent.t()], [term()], String.t()) :: map()
-  def metadata(progress_events, artifacts, work_package_id), do: MetadataProjection.metadata(progress_events, artifacts, work_package_id)
+  @spec metadata([ProgressEvent.t()], [term()], String.t(), map() | nil) :: map()
+  def metadata(progress_events, artifacts, work_package_id, review_requirement) do
+    MetadataProjection.metadata(progress_events, artifacts, work_package_id, review_requirement)
+  end
 
   @spec package_lineage(repo(), String.t()) :: map()
   def package_lineage(repo, work_package_id), do: MetadataProjection.package_lineage(repo, work_package_id)

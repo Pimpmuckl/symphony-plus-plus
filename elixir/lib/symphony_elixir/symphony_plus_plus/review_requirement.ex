@@ -25,6 +25,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewRequirement do
 
   def normalize(_requirement), do: {:error, :invalid_review_requirement}
 
+  @spec validation_error(term()) :: String.t() | nil
+  def validation_error(requirement) do
+    case normalize(requirement) do
+      {:ok, ^requirement} -> nil
+      {:ok, _normalized} -> "must use string keys and a trimmed non-empty type"
+      {:error, :sensitive_review_requirement} -> "must not contain secrets"
+      {:error, :invalid_review_requirement} -> "must contain a non-empty type and optional args object"
+    end
+  end
+
   defp normalize_args(nil), do: {:ok, nil}
   defp normalize_args(args) when is_map(args), do: {:ok, Redactor.json_safe(args)}
   defp normalize_args(_args), do: {:error, :invalid_review_requirement}

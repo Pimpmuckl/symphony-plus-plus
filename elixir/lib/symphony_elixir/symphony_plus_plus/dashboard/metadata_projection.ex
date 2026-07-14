@@ -206,8 +206,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
   def normalized_status(status) when is_binary(status), do: status |> String.trim() |> String.downcase()
   def normalized_status(_status), do: ""
 
-  @spec metadata([ProgressEvent.t()], [term()], String.t()) :: map()
-  def metadata(progress_events, _artifacts, work_package_id) do
+  @spec metadata([ProgressEvent.t()], [term()], String.t(), map() | nil) :: map()
+  def metadata(progress_events, _artifacts, work_package_id, review_requirement) do
     branch = latest_payload(progress_events, "branch", "attach_branch")
     head_filter = metadata_head_filter(progress_events, branch)
     pr = latest_pr_payload(progress_events, head_filter)
@@ -216,7 +216,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
       branch: branch,
       pr: pr_metadata(pr, head_filter),
       review_package: latest_current_payload(progress_events, "review_package", "submit_review_package", head_filter),
-      review_completion: review_completion_payload(progress_events, work_package_id, head_filter)
+      review_completion: review_completion_payload(progress_events, work_package_id, head_filter, review_requirement)
     }
   end
 
@@ -247,20 +247,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
     end)
   end
 
-  defp review_completion_payload(progress_events, work_package_id, {:head, head_sha}) do
-    progress_events
-    |> chronological_progress_events()
-    |> Enum.reverse()
-    |> Enum.find_value(fn
-      %ProgressEvent{payload: %{"type" => "review_completion", "source_tool" => "complete_review", "work_package_id" => ^work_package_id, "head_sha" => ^head_sha} = payload} ->
-        Sanitizer.redacted_json(payload)
-
-      _event ->
-        nil
-    end)
+  defp review_completion_payload(progress_events, work_package_id, {:head, head_sha}, requirement)
+       when is_map(requirement) do
+    case latest_review_completion_event(progress_events, work_package_id, head_sha, requirement) do
+      %ProgressEvent{payload: payload} -> Sanitizer.redacted_json(payload)
+      nil -> nil
+    end
   end
 
-  defp review_completion_payload(_progress_events, _work_package_id, _head_filter), do: nil
+  defp review_completion_payload(_progress_events, _work_package_id, _head_filter, _requirement), do: nil
 
   defp pr_metadata(nil, _head_filter), do: nil
 

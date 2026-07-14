@@ -302,7 +302,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-PROGRESS-SUMMARIES",
         work_package_id: "WP-BOARD-PROGRESS-SUMMARIES",
-        status: "reviewing"
+        status: "reviewing",
+        review_requirement: %{"type" => "human"}
       )
 
     assert {:ok, _branch} =
@@ -388,6 +389,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     refute Map.has_key?(slice.work_package.pr.merge_state, :raw_payload)
     refute Map.has_key?(slice.work_package.review.package, :transcript)
     refute Map.has_key?(slice.work_package.review.completion, :logs)
+
+    changed_package =
+      linked_package
+      |> Ecto.Changeset.change(review_requirement: %{"type" => "automated"})
+      |> repo.update!()
+
+    assert {:ok, %{slices: [changed_slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert changed_slice.work_package.review.completion == nil
+
+    changed_package
+    |> Ecto.Changeset.change(review_requirement: %{"type" => "human"})
+    |> repo.update!()
+
+    assert {:ok, _new_head} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: linked_package.id,
+               summary: "Branch advanced",
+               status: "branch_attached",
+               payload: %{
+                 type: "branch",
+                 source_tool: "attach_branch",
+                 branch: "feat/delivery-board",
+                 head_sha: "new-head"
+               }
+             })
+
+    assert {:ok, %{slices: [advanced_slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert advanced_slice.work_package.review.completion == nil
   end
 
   test "preloaded dashboard metadata is used before progress fallback", %{repo: repo} do
@@ -789,7 +818,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
         branch_pattern: planned_slice.branch_pattern,
         product_description: work_request.human_description,
         allowed_file_globs: planned_slice.owned_file_globs,
-        acceptance_criteria: planned_slice.acceptance_criteria
+        acceptance_criteria: planned_slice.acceptance_criteria,
+        review_requirement: planned_slice.review_requirement
       ]
       |> Keyword.merge(overrides)
       |> WorkPackageFactory.attrs()

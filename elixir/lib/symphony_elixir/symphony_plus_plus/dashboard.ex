@@ -463,7 +463,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
            guidance_requests: Enum.map(guidance_requests, &guidance_request/1),
            grants: Enum.map(grants, &grant/1),
            agent_runs: Enum.map(agent_runs, &agent_run/1),
-           metadata: OperationalProjection.metadata(state.progress_events, state.artifacts, state.work_package.id),
+           metadata:
+             OperationalProjection.metadata(
+               state.progress_events,
+               state.artifacts,
+               state.work_package.id,
+               state.work_package.review_requirement
+             ),
            alert_indicators: OperationalProjection.alert_indicators(repo, state, summary.runtime)
          }}
       end
@@ -558,7 +564,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           findings
         )
 
-      metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id)
+      metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id, work_package.review_requirement)
 
       operational_state =
         OperationalProjection.work_package_operational_state(work_package, %{
@@ -1549,7 +1555,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       grants = Map.get(grants_by_id, work_package.id, [])
       blockers = OperationalProjection.blockers(progress_events)
       runtime = OperationalProjection.runtime_summary(agent_runs)
-      metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id)
+      metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id, work_package.review_requirement)
 
       readiness_context =
         OperationalProjection.readiness_context(

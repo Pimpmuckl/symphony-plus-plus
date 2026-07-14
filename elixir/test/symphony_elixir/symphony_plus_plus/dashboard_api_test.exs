@@ -2705,6 +2705,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     refute "review_complete" in missing["missing"]
     refute "review_artifacts_attached" in missing["missing"]
     refute inspect(payload) =~ "Bearer "
+
+    work_package
+    |> Ecto.Changeset.change(review_requirement: %{"type" => "automated"})
+    |> repo.update!()
+
+    changed_payload = json_response(get(auth_conn(secret), "/api/v1/sympp/work-packages/#{work_package.id}"), 200)
+    changed_missing = Enum.find(changed_payload["alert_indicators"], &(&1["type"] == "missing_readiness_evidence"))
+
+    assert changed_payload["metadata"]["review_completion"] == nil
+    assert "review_complete" in changed_missing["missing"]
   end
 
   test "latest no-artifact review package does not reuse older artifact evidence", %{repo: repo} do
@@ -3270,8 +3280,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     stale_events = semantic_events ++ [bare_reattach]
 
     refute MetadataProjection.current_pr_state_present?(stale_events, "head-a")
-    assert MetadataProjection.metadata(stale_events, [], "SYMPP-SEQUENCELESS").pr["source_tool"] == "attach_pr"
-    refute Map.has_key?(MetadataProjection.metadata(stale_events, [], "SYMPP-SEQUENCELESS").pr, "check_summary")
+    assert MetadataProjection.metadata(stale_events, [], "SYMPP-SEQUENCELESS", nil).pr["source_tool"] == "attach_pr"
+    refute Map.has_key?(MetadataProjection.metadata(stale_events, [], "SYMPP-SEQUENCELESS", nil).pr, "check_summary")
 
     fresh_sync =
       progress_event("sync-state", nil, DateTime.add(timestamp, 4, :second), %{
@@ -3289,7 +3299,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     fresh_events = stale_events ++ [fresh_sync]
 
     assert MetadataProjection.current_pr_state_present?(fresh_events, "head-a")
-    assert MetadataProjection.metadata(fresh_events, [], "SYMPP-SEQUENCELESS").pr["source_tool"] == "sync_pr"
+    assert MetadataProjection.metadata(fresh_events, [], "SYMPP-SEQUENCELESS", nil).pr["source_tool"] == "sync_pr"
   end
 
   test "dashboard exposes structured scope guard readiness reasons without synced secrets", %{repo: repo} do
