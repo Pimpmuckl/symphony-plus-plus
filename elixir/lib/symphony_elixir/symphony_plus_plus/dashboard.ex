@@ -463,7 +463,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
            guidance_requests: Enum.map(guidance_requests, &guidance_request/1),
            grants: Enum.map(grants, &grant/1),
            agent_runs: Enum.map(agent_runs, &agent_run/1),
-           metadata: OperationalProjection.metadata(state.progress_events, state.artifacts, state.work_package.id),
+           metadata:
+             OperationalProjection.metadata(
+               state.progress_events,
+               state.artifacts,
+               state.work_package.id,
+               state.work_package.review_requirement
+             ),
            alert_indicators: OperationalProjection.alert_indicators(repo, state, summary.runtime)
          }}
       end
@@ -558,7 +564,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           findings
         )
 
-      metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id)
+      metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id, work_package.review_requirement)
 
       operational_state =
         OperationalProjection.work_package_operational_state(work_package, %{
@@ -630,7 +636,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   defp artifact_backed_readiness_gate_required?(%WorkPackage{} = work_package) do
-    Enum.any?(["recommendation_artifact_recorded", "review_artifacts_attached", "review_suite_result"], &required_gate?(work_package, &1))
+    merge_required?(work_package) or required_gate?(work_package, "recommendation_artifact_recorded")
   end
 
   defp readiness_findings(repo, %WorkPackage{status: status, id: work_package_id}) when status in @ready_statuses do
@@ -1414,7 +1420,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       forbidden_file_globs: Enum.map(planned_slice.forbidden_file_globs || [], &redacted_text/1),
       acceptance_criteria: Enum.map(planned_slice.acceptance_criteria || [], &redacted_text/1),
       validation_steps: Enum.map(planned_slice.validation_steps || [], &redacted_text/1),
-      review_lanes: planned_slice.review_lanes || [],
+      review: redacted_json(planned_slice.review_requirement),
       stop_conditions: Enum.map(planned_slice.stop_conditions || [], &redacted_text/1),
       status: planned_slice.status,
       inserted_at: timestamp(planned_slice.inserted_at),
@@ -1539,7 +1545,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     agent_runs_by_id = grouped_agent_runs(repo, work_package_ids)
     grants_by_id = grouped_access_grants(repo, work_package_ids)
     lineages_by_id = OperationalProjection.package_lineages(repo, work_packages)
-    planned_slice_review_lanes_by_id = grouped_planned_slice_review_lanes(repo, work_package_ids)
 
     Map.new(work_packages, fn %WorkPackage{} = work_package ->
       progress_events = Map.get(progress_events_by_id, work_package.id, [])
@@ -1550,8 +1555,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       grants = Map.get(grants_by_id, work_package.id, [])
       blockers = OperationalProjection.blockers(progress_events)
       runtime = OperationalProjection.runtime_summary(agent_runs)
-      metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id)
-      planned_slice_review_lanes = Map.get(planned_slice_review_lanes_by_id, work_package.id)
+      metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id, work_package.review_requirement)
 
       readiness_context =
         OperationalProjection.readiness_context(
@@ -1561,7 +1565,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           progress_events,
           artifacts,
           findings,
-          planned_slice_review_lanes
+          work_package.review_requirement
         )
 
       lineage = Map.get(lineages_by_id, work_package.id, OperationalProjection.empty_lineage(work_package.id))
@@ -1647,17 +1651,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       )
     end)
   end
-
-  defp grouped_planned_slice_review_lanes(repo, work_package_ids) do
-    {:ok, planned_slices_by_work_package_id} = linked_planned_slices_by_work_package_id(repo, work_package_ids)
-
-    Map.new(planned_slices_by_work_package_id, fn {work_package_id, planned_slice} ->
-      {work_package_id, planned_slice_review_lanes(planned_slice)}
-    end)
-  end
-
-  defp planned_slice_review_lanes(%PlannedSlice{} = planned_slice), do: planned_slice.review_lanes || []
-  defp planned_slice_review_lanes(_planned_slice), do: []
 
   defp chunked_records_by_work_package_id(work_package_ids, list_fun) do
     work_package_ids

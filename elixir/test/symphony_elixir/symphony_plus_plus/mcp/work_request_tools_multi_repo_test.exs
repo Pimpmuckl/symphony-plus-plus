@@ -35,7 +35,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestToolsMultiRepoTest do
       "forbidden_file_globs" => [],
       "acceptance_criteria" => ["Delivery repo is preserved on the planned slice."],
       "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
-      "review_lanes" => ["normal"],
+      "review" => %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       "stop_conditions" => ["Stop before unrelated scope."]
     }
 

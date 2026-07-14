@@ -1,8 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
-
   @spec invalid_params_error(String.t(), term()) :: {:error, integer(), String.t(), map()}
   def invalid_params_error(tool, {:invalid_enum, field, allowed_values}) do
     field = to_string(field)
@@ -51,10 +49,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
     |> maybe_put_allowed_values(field, opts)
   end
 
-  defp changeset_validation_message("review_lanes", _message, _opts) do
-    "must be Review Suite profiles only; GitHub review lanes do not belong here"
-  end
-
   defp changeset_validation_message(_field, message, opts) do
     Regex.replace(~r/%{(count|number)}/, message, fn _match, key ->
       opts
@@ -66,8 +60,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
   defp changeset_message_key("count"), do: :count
   defp changeset_message_key("number"), do: :number
 
-  defp changeset_validation_reason("review_lanes", _opts), do: "invalid_review_lanes"
-
   defp changeset_validation_reason(_field, opts) do
     case Keyword.get(opts, :validation) do
       :required -> "required"
@@ -76,10 +68,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
       validation when is_atom(validation) -> Atom.to_string(validation)
       _validation -> "invalid"
     end
-  end
-
-  defp maybe_put_allowed_values(detail, "review_lanes", _opts) do
-    Map.put(detail, "allowed_values", ReviewProfiles.review_suite_profiles())
   end
 
   defp maybe_put_allowed_values(detail, _field, opts) do

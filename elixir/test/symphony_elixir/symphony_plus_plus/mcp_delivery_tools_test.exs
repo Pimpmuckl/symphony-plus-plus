@@ -1588,7 +1588,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       validation_steps: [
         "mix test test/symphony_elixir/symphony_plus_plus/mcp_delivery_tools_test.exs"
       ],
-      review_lanes: ["normal"],
+      review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       stop_conditions: ["Do not expose broad package visibility."]
     }
 

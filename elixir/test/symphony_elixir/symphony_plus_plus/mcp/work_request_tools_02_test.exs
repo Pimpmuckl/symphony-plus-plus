@@ -125,7 +125,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
         "forbidden_file_globs" => [],
         "acceptance_criteria" => ["Sibling mutation remains denied."],
         "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
-        "review_lanes" => ["normal"],
+        "review" => %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
         "stop_conditions" => ["Stop before mutating siblings."]
       })
 
@@ -274,7 +274,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert planned_slice.work_package_kind == "standard_pr"
     assert planned_slice.branch_pattern == nil
     assert planned_slice.forbidden_file_globs == []
-    assert planned_slice.review_lanes == ["normal"]
+    assert planned_slice.review_requirement == nil
 
     unsafe_omission_response =
       mcp_tool(repo, session, "plan_slice", Map.delete(add_args, "owned_file_globs"))
@@ -357,10 +357,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     work_package = repo.get!(WorkPackage, work_package_id)
     assert work_package.kind == "standard_pr"
     assert work_package.policy_template == "standard_pr"
-    assert {:ok, review_suite} = Renderer.render(repo, work_package_id, "review_suite.md")
-    assert review_suite =~ "Policy template: `worker_package`"
-    assert review_suite =~ "- Required: normal"
-    assert review_suite =~ "human_merge"
+    assert {:ok, review} = Renderer.render(repo, work_package_id, "review.md")
+    assert review =~ "No review required."
 
     assert get_in(dispatch_response, ["result", "structuredContent", "coordinates", "primary_execution"]) == %{
              "kind" => "work_package",
@@ -1333,7 +1331,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       "forbidden_file_globs" => [],
       "acceptance_criteria" => ["MCP planned-slice mutation succeeds."],
       "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
-      "review_lanes" => ["fast", "normal"],
+      "review" => %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       "stop_conditions" => ["Stop before dispatch."]
     }
 
@@ -1345,21 +1343,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
         Map.merge(add_args, %{
           "title" => "Invalid raw_secret_value slice",
           "goal" => "Do not echo raw_secret_value in changeset errors.",
-          "work_package_kind" => "side_quest",
-          "review_lanes" => ["raw_secret_value"]
+          "work_package_kind" => "side_quest"
         })
       )
 
     assert get_in(changeset_error_response, ["error", "code"]) == -32_602
     assert get_in(changeset_error_response, ["error", "data", "reason"]) == "invalid_planned_slice"
     validation_errors = get_in(changeset_error_response, ["error", "data", "validation_errors"])
-
-    assert %{
-             "field" => "review_lanes",
-             "message" => "must be Review Suite profiles only; GitHub review lanes do not belong here",
-             "reason" => "invalid_review_lanes",
-             "allowed_values" => ["fast", "normal", "deep"]
-           } = Enum.find(validation_errors, &(&1["field"] == "review_lanes"))
 
     assert %{
              "field" => "work_package_kind",
@@ -1372,6 +1362,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     refute inspect(changeset_error_response) =~ "raw_secret_value"
     assert {:ok, []} = WorkRequestRepository.list_planned_slices(repo, work_request.id)
+
+    sensitive_review_response =
+      mcp_tool(
+        repo,
+        session,
+        "plan_slice",
+        Map.put(add_args, "review", %{"type" => "human", "args" => %{"token" => "raw_secret_value"}})
+      )
+
+    assert get_in(sensitive_review_response, ["error", "data", "reason"]) ==
+             "sensitive_review_requirement"
+
+    refute inspect(sensitive_review_response) =~ "raw_secret_value"
 
     invalid_docs_scope_response =
       mcp_tool(
@@ -1430,7 +1433,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(add_payload, ["planned_slice", "status"]) == "planned"
     refute Map.has_key?(add_payload["planned_slice"], "owned_file_globs")
     refute Map.has_key?(add_payload["planned_slice"], "acceptance_criteria")
-    refute Map.has_key?(add_payload["planned_slice"], "review_lanes")
+    refute Map.has_key?(add_payload["planned_slice"], "review")
     assert add_payload["status"] == %{"work_request_status" => "ready_for_slicing", "planned_slice_status" => "planned"}
     refute inspect(add_response) =~ "raw_secret_value"
 
@@ -1817,7 +1820,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
         "forbidden_file_globs" => [],
         "acceptance_criteria" => ["Delivery base is preserved on the planned slice."],
         "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
-        "review_lanes" => ["normal"],
+        "review" => %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
         "stop_conditions" => ["Stop before unrelated scope."]
       })
 
@@ -1869,7 +1872,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
         "forbidden_file_globs" => [],
         "acceptance_criteria" => ["Slice creation still succeeds."],
         "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
-        "review_lanes" => ["normal"],
+        "review" => %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
         "stop_conditions" => ["Stop before dispatch."]
       })
 
@@ -1919,7 +1922,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       "forbidden_file_globs" => [],
       "acceptance_criteria" => ["Invalid globstar placement is rejected early."],
       "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
-      "review_lanes" => ["normal"],
+      "review" => %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       "stop_conditions" => ["Stop before dispatch."]
     }
 

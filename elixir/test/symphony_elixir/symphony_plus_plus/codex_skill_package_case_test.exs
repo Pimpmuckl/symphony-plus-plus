@@ -87,7 +87,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase do
         "attach_pr",
         "sync_pr",
         "submit_review_package",
-        "attach_review_suite_result",
+        "complete_review",
         "mark_ready"
       ]
 

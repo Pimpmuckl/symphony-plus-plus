@@ -134,7 +134,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
               "forbidden_file_globs" => [],
               "acceptance_criteria" => ["Mutation remains claim-gated."],
               "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
-              "review_lanes" => ["normal"],
+              "review" => %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
               "stop_conditions" => ["Stop before unclaimed mutation."]
             }
           }

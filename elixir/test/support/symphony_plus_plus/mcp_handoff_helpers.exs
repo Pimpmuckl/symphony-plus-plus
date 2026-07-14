@@ -192,8 +192,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.HandoffHelpers do
       "tests" => ["mix test elixir/test/symphony_elixir/symphony_plus_plus/mcp"],
       "artifacts" => ["review-log.txt"],
       "head_sha" => head_sha,
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     }
   end
 

@@ -11,7 +11,7 @@ PR-sized assignment.
 ## Contract
 
 1. Understand scope, owned paths, forbidden paths, acceptance, validation,
-   review profile, branch/base target, stop conditions, and any line or PR-size
+   optional review requirement, branch/base target, stop conditions, and any line or PR-size
    budget before coding.
 2. Pick the correct state layer:
    - Assigned WorkPackage: use
@@ -23,8 +23,8 @@ PR-sized assignment.
      `symphony-plus-plus-mcp:symphony-solo-session`.
      Each worker uses its own session.
 3. Implement only the assigned scope.
-4. Run required tests, static checks, CI/check status when present, Review
-   Suite profile, and GitHub review when required.
+4. Run required tests, static checks, CI/check status when present, any declared
+   review requirement, and GitHub review when required.
 5. Return a review-green, merge-ready PR, or a no-PR evidence packet for
    investigation/docs/read-only work.
 
@@ -52,8 +52,7 @@ concurrency-protection operation that asks for them.
 - Run focused validation first, then broader assigned validation.
 - If CI/checks exist, make sure they are green or report the exact blocker. If
   no CI exists, say so.
-- After material changes, rerun the same required review profile; do not step
-  down to a lower review level.
+- After material changes, rerun any declared review for the new exact head.
 - Record validation and review evidence in the active Symphony++ state. For
   WorkPackages, that state is the ledger-backed claim opened by the
   WorkPackage skill.

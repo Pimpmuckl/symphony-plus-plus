@@ -3,6 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   import Ecto.Query, only: [from: 2]
 
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
@@ -19,7 +20,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   @delivery_lookup_chunk_size 400
   @context_lookup_chunk_size 400
   @review_package_artifact_limit 20
-  @review_package_review_limit 20
   @review_package_string_limit 240
 
   @delivery_states %{
@@ -505,7 +505,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       %WorkPackage{} = work_package ->
         events = Map.get(context.progress_events, work_package_id, [])
         activity = Map.get(context.activity_contexts, work_package_id, WorkPackageActivity.empty_context())
-        metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events)
+        metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events, work_package)
 
         %{
           raw_status: work_package.status,
@@ -558,7 +558,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       %WorkPackage{} = work_package ->
         events = Map.get(context.progress_events, work_package_id, [])
         activity = Map.get(context.activity_contexts, work_package_id, WorkPackageActivity.empty_context())
-        metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events)
+        metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events, work_package)
 
         %{
           id: work_package.id,
@@ -583,21 +583,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     end
   end
 
-  defp metadata_from_progress_events(events) do
+  defp metadata_from_progress_events(events, %WorkPackage{} = work_package) do
+    branch = latest_payload(events, "branch", "attach_branch")
+
     %{
-      branch: latest_payload(events, "branch", "attach_branch"),
+      branch: branch,
       pr: latest_pr_payload(events),
-      review_progress: latest_payload(events, "review_progress", nil),
       review_package: latest_payload(events, "review_package", "submit_review_package"),
-      review_suite_result: latest_payload(events, "review_suite_result", nil)
+      review_completion: current_review_completion(events, work_package, branch)
     }
   end
 
+  defp current_review_completion(events, %WorkPackage{review_requirement: requirement} = work_package, branch)
+       when is_map(requirement) do
+    case map_value(branch, "head_sha") do
+      head_sha when is_binary(head_sha) ->
+        case MetadataProjection.latest_review_completion_event(events, work_package.id, head_sha, requirement) do
+          %ProgressEvent{payload: payload} -> payload
+          nil -> nil
+        end
+
+      _head_sha ->
+        nil
+    end
+  end
+
+  defp current_review_completion(_events, %WorkPackage{}, _branch), do: nil
+
   defp review_summary(metadata) do
     %{
-      progress: review_progress_summary(map_value(metadata, "review_progress")),
       package: review_package_summary(map_value(metadata, "review_package")),
-      suite_result: review_suite_result_summary(map_value(metadata, "review_suite_result"))
+      completion: review_completion_summary(map_value(metadata, "review_completion"))
     }
   end
 
@@ -653,42 +669,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp merge_state_summary(_merge_state), do: nil
 
-  defp review_progress_summary(nil), do: nil
-  defp review_progress_summary(payload) when not is_map(payload), do: nil
+  defp review_completion_summary(nil), do: nil
+  defp review_completion_summary(payload) when not is_map(payload), do: nil
 
-  defp review_progress_summary(%{} = payload) do
-    %{
-      type: bounded_string(map_value(payload, "type")),
-      source_tool: bounded_string(map_value(payload, "source_tool")),
-      provider: bounded_string(map_value(payload, "provider")),
-      profile: bounded_string(map_value(payload, "profile")),
-      lane: bounded_string(map_value(payload, "lane")),
-      status: bounded_string(map_value(payload, "status")),
-      verdict: bounded_string(map_value(payload, "verdict")),
-      head_sha: bounded_string(map_value(payload, "head_sha")),
-      step_current: integer_value(map_value(payload, "step_current")),
-      step_total: integer_value(map_value(payload, "step_total")),
-      step_name: bounded_string(map_value(payload, "step_name"))
-    }
-    |> reject_nil_values()
-    |> non_empty_map()
-  end
-
-  defp review_suite_result_summary(nil), do: nil
-  defp review_suite_result_summary(payload) when not is_map(payload), do: nil
-
-  defp review_suite_result_summary(%{} = payload) do
+  defp review_completion_summary(%{} = payload) do
     %{
       type: bounded_string(map_value(payload, "type")),
       source_tool: bounded_string(map_value(payload, "source_tool")),
       work_package_id: bounded_string(map_value(payload, "work_package_id")),
       head_sha: bounded_string(map_value(payload, "head_sha")),
-      suite: bounded_string(map_value(payload, "suite")),
-      anchor: bounded_string(map_value(payload, "anchor")),
-      status: bounded_string(map_value(payload, "status")),
-      verdict: bounded_string(map_value(payload, "verdict")),
-      summary: bounded_string(map_value(payload, "summary")),
-      artifacts: bounded_string_list(map_value(payload, "artifacts"), @review_package_artifact_limit)
+      review_type: payload |> map_value("review") |> map_value("type") |> bounded_string(),
+      reference: bounded_string(map_value(payload, "reference")),
+      note: bounded_string(map_value(payload, "note"))
     }
     |> reject_nil_values()
     |> non_empty_map()
@@ -703,35 +695,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       source_tool: bounded_string(map_value(payload, "source_tool")),
       head_sha: bounded_string(map_value(payload, "head_sha")),
       artifacts: bounded_string_list(map_value(payload, "artifacts"), @review_package_artifact_limit),
-      review_lanes: bounded_string_list(map_value(payload, "review_lanes"), @review_package_artifact_limit),
       acceptance_criteria_met: boolean_value(map_value(payload, "acceptance_criteria_met")),
-      tests_passed: boolean_value(map_value(payload, "tests_passed")),
-      reviews: review_package_review_summaries(map_value(payload, "reviews"))
+      tests_passed: boolean_value(map_value(payload, "tests_passed"))
     }
     |> reject_nil_values()
   end
-
-  defp review_package_review_summaries(reviews) when is_list(reviews) do
-    reviews
-    |> Enum.flat_map(&review_package_review_summary/1)
-    |> Enum.take(@review_package_review_limit)
-  end
-
-  defp review_package_review_summaries(_reviews), do: nil
-
-  defp review_package_review_summary(%{} = review) do
-    summary =
-      %{
-        lane: bounded_string(map_value(review, "lane")),
-        verdict: bounded_string(map_value(review, "verdict")),
-        status: bounded_string(map_value(review, "status"))
-      }
-      |> reject_nil_values()
-
-    if map_size(summary) == 0, do: [], else: [summary]
-  end
-
-  defp review_package_review_summary(_review), do: []
 
   defp successor_context(nil, _slices_by_scope, _context), do: nil
 
@@ -994,7 +962,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp payload_matches?(%ProgressEvent{}, _type, _source_tool), do: false
 
-  defp source_tool_matches?(_value, nil), do: true
   defp source_tool_matches?(value, expected) when is_list(expected), do: value in expected
   defp source_tool_matches?(value, expected), do: value == expected
 

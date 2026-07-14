@@ -230,8 +230,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
       "tests" => ["mix test"],
       "artifacts" => ["review-log.txt"],
       "head_sha" => head_sha,
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
   end
 
@@ -294,7 +293,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
       forbidden_file_globs: ["elixir/lib/symphony_elixir_web/live/**"],
       acceptance_criteria: ["WorkRequest MCP reads are scoped and redacted."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
-      review_lanes: ["fast", "normal"],
       stop_conditions: ["Stop before mutation or dispatch wiring."]
     }
 

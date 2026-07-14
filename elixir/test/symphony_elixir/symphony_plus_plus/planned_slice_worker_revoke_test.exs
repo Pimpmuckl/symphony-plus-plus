@@ -433,7 +433,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
       forbidden_file_globs: ["elixir/assets/**"],
       acceptance_criteria: ["Delivery MCP tools are scoped."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/planned_slice_worker_revoke_test.exs"],
-      review_lanes: ["normal"],
+      review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       stop_conditions: ["Do not expose broad package visibility."]
     }
 

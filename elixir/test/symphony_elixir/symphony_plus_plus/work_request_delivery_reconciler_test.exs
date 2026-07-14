@@ -1268,7 +1268,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
       forbidden_file_globs: ["elixir/assets/**"],
       acceptance_criteria: ["Delivery reconciler is deterministic."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/work_request_delivery_reconciler_test.exs"],
-      review_lanes: ["normal"],
+      review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       stop_conditions: ["Do not infer no-PR completion from prose."]
     }
 

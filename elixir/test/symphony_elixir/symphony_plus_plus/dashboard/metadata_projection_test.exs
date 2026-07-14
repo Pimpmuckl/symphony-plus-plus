@@ -29,7 +29,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjectionTest do
       })
     ]
 
-    metadata = MetadataProjection.metadata(events, [], "wp-1")
+    metadata = MetadataProjection.metadata(events, [], "wp-1", nil)
 
     assert metadata.branch["head_sha"] == "head-a"
     assert metadata.pr["head_sha"] == "head-a"
@@ -85,7 +85,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjectionTest do
     ]
 
     assert MetadataProjection.current_pr_state_present?(events, "head-a")
-    metadata = MetadataProjection.metadata(events, [], "wp-1")
+    metadata = MetadataProjection.metadata(events, [], "wp-1", nil)
     assert metadata.pr["number"] == 17
     assert metadata.pr["source_tool"] == "sync_pr"
   end
@@ -127,7 +127,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjectionTest do
     ]
 
     assert MetadataProjection.current_pr_state_present?(events, "head-a")
-    metadata = MetadataProjection.metadata(events, [], "wp-1")
+    metadata = MetadataProjection.metadata(events, [], "wp-1", nil)
     assert metadata.pr["number"] == 17
     assert metadata.pr["source_tool"] == "sync_pr"
   end
@@ -155,7 +155,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjectionTest do
       )
     ]
 
-    metadata = MetadataProjection.metadata(events, [], "wp-1")
+    metadata = MetadataProjection.metadata(events, [], "wp-1", nil)
     assert metadata.pr["number"] == 17
     assert metadata.pr["source_tool"] == "sync_pr"
   end
@@ -208,7 +208,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjectionTest do
     ]
 
     refute MetadataProjection.current_pr_state_present?(events, "head-a")
-    metadata = MetadataProjection.metadata(events, [], "wp-1")
+    metadata = MetadataProjection.metadata(events, [], "wp-1", nil)
     assert metadata.pr["source_tool"] == "attach_pr"
     refute Map.has_key?(metadata.pr, "check_summary")
   end

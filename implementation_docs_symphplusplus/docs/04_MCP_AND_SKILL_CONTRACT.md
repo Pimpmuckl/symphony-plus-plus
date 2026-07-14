@@ -56,10 +56,9 @@ script, private file, or raw secret metadata.
 Bound workers should omit values the current WorkPackage already supplies.
 `add_comment(body)` and `list_comments()` default to the current WorkPackage.
 `attach_branch(head_sha)` infers a literal WorkPackage branch pattern; pass
-`branch` only for templated or absent patterns. Review Suite evidence should use
-`mark_ready(review_suite_round_id)` when the package is otherwise ready; use
-`attach_review_suite_result(round_id)` only when recording review evidence before
-the finish call.
+`branch` only for templated or absent patterns. If `review.md` declares a
+review, complete its opaque provider requirement for the current exact head,
+then call `complete_review(reference?, note?)` before `mark_ready()`.
 
 `sync_pr()` only refreshes the already attached PR when state changed after
 attachment or the attach call did not include current-state metadata required by
@@ -83,9 +82,9 @@ their explicit target ids.
 
 For ordinary PR-backed work, `plan_slice` defaults
 `work_package_kind` to `standard_pr`, delivery repo and target base branch to
-the selected WorkRequest's primary repo scope, and omitted review lanes to the
-package policy. Pass the target base branch when selecting a secondary delivery
-repo. Branch pattern and forbidden globs may also be omitted. Title, goal,
+the selected WorkRequest's primary repo scope. Review is omitted unless the
+architect supplies one opaque `review` requirement. Pass the target base branch
+when selecting a secondary delivery repo. Branch pattern and forbidden globs may also be omitted. Title, goal,
 owned globs, acceptance criteria, validation, and stop conditions stay
 required. Use `mcp` only for MCP server, protocol, tool, or plugin work.
 

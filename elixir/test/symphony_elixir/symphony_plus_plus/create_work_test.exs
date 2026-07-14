@@ -11,7 +11,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Server}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -96,8 +95,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
                base_branch: "main",
                title: "Explicit hotfix policy",
                acceptance_criteria: ["Hotfix works."],
-               policy_template: "hotfix",
-               review_suite_template: "hotfix"
+               policy_template: "hotfix"
              })
 
     assert request["kind"] == "hotfix"
@@ -110,8 +108,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
                base_branch: "symphony-plus-plus/beta",
                title: "Explicit worker package policy",
                acceptance_criteria: ["Worker package policy works."],
-               policy_template: "worker_package",
-               review_suite_template: "mcp"
+               kind: "mcp",
+               policy_template: "worker_package"
              })
 
     assert request["kind"] == "mcp"
@@ -170,7 +168,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     assert request["policy_template"] == "mcp_changed_file_scope_guard"
     assert request["allowed_file_globs"] == ["elixir/lib/**"]
     assert "scope_guard" in request["policy"].required_gates
-    assert "review_suite_result" in request["policy"].required_gates
+    refute "review_complete" in request["policy"].required_gates
 
     assert {:error, :missing_allowed_file_globs} =
              CreateWork.parse_request(%{
@@ -213,19 +211,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
                allowed_file_globs: ["elixir/lib/**"]
              })
 
-    assert {:ok, request} =
-             CreateWork.parse_request(%{
-               repo: "symphony-plus-plus",
-               base_branch: "symphony-plus-plus/beta",
-               title: "Default current PR policy kind with MCP alias",
-               acceptance_criteria: ["Current PR state is required."],
-               policy_template: "mcp_current_pr_state",
-               review_suite_template: "mcp"
-             })
-
-    assert request["kind"] == "mcp"
-    assert request["policy_template"] == "mcp_current_pr_state"
-
     assert {:error, :invalid_acceptance_criteria} =
              CreateWork.parse_request(%{
                repo: "kraken",
@@ -261,18 +246,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
              })
   end
 
-  test "rejects conflicting policy template fields" do
-    assert {:error, :policy_template_mismatch} =
-             CreateWork.parse_request(%{
-               kind: "quick_fix",
-               repo: "symphony-plus-plus",
-               base_branch: "symphony-plus-plus/beta",
-               title: "Conflicting policy templates",
-               acceptance_criteria: ["Conflict is rejected."],
-               policy_template: "hotfix",
-               review_suite_template: "worker_package"
-             })
-
+  test "rejects policy templates that conflict with the work kind" do
     assert {:error, :policy_template_mismatch} =
              CreateWork.parse_request(%{
                kind: "quick_fix",
@@ -293,20 +267,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
                policy_template: "hotfix"
              })
 
-    assert {:ok, request} =
-             CreateWork.parse_request(%{
-               kind: "mcp",
-               repo: "symphony-plus-plus",
-               base_branch: "symphony-plus-plus/beta",
-               title: "MCP current PR state can be selected from review suite template",
-               acceptance_criteria: ["Current PR state is required."],
-               policy_template: "mcp",
-               review_suite_template: "mcp_current_pr_state"
-             })
-
-    assert request["policy_template"] == "mcp_current_pr_state"
-    assert "current_pr_state" in request["policy"].required_gates
-
     assert {:ok, exact_alias_request} =
              CreateWork.parse_request(%{
                kind: "mcp",
@@ -314,23 +274,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
                base_branch: "symphony-plus-plus/beta",
                title: "MCP current PR state accepts exact policy and template alias",
                acceptance_criteria: ["Current PR state is required."],
-               policy_template: "mcp_current_pr_state",
-               review_suite_template: "worker_package"
+               policy_template: "mcp_current_pr_state"
              })
 
     assert exact_alias_request["policy_template"] == "mcp_current_pr_state"
     assert "current_pr_state" in exact_alias_request["policy"].required_gates
-
-    assert {:error, :policy_template_mismatch} =
-             CreateWork.parse_request(%{
-               kind: "mcp",
-               repo: "symphony-plus-plus",
-               base_branch: "symphony-plus-plus/beta",
-               title: "MCP cannot mix generic worker policy with current PR policy",
-               acceptance_criteria: ["Conflict is rejected."],
-               policy_template: "worker_package",
-               review_suite_template: "mcp_current_pr_state"
-             })
   end
 
   test "preserves allowed file globs and rejects invalid scope constraints", %{repo: repo} do
@@ -407,7 +355,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     assert creation.work_package.parent_id == nil
     assert creation.work_package.status == "ready_for_worker"
     assert creation.policy.template == "quick_fix"
-    assert creation.policy.review_suite.required == ["normal"]
+    refute Map.has_key?(creation.policy, :review_suite)
+    assert creation.work_package.review_requirement == nil
     assert creation.virtual_files["context.md"] =~ "- Status: `ready_for_worker`"
     assert creation.virtual_files["handoff.md"] =~ "- Status: `ready_for_worker`"
     refute creation.virtual_files["context.md"] =~ "- Status: `created`"
@@ -422,7 +371,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     assert creation.virtual_files["task_plan.md"] =~ "Implement requested scope"
     assert creation.virtual_files["task_plan.md"] =~ "Required gates:"
     assert creation.virtual_files["acceptance.md"] =~ "Focused regression coverage exists."
-    assert creation.virtual_files["review_suite.md"] =~ "Policy template: `quick_fix`"
+    assert creation.virtual_files["review.md"] =~ "No review required."
 
     assert {:ok, rendered} = PlanningRepository.get_render_state(repo, creation.work_package.id)
     refute inspect(rendered) =~ grant_id
@@ -458,25 +407,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     refute json =~ "hash-should-not-leak"
   end
 
-  test "direct create-work review lanes remain durable", %{repo: repo} do
+  test "direct create-work generic review requirement remains durable", %{repo: repo} do
+    review = %{"type" => "human", "args" => %{"team" => "maintainers"}}
+
     assert {:ok, creation} =
              CreateWork.create(repo, %{
                kind: "standard_pr",
                repo: "kraken",
                base_branch: "main",
-               title: "Use a brief direct review",
+               title: "Use a direct human review",
                acceptance_criteria: ["Direct review guidance remains coherent."],
-               review_lanes: ["fast"]
+               review_requirement: review
              })
 
-    assert creation.work_package.review_lanes == ["fast"]
-    assert CreateWork.response_payload(creation).work_package.review_lanes == ["fast"]
-    assert creation.virtual_files["review_suite.md"] =~ "- review_fast"
-    refute creation.virtual_files["review_suite.md"] =~ "review_normal"
-    assert {:ok, {["fast"], []}} = ReviewLanes.required(repo, creation.work_package)
+    assert creation.work_package.review_requirement == review
+    assert CreateWork.response_payload(creation).work_package.review == review
+    assert creation.virtual_files["review.md"] =~ "\"type\": \"human\""
+    assert creation.virtual_files["review.md"] =~ "\"team\": \"maintainers\""
 
-    assert {:ok, later_review_suite} = Renderer.render(repo, creation.work_package.id, "review_suite.md")
-    assert later_review_suite == creation.virtual_files["review_suite.md"]
+    assert {:ok, later_review} = Renderer.render(repo, creation.work_package.id, "review.md")
+    assert later_review == creation.virtual_files["review.md"]
   end
 
   test "response payload preserves nil worker grant", %{repo: repo} do
@@ -554,8 +504,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
                title: "Fix production balance regression",
                product_description: "Available balance is overstated.",
                engineering_scope: "Exclude pending withdrawals from available balance.",
-               acceptance_criteria: ["Pending withdrawals are excluded.", "Hotfix review evidence exists."],
-               review_suite_template: "hotfix"
+               acceptance_criteria: ["Pending withdrawals are excluded."]
              })
 
     config = local_mcp_config(repo)
@@ -615,7 +564,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
                product_description: "A production endpoint is returning stale results.",
                engineering_scope: "Refresh the endpoint cache invalidation path only.",
                acceptance_criteria: ["Endpoint returns fresh results.", "Hotfix evidence is attached."],
-               review_suite_template: "hotfix"
+               review_requirement: %{"type" => "human", "args" => %{"team" => "maintainers"}}
              })
 
     assert {:ok, sibling_creation} =
@@ -624,14 +573,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
                repo: "kraken",
                base_branch: "main",
                title: "Sibling hotfix",
-               acceptance_criteria: ["Sibling remains isolated."],
-               review_suite_template: "hotfix"
+               acceptance_criteria: ["Sibling remains isolated."]
              })
 
     assert creation.work_package.parent_id == nil
     assert creation.work_package.status == "ready_for_worker"
     assert creation.policy.template == "hotfix"
-    assert creation.policy.review_suite.required == ["fast"]
+    assert "review_complete" in creation.policy.required_gates
 
     config = local_mcp_config(repo)
     server = local_mcp_server(config, "hotfix-worker-state")
@@ -824,7 +772,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     missing = get_in(missing_evidence_response, ["error", "data", "missing"])
     assert "branch_attached" in missing
     assert "pr_attached" in missing
-    assert "review_lanes_complete" in missing
+    assert "review_complete" in missing
 
     head_sha = "hotfix-head"
 
@@ -839,12 +787,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     })
 
     attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Fake hotfix review-suite package for the E2E path.",
+      "summary" => "Fake hotfix validation package for the E2E path.",
       "tests" => ["mix test test/symphony_elixir/symphony_plus_plus/create_work_test.exs"],
-      "artifacts" => ["review-suite/SYMPP-P4-003-fake-hotfix-review.json"],
-      "head_sha" => head_sha,
-      "reviews" => [%{"lane" => "fast", "verdict" => "green"}]
+      "artifacts" => ["validation/SYMPP-P4-003-hotfix.json"],
+      "head_sha" => head_sha
     })
+
+    attach_tool(repo, session, "complete_review", %{"reference" => "maintainer-review-4003"})
 
     ready_response =
       MCPHarness.request(

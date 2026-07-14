@@ -7,8 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
 
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
   alias SymphonyElixir.SymphonyPlusPlus.Id
-  alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.StringList
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -23,7 +22,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
     :forbidden_file_globs,
     :acceptance_criteria,
     :validation_steps,
-    :review_lanes,
     :stop_conditions
   ]
 
@@ -41,7 +39,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
           forbidden_file_globs: [String.t()] | nil,
           acceptance_criteria: [String.t()] | nil,
           validation_steps: [String.t()] | nil,
-          review_lanes: [String.t()] | nil,
+          review_requirement: map() | nil,
           stop_conditions: [String.t()] | nil,
           status: String.t() | nil,
           work_package_id: String.t() | nil,
@@ -63,7 +61,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
     field(:forbidden_file_globs, StringList, default: [])
     field(:acceptance_criteria, StringList, default: [])
     field(:validation_steps, StringList, default: [])
-    field(:review_lanes, StringList, default: [])
+    field(:review_requirement, :map)
     field(:stop_conditions, StringList, default: [])
     field(:status, :string)
     field(:work_package_id, :string)
@@ -87,7 +85,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
       |> normalize_keys()
       |> put_new_value("id", stable_id())
       |> put_new_value("status", "planned")
-      |> put_new_review_lanes()
       |> put_new_list_values()
 
     %__MODULE__{}
@@ -113,7 +110,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
       :forbidden_file_globs,
       :acceptance_criteria,
       :validation_steps,
-      :review_lanes,
+      :review_requirement,
       :stop_conditions,
       :status
     ])
@@ -129,7 +126,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
       :forbidden_file_globs,
       :acceptance_criteria,
       :validation_steps,
-      :review_lanes,
       :stop_conditions,
       :status
     ])
@@ -137,8 +133,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
     |> validate_inclusion(:work_package_kind, WorkPackage.planned_slice_kinds())
     |> validate_inclusion(:status, @statuses)
     |> validate_branch_pattern()
-    |> validate_review_lanes()
-    |> canonicalize_review_lanes()
+    |> validate_review_requirement()
   end
 
   defp validate_create_status(changeset) do
@@ -160,34 +155,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice do
     end)
   end
 
-  defp validate_review_lanes(changeset) do
-    validate_change(changeset, :review_lanes, fn :review_lanes, lanes ->
-      if Enum.all?(lanes, &ReviewProfiles.normalize_review_suite_profile/1) do
-        []
-      else
-        [review_lanes: "must be one of: #{Enum.join(ReviewProfiles.review_suite_profiles(), ", ")}"]
+  defp validate_review_requirement(changeset) do
+    validate_change(changeset, :review_requirement, fn :review_requirement, requirement ->
+      case ReviewRequirement.validation_error(requirement) do
+        nil -> []
+        message -> [review_requirement: message]
       end
     end)
   end
 
-  defp canonicalize_review_lanes(%Ecto.Changeset{valid?: true} = changeset) do
-    update_change(changeset, :review_lanes, &ReviewProfiles.normalize_review_suite_profiles/1)
-  end
-
-  defp canonicalize_review_lanes(changeset), do: changeset
-
   defp put_new_list_values(attrs) do
     Enum.reduce(@list_fields, attrs, fn field, acc -> put_new_value(acc, Atom.to_string(field), []) end)
   end
-
-  defp put_new_review_lanes(%{"work_package_kind" => kind} = attrs) when is_binary(kind) do
-    case Templates.expand(kind) do
-      {:ok, policy} -> put_new_value(attrs, "review_lanes", policy.review_suite.required)
-      {:error, :unknown_policy_template} -> attrs
-    end
-  end
-
-  defp put_new_review_lanes(attrs), do: attrs
 
   defp normalize_keys(attrs) when is_map(attrs) do
     Map.new(attrs, fn {key, value} -> {normalize_key(key), value} end)

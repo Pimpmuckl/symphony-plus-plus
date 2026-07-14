@@ -197,7 +197,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "acceptance_criteria" => slice |> map_value("acceptance_criteria") |> detail_list(),
       "validation_count" => list_count(map_value(slice, "validation_steps")),
       "validation_steps" => slice |> map_value("validation_steps") |> detail_list(),
-      "review_lanes" => slice |> map_value("review_lanes") |> join_list()
+      "review" => map_value(slice, "review")
     }
   end
 

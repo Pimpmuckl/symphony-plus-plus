@@ -25,9 +25,9 @@ After claiming one current WorkRequest, an architect may omit
 `work_request_id`, delivery repo, and the primary repo's target base branch.
 Pass the target base branch when selecting a secondary delivery repo. Ordinary
 PR work also defaults to `standard_pr`; use `mcp` for MCP server, protocol,
-tool, or plugin work. Branch pattern, forbidden globs, and review lanes may be
-omitted, while title, goal, owned globs, acceptance criteria, validation, and
-stop conditions remain explicit.
+tool, or plugin work. Branch pattern and forbidden globs may be omitted. Review
+is also optional and provider-agnostic. Title, goal, owned
+globs, acceptance criteria, validation, and stop conditions remain explicit.
 
 Approved planned slices are dispatched with `work_request_id` and
 `planned_slice_id`. Dispatch creates a linked WorkPackage and returns worker

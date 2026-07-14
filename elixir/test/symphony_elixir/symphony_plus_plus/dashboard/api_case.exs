@@ -143,7 +143,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
       forbidden_file_globs: ["plugins/**"],
       acceptance_criteria: ["payload remains stable"],
       validation_steps: ["mix test"],
-      review_lanes: ["normal"],
+      review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       stop_conditions: ["payload drift"]
     }
     |> Map.merge(Enum.into(overrides, %{}))

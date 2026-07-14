@@ -26,7 +26,7 @@ Before coding:
    the local ledger scope mismatches, stop and ask the architect or operator to
    repair that state. Do not request raw secrets.
 4. Read `read_context()`, `read_task_plan()`, findings, progress,
-   acceptance, review-suite, and handoff virtual resources.
+   acceptance, review, and handoff virtual resources.
 5. Update the virtual task plan with `update_task_plan(patch, expected_version)`.
 6. Stop and ask the architecture agent if dependency evidence, permission
    grants, or source context are missing.
@@ -64,15 +64,16 @@ Before ready:
 4. Refresh current state only for the attached PR with `sync_pr()`. Pass
    top-level current-state fields when they changed; use explicit PR identity
    or `recovery` only for repair.
-5. Submit review evidence when available with
+5. Submit validation evidence with
    `submit_review_package(summary, tests, artifacts)` after branch metadata is
    current.
-6. Call `mark_ready()` only after acceptance criteria, tests, required review
-   profile evidence, progress, findings, branch/PR evidence, and blockers are
-   settled. Pass `review_suite_round_id` when a passing local Review Suite
-   round should be attached during closeout. Do not add lifecycle calls only to
-   restate existing evidence. If active blockers must be resolved or kept
-   active during the finish transition, pass `blocker_closeout`.
+6. If `review.md` declares a review requirement, complete it for the current
+   exact head and call `complete_review(reference?, note?)`.
+7. Call `mark_ready()` only after acceptance criteria, tests, required review,
+   progress, findings, branch/PR evidence, and blockers are settled. Do not add
+   lifecycle calls only to restate existing evidence. If active blockers must
+   be resolved or kept active during the finish transition, pass
+   `blocker_closeout`.
 
 Final output:
 - PR URL and final head SHA.

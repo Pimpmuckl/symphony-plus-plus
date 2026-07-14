@@ -109,7 +109,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshContractTest d
              "branch_pattern",
              "delivery_repo",
              "forbidden_file_globs",
-             "review_lanes",
+             "review",
              "target_base_branch",
              "work_package_kind"
            ]
@@ -127,7 +127,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshContractTest d
              "branch_pattern",
              "delivery_repo",
              "forbidden_file_globs",
-             "review_lanes",
+             "review",
              "target_base_branch",
              "work_package_kind",
              "work_request_id"

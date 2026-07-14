@@ -26,7 +26,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     "request_scope_expansion",
     "resolve_blocker",
     "submit_review_package",
-    "attach_review_suite_result"
+    "complete_review"
   ]
 
   @type repo :: module()
@@ -157,8 +157,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     ["submit_review_package", session.assignment.work_package_id, idempotency_key] |> Enum.join(":")
   end
 
-  def scoped_idempotency_key("attach_review_suite_result", idempotency_key, %Session{} = session) do
-    ["attach_review_suite_result", session.assignment.work_package_id, idempotency_key] |> Enum.join(":")
+  def scoped_idempotency_key("complete_review", idempotency_key, %Session{} = session) do
+    ["complete_review", session.assignment.work_package_id, idempotency_key] |> Enum.join(":")
   end
 
   def scoped_idempotency_key(tool, idempotency_key, %Session{} = session) when tool in ["attach_branch", "attach_pr", "sync_pr"] do
@@ -179,7 +179,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     |> Map.merge(tool_payload)
   end
 
-  def merge_payload("attach_review_suite_result", _caller_payload, tool_payload), do: tool_payload
+  def merge_payload("complete_review", _caller_payload, tool_payload), do: tool_payload
 
   def merge_payload(_tool, caller_payload, tool_payload) when tool_payload == %{} do
     Map.drop(caller_payload, ["source_tool"])
@@ -452,11 +452,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     |> Map.get(:payload)
   end
 
-  defp canonical_metadata_event_status(arguments, "attach_review_suite_result", status), do: Map.put(arguments, "status", status)
   defp canonical_metadata_event_status(arguments, _tool, _status), do: arguments
 
-  defp validate_metadata_caller_payload("attach_review_suite_result", caller_payload) when map_size(caller_payload) == 0, do: :ok
-  defp validate_metadata_caller_payload("attach_review_suite_result", _caller_payload), do: {:tool_error, "unexpected_payload"}
+  defp validate_metadata_caller_payload("complete_review", caller_payload) when map_size(caller_payload) == 0, do: :ok
+  defp validate_metadata_caller_payload("complete_review", _caller_payload), do: {:tool_error, "unexpected_payload"}
   defp validate_metadata_caller_payload(_tool, _caller_payload), do: :ok
 
   defp drop_protected_append_progress_payload(%{"type" => type} = caller_payload) when type in ["scope_expansion_request", "scope_expansion_approval"] do

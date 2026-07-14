@@ -306,7 +306,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   defp resource_type_for_virtual_file("task_plan.md"), do: :task_plan
   defp resource_type_for_virtual_file("findings.md"), do: :finding
   defp resource_type_for_virtual_file("progress.md"), do: :progress
-  defp resource_type_for_virtual_file("review_suite.md"), do: :review_evidence
+  defp resource_type_for_virtual_file("review.md"), do: :review_evidence
   defp resource_type_for_virtual_file(_file_name), do: :work_package
 
   defp worker_session?(%Session{assignment: %{grant_role: "worker"}}), do: true

@@ -812,8 +812,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
       "tests" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
       "artifacts" => ["review-log.txt"],
       "head_sha" => head_sha,
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     }
 
     review_response = attach_tool(repo, claimed_server.session, "submit_review_package", review_args)

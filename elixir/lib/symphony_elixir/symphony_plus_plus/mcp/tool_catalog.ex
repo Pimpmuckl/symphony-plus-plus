@@ -4,7 +4,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, SoloTools}
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{Node, SliceLink}
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
@@ -49,7 +48,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "attach_pr",
     "sync_pr",
     "submit_review_package",
-    "attach_review_suite_result"
+    "complete_review"
   ]
   @worker_tools [
     "get_current_assignment",
@@ -71,7 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "attach_pr",
     "sync_pr",
     "submit_review_package",
-    "attach_review_suite_result",
+    "complete_review",
     "mark_ready"
   ]
   @shared_worker_architect_tools ["add_comment", "list_comments", "resolve_comment", "resolve_blocker", "read_guidance_request"]
@@ -524,13 +523,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   end
 
   def worker_tool_input_schema("mark_ready") do
-    schema(
-      %{
-        "blocker_closeout" => blocker_closeout_schema(),
-        "review_suite_round_id" => described_string_schema("Optional passing local Review Suite round id to attach before readiness checks.")
-      },
-      []
-    )
+    schema(%{"blocker_closeout" => blocker_closeout_schema()}, [])
   end
 
   def worker_tool_input_schema("update_task_plan") do
@@ -657,7 +650,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         "summary" => string_schema(),
         "tests" => nonempty_string_array_schema(),
         "artifacts" => nonempty_string_array_schema(),
-        "reviews" => review_entries_schema(),
         "head_sha" => string_schema(),
         "acceptance_criteria_met" => boolean_schema()
       }),
@@ -665,29 +657,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def worker_tool_input_schema("attach_review_suite_result") do
+  def worker_tool_input_schema("complete_review") do
     schema(
       session_scoped_properties(%{
-        "anchor" => string_schema(),
-        "head_sha" => string_schema(),
-        "idempotency_key" => string_schema(),
-        "lane" => string_schema(),
-        "profile" => string_schema(),
-        "reviewer" => string_schema(),
-        "round_id" => string_schema(),
-        "status" => string_schema(),
-        "suite" => string_schema(),
-        "summary" => string_schema(),
-        "verdict" => string_schema()
+        "reference" =>
+          nullable_string_schema()
+          |> Map.put("description", "Optional opaque provider or human review reference."),
+        "note" => markdown_nullable_string_schema("Optional human-facing completion note.")
       }),
       []
     )
-    |> always_validate(%{
-      "anyOf" => [
-        %{"required" => ["round_id"]},
-        %{"required" => ["head_sha", "status", "verdict", "suite", "anchor", "summary"]}
-      ]
-    })
   end
 
   defp unbound_worker_tool_input_schema(name) when name in @session_scoped_worker_tools do
@@ -966,7 +945,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         "forbidden_file_globs" => described_string_array_schema("Optional forbidden file globs. Defaults to an empty list."),
         "acceptance_criteria" => string_array_schema(),
         "validation_steps" => string_array_schema(),
-        "review_lanes" => Map.put(review_suite_profile_array_schema(), "description", "Omit to use package policy review defaults."),
+        "review" => review_requirement_schema(),
         "stop_conditions" => string_array_schema(),
         "branch_pattern" => described_string_schema("Optional exact branch or {{placeholder}} template. Git wildcard patterns such as `*` are not supported.")
       },
@@ -1413,6 +1392,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp markdown_nullable_string_schema(description), do: Map.put(nullable_string_schema(), "description", description)
   defp object_schema, do: %{"type" => "object", "additionalProperties" => true}
 
+  defp review_requirement_schema do
+    %{
+      "type" => "object",
+      "description" => "Optional provider-agnostic review requirement. Omit when no review is required.",
+      "additionalProperties" => false,
+      "properties" => %{
+        "type" => nonblank_string_schema() |> Map.put("description", "Opaque review provider or type."),
+        "args" => object_schema() |> Map.put("description", "Optional opaque non-secret provider arguments.")
+      },
+      "required" => ["type"]
+    }
+  end
+
   defp blocker_closeout_schema do
     %{
       "type" => "object",
@@ -1466,7 +1458,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp nonempty_string_array_schema, do: %{"type" => "array", "minItems" => 1, "items" => nonblank_string_schema()}
   defp string_array_schema, do: %{"type" => "array", "items" => nonblank_string_schema()}
   defp described_string_array_schema(description), do: Map.put(string_array_schema(), "description", description)
-  defp review_suite_profile_array_schema, do: %{"type" => "array", "items" => string_enum_schema(ReviewProfiles.review_suite_profiles())}
 
   defp changed_files_schema,
     do: %{"anyOf" => [%{"type" => "array", "items" => %{"anyOf" => [nonblank_string_schema(), object_schema()]}}, nonnegative_integer_schema()]}
@@ -1531,18 +1522,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         }
       },
       "required" => ["nodes"]
-    }
-  end
-
-  defp review_entries_schema do
-    %{
-      "type" => "array",
-      "items" => %{
-        "type" => "object",
-        "additionalProperties" => true,
-        "properties" => %{"lane" => string_schema(), "verdict" => string_schema()},
-        "required" => ["lane", "verdict"]
-      }
     }
   end
 

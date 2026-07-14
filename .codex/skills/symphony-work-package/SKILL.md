@@ -49,8 +49,9 @@ Keep S++ current as the work changes:
 - `append_finding(finding, idempotency_key)`.
 - `append_progress(event, idempotency_key)`.
 - `report_blocker` / `resolve_blocker`.
-- `add_comment(target_kind, target_id, body)`, `list_comments`, and
-  `resolve_comment(comment_id, resolution_note?)` for scoped notes.
+- `add_comment(body)`, `list_comments()`, and
+  `resolve_comment(comment_id, resolution_note?)` for scoped package notes.
+  Pass `target_kind` and `target_id` only for another authorized target.
 - `set_status` for allowed lifecycle transitions.
 - `request_scope_expansion` when the assignment must grow.
 - `create_guidance_request` when product, architecture, dependency, or
@@ -69,17 +70,20 @@ S++ explicitly gives scoped context.
 
 ## Branch, PR, Review
 
-- `attach_branch(branch, head_sha)` once implementation branch exists.
-- `attach_pr(url, head_sha)` after PR creation.
-- `sync_pr(url_or_number, metadata)` only for the attached PR.
-- `submit_review_package(summary, tests, artifacts, head_sha)` with current
-  head SHA and required review verdicts.
-- `attach_review_suite_result` when structured Review Suite result evidence is
-  required.
-
-Run the required Review Suite profile. If unavailable, use the package-approved
-provider and record review progress. After material changes, rerun the same
-required profile; do not step down.
+- `attach_branch(head_sha)` once implementation branch exists. Pass `branch`
+  only when the package branch pattern is templated or absent.
+- `attach_pr(url, head_sha)` after PR creation. Include current check, review,
+  or merge metadata in the same call when it is already available.
+- Use `sync_pr()` to refresh the currently attached PR. Add top-level current
+  state fields when they changed; use explicit PR identity or `recovery` only
+  when repairing missing attachment evidence.
+- `submit_review_package(summary, tests, artifacts)` after branch metadata is
+  current to record validation and acceptance evidence.
+- If `review.md` declares a review requirement, use that provider and its
+  optional arguments. After it succeeds for the attached exact head, call
+  `complete_review(reference?, note?)`. The reference is an opaque provider or
+  human review id; Symphony++ does not interpret provider-specific results.
+- If `review.md` says no review is required, do not invent one.
 
 ## Ready
 
@@ -88,8 +92,13 @@ Before `mark_ready()`:
 - Acceptance is satisfied or explicitly blocked.
 - Required tests, static checks, review, and CI/check status are complete or
   accurately reported as absent/blocked.
-- Task plan, findings, progress, branch, PR, and review evidence are current.
+- Task plan, findings, progress, branch, PR, and any required review completion are current.
+  Package-depth policies still require at least one terminal package plan node.
+  Do not add lifecycle calls only to restate facts already present; `mark_ready`
+  infers completed plan, PR, branch, and review facts from existing evidence.
 - No active blocker remains.
+  If a finish transition must address active blockers, pass
+  `blocker_closeout` to `set_status` or `mark_ready`.
 
 After `mark_ready()` succeeds, evidence is frozen except idempotent replay of
 already-recorded writes.

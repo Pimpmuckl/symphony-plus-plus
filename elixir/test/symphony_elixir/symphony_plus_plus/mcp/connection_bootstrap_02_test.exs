@@ -225,7 +225,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
           "attach_pr",
           "sync_pr",
           "submit_review_package",
-          "attach_review_suite_result"
+          "complete_review"
         ] do
       assert get_in(unbound_tools_by_name, [tool, "inputSchema", "properties", "work_package_id", "type"]) == "string"
     end
@@ -465,15 +465,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
            ]
 
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "required"]) == ["summary", "tests", "artifacts"]
-    assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "reviews", "type"]) == "array"
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "tests", "minItems"]) == 1
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "tests", "items", "type"]) == "string"
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "tests", "items", "pattern"]) == "\\S"
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "artifacts", "minItems"]) == 1
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "artifacts", "items", "type"]) == "string"
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "artifacts", "items", "pattern"]) == "\\S"
-    assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "reviews", "items", "required"]) == ["lane", "verdict"]
-    assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "reviews", "items", "additionalProperties"]) == true
+    assert get_in(tools_by_name, ["complete_review", "inputSchema", "required"]) == []
+    assert get_in(tools_by_name, ["complete_review", "inputSchema", "properties", "reference", "type"]) == ["string", "null"]
+    refute Map.has_key?(get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties"]), "reviews")
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "head_sha", "type"]) == "string"
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "acceptance_criteria_met", "type"]) == "boolean"
 

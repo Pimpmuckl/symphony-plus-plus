@@ -51,7 +51,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     :ok
   end
 
-  test "hotfix package runs through MCP with fake GitHub and review evidence", %{repo: repo} do
+  test "hotfix package runs through MCP with a generic review requirement", %{repo: repo} do
     assert {:ok, creation} =
              CreateWork.create(repo, %{
                kind: "hotfix",
@@ -60,8 +60,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
                title: "Fix hotfix incident",
                product_description: "A pilot endpoint returns stale data.",
                engineering_scope: "Touch only the cache invalidation path.",
-               acceptance_criteria: ["Endpoint returns fresh data.", "Hotfix review evidence exists."],
-               review_suite_template: "hotfix"
+               acceptance_criteria: ["Endpoint returns fresh data.", "Required review is complete."],
+               review_requirement: %{"type" => "human", "args" => %{"team" => "maintainers"}}
              })
 
     session = claim_worker_grant(repo, creation.worker_grant.id, "hotfix-worker")
@@ -75,7 +75,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     attach_branch(repo, session, "agent/SYMPP-P8-001/hotfix", head_sha)
     attach_pr(repo, session, "https://github.com/nextide/symphony-plus-plus/pull/8001", head_sha)
     sync_fake_github(repo, session, 8001, head_sha, ["elixir/lib/symphony_elixir/cache.ex"])
-    submit_fake_review_package(repo, session, head_sha, ["fast"])
+    submit_validation_package(repo, session, head_sha)
+    complete_review(repo, session, "maintainer-review-8001")
 
     response = mcp_tool(repo, session, "mark_ready", %{})
 
@@ -87,7 +88,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     assert persisted.status == "ready_for_merge"
   end
 
-  test "fake GitHub and review-suite gates drive a CI-friendly MCP package to ready", %{repo: repo} do
+  test "fake GitHub and generic review gates drive a CI-friendly MCP package to ready", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
@@ -98,7 +99,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
                  base_branch: "symphony-plus-plus/beta",
                  status: "ci_waiting",
                  policy_template: "mcp_changed_file_scope_guard",
-                 allowed_file_globs: ["elixir/lib/**"]
+                 allowed_file_globs: ["elixir/lib/**"],
+                 review_requirement: %{"type" => "automated", "args" => %{"policy" => "repository"}}
                )
              )
 
@@ -109,8 +111,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     attach_branch(repo, session, "agent/SYMPP-P8-001/gates", head_sha)
     attach_pr(repo, session, "https://github.com/nextide/symphony-plus-plus/pull/8002", head_sha)
     sync_fake_github(repo, session, 8002, head_sha, ["elixir/lib/symphony_elixir/symphony_plus_plus/readiness.ex"])
-    submit_fake_review_package(repo, session, head_sha)
-    attach_fake_review_suite_result(repo, session, package.id, head_sha)
+    submit_validation_package(repo, session, head_sha)
+    complete_review(repo, session, "automated-review-8002")
 
     response = mcp_tool(repo, session, "mark_ready", %{})
 
@@ -119,7 +121,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
 
     assert {:ok, artifacts} = PlanningRepository.list_artifacts(repo, package.id)
     assert Enum.any?(artifacts, &(&1.kind == "github_pr" and &1.path == "github-pr.json"))
-    assert Enum.any?(artifacts, &(&1.kind == "review_suite" and &1.path == "review-suite-result.json"))
+    assert Enum.any?(artifacts, &(&1.kind == "review" and &1.path == "validation/p8-001-local.json"))
   end
 
   test "phase architect delegates two packages through ready approval and merge", %{repo: repo} do
@@ -380,7 +382,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     append_done_plan(repo, child_id)
     attach_branch(repo, session, "agent/#{child_id}/worker", head_sha)
     attach_pr(repo, session, phase_child_pr_url(child_id), head_sha)
-    submit_fake_review_package(repo, session, head_sha)
+    submit_validation_package(repo, session, head_sha)
   end
 
   defp phase_child_pr_url("SYMPP-P8-001-PHASE-A"), do: "https://github.com/nextide/symphony-plus-plus/pull/8003"
@@ -408,28 +410,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     })
   end
 
-  defp submit_fake_review_package(repo, session, head_sha, lanes \\ ["normal"]) do
+  defp submit_validation_package(repo, session, head_sha) do
     attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Deterministic local review evidence for P8 integration harness.",
+      "summary" => "Deterministic local validation evidence for P8 integration harness.",
       "tests" => ["mix sympp.integration"],
-      "artifacts" => ["review-suite/p8-001-local.json"],
+      "artifacts" => ["validation/p8-001-local.json"],
       "head_sha" => head_sha,
-      "acceptance_criteria_met" => true,
-      "reviews" => Enum.map(lanes, &%{"lane" => &1, "verdict" => "green"})
+      "acceptance_criteria_met" => true
     })
   end
 
-  defp attach_fake_review_suite_result(repo, session, work_package_id, head_sha) do
-    attach_tool(repo, session, "attach_review_suite_result", %{
-      "work_package_id" => work_package_id,
-      "head_sha" => head_sha,
-      "suite" => "review-suite",
-      "anchor" => "phase_gate-p8-001-local",
-      "summary" => "normal profile is green in the deterministic harness.",
-      "status" => "passed",
-      "verdict" => "green",
-      "lane" => "normal"
-    })
+  defp complete_review(repo, session, reference) do
+    attach_tool(repo, session, "complete_review", %{"reference" => reference})
   end
 
   defp append_progress(repo, session, summary, status, idempotency_key) do

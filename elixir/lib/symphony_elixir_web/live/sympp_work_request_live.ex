@@ -787,8 +787,8 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive do
                   <textarea name={f[:forbidden_file_globs].name} rows="4"><%= input_value(f, :forbidden_file_globs) %></textarea>
                 </label>
                 <label>
-                  <span>Review lanes</span>
-                  <textarea name={f[:review_lanes].name} rows="4"><%= input_value(f, :review_lanes) %></textarea>
+                  <span>Review (optional JSON)</span>
+                  <textarea name={f[:review_json].name} rows="4" placeholder={~s({"type":"human","args":{"role":"maintainer"}})}><%= input_value(f, :review_json) %></textarea>
                 </label>
                 <label class="sympp-form-wide">
                   <span>Acceptance criteria</span>
@@ -902,7 +902,7 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive do
                   </div>
                   <div>
                     <dt>Review</dt>
-                    <dd><%= list_label(value(slice, :review_lanes, [])) %></dd>
+                    <dd><%= value(slice, :review) |> json_block() %></dd>
                   </div>
                   <div>
                     <dt>Stop conditions</dt>

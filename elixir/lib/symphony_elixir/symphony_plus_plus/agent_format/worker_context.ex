@@ -2,14 +2,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.Toon
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
-  alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @redacted "[REDACTED]"
@@ -123,11 +122,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
     {:ok, payload}
   end
 
-  def virtual_file_payload(%State{} = state, "review_suite.md", opts) do
+  def virtual_file_payload(%State{} = state, "review.md", opts) do
     payload =
       state
-      |> base_payload("review_suite.md", opts)
-      |> Map.put("review_suite", review_suite_payload(state))
+      |> base_payload("review.md", opts)
+      |> Map.put("review", review_payload(state))
 
     {:ok, payload}
   end
@@ -174,38 +173,56 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
       "parent_id" => Redactor.redact_text(work_package.parent_id),
       "owner_id" => Redactor.redact_text(work_package.owner_id),
       "product_description" => Redactor.redact_text(work_package.product_description),
-      "engineering_scope" => Redactor.redact_text(work_package.engineering_scope)
+      "engineering_scope" => Redactor.redact_text(work_package.engineering_scope),
+      "review" => Redactor.redact_output(work_package.review_requirement)
     }
   end
 
-  defp review_suite_payload(%State{work_package: %WorkPackage{} = work_package} = state) do
-    case Templates.expand(policy_key(work_package)) do
-      {:ok, template} ->
-        template = effective_review_policy(state, template)
+  defp review_payload(%State{work_package: work_package, progress_events: progress_events}) do
+    %{
+      "requirement" => Redactor.redact_output(work_package.review_requirement),
+      "completion" => review_completion_payload(work_package, progress_events)
+    }
+  end
+
+  defp review_completion_payload(%WorkPackage{review_requirement: nil}, _progress_events), do: nil
+
+  defp review_completion_payload(%WorkPackage{} = work_package, progress_events) do
+    current_head = latest_current_head(progress_events)
+
+    event =
+      if is_binary(current_head) do
+        MetadataProjection.latest_review_completion_event(
+          progress_events,
+          work_package.id,
+          current_head,
+          work_package.review_requirement
+        )
+      end
+
+    case event do
+      %ProgressEvent{} = event ->
+        payload = event.payload || %{}
 
         %{
-          "policy_template" => template.template,
-          "required_gates" => template.required_gates,
-          "readiness_requirements" => template.readiness_requirements,
-          "required_review_profiles" => review_suite_required_profiles(state, template),
-          "optional_review_profiles" => template.review_suite.optional
+          "head_sha" => current_head,
+          "reference" => Redactor.redact_text(Map.get(payload, "reference")),
+          "note" => Redactor.redact_text(Map.get(payload, "note")),
+          "actor_id" => Redactor.redact_text(event.actor_id),
+          "completed_at" => timestamp(event.created_at)
         }
 
-      {:error, :unknown_policy_template} ->
-        %{"policy_template" => policy_key(work_package), "error" => "unknown_policy_template"}
+      nil ->
+        nil
     end
   end
 
-  defp effective_review_policy(%State{review_suite_required_profiles: profiles}, template) when is_list(profiles) do
-    ReviewProfiles.apply_required_profiles(template, profiles)
+  defp latest_current_head(progress_events) do
+    Enum.find_value(Enum.reverse(progress_events), fn %ProgressEvent{payload: payload} ->
+      if is_map(payload) and Map.get(payload, "type") == "branch" and Map.get(payload, "source_tool") == "attach_branch",
+        do: Map.get(payload, "head_sha")
+    end)
   end
-
-  defp effective_review_policy(%State{}, template), do: template
-
-  defp review_suite_required_profiles(%State{review_suite_required_profiles: profiles}, _template) when is_list(profiles), do: redacted_profiles(profiles)
-  defp review_suite_required_profiles(%State{}, template), do: template.review_suite.required
-
-  defp redacted_profiles(profiles), do: Redactor.redact_output(profiles)
 
   defp plan_node_payload(%PlanNode{} = plan_node) do
     %{

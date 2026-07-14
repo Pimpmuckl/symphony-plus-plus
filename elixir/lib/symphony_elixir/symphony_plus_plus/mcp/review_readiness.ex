@@ -14,11 +14,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
-  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes
   alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
-  alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewSuiteRounds
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
@@ -36,41 +33,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
          {:ok, tests} <- required_string_list(arguments, "tests"),
          {:ok, artifacts} <- required_string_list(arguments, "artifacts"),
          artifacts = Enum.uniq(artifacts),
-         {:ok, reviews} <- optional_review_list(arguments, "reviews"),
          {:ok, acceptance_criteria_met} <- optional_boolean(arguments, "acceptance_criteria_met", nil) do
       submit_review_package_transaction(repo, session, arguments, artifacts, %{
         "type" => "review_package",
         "summary" => summary,
         "tests" => tests,
         "artifacts" => artifacts,
-        "reviews" => reviews,
         "acceptance_criteria_met" => acceptance_criteria_met
       })
     end
   end
 
-  @spec attach_review_suite_result(repo(), Session.t(), map()) :: worker_result()
-  def attach_review_suite_result(repo, %Session{} = session, arguments) do
-    with {:ok, arguments, payload} <- review_suite_result_arguments(arguments, session),
-         status = Map.get(payload, "status"),
-         verdict = Map.get(payload, "verdict"),
-         :ok <- require_passing_review_suite_result(status, verdict) do
-      attach_review_suite_result_transaction(repo, session, arguments, payload)
+  @spec complete_review(repo(), Session.t(), map()) :: worker_result()
+  def complete_review(repo, %Session{} = session, arguments) do
+    with {:ok, reference} <- optional_string_argument(arguments, "reference"),
+         {:ok, note} <- optional_string_argument(arguments, "note") do
+      complete_review_transaction(repo, session, reference, note)
     end
   end
 
-  @spec mark_ready(repo(), Session.t(), term(), term(), function()) ::
+  @spec mark_ready(repo(), Session.t(), term(), function()) ::
           {:ok, {WorkPackage.t(), term(), [term()]}}
           | {:tool_error, term()}
           | {:error, term()}
           | mcp_error()
-  def mark_ready(repo, %Session{} = session, blocker_closeout_plan, review_suite_result, apply_blocker_closeout) do
+  def mark_ready(repo, %Session{} = session, blocker_closeout_plan, apply_blocker_closeout) do
     repo
     |> run_worker_transaction(fn ->
       with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
            :ok <- lock_work_package(repo, Session.work_package_id(session)),
-           {:ok, _review_suite_result} <-
-             maybe_attach_mark_ready_review_suite_result(repo, session, review_suite_result),
            {:ok, blocker_closeout} <- apply_blocker_closeout.(repo, session, blocker_closeout_plan),
            {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
            {:ok, readiness_warnings} <- readiness_gates(repo, state),
@@ -83,18 +74,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     end)
   end
 
-  @spec mark_ready_review_suite_result(map(), Session.t()) :: {:ok, nil | {map(), map()}} | {:tool_error, term()}
-  def mark_ready_review_suite_result(arguments, %Session{} = session) do
-    with {:ok, round_id} <- optional_string_argument(arguments, "review_suite_round_id") do
-      mark_ready_review_suite_result_for_round(round_id, session)
-    end
-  end
-
   @spec child_ready_approval_gates(repo(), map()) ::
           :ok | {:error, {:readiness_failed, [String.t()], [map()]}} | {:error, term()}
   def child_ready_approval_gates(repo, state) do
-    with {:ok, {required_review_lanes, _warnings}} <- ReviewLanes.required(repo, state.work_package),
-         {:ok, reasons} <- readiness_failure_reasons(repo, state, required_review_lanes) do
+    with {:ok, reasons} <- readiness_failure_reasons(repo, state) do
       reasons = Enum.reject(reasons, &(Map.get(&1, "gate") in ["status_ci_waiting", "status_reviewing"]))
       missing = missing_readiness_gates(reasons)
 
@@ -105,24 +88,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   @spec maybe_put_readiness_warnings(map(), [term()]) :: map()
   def maybe_put_readiness_warnings(payload, []), do: payload
   def maybe_put_readiness_warnings(payload, warnings), do: Map.put(payload, "warnings", warnings)
-
-  defp mark_ready_review_suite_result_for_round(nil, %Session{}), do: {:ok, nil}
-
-  defp mark_ready_review_suite_result_for_round(round_id, %Session{} = session) do
-    with {:ok, arguments, payload} <- review_suite_result_arguments(%{"round_id" => round_id}, session),
-         :ok <- require_passing_review_suite_result(Map.get(payload, "status"), Map.get(payload, "verdict")) do
-      {:ok, {arguments, payload}}
-    end
-  end
-
-  defp maybe_attach_mark_ready_review_suite_result(_repo, %Session{}, nil), do: {:ok, nil}
-
-  defp maybe_attach_mark_ready_review_suite_result(repo, %Session{} = session, {arguments, payload}) do
-    case attach_review_suite_result_transaction_body(repo, session, arguments, payload) do
-      {:error, _code, _message, _data} = error -> error
-      result -> {:ok, result}
-    end
-  end
 
   defp submit_review_package_transaction(repo, %Session{} = session, arguments, artifacts, payload) do
     case repo.transaction(fn ->
@@ -347,344 +312,69 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     if String.contains?(artifact, "://"), do: artifact, else: nil
   end
 
-  defp review_suite_result_arguments(arguments, %Session{} = session) do
-    if review_suite_round_id_argument?(arguments) do
-      resolved_review_suite_result_arguments(arguments, session)
-    else
-      explicit_review_suite_result_arguments(arguments, session)
-    end
-  end
-
-  defp review_suite_round_id_argument?(arguments) do
-    case Map.get(arguments, "round_id") do
-      value when is_binary(value) -> String.trim(value) != ""
-      _value -> false
-    end
-  end
-
-  defp explicit_review_suite_result_arguments(arguments, %Session{} = session) do
-    with {:ok, work_package_id} <- optional_string_argument(arguments, "work_package_id", Session.work_package_id(session)),
-         {:ok, requested_head_sha} <- required_argument(arguments, "head_sha"),
-         {:ok, suite} <- required_argument(arguments, "suite"),
-         {:ok, suite} <- review_suite_argument(suite),
-         {:ok, anchor} <- required_argument(arguments, "anchor"),
-         {:ok, summary} <- required_argument(arguments, "summary"),
-         {:ok, status} <- required_argument(arguments, "status"),
-         {:ok, verdict} <- required_argument(arguments, "verdict") do
-      {:ok, arguments,
-       %{
-         "type" => "review_suite_result",
-         "source_tool" => "attach_review_suite_result",
-         "work_package_id" => work_package_id,
-         "head_sha" => requested_head_sha,
-         "suite" => suite,
-         "anchor" => anchor,
-         "summary" => summary,
-         "status" => normalized_review_suite_status(status),
-         "verdict" => normalized_review_suite_verdict(verdict)
-       }}
-    end
-  end
-
-  defp resolved_review_suite_result_arguments(arguments, %Session{} = session) do
-    with {:ok, work_package_id} <- optional_string_argument(arguments, "work_package_id", Session.work_package_id(session)),
-         {:ok, round_id} <- required_argument(arguments, "round_id"),
-         {:ok, resolved} <-
-           ReviewSuiteRounds.resolve(round_id,
-             lane: Map.get(arguments, "lane"),
-             profile: Map.get(arguments, "profile")
-           ),
-         :ok <- require_review_suite_identity_match(resolved, "work_package_id", work_package_id) do
-      payload =
-        resolved
-        |> Map.merge(%{
-          "type" => "review_suite_result",
-          "source_tool" => "attach_review_suite_result",
-          "work_package_id" => work_package_id
-        })
-        |> Map.update!("status", &normalized_review_suite_status/1)
-        |> Map.update!("verdict", &normalized_review_suite_verdict/1)
-
-      resolved_arguments =
-        arguments
-        |> Map.put("head_sha", Map.fetch!(payload, "head_sha"))
-        |> Map.put_new("summary", Map.fetch!(payload, "summary"))
-
-      {:ok, resolved_arguments, payload}
-    else
-      {:tool_error, reason} -> {:tool_error, reason}
-      {:error, reason} -> {:tool_error, reason}
-    end
-  end
-
-  defp attach_review_suite_result_transaction(repo, %Session{} = session, arguments, payload) do
-    case repo.transaction(fn ->
-           attach_review_suite_result_transaction_body(repo, session, arguments, payload)
-         end) do
+  defp complete_review_transaction(repo, %Session{} = session, reference, note) do
+    case repo.transaction(fn -> complete_review_transaction_body(repo, session, reference, note) end) do
       {:ok, result} -> {:ok, result}
       {:error, {:mcp_error, code, message, data}} -> {:error, code, message, data}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp attach_review_suite_result_transaction_body(repo, %Session{} = session, arguments, payload) do
-    case replay_existing_review_suite_result(repo, session, arguments, payload) do
-      {:ok, result} ->
-        result
-
-      :new ->
-        append_new_review_suite_result(repo, session, arguments, payload)
-
-      {:error, code, message, data} ->
-        repo.rollback({:mcp_error, code, message, data})
-    end
-  end
-
-  defp replay_existing_review_suite_result(repo, %Session{} = session, arguments, payload) do
-    case PlanningService.require_valid_assignment(repo, session.assignment) do
-      :ok -> replay_existing_review_suite_result_for_valid_assignment(repo, session, arguments, payload)
-      {:error, reason} -> worker_error(reason, "attach_review_suite_result")
-    end
-  end
-
-  defp replay_existing_review_suite_result_for_valid_assignment(repo, %Session{} = session, arguments, payload) do
-    replay_payload = review_suite_payload(payload, arguments, Map.fetch!(payload, "head_sha"))
-
-    case ProgressEvents.metadata_attrs(session, arguments, "attach_review_suite_result", "review_suite_passed", replay_payload) do
-      {:ok, idempotency_key, attrs} -> replay_existing_review_suite_result_event(repo, session, idempotency_key, attrs)
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "attach_review_suite_result", "reason" => reason}}
-    end
-  end
-
-  defp replay_existing_review_suite_result_event(repo, %Session{} = session, idempotency_key, attrs) do
-    case ProgressEvents.existing(repo, session, idempotency_key) do
-      {:ok, event} -> ProgressEvents.replay_existing(repo, session, event, attrs, "attach_review_suite_result")
-      {:error, :not_found} -> :new
-      {:error, reason} -> worker_error(reason, "attach_review_suite_result")
-    end
-  end
-
-  defp append_new_review_suite_result(repo, %Session{} = session, arguments, payload) do
+  defp complete_review_transaction_body(repo, %Session{} = session, reference, note) do
     work_package_id = Session.work_package_id(session)
-    requested_head_sha = Map.fetch!(payload, "head_sha")
 
     with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
          :ok <- lock_work_package(repo, work_package_id),
          {:ok, state} <- PlanningRepository.get_state(repo, work_package_id),
-         {:ok, head_sha} <- review_package_head_sha(requested_head_sha, state.progress_events, state.work_package),
-         :ok <- reject_failed_review_suite_result_override(state.progress_events, work_package_id, head_sha),
-         payload <- review_suite_payload(payload, arguments, head_sha),
-         :ok <- require_review_suite_round_identity(payload, state.work_package, state.progress_events),
-         {:ok, result} <- ProgressEvents.append_metadata(repo, session, arguments, "attach_review_suite_result", "review_suite_passed", payload),
-         :ok <- append_review_suite_artifact(repo, work_package_id, head_sha),
+         {:ok, requirement} <- required_review_requirement(state.work_package),
+         {:ok, head_sha} <- required_current_review_head(state.progress_events),
+         payload <- review_completion_payload(work_package_id, requirement, head_sha, reference, note),
+         arguments <- review_completion_arguments(requirement, head_sha, note),
+         {:ok, result} <- ProgressEvents.append_metadata(repo, session, arguments, "complete_review", "review_complete", payload),
          :ok <- promote_stale_package_to_reviewing(repo, state.work_package) do
       result
     else
-      {:tool_error, {:review_suite_round_identity_mismatch, _field, _expected, _got} = reason} ->
-        {:error, code, message, data} = invalid_params_error("attach_review_suite_result", reason)
-        repo.rollback({:mcp_error, code, message, data})
-
-      {:tool_error, reason} ->
-        repo.rollback({:mcp_error, -32_602, "Invalid params", %{"tool" => "attach_review_suite_result", "reason" => reason}})
-
-      {:error, code, message, data} ->
-        repo.rollback({:mcp_error, code, message, data})
-
-      {:error, reason} ->
-        repo.rollback(reason)
+      {:tool_error, reason} -> repo.rollback({:mcp_error, -32_602, "Invalid params", %{"tool" => "complete_review", "reason" => reason}})
+      {:error, code, message, data} -> repo.rollback({:mcp_error, code, message, data})
+      {:error, reason} -> repo.rollback(reason)
     end
   end
 
-  defp review_suite_payload(payload, arguments, head_sha) do
-    payload
-    |> Map.put("head_sha", head_sha)
-    |> maybe_put_review_suite_field(arguments, "lane")
-    |> maybe_put_review_suite_field(arguments, "profile")
-    |> maybe_put_review_suite_field(arguments, "reviewer")
-    |> maybe_put_review_suite_field(arguments, "round_id")
-  end
+  defp required_review_requirement(%WorkPackage{review_requirement: requirement}) when is_map(requirement), do: {:ok, requirement}
+  defp required_review_requirement(%WorkPackage{}), do: {:tool_error, "review_not_required"}
 
-  defp review_suite_argument(suite) do
-    case ReviewProfiles.normalize_suite(suite) do
-      "review-suite" -> {:ok, "review-suite"}
-      _suite -> {:tool_error, "invalid_review_suite"}
+  defp required_current_review_head(progress_events) do
+    case latest_current_head_sha(progress_events) do
+      head_sha when is_binary(head_sha) and head_sha != "" -> {:ok, head_sha}
+      _head_sha -> {:tool_error, "review_current_head_missing"}
     end
   end
 
-  defp maybe_put_review_suite_field(payload, arguments, key) when key in ["lane", "profile"] do
-    value = review_suite_profile_argument(Map.get(arguments, key))
-
-    cond do
-      not is_binary(value) -> payload
-      Map.has_key?(payload, key) -> payload
-      true -> Map.put(payload, key, value)
-    end
-  end
-
-  defp maybe_put_review_suite_field(payload, arguments, key) do
-    case Map.get(arguments, key) do
-      value when is_binary(value) ->
-        value = String.trim(value)
-        if value == "" or Map.has_key?(payload, key), do: payload, else: Map.put(payload, key, value)
-
-      _value ->
-        payload
-    end
-  end
-
-  defp review_suite_profile_argument(value) when is_binary(value) do
-    case ReviewProfiles.normalize_profile(value) do
-      "" -> nil
-      value -> value
-    end
-  end
-
-  defp review_suite_profile_argument(_value), do: nil
-
-  defp require_review_suite_round_identity(%{} = payload, %WorkPackage{} = work_package, progress_events) do
-    with :ok <- require_review_suite_identity_match(payload, "repo", work_package.repo),
-         :ok <- require_review_suite_identity_match(payload, "base_branch", work_package.base_branch) do
-      require_review_suite_identity_match(payload, "branch", latest_current_branch(progress_events))
-    end
-  end
-
-  defp require_review_suite_identity_match(payload, field, expected) do
-    case review_suite_identity_value(payload, field) do
-      nil ->
-        :ok
-
-      got ->
-        if review_suite_identity_matches?(field, got, expected) do
-          :ok
-        else
-          {:tool_error, {:review_suite_round_identity_mismatch, field, expected, got}}
-        end
-    end
-  end
-
-  defp review_suite_identity_matches?("repo", got, expected) do
-    filled_string?(expected) and
-      (repo_scope_name_matches?(got, expected, []) or String.downcase(String.trim(got)) == String.downcase(String.trim(expected)))
-  end
-
-  defp review_suite_identity_matches?(_field, got, expected) do
-    case {normalize_review_suite_ref(got), normalize_review_suite_ref(expected)} do
-      {got, expected} when is_binary(got) and is_binary(expected) -> got == expected
-      _refs -> false
-    end
-  end
-
-  defp normalize_review_suite_ref(value) when is_binary(value) do
-    value
-    |> String.trim()
-    |> remove_review_suite_ref_prefix("refs/heads/")
-    |> remove_review_suite_ref_prefix("origin/")
-    |> empty_string_to_nil()
-  end
-
-  defp normalize_review_suite_ref(_value), do: nil
-
-  defp remove_review_suite_ref_prefix(value, prefix) do
-    if String.starts_with?(value, prefix), do: String.replace_prefix(value, prefix, ""), else: value
-  end
-
-  defp empty_string_to_nil(""), do: nil
-  defp empty_string_to_nil(value), do: value
-
-  defp review_suite_identity_value(payload, field) do
-    case Map.get(payload, field) do
-      value when is_binary(value) ->
-        value = String.trim(value)
-        if value == "", do: nil, else: value
-
-      _value ->
-        nil
-    end
-  end
-
-  defp reject_failed_review_suite_result_override(progress_events, work_package_id, head_sha) do
-    failed_result? =
-      progress_events
-      |> MetadataProjection.current_head_review_suite_result_events(work_package_id, head_sha)
-      |> Enum.any?(&failed_review_suite_result_payload?(&1, work_package_id))
-
-    if failed_result? do
-      {:tool_error, "failed_review_suite_result_exists"}
-    else
-      :ok
-    end
-  end
-
-  defp failed_review_suite_result_payload?(%ProgressEvent{payload: payload}, work_package_id) do
-    Map.get(payload, "work_package_id") == work_package_id and
-      not (review_suite_status_passed?(Map.get(payload, "status")) and review_suite_verdict_passed?(Map.get(payload, "verdict")))
-  end
-
-  defp require_passing_review_suite_result(status, verdict) do
-    if review_suite_status_passed?(status) and review_suite_verdict_passed?(verdict) do
-      :ok
-    else
-      normalized_status = normalized_review_suite_status(status)
-      normalized_verdict = normalized_review_suite_verdict(verdict)
-
-      {:tool_error, {:non_passing_review_suite_result, normalized_status, normalized_verdict}}
-    end
-  end
-
-  defp normalized_review_suite_status(status), do: ReviewProfiles.normalize_status(status)
-  defp normalized_review_suite_verdict(verdict), do: ReviewProfiles.normalize_status(verdict)
-  defp review_suite_status_passed?(status), do: ReviewProfiles.passing_status?(status)
-  defp review_suite_verdict_passed?(verdict), do: ReviewProfiles.passing_verdict?(verdict)
-
-  defp append_review_suite_artifact(repo, work_package_id, head_sha) do
-    case PlanningRepository.list_artifacts(repo, work_package_id) do
-      {:ok, artifacts} -> maybe_append_review_suite_artifact(repo, work_package_id, head_sha, artifacts)
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp maybe_append_review_suite_artifact(repo, work_package_id, head_sha, artifacts) do
-    if MetadataProjection.persisted_review_suite_artifact?(artifacts, work_package_id, head_sha) do
-      :ok
-    else
-      insert_review_suite_artifact(repo, work_package_id, head_sha)
-    end
-  end
-
-  defp insert_review_suite_artifact(repo, work_package_id, head_sha) do
-    attrs = %{
-      "id" => review_suite_artifact_id(work_package_id, head_sha),
+  defp review_completion_payload(work_package_id, requirement, head_sha, reference, note) do
+    %{
+      "type" => "review_completion",
+      "source_tool" => "complete_review",
       "work_package_id" => work_package_id,
-      "path" => "review-suite-result.json",
-      "title" => "Review-suite result",
-      "kind" => "review_suite"
+      "review" => requirement,
+      "review_fingerprint" => ReviewRequirement.fingerprint(requirement),
+      "head_sha" => head_sha
     }
-
-    case PlanningService.append_artifact(repo, attrs) do
-      {:ok, _artifact} -> :ok
-      {:error, :id_already_exists} -> replay_review_suite_artifact(repo, work_package_id, head_sha)
-      {:error, reason} -> {:error, reason}
-    end
+    |> put_if_present("reference", reference)
+    |> put_if_present("note", note)
   end
 
-  defp replay_review_suite_artifact(repo, work_package_id, head_sha) do
-    case PlanningRepository.list_artifacts(repo, work_package_id) do
-      {:ok, artifacts} -> replay_review_suite_artifact_result(work_package_id, head_sha, artifacts)
-      {:error, reason} -> {:error, reason}
-    end
+  defp review_completion_arguments(requirement, head_sha, note) do
+    %{
+      "summary" => "Required review completed",
+      "body" => note,
+      "status" => "review_complete",
+      "idempotency_key" => review_completion_idempotency_key(requirement, head_sha)
+    }
   end
 
-  defp replay_review_suite_artifact_result(work_package_id, head_sha, artifacts) do
-    if MetadataProjection.persisted_review_suite_artifact?(artifacts, work_package_id, head_sha) do
-      :ok
-    else
-      {:error, :id_already_exists}
-    end
-  end
-
-  defp review_suite_artifact_id(work_package_id, head_sha) do
-    material = [work_package_id, head_sha, "review-suite-result.json"] |> Enum.join(":")
-    "artifact_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
+  defp review_completion_idempotency_key(requirement, head_sha) do
+    digest = :crypto.hash(:sha256, Jason.encode!([head_sha, requirement])) |> Base.url_encode64(padding: false)
+    "current:" <> digest
   end
 
   defp promote_stale_package_to_reviewing(repo, %WorkPackage{status: status} = work_package)
@@ -721,11 +411,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   end
 
   defp readiness_gates(repo, state) do
-    with {:ok, {required_review_lanes, warnings}} <- ReviewLanes.required(repo, state.work_package),
-         {:ok, reasons} <- readiness_failure_reasons(repo, state, required_review_lanes) do
+    with {:ok, reasons} <- readiness_failure_reasons(repo, state) do
       missing = missing_readiness_gates(reasons)
 
-      if missing == [], do: {:ok, warnings}, else: {:error, {:readiness_failed, missing, reasons, warnings}}
+      if missing == [], do: {:ok, []}, else: {:error, {:readiness_failed, missing, reasons, []}}
     end
   end
 
@@ -735,13 +424,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     |> Enum.uniq()
   end
 
-  defp readiness_failure_reasons(repo, state, required_review_lanes) do
+  defp readiness_failure_reasons(repo, state) do
     with {:ok, phase_child_reasons} <- phase_child_readiness_failure_reasons(repo, state.work_package) do
-      {:ok, base_readiness_failure_reasons(state, required_review_lanes) ++ phase_child_reasons}
+      {:ok, base_readiness_failure_reasons(state) ++ phase_child_reasons}
     end
   end
 
-  defp base_readiness_failure_reasons(state, required_review_lanes) do
+  defp base_readiness_failure_reasons(state) do
     [
       {readiness_status_missing?(state.work_package), readiness_status_gate(state.work_package)},
       {active_blocker?(state.progress_events), "no_active_blockers"},
@@ -751,17 +440,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {merge_metadata_missing?(state, "branch"), "branch_attached"},
       {merge_metadata_missing?(state, "pr"), "pr_attached"},
       {current_pr_state_missing?(state), "current_pr_state"},
-      {review_suite_result_missing?(state), "review_suite_result"},
       {ScopeGuard.missing?(state.work_package, state.progress_events), @scope_guard_gate},
-      {review_package_missing?(state, required_review_lanes), "review_package_submitted"},
-      {review_artifacts_missing?(state, required_review_lanes), "review_artifacts_attached"},
-      {review_lanes_missing?(state, required_review_lanes), "review_lanes_complete"},
+      {review_artifacts_missing?(state), "review_artifacts_attached"},
+      {review_current_head_missing?(state), "review_current_head"},
+      {review_completion_missing?(state), "review_complete"},
       {investigation_findings_missing?(state), "findings_documented"},
       {investigation_recommendation_missing?(state), "recommendation_artifact_recorded"}
     ]
     |> Enum.flat_map(fn
       {true, @scope_guard_gate} -> ScopeGuard.failure_reasons(state.work_package, state.progress_events)
-      {true, "review_lanes_complete"} -> [readiness_failure_reason("review_lanes_complete", state, required_review_lanes)]
+      {true, "review_complete"} -> [readiness_failure_reason("review_complete", state)]
       {true, gate} -> [readiness_failure_reason(gate)]
       {false, _gate} -> []
     end)
@@ -827,16 +515,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     }
   end
 
-  defp readiness_failure_reason("review_lanes_complete", _state, required_lanes) do
-    "review_lanes_complete"
+  defp readiness_failure_reason("review_complete", state) do
+    "review_complete"
     |> readiness_failure_reason()
     |> Map.merge(%{
-      "required_lanes" => redacted_review_lanes(required_lanes)
+      "review" => Redactor.redact_output(state.work_package.review_requirement),
+      "head_sha" => latest_current_head_sha(state.progress_events)
     })
     |> drop_nil_values()
   end
-
-  defp redacted_review_lanes(lanes), do: Redactor.redact_output(lanes)
 
   defp readiness_failure_message("status_ci_waiting"), do: "Package must be waiting on validation."
   defp readiness_failure_message("status_reviewing"), do: "Package must be in review or validation."
@@ -847,10 +534,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp readiness_failure_message("branch_attached"), do: "Current branch metadata is missing."
   defp readiness_failure_message("pr_attached"), do: "Current PR metadata is missing."
   defp readiness_failure_message("current_pr_state"), do: "Current synced PR state is missing."
-  defp readiness_failure_message("review_suite_result"), do: "Current-head Review Suite result is missing."
-  defp readiness_failure_message("review_package_submitted"), do: "Current-head review package is missing."
-  defp readiness_failure_message("review_artifacts_attached"), do: "Current-head review artifacts are missing."
-  defp readiness_failure_message("review_lanes_complete"), do: "Required Review Suite profile is not passing for the current head."
+  defp readiness_failure_message("review_artifacts_attached"), do: "Current-head validation artifacts are missing."
+  defp readiness_failure_message("review_current_head"), do: "Required review cannot be completed until the current exact head is attached."
+  defp readiness_failure_message("review_complete"), do: "Required review is not completed for the current exact head and requirement."
   defp readiness_failure_message("findings_documented"), do: "Investigation findings are missing."
   defp readiness_failure_message("recommendation_artifact_recorded"), do: "Investigation recommendation artifact is missing."
   defp readiness_failure_message("phase_active"), do: "Phase must be active before phase child readiness."
@@ -879,45 +565,43 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       not current_pr_state_present?(state.progress_events, current_head_sha)
   end
 
-  defp review_suite_result_missing?(state) do
-    required_gate?(state.work_package, "review_suite_result") and
-      not review_suite_result_present?(state.progress_events, state.artifacts, state.work_package.id, review_head_sha_for_readiness(state))
+  defp review_current_head_missing?(%{work_package: %WorkPackage{review_requirement: nil}}), do: false
+  defp review_current_head_missing?(state), do: is_nil(latest_current_head_sha(state.progress_events))
+
+  defp review_completion_missing?(%{work_package: %WorkPackage{review_requirement: nil}}), do: false
+
+  defp review_completion_missing?(state) do
+    requirement = state.work_package.review_requirement
+    head_sha = latest_current_head_sha(state.progress_events)
+
+    is_nil(head_sha) or
+      not MetadataProjection.review_completion_present?(
+        state.progress_events,
+        state.work_package.id,
+        head_sha,
+        requirement
+      )
   end
 
-  defp review_suite_result_present?(_progress_events, _artifacts, _work_package_id, nil), do: false
+  defp review_artifacts_missing?(state) do
+    merge_required?(state.work_package) and not current_review_artifacts_present?(state)
+  end
 
-  defp review_suite_result_present?(progress_events, artifacts, work_package_id, readiness_head_sha) do
-    case MetadataProjection.latest_review_suite_result_event(progress_events, work_package_id, readiness_head_sha) do
-      %ProgressEvent{payload: payload} ->
-        valid_persisted_review_suite_result?(payload, artifacts, work_package_id, readiness_head_sha)
+  defp current_review_artifacts_present?(state) do
+    current_head_sha = latest_current_head_sha(state.progress_events)
+
+    case latest_review_package_event(state.progress_events, current_head_sha) do
+      %ProgressEvent{} = event ->
+        artifacts = review_package_artifact_paths(event, current_head_sha)
+
+        artifacts != [] and
+          Enum.all?(artifacts, &persisted_review_artifact?(state.artifacts, state.work_package.id, current_head_sha, &1))
 
       nil ->
         false
     end
   end
 
-  defp valid_persisted_review_suite_result?(%{"head_sha" => head_sha} = payload, artifacts, work_package_id, readiness_head_sha)
-       when is_binary(head_sha) do
-    MetadataProjection.valid_review_suite_result_payload?(payload, work_package_id, readiness_head_sha) and
-      MetadataProjection.persisted_review_suite_artifact?(artifacts, work_package_id, head_sha)
-  end
-
-  defp valid_persisted_review_suite_result?(_payload, _artifacts, _work_package_id, _readiness_head_sha), do: false
-
-  defp review_package_missing?(state, required_review_lanes) do
-    readiness_head_sha = review_head_sha_for_readiness(state)
-
-    merge_required?(state.work_package) and required_review_lanes != [] and
-      not review_suite_result_lanes_present?(state, required_review_lanes) and
-      current_head_review_package_events(state.progress_events, readiness_head_sha) == []
-  end
-
-  defp review_artifacts_missing?(state, required_review_lanes) do
-    merge_required?(state.work_package) and required_review_lanes != [] and
-      not review_artifacts_present?(state, required_review_lanes)
-  end
-
-  defp review_lanes_missing?(state, required_review_lanes), do: not review_lanes_present?(state, required_review_lanes)
   defp investigation_findings_missing?(state), do: state.work_package.kind == "investigation" and state.findings == []
 
   defp investigation_recommendation_missing?(state) do
@@ -928,103 +612,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     required_gate?(work_package, "human_merge") or required_gate?(work_package, "architect_merge")
   end
 
-  defp review_lanes_present?(_state, []), do: true
-
-  defp review_lanes_present?(state, required_lanes) do
-    if merge_required?(state.work_package) do
-      review_package_lanes_present?(state.progress_events, required_lanes) or
-        review_suite_result_lanes_present?(state, required_lanes)
-    else
-      review_package_lanes_present?(state.progress_events, required_lanes, review_head_sha_for_readiness(state)) or
-        review_suite_result_lanes_present?(state, required_lanes) or
-        progress_review_lanes_present?(state.progress_events, required_lanes)
-    end
-  end
-
-  defp review_package_lanes_present?(progress_events, required_lanes) do
-    review_package_lanes_present?(progress_events, required_lanes, latest_current_head_sha(progress_events))
-  end
-
-  defp review_package_lanes_present?(progress_events, required_lanes, readiness_head_sha) do
-    readiness_head_sha = normalize_review_readiness_head_sha(readiness_head_sha)
-
-    latest_verdicts =
-      case latest_review_package_event(progress_events, readiness_head_sha) do
-        %ProgressEvent{} = event ->
-          event
-          |> review_package_reviews(readiness_head_sha)
-          |> Enum.reduce(%{}, fn review, verdicts ->
-            Map.put(verdicts, ReviewProfiles.normalize_profile(Map.get(review, "lane")), Map.get(review, "verdict"))
-          end)
-
-        nil ->
-          %{}
-      end
-
-    Enum.all?(required_lanes, &ReviewProfiles.profile_verdicts_pass?(&1, latest_verdicts))
-  end
-
-  defp review_suite_result_lanes_present?(state, required_lanes) do
-    readiness_head_sha = review_head_sha_for_readiness(state)
-
-    payloads =
-      state.progress_events
-      |> MetadataProjection.current_head_review_suite_result_events(state.work_package.id, readiness_head_sha)
-      |> Enum.map(& &1.payload)
-      |> Enum.filter(
-        &(MetadataProjection.review_suite_result_payload_in_scope?(&1, state.work_package.id, readiness_head_sha) and
-            MetadataProjection.persisted_review_suite_artifact?(
-              state.artifacts,
-              state.work_package.id,
-              Map.fetch!(&1, "head_sha")
-            ))
-      )
-
-    payloads != [] and Enum.all?(required_lanes, &ReviewProfiles.review_suite_payloads_satisfy_required_profile?(payloads, &1))
-  end
-
-  defp progress_review_lanes_present?(progress_events, required_lanes) do
-    head_boundary_sequence = latest_branch_event_sequence(progress_events)
-
-    Enum.all?(required_lanes, &progress_review_lane_present?(progress_events, head_boundary_sequence, &1))
-  end
-
-  defp progress_review_lane_present?(progress_events, head_boundary_sequence, required_lane) do
-    satisfying_profiles = ReviewProfiles.satisfying_profiles(required_lane)
-
-    latest_statuses =
-      satisfying_profiles
-      |> Enum.map(&{&1, latest_generic_progress_status(progress_events, head_boundary_sequence, ReviewProfiles.statuses(&1))})
-      |> Enum.reject(fn {_profile, status} -> is_nil(status) end)
-
-    latest_statuses != [] and Enum.all?(latest_statuses, fn {profile, status} -> status in ReviewProfiles.green_statuses(profile) end)
-  end
-
-  defp review_artifacts_present?(state, required_review_lanes) do
-    current_head_sha = latest_current_head_sha(state.progress_events)
-    artifact_references = current_head_review_artifact_references(state.progress_events, current_head_sha)
-
-    review_package_artifacts_present =
-      artifact_references != [] and
-        Enum.all?(artifact_references, fn {path, artifact_head_sha} ->
-          persisted_review_artifact?(state.artifacts, state.work_package.id, artifact_head_sha, path)
-        end)
-
-    review_package_artifacts_present or review_suite_result_lanes_present?(state, required_review_lanes)
-  end
-
-  defp current_head_review_artifact_references(progress_events, current_head_sha) do
-    case latest_review_package_event(progress_events, current_head_sha) do
-      %ProgressEvent{} = event -> review_package_artifact_references(event, current_head_sha)
-      nil -> []
-    end
-  end
-
   defp latest_review_package_event(progress_events, current_head_sha) do
     progress_events
     |> current_head_review_package_events(current_head_sha)
-    |> Enum.reverse()
-    |> Enum.find(fn event -> review_package_artifact_paths(event, current_head_sha) != [] end)
+    |> List.last()
   end
 
   defp current_head_review_package_events(progress_events, current_head_sha) do
@@ -1062,59 +653,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp review_package_artifact_paths(%ProgressEvent{}, _current_head_sha), do: []
 
-  defp review_package_artifact_references(%ProgressEvent{payload: payload} = event, current_head_sha) when is_map(payload) do
-    event
-    |> review_package_artifact_paths(current_head_sha)
-    |> Enum.map(&{&1, Map.get(payload, "head_sha")})
-  end
-
-  defp review_package_artifact_references(%ProgressEvent{}, _current_head_sha), do: []
-
   defp persisted_review_artifact?(artifacts, work_package_id, head_sha, path) do
     expected_id = review_artifact_id(work_package_id, head_sha, path)
     Enum.any?(artifacts, &(&1.id == expected_id and &1.kind == "review" and &1.path == path))
   end
 
-  defp review_package_reviews(%ProgressEvent{payload: payload}, current_head_sha) when is_map(payload) do
-    reviews = Map.get(payload, "reviews")
-
-    cond do
-      not is_list(reviews) -> []
-      not review_head_matches?(payload, current_head_sha) -> []
-      true -> normalize_review_entries(reviews)
-    end
-  end
-
-  defp review_package_reviews(%ProgressEvent{}, _current_head_sha), do: []
-
-  defp normalize_review_entries(reviews) do
-    reviews
-    |> Enum.filter(&usable_review_entry?/1)
-    |> Enum.map(fn review ->
-      %{
-        "lane" => review |> Map.get("lane", "") |> String.trim() |> String.downcase(),
-        "verdict" => review |> Map.get("verdict", "") |> String.trim() |> String.downcase()
-      }
-    end)
-  end
-
-  defp usable_review_entry?(%{"lane" => lane, "verdict" => verdict}) do
-    is_binary(lane) and String.trim(lane) != "" and is_binary(verdict) and String.trim(verdict) != ""
-  end
-
-  defp usable_review_entry?(_review), do: false
-
   defp latest_current_head_sha(progress_events), do: latest_metadata_head_sha(progress_events, "branch", "attach_branch")
-
-  defp latest_current_branch(progress_events) do
-    progress_events
-    |> Enum.filter(&payload_type?(&1, "branch", "attach_branch"))
-    |> Enum.reverse()
-    |> Enum.find_value(fn
-      %ProgressEvent{payload: payload} -> review_suite_identity_value(payload || %{}, "branch")
-      _event -> nil
-    end)
-  end
 
   defp latest_metadata_head_sha(progress_events, type, source_tool) do
     progress_events
@@ -1836,31 +1380,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     end
   end
 
-  defp required_review_list(arguments, key) do
-    with {:ok, values} <- required_list(arguments, key) do
-      reviews = normalize_review_entries(values)
-
-      if length(reviews) == length(values) and unique_review_lanes?(reviews) do
-        {:ok, reviews}
-      else
-        {:tool_error, "invalid_#{key}"}
-      end
-    end
-  end
-
-  defp unique_review_lanes?(reviews) do
-    lanes = Enum.map(reviews, fn %{"lane" => lane} -> lane end)
-    Enum.uniq(lanes) == lanes
-  end
-
-  defp optional_review_list(arguments, key) do
-    case Map.get(arguments, key) do
-      nil -> {:ok, []}
-      [] -> {:ok, []}
-      _reviews -> required_review_list(arguments, key)
-    end
-  end
-
   defp optional_boolean(arguments, key, default) do
     case Map.fetch(arguments, key) do
       {:ok, value} when is_boolean(value) -> {:ok, value}
@@ -1891,6 +1410,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp normalize_blocker_id(value) when is_binary(value), do: String.trim(value)
   defp normalize_blocker_id(value), do: value
   defp drop_nil_values(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
+  defp put_if_present(map, _key, nil), do: map
+  defp put_if_present(map, key, value), do: Map.put(map, key, value)
   defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
 
   defp actor(%Session{} = session) do
@@ -1901,44 +1422,4 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       work_package_id: session.assignment.work_package_id
     }
   end
-
-  defp repo_scope_name_matches?(repo, repo, _opts) when is_binary(repo), do: true
-
-  defp repo_scope_name_matches?(expected_repo, actual_repo, opts) when is_binary(expected_repo) and is_binary(actual_repo) do
-    RepoIdentity.scope_match?(expected_repo, actual_repo,
-      trusted_remotes: Keyword.get(opts, :repo_scope_trusted_remotes, default_repo_scope_trusted_remotes()),
-      local_path_remotes?: true
-    )
-  end
-
-  defp repo_scope_name_matches?(_expected_repo, _actual_repo, _opts), do: false
-
-  defp default_repo_scope_trusted_remotes do
-    :symphony_elixir
-    |> Application.get_env(:sympp_repo_identity_trusted_remotes, [])
-    |> List.wrap()
-  end
-
-  defp invalid_params_error(tool, {:review_suite_round_identity_mismatch, field, expected, got}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "review_suite_round_identity_mismatch",
-       "field" => field,
-       "expected" => expected,
-       "got" => got,
-       "message" => "Local Review Suite round identity does not match the current work package/session."
-     }}
-  end
-
-  defp worker_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
-  defp worker_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
-  defp worker_error(:assignment_mismatch, resource), do: auth_error({:unauthorized, :assignment_mismatch}, resource)
-  defp worker_error(:database_busy, tool), do: service_error(:database_busy, tool)
-  defp worker_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
-  defp worker_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
-
-  defp auth_error({:unauthorized, reason}, resource), do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => reason_text(reason)}}
-  defp service_error(_reason, resource), do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
-  defp reason_text(reason), do: to_string(reason)
 end

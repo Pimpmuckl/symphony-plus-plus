@@ -24,6 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
           "attach_branch",
           "attach_pr",
           "submit_review_package",
+          "complete_review",
           "mark_ready()"
         ] do
       assert skill =~ marker
@@ -113,8 +114,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     tool_schemas = Map.new(contract["tool_schemas"], &{&1["name"], &1})
 
     assert "blocker_closeout" in get_in(tool_schemas, ["set_status", "optional_arguments"])
-    assert get_in(tool_schemas, ["mark_ready", "optional_arguments"]) == ["blocker_closeout", "review_suite_round_id"]
-    assert get_in(tool_schemas, ["attach_review_suite_result", "happy_path_arguments"]) == ["round_id"]
+    assert get_in(tool_schemas, ["mark_ready", "optional_arguments"]) == ["blocker_closeout"]
+    assert get_in(tool_schemas, ["complete_review", "optional_arguments"]) == ["note", "reference", "work_package_id"]
 
     assert get_in(tool_schemas, ["attach_branch", "worker_required_arguments_by_branch_pattern", "literal"]) == ["head_sha"]
     assert get_in(tool_schemas, ["attach_branch", "worker_required_arguments_by_branch_pattern", "templated_or_absent"]) == ["branch", "head_sha"]
@@ -143,7 +144,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
           "attach_pr",
           "sync_pr",
           "submit_review_package",
-          "attach_review_suite_result"
+          "complete_review"
         ] do
       worker_schema = ToolCatalog.worker_tool_input_schema(tool)
 
@@ -169,7 +170,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
           "attach_pr",
           "sync_pr",
           "submit_review_package",
-          "attach_review_suite_result"
+          "complete_review"
         ] do
       assert "work_package_id" in get_in(tool_schemas, [tool, "optional_arguments"])
     end
@@ -185,7 +186,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
       assert content =~ "add_comment(body)"
       assert content =~ "list_comments()"
       assert content =~ "attach_branch(head_sha)"
-      assert content =~ "attach_review_suite_result(round_id)"
+      assert content =~ "complete_review(reference?, note?)"
       assert content =~ "sync_pr()"
       assert content =~ "blocker_closeout"
       assert content =~ "attached PR"
@@ -199,6 +200,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
       assert prompt =~ "attached PR"
       assert prompt =~ "attach_branch(head_sha)"
       assert prompt =~ "sync_pr()"
+      assert prompt =~ "complete_review(reference?, note?)"
       assert prompt =~ "blocker_closeout"
       refute prompt =~ "sync_pr(metadata, url|number)"
       refute prompt =~ "sync_pr(url_or_number, metadata)"

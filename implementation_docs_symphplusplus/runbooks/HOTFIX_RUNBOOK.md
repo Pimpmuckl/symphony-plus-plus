@@ -30,7 +30,7 @@ Send the worker:
   convention, and PR title format.
 - WorkPackage claim call and optional stable `claimed_by` identity.
 - Package scope, owned files, acceptance criteria, and stop conditions.
-- Validation target and required review profiles.
+- Validation target and optional review requirement.
 - Reminder to use the `symphony-plus-plus` plugin or repo-local skill with MCP
   local claim bootstrap.
 

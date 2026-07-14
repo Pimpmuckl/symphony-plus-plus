@@ -33,7 +33,7 @@ this skill handles only the dispatched execution/audit record.
    - `sympp://work-packages/{id}/findings.md`
    - `sympp://work-packages/{id}/progress.md`
    - `sympp://work-packages/{id}/acceptance.md`
-   - `sympp://work-packages/{id}/review_suite.md`
+   - `sympp://work-packages/{id}/review.md`
    - `sympp://work-packages/{id}/handoff.md`
 
 Do not create local `task_plan.md`, `findings.md`, or `progress.md` files as
@@ -78,29 +78,20 @@ other compact labels plain.
 - Refresh current state only for the attached PR with `sync_pr()`. Pass
   top-level current-state fields when they changed; use explicit PR identity or
   `recovery` only for repair.
-- Submit review evidence with `submit_review_package(summary, tests, artifacts)`
+- Submit validation evidence with `submit_review_package(summary, tests, artifacts)`
   after branch metadata is current.
-- Prefer `mark_ready(review_suite_round_id)` when the package is otherwise
-  ready and a passing local Review Suite round is available. Use
-  `attach_review_suite_result(round_id)` only when recording review evidence
-  before the finish call.
-- If Review Suite is installed, run the current orchestrator with the required
-  profile: `review.py --mode fast|normal|deep`.
-- If Review Suite is not installed, use the package-approved review provider
-  and record review progress through `append_progress`; include a payload such
-  as `type=review_progress`, `provider`, `profile`, `step_current`,
-  `step_total`, and `step_name` when available.
-- Include review profile verdicts in the review package when the package policy
-  requires them.
-- Always use the current branch head SHA. Older review evidence can replay for
-  lost-response stability, but readiness evaluates against the current head.
+- If `review.md` declares a review requirement, use its opaque provider type
+  and optional arguments. After it succeeds for the current exact head, call
+  `complete_review(reference?, note?)`.
+- If no review is declared, do not invent one. Symphony++ does not install,
+  run, or interpret review providers.
 
 ## Ready Gate
 
 Before calling `mark_ready()`:
 
 - Acceptance criteria are satisfied or explicitly blocked.
-- Required tests and review profile evidence are complete.
+- Required tests and any declared review are complete.
 - Virtual task plan, findings, and progress are current.
 - Branch, PR, and review artifacts are attached when the policy requires them.
 - Package-depth policies still require at least one terminal package plan node.

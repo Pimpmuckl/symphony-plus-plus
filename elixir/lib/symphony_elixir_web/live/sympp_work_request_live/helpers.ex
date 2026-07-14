@@ -15,14 +15,14 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
     "goal",
     "work_package_kind",
     "target_base_branch",
-    "branch_pattern"
+    "branch_pattern",
+    "review_json"
   ]
   @planned_slice_list_fields [
     "owned_file_globs",
     "forbidden_file_globs",
     "acceptance_criteria",
     "validation_steps",
-    "review_lanes",
     "stop_conditions"
   ]
   @work_request_constraint_list_fields [
@@ -135,7 +135,8 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
       "goal" => "",
       "work_package_kind" => "standard_pr",
       "target_base_branch" => value(work_request, :base_branch, ""),
-      "branch_pattern" => ""
+      "branch_pattern" => "",
+      "review_json" => review_form_value(Map.get(attrs, "review_requirement"))
     }
     |> Map.merge(Map.take(attrs, @planned_slice_scalar_fields))
     |> Map.merge(planned_slice_list_form_values(attrs))
@@ -149,12 +150,13 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
       form
       |> Map.take(@planned_slice_scalar_fields)
       |> trim_string_values()
+      |> Map.delete("review_json")
+      |> maybe_put_review_requirement(Map.get(form, "review_json"))
 
     list_attrs =
       Map.new(@planned_slice_list_fields, fn field ->
         {field, newline_list(Map.get(form, field, ""))}
       end)
-      |> then(fn attrs -> if attrs["review_lanes"] == [], do: Map.delete(attrs, "review_lanes"), else: attrs end)
 
     Map.merge(scalar_attrs, list_attrs)
   end
@@ -169,6 +171,26 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
       {field, value}
     end)
   end
+
+  defp review_form_value(nil), do: ""
+  defp review_form_value(value) when is_map(value), do: Jason.encode!(value, pretty: true)
+  defp review_form_value(value) when is_binary(value), do: value
+  defp review_form_value(_value), do: ""
+
+  defp maybe_put_review_requirement(attrs, value) when is_binary(value) do
+    case String.trim(value) do
+      "" ->
+        attrs
+
+      json ->
+        case Jason.decode(json) do
+          {:ok, requirement} -> Map.put(attrs, "review_requirement", requirement)
+          {:error, _reason} -> Map.put(attrs, "review_requirement", json)
+        end
+    end
+  end
+
+  defp maybe_put_review_requirement(attrs, _value), do: attrs
 
   defp multiline_form_value(values) when is_list(values), do: Enum.map_join(values, "\n", &to_string/1)
   defp multiline_form_value(value) when is_binary(value), do: value
