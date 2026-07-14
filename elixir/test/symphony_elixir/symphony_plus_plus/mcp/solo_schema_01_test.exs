@@ -923,11 +923,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              "stop_conditions"
            ]
 
-    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "review_lanes", "items", "enum"]) == [
-             "fast",
-             "normal",
-             "deep"
-           ]
+    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "review", "type"]) == "object"
+    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "review", "required"]) == ["type"]
+    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "review", "properties", "args", "type"]) == "object"
 
     assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "work_request_id", "description"]) =~
              "Required WorkRequest id"

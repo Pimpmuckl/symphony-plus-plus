@@ -1330,7 +1330,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
       forbidden_file_globs: [],
       acceptance_criteria: ["Completion state is explicit."],
       validation_steps: ["mix test"],
-      review_lanes: ["normal"],
+      review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       stop_conditions: []
     }
 

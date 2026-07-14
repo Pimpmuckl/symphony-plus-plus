@@ -1,8 +1,8 @@
 {
-  "version": 3,
-  "mcp_contract_fingerprint": "a71868adfac9d50e61a944ec63337624858f9de47e7d8800f530a1df13e5219a",
+  "version": 4,
+  "mcp_contract_fingerprint": "34c02a92fd1a532103728ee114045c2d7173ccff8cfbb17e06dd4d0ed046fad6",
   "schema_source": "ToolCatalog owns the live runtime tool surfaces. This JSON publishes those names plus the canonical MCP contract fingerprint for scripts, docs, and release artifacts.",
-  "compatibility_policy": "Version 3 intentionally replaces the legacy verbose contract shape with discovery_policy, claim_policy, resources, and tool_schemas. Consumers should migrate by reading role tool names from discovery_policy and per-tool arguments from tool_schemas.",
+  "compatibility_policy": "Version 4 replaces provider-specific review profiles and round attachment with one optional generic review requirement and complete_review. Consumers should read role tool names from discovery_policy and per-tool arguments from tool_schemas.",
   "human_text_policy": "Human-facing long text fields are Markdown unless a field is explicitly a compact label, status, identifier, branch, PR URL, or other machine-readable value. Dashboard renderers must not turn raw Markdown HTML into executable or trusted HTML.",
   "discovery_policy": {
     "unbound_tools": [
@@ -89,7 +89,7 @@
         "attach_pr",
         "sync_pr",
         "submit_review_package",
-        "attach_review_suite_result",
+        "complete_review",
         "mark_ready"
       ]
     },
@@ -134,7 +134,7 @@
       "attach_pr",
       "sync_pr",
       "submit_review_package",
-      "attach_review_suite_result",
+      "complete_review",
       "mark_ready"
     ],
     "bound_architect_tools": [
@@ -208,7 +208,7 @@
     "sympp://work-packages/{id}/findings.md",
     "sympp://work-packages/{id}/progress.md",
     "sympp://work-packages/{id}/acceptance.md",
-    "sympp://work-packages/{id}/review_suite.md",
+    "sympp://work-packages/{id}/review.md",
     "sympp://work-packages/{id}/handoff.md"
   ],
   "argument_diet_audit": {
@@ -301,9 +301,9 @@
     {"name": "attach_branch", "required_arguments": ["branch", "head_sha"], "optional_arguments": ["body", "idempotency_key", "payload", "status", "summary", "work_package_id"], "worker_required_arguments_by_branch_pattern": {"literal": ["head_sha"], "templated_or_absent": ["branch", "head_sha"]}, "worker_compact_policy": "Bound worker tools/list requires head_sha only when the current WorkPackage has a literal branch_pattern; pass branch for templated or absent branch patterns."},
     {"name": "attach_pr", "required_arguments": [], "optional_arguments": ["body", "head_sha", "idempotency_key", "metadata", "number", "payload", "repository", "status", "summary", "url", "work_package_id"], "current_state_policy": "May include current check, review, or merge metadata. That attachment satisfies current PR state when the metadata proves the attached PR and current head."},
     {"name": "sync_pr", "required_arguments": [], "required_argument_sets": [], "optional_arguments": ["base_branch", "base_sha", "body", "changed_files", "changed_files_count", "check_summary", "head_sha", "idempotency_key", "merge_state", "metadata", "number", "payload", "recovery", "repository", "review_state", "status", "summary", "url", "work_package_id"], "attached_pr_policy": "Refreshes only the already attached PR. Bound workers may call sync_pr() with no arguments; top-level current-state fields refine the refresh, and explicit PR identity or recovery payloads are repair fallbacks."},
-    {"name": "submit_review_package", "required_arguments": ["artifacts", "summary", "tests"], "optional_arguments": ["acceptance_criteria_met", "body", "head_sha", "idempotency_key", "payload", "reviews", "status", "work_package_id"]},
-    {"name": "attach_review_suite_result", "required_arguments": [], "happy_path_arguments": ["round_id"], "optional_arguments": ["round_id", "anchor", "head_sha", "idempotency_key", "lane", "profile", "reviewer", "status", "suite", "summary", "verdict", "work_package_id"], "fallback_policy": "If round_id resolves to passing local Review Suite state, suite/profile/lane/head/status/verdict/summary/anchor are inferred. Omit round_id when using verbose fallback fields; suite must identify Review Suite."},
-    {"name": "mark_ready", "required_arguments": [], "optional_arguments": ["blocker_closeout", "review_suite_round_id"], "blocker_closeout_policy": "When active blockers exist, provide blocker_closeout with decision=resolved plus a resolution, or decision=still_active to leave blockers active and keep readiness blocked."},
+    {"name": "submit_review_package", "required_arguments": ["artifacts", "summary", "tests"], "optional_arguments": ["acceptance_criteria_met", "body", "head_sha", "idempotency_key", "payload", "status", "work_package_id"]},
+    {"name": "complete_review", "required_arguments": [], "optional_arguments": ["note", "reference", "work_package_id"], "completion_policy": "Requires a configured review requirement and attached exact head. Records an opaque completion bound to the WorkPackage, current head, and complete requirement; Symphony++ does not interpret the provider or reference."},
+    {"name": "mark_ready", "required_arguments": [], "optional_arguments": ["blocker_closeout"], "blocker_closeout_policy": "When active blockers exist, provide blocker_closeout with decision=resolved plus a resolution, or decision=still_active to leave blockers active and keep readiness blocked."},
     {"name": "create_child_work_package", "required_arguments": ["package"], "optional_arguments": []},
     {"name": "mint_child_worker_key", "required_arguments": ["work_package_id"], "optional_arguments": ["template"], "template_policy": "Optional template may set capabilities, expires_at, and claimed_by only."},
     {"name": "revoke_child_worker_key", "required_arguments": ["grant_id", "reason"], "optional_arguments": []},
@@ -324,7 +324,7 @@
     {"name": "answer_question_and_record_decision", "required_arguments": ["answer", "decision", "question_id", "rationale", "scope_impact", "source_type", "work_request_id"], "optional_arguments": ["answered_by", "created_by", "current_status", "expected_question_status", "source_id"]},
     {"name": "close_question", "required_arguments": ["question_id", "work_request_id"], "optional_arguments": ["current_status", "expected_question_status"]},
     {"name": "record_decision", "required_arguments": ["created_by", "decision", "rationale", "scope_impact", "source_type", "work_request_id"], "optional_arguments": ["source_id"], "argument_constraints": {"source_type": ["human", "architect", "operator", "ask_pro_advisory"]}},
-    {"name": "plan_slice", "required_arguments": ["acceptance_criteria", "goal", "owned_file_globs", "stop_conditions", "title", "validation_steps", "work_request_id"], "optional_arguments": ["branch_pattern", "delivery_repo", "forbidden_file_globs", "review_lanes", "target_base_branch", "work_package_kind"], "current_work_request_required_arguments": ["acceptance_criteria", "goal", "owned_file_globs", "stop_conditions", "title", "validation_steps"], "current_work_request_optional_arguments": ["branch_pattern", "delivery_repo", "forbidden_file_globs", "review_lanes", "target_base_branch", "work_package_kind", "work_request_id"], "current_work_request_policy": "Omit work_request_id only when the claimed architect session has exactly one current WorkRequest. delivery_repo and target_base_branch default from that WorkRequest's primary repo scope; pass target_base_branch when selecting a secondary delivery_repo. work_package_kind defaults to standard_pr; branch_pattern, forbidden file globs, and review_lanes use safe empty or policy defaults. Explicit ids are still scope-checked.", "argument_constraints": {"review_lanes": ["fast", "normal", "deep"], "work_package_kind": ["standard_pr", "quick_fix", "hotfix", "docs", "investigation", "adapter", "mcp", "skill", "hooks"]}},
+    {"name": "plan_slice", "required_arguments": ["acceptance_criteria", "goal", "owned_file_globs", "stop_conditions", "title", "validation_steps", "work_request_id"], "optional_arguments": ["branch_pattern", "delivery_repo", "forbidden_file_globs", "review", "target_base_branch", "work_package_kind"], "current_work_request_required_arguments": ["acceptance_criteria", "goal", "owned_file_globs", "stop_conditions", "title", "validation_steps"], "current_work_request_optional_arguments": ["branch_pattern", "delivery_repo", "forbidden_file_globs", "review", "target_base_branch", "work_package_kind", "work_request_id"], "current_work_request_policy": "Omit work_request_id only when the claimed architect session has exactly one current WorkRequest. delivery_repo and target_base_branch default from that WorkRequest's primary repo scope; pass target_base_branch when selecting a secondary delivery_repo. work_package_kind defaults to standard_pr; branch_pattern, forbidden file globs, and review use safe empty defaults. Explicit ids are still scope-checked.", "argument_constraints": {"review": {"required": ["type"], "optional": ["args"]}, "work_package_kind": ["standard_pr", "quick_fix", "hotfix", "docs", "investigation", "adapter", "mcp", "skill", "hooks"]}},
     {"name": "upsert_plan_node", "required_arguments": ["work_request_id"], "optional_arguments": ["created_by", "description", "node_kind", "product_tree_node_id", "title"], "current_work_request_required_arguments": [], "current_work_request_optional_arguments": ["created_by", "description", "node_kind", "product_tree_node_id", "title", "work_request_id"], "current_work_request_policy": "Omit work_request_id only when the claimed architect session has exactly one current WorkRequest. Explicit ids are still scope-checked. New nodes require title.", "argument_constraints": {"create_requires": ["title"], "content_requires_one_of": ["title", "description", "node_kind"]}},
     {"name": "move_plan_node", "required_arguments": ["product_tree_node_id", "work_request_id"], "optional_arguments": ["created_by", "parent_id", "position"], "current_work_request_required_arguments": ["product_tree_node_id"], "current_work_request_optional_arguments": ["created_by", "parent_id", "position", "work_request_id"], "current_work_request_policy": "Omit work_request_id only when the claimed architect session has exactly one current WorkRequest. Explicit ids are still scope-checked. Pass parent_id null or empty to move the node to the WorkRequest root; omit parent_id to keep the current parent.", "argument_constraints": {"nonblank": ["product_tree_node_id"], "requires_one_of": ["parent_id", "position"]}},
     {"name": "set_plan_node_completion", "required_arguments": ["completion_mark", "product_tree_node_id", "work_request_id"], "optional_arguments": ["blocker_closeout", "created_by"], "current_work_request_required_arguments": ["completion_mark", "product_tree_node_id"], "current_work_request_optional_arguments": ["blocker_closeout", "created_by", "work_request_id"], "current_work_request_policy": "Omit work_request_id only when the claimed architect session has exactly one current WorkRequest. Explicit ids are still scope-checked. Terminal marks require blocker_closeout when descendant WorkPackages have active blockers.", "argument_constraints": {"nonblank": ["product_tree_node_id"]}},

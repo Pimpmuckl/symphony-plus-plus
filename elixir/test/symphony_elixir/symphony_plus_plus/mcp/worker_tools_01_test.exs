@@ -448,7 +448,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     tools_by_name = tools_response |> get_in(["result", "tools"]) |> Map.new(&{&1["name"], &1})
     assert get_in(tools_by_name, ["attach_branch", "inputSchema", "required"]) == ["head_sha"]
 
-    for tool <- ["update_task_plan", "append_progress", "attach_branch", "attach_review_suite_result"] do
+    for tool <- ["update_task_plan", "append_progress", "attach_branch", "complete_review"] do
       refute Map.has_key?(get_in(tools_by_name, [tool, "inputSchema", "properties"]), "work_package_id")
     end
 

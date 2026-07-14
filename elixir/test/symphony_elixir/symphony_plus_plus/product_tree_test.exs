@@ -587,7 +587,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTreeTest do
         forbidden_file_globs: [],
         acceptance_criteria: ["Slice is represented in the product tree."],
         validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/product_tree_test.exs"],
-        review_lanes: ["normal"],
+        review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
         stop_conditions: ["Stop on schema mismatch."]
       }
       |> Map.merge(Map.new(overrides))

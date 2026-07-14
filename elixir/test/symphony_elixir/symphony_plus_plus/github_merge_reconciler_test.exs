@@ -455,7 +455,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
                owned_file_globs: ["elixir/lib/**"],
                acceptance_criteria: ["Merged delivery is recorded."],
                validation_steps: ["mix test"],
-               review_lanes: ["fast"]
+               review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "fast"}}
              })
 
     assert {:ok, approved_slice} =

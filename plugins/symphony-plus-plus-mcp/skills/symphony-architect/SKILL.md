@@ -74,11 +74,11 @@ another shape. Each slice needs:
   use `mcp` only for MCP servers, protocols, tools, or plugins.
 - Delivery repo and target base branch default to the selected WorkRequest's
   primary repo scope. Pass the target base branch when selecting a secondary
-  delivery repo. Branch pattern, forbidden globs, and review lanes may be
-  omitted when their safe empty or package-policy defaults are sufficient.
+  delivery repo. Branch pattern and forbidden globs may be omitted when their
+  safe empty defaults are sufficient.
 - Acceptance criteria the worker can prove.
 - Validation commands or blocked-validation owner.
-- Review profile/provider requirements.
+- Optional provider-agnostic review requirement.
 - PR-size or line-budget guidance; add slice-specific PR-size or line-budget
   constraints when the default boundary is not enough. These budgets should
   always be used and split between implementation- and test work when possible.
@@ -132,7 +132,7 @@ Worker prompts must include:
   `symphony-plus-plus-mcp:symphony-work-package`.
 - Repo-local fallback: `symphony-plus-plus:symphony-worker` plus copied
   `symphony-work-package`.
-- WorkPackage id, branch/base, scope, acceptance, validation, review profile,
+- WorkPackage id, branch/base, scope, acceptance, validation, optional review requirement,
   line/PR-size budget, and stop conditions.
 - The ledger claim payload or clear recovery/legacy bootstrap label. The normal
   worker claim is WorkPackage-id-only; do not add repo, base, branch, or
@@ -149,9 +149,9 @@ prompt only needs task-specific scope, evidence, constraints, and deviations.
 Do not reprint the full implementation/review/PR checklist unless the package
 deviates from the baseline worker contract.
 
-Workers own implementation, tests, Review Suite, GitHub review when required,
-CI/static gates when present, and PR readiness. Do not take over their review
-loop; send important findings back to the worker.
+Workers own implementation, tests, any declared review, GitHub review when
+required, CI/static gates when present, and PR readiness. Do not take over
+their review loop; send important findings back to the worker.
 
 ## Guidance
 

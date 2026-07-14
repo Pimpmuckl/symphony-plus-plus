@@ -168,17 +168,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ToonTest do
     assert byte_size(toon) < byte_size(Jason.encode!(payload))
   end
 
-  test "review suite payload uses resolved review profiles from state" do
+  test "review payload exposes the generic requirement from state" do
+    review = %{"type" => "human", "args" => %{"team" => "maintainers"}}
+
     work_package =
       struct(
         WorkPackage,
-        WorkPackageFactory.attrs(id: "SYMPP-TOON-REVIEW", kind: "mcp", status: "ci_waiting", policy_template: "mcp")
+        WorkPackageFactory.attrs(
+          id: "SYMPP-TOON-REVIEW",
+          kind: "mcp",
+          status: "ci_waiting",
+          policy_template: "mcp",
+          review_requirement: review
+        )
       )
 
-    state = %State{work_package: work_package, review_suite_required_profiles: ["deep", "raw_secret_review_lane"]}
+    state = %State{work_package: work_package}
 
-    assert {:ok, payload} = WorkerContext.virtual_file_payload(state, "review_suite.md", [])
-    assert get_in(payload, ["review_suite", "required_review_profiles"]) == ["deep", "[REDACTED]"]
+    assert {:ok, payload} = WorkerContext.virtual_file_payload(state, "review.md", [])
+    assert get_in(payload, ["review", "requirement"]) == review
+    assert get_in(payload, ["review", "completion"]) == nil
   end
 
   test "falls back for non-uniform rows and shows when compact JSON can be preferable" do

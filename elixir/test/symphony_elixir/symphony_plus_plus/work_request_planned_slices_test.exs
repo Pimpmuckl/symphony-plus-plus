@@ -12,7 +12,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -140,14 +139,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
                repo,
                work_request.id,
                planned_slice_attrs(id: "WRS-002", title: "Document persistence", work_package_kind: "docs")
-               |> Map.delete(:review_lanes)
              )
 
     assert first.work_request_id == work_request.id
     assert first.sequence == 1
     assert first.title == "Document persistence"
     assert first.status == "planned"
-    assert first.review_lanes == ["normal"]
+    assert first.review_requirement == nil
 
     assert {:ok, second} =
              Repository.add_planned_slice(
@@ -159,11 +157,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
                  goal: "Reject malformed planned slices.",
                  work_package_kind: "standard_pr"
                )
-               |> Map.delete(:review_lanes)
              )
 
     assert second.sequence == 2
-    assert second.review_lanes == ["normal"]
+    assert second.review_requirement == nil
     assert {:ok, [^first, ^second]} = Service.list_planned_slices(repo, work_request.id)
   end
 
@@ -709,12 +706,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
     assert create_work.work_package.acceptance_criteria == approved.acceptance_criteria
     assert create_work.work_package.engineering_scope =~ approved.goal
     assert create_work.work_package.engineering_scope =~ "Validation steps:"
-    assert create_work.work_package.engineering_scope =~ "Review profiles:"
+    assert create_work.work_package.review == nil
     assert create_work.work_package.engineering_scope =~ "Forbidden file globs:"
     assert create_work.work_package.engineering_scope =~ "Stop conditions:"
-    assert create_work.virtual_files["task_plan.md"] =~ ~r/Required review profiles:\n\s*- normal/
-    assert create_work.virtual_files["review_suite.md"] =~ "- review_normal"
-    assert create_work.virtual_files["review_suite.md"] =~ "- review_normal_green"
+    assert create_work.virtual_files["task_plan.md"] =~ "Review requirement:\n  - None."
+    assert create_work.virtual_files["review.md"] =~ "No review required."
 
     refute Map.has_key?(create_work.worker_grant, :secret)
     refute Map.has_key?(create_work.worker_grant, :display_key)
@@ -798,17 +794,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
     assert persisted.work_package_id == create_work.work_package.id
   end
 
-  test "dispatch projects a standard PR review-lane override coherently", %{repo: repo, database_path: database_path} do
-    work_request = create_work_request!(repo, id: "WR-DISPATCH-FAST-STANDARD", status: "ready_for_slicing")
+  test "dispatch projects an optional provider-agnostic review requirement coherently", %{repo: repo, database_path: database_path} do
+    work_request = create_work_request!(repo, id: "WR-DISPATCH-HUMAN-STANDARD", status: "ready_for_slicing")
+    review = %{"type" => "human", "args" => %{"team" => "maintainers"}}
 
     assert {:ok, planned} =
              Repository.add_planned_slice(
                repo,
                work_request.id,
                planned_slice_attrs(
-                 id: "WRS-DISPATCH-FAST-STANDARD",
+                 id: "WRS-DISPATCH-HUMAN-STANDARD",
                  work_package_kind: "standard_pr",
-                 review_lanes: ["fast"]
+                 review_requirement: review
                )
              )
 
@@ -819,40 +816,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
                repo,
                work_request.id,
                approved.id,
-               dispatch_handoff_opts(database_path, "worker-dispatch-fast-standard")
+               dispatch_handoff_opts(database_path, "worker-dispatch-human-standard")
              )
 
     creation = dispatch.creation
     assert creation.work_package.kind == "standard_pr"
-    assert creation.policy.review_suite.required == ["fast"]
-    assert "review_fast" in creation.policy.required_gates
-    assert "review_fast_green" in creation.policy.readiness_requirements
+    assert creation.work_package.review_requirement == review
+    assert "review_complete" in creation.policy.required_gates
+    assert "review_current_head" in creation.policy.readiness_requirements
 
     creation_files = creation.virtual_files
-    assert creation_files["task_plan.md"] =~ ~r/Required review profiles:\n\s*- fast/
-    assert creation_files["context.md"] =~ ~r/Review profiles:\n\s*- fast/
-    assert creation_files["review_suite.md"] =~ "- Required: fast"
-
-    assert {:ok, {["fast"], []}} = ReviewLanes.required(repo, creation.work_package)
+    encoded_review = Jason.encode!(review)
+    assert creation_files["task_plan.md"] =~ encoded_review
+    assert creation_files["context.md"] =~ encoded_review
+    assert creation_files["review.md"] =~ "\"type\": \"human\""
 
     assert {:ok, state} = PlanningRepository.get_render_state(repo, creation.work_package.id)
     assert {:ok, later_context} = Renderer.render_state(state, "context.md")
     assert {:ok, later_task_plan} = Renderer.render_state(state, "task_plan.md")
-    assert {:ok, later_review_suite} = Renderer.render_state(state, "review_suite.md")
+    assert {:ok, later_review} = Renderer.render_state(state, "review.md")
 
     assert later_context == creation_files["context.md"]
     assert later_task_plan == creation_files["task_plan.md"]
-    assert later_review_suite == creation_files["review_suite.md"]
+    assert later_review == creation_files["review.md"]
 
-    assert {:ok, review_payload} = WorkerContext.virtual_file_payload(state, "review_suite.md", [])
-    review_suite = review_payload["review_suite"]
-    assert review_suite["required_review_profiles"] == ["fast"]
-    assert "review_fast" in review_suite["required_gates"]
-    assert "review_fast_green" in review_suite["readiness_requirements"]
+    assert {:ok, review_payload} = WorkerContext.virtual_file_payload(state, "review.md", [])
+    assert review_payload["review"]["requirement"] == review
+    assert review_payload["review"]["completion"] == nil
 
-    refute Enum.any?(creation_files, fn {_name, contents} -> String.contains?(contents, "normal") end)
-    refute inspect(PlannedSliceDispatch.response_payload(dispatch)) =~ "normal"
-    refute inspect(review_payload) =~ "normal"
+    refute inspect(PlannedSliceDispatch.response_payload(dispatch)) =~ "review-suite"
+    refute inspect(review_payload) =~ "review-suite"
   end
 
   test "dispatch orchestration creates packages from secondary WorkRequest repo scopes", %{repo: repo, database_path: database_path} do
@@ -958,7 +951,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
                  forbidden_file_globs: [],
                  acceptance_criteria: ["Operator docs describe the flow."],
                  validation_steps: ["markdownlint docs/operator-flow.md"],
-                 review_lanes: ["normal"],
+                 review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
                  stop_conditions: ["Stop before runtime behavior changes."]
                )
              )
@@ -1132,10 +1125,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
 
     assert "is invalid" in errors_on(list_changeset).owned_file_globs
 
-    assert {:error, %Ecto.Changeset{} = non_list_changeset} =
-             Repository.add_planned_slice(repo, work_request.id, planned_slice_attrs(review_lanes: "normal"))
+    assert {:error, %Ecto.Changeset{} = invalid_review_changeset} =
+             Repository.add_planned_slice(repo, work_request.id, planned_slice_attrs(review_requirement: %{"args" => %{}}))
 
-    assert "is invalid" in errors_on(non_list_changeset).review_lanes
+    assert "must contain a non-empty type and optional args object" in errors_on(invalid_review_changeset).review_requirement
 
     assert {:error, %Ecto.Changeset{} = branch_pattern_changeset} =
              Repository.add_planned_slice(
@@ -1244,6 +1237,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
           "acceptance_criteria",
           "validation_steps",
           "review_lanes",
+          "review_requirement",
           "stop_conditions",
           "status",
           "work_package_id",
@@ -1267,13 +1261,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
     assert index_partial?(repo, "sympp_work_request_planned_slices", "sympp_work_request_planned_slices_work_package_id_unique_index")
   end
 
-  test "review-mode migration updates only active WorkRequest requirements and preserves evidence" do
+  test "generic review migration converts legacy requirements and preserves evidence" do
     database_path = WorkPackageFactory.database_path()
     {:ok, pid} = Repo.start_link(database: database_path, name: nil, pool_size: 1, log: false)
     original_repo = Repo.put_dynamic_repo(pid)
 
     try do
-      pre_cutover_migration = 20_260_711_010_000
+      pre_cutover_migration = 20_260_711_200_000
 
       assert pre_cutover_migration in Ecto.Migrator.run(Repo, Migrations.all(), :up,
                to: pre_cutover_migration,
@@ -1309,15 +1303,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
                  "payload" => historical_payload
                })
 
-      cutover_migration = 20_260_711_200_000
+      cutover_migration = 20_260_714_160_000
       assert cutover_migration in Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false)
 
-      assert Repo.get!(PlannedSlice, active_pair.slice.id).review_lanes == ["normal", "fast"]
-      assert Repo.get!(WorkPackage, active_pair.package.id).review_lanes == ["normal", "fast"]
-      assert Repo.get!(PlannedSlice, completed_pair.slice.id).review_lanes == ["brief"]
-      assert Repo.get!(WorkPackage, completed_pair.package.id).review_lanes == ["brief"]
-      assert Repo.get!(PlannedSlice, archived_pair.slice.id).review_lanes == ["emergency"]
-      assert Repo.get!(WorkPackage, archived_pair.package.id).review_lanes == ["emergency"]
+      assert Repo.get!(PlannedSlice, active_pair.slice.id).review_requirement ==
+               %{"type" => "review-suite", "args" => %{"mode" => "normal"}}
+
+      assert Repo.get!(WorkPackage, active_pair.package.id).review_requirement ==
+               %{"type" => "review-suite", "args" => %{"mode" => "normal"}}
+
+      assert Repo.get!(PlannedSlice, completed_pair.slice.id).review_requirement ==
+               %{"type" => "review-suite", "args" => %{"mode" => "normal"}}
+
+      assert Repo.get!(WorkPackage, completed_pair.package.id).review_requirement ==
+               %{"type" => "review-suite", "args" => %{"mode" => "normal"}}
+
+      assert Repo.get!(PlannedSlice, archived_pair.slice.id).review_requirement ==
+               %{"type" => "review-suite", "args" => %{"mode" => "fast"}}
+
+      assert Repo.get!(WorkPackage, archived_pair.package.id).review_requirement ==
+               %{"type" => "review-suite", "args" => %{"mode" => "fast"}}
+
       assert Repo.get!(ProgressEvent, evidence.id).payload == historical_payload
       assert Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false) == []
     after
@@ -1360,13 +1366,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
   end
 
   defp create_legacy_review_requirement_pair!(repo, work_request, suffix, review_lanes) do
-    package = create_work_package!(repo, id: "SYMPP-REVIEW-MODES-#{suffix}", kind: "mcp", review_lanes: ["normal"])
+    package = create_work_package!(repo, id: "SYMPP-REVIEW-MODES-#{suffix}", kind: "mcp")
 
     assert {:ok, slice} =
              Repository.add_planned_slice(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-REVIEW-MODES-#{suffix}", review_lanes: ["normal"])
+               planned_slice_attrs(id: "WRS-REVIEW-MODES-#{suffix}")
              )
 
     encoded = Jason.encode!(review_lanes)
@@ -1424,7 +1430,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
       forbidden_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/**"],
       acceptance_criteria: ["Planned slices persist and list in sequence order."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/work_request_planned_slices_test.exs"],
-      review_lanes: ["normal"],
       stop_conditions: ["Stop before dashboard or MCP tool wiring."]
     }
 

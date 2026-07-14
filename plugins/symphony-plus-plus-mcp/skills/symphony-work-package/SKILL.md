@@ -84,16 +84,12 @@ S++ explicitly gives scoped context.
   `merge_state` when they changed; use explicit `url`/`number` or `recovery`
   only when repairing missing attachment evidence.
 - `submit_review_package(summary, tests, artifacts)` after branch metadata is
-  current; include review verdicts only when Review Suite evidence will not
-  supply them.
-- Prefer `mark_ready(review_suite_round_id)` when the package is otherwise
-  ready and you have a passing local Review Suite round. Use
-  `attach_review_suite_result(round_id)` only when recording review evidence
-  before the finish call.
-
-Run the required Review Suite profile. If unavailable, use the package-approved
-provider and record review progress. After material changes, rerun the same
-required profile; do not step down.
+  current to record validation and acceptance evidence.
+- If `review.md` declares a review requirement, use that provider and its
+  optional arguments. After it succeeds for the attached exact head, call
+  `complete_review(reference?, note?)`. The reference is an opaque provider or
+  human review id; Symphony++ does not interpret provider-specific results.
+- If `review.md` says no review is required, do not invent one.
 
 ## Ready
 
@@ -102,7 +98,7 @@ Before `mark_ready()`:
 - Acceptance is satisfied or explicitly blocked.
 - Required tests, static checks, review, and CI/check status are complete or
   accurately reported as absent/blocked.
-- Task plan, findings, progress, branch, PR, and review evidence are current.
+- Task plan, findings, progress, branch, PR, and any required review completion are current.
   Package-depth policies still require at least one terminal package plan node.
   Do not add lifecycle calls only to restate facts already present; `mark_ready`
   infers completed plan, PR, branch, and review facts from existing evidence

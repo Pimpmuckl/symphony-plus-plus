@@ -171,7 +171,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       "forbidden_file_globs" => Enum.map(planned_slice.forbidden_file_globs || [], &Redactor.redact_text/1),
       "acceptance_criteria" => Enum.map(planned_slice.acceptance_criteria || [], &Redactor.redact_text/1),
       "validation_steps" => Enum.map(planned_slice.validation_steps || [], &Redactor.redact_text/1),
-      "review_lanes" => Enum.map(planned_slice.review_lanes || [], &Redactor.redact_text/1),
+      "review" => Redactor.redact_output(planned_slice.review_requirement),
       "stop_conditions" => Enum.map(planned_slice.stop_conditions || [], &Redactor.redact_text/1),
       "status" => planned_slice.status,
       "work_package_id" => planned_slice.work_package_id,

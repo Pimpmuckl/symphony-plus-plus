@@ -8,6 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
   alias SymphonyElixir.SymphonyPlusPlus.Id
   alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.StringList
 
   @primary_key {:id, :string, autogenerate: false}
@@ -74,7 +75,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
           product_description: String.t() | nil,
           engineering_scope: String.t() | nil,
           allowed_file_globs: [String.t()] | nil,
-          review_lanes: [String.t()] | nil,
+          review_requirement: map() | nil,
           policy_template: String.t() | nil,
           acceptance_criteria: [String.t()] | nil,
           worktree_path: String.t() | nil,
@@ -96,7 +97,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     field(:product_description, :string)
     field(:engineering_scope, :string)
     field(:allowed_file_globs, StringList, default: [])
-    field(:review_lanes, StringList)
+    field(:review_requirement, :map)
     field(:policy_template, :string)
     field(:acceptance_criteria, StringList, default: [])
     field(:worktree_path, :string)
@@ -164,7 +165,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
       :product_description,
       :engineering_scope,
       :allowed_file_globs,
-      :review_lanes,
+      :review_requirement,
       :policy_template,
       :acceptance_criteria,
       :worktree_path,
@@ -179,6 +180,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     |> validate_inclusion(:status, valid_statuses(work_package))
     |> validate_branch_pattern()
     |> validate_policy_template()
+    |> validate_review_requirement()
   end
 
   defp update_valid_kinds(%__MODULE__{} = work_package, attrs) do
@@ -215,6 +217,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
           add_error(changeset, :policy_template, "is invalid", validation: :policy_template)
         end
     end
+  end
+
+  defp validate_review_requirement(changeset) do
+    validate_change(changeset, :review_requirement, fn :review_requirement, requirement ->
+      case ReviewRequirement.normalize(requirement) do
+        {:ok, normalized} -> if normalized == requirement, do: [], else: [review_requirement: "must use string keys and a trimmed non-empty type"]
+        {:error, :sensitive_review_requirement} -> [review_requirement: "must not contain secrets"]
+        {:error, :invalid_review_requirement} -> [review_requirement: "must contain a non-empty type and optional args object"]
+      end
+    end)
   end
 
   defp canonical_policy_template?(kind, policy_template), do: Templates.compatible_kind?(kind, policy_template)

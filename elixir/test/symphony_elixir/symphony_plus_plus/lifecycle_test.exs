@@ -66,19 +66,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert quick_fix.constraints.expiry_seconds == nil
     assert quick_fix.constraints.planning_depth == "brief"
     assert quick_fix.constraints.terminal_readiness_status == "ready_for_merge"
-    assert "review_normal_green" in quick_fix.readiness_requirements
+    assert quick_fix.readiness_requirements == ["implementation_complete", "tests_passed"]
 
     assert {:ok, hotfix} = Templates.expand("hotfix")
     assert hotfix.constraints.expiry_seconds == nil
-    assert hotfix.review_suite.required == ["fast"]
+    assert hotfix.required_gates == ["focused_tests", "human_merge"]
     assert hotfix.constraints.terminal_readiness_status == "ready_for_merge"
 
     assert {:ok, docs} = Templates.expand("docs")
     assert docs.constraints.expiry_seconds == nil
     assert docs.constraints.planning_depth == "brief"
-    assert docs.review_suite.required == ["normal"]
     assert docs.constraints.terminal_readiness_status == "ready_for_merge"
-    assert docs.readiness_requirements == ["tests_passed", "review_normal_green"]
+    assert docs.readiness_requirements == ["tests_passed"]
 
     assert {:ok, phase_child} = Templates.expand("phase_child")
     assert phase_child.constraints.expiry_seconds == nil
@@ -95,7 +94,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     for kind <- ["mcp", "skill", "hooks"] do
       assert {:ok, policy} = Templates.expand(kind)
       assert policy.template == "worker_package"
-      assert policy.review_suite.required == ["normal"]
+      refute Map.has_key?(policy, :review_suite)
       assert policy.constraints.terminal_readiness_status == "ready_for_merge"
     end
 
@@ -106,7 +105,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert {:ok, scope_guard_policy} = Templates.expand("mcp_changed_file_scope_guard")
     assert scope_guard_policy.template == "worker_package"
     assert "current_pr_state" in scope_guard_policy.required_gates
-    assert "review_suite_result" in scope_guard_policy.required_gates
     assert "scope_guard" in scope_guard_policy.required_gates
   end
 
@@ -123,8 +121,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
           "`#{policy.constraints.planning_depth}`",
           "`#{expiry_label(policy)}`",
           "`#{policy.constraints.terminal_readiness_status}`",
-          "`#{Enum.join(policy.required_gates, ", ")}`",
-          "`#{Enum.join(policy.review_suite.required, ", ")}`"
+          "`#{Enum.join(policy.required_gates, ", ")}`"
         ]
 
       Enum.each(expected_row, &assert(docs =~ &1))

@@ -8,172 +8,61 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
       planning_depth: "package",
       terminal_readiness_status: "ready_for_merge"
     },
-    required_gates: ["package_acceptance", "focused_tests", "review_normal", "human_merge"],
-    readiness_requirements: ["acceptance_criteria_met", "tests_passed", "review_normal_green"],
-    review_suite: %{required: ["normal"], optional: ["deep"]}
+    required_gates: ["package_acceptance", "focused_tests", "human_merge"],
+    readiness_requirements: ["acceptance_criteria_met", "tests_passed"]
   }
 
   @mcp_ci_required_policy @worker_package_policy
                           |> Map.put(:work_package_kind, "mcp")
                           |> Map.update!(:required_gates, &(&1 ++ ["ci_waiting"]))
                           |> Map.update!(:readiness_requirements, &(&1 ++ ["ci_waiting"]))
+
   @templates %{
     "quick_fix" => %{
       template: "quick_fix",
-      constraints: %{
-        expiry_seconds: nil,
-        planning_depth: "brief",
-        terminal_readiness_status: "ready_for_merge"
-      },
-      required_gates: ["focused_tests", "review_normal"],
-      readiness_requirements: ["implementation_complete", "tests_passed", "review_normal_green"],
-      review_suite: %{required: ["normal"], optional: ["deep"]}
+      constraints: %{expiry_seconds: nil, planning_depth: "brief", terminal_readiness_status: "ready_for_merge"},
+      required_gates: ["focused_tests"],
+      readiness_requirements: ["implementation_complete", "tests_passed"]
     },
     "hotfix" => %{
       template: "hotfix",
-      constraints: %{
-        expiry_seconds: nil,
-        planning_depth: "incident",
-        terminal_readiness_status: "ready_for_merge"
-      },
-      required_gates: ["focused_tests", "review_fast", "human_merge"],
-      readiness_requirements: ["implementation_complete", "tests_passed", "review_fast_green"],
-      review_suite: %{required: ["fast"], optional: []}
+      constraints: %{expiry_seconds: nil, planning_depth: "incident", terminal_readiness_status: "ready_for_merge"},
+      required_gates: ["focused_tests", "human_merge"],
+      readiness_requirements: ["implementation_complete", "tests_passed"]
     },
     "docs" => %{
       template: "docs",
-      constraints: %{
-        expiry_seconds: nil,
-        planning_depth: "brief",
-        terminal_readiness_status: "ready_for_merge"
-      },
-      required_gates: ["focused_tests", "review_normal"],
-      readiness_requirements: ["tests_passed", "review_normal_green"],
-      review_suite: %{required: ["normal"], optional: ["deep"]}
+      constraints: %{expiry_seconds: nil, planning_depth: "brief", terminal_readiness_status: "ready_for_merge"},
+      required_gates: ["focused_tests"],
+      readiness_requirements: ["tests_passed"]
     },
-    "adapter" => %{
-      template: "adapter",
-      constraints: %{
-        expiry_seconds: nil,
-        planning_depth: "package",
-        terminal_readiness_status: "ready_for_merge"
-      },
-      required_gates: ["package_acceptance", "focused_tests", "review_normal", "human_merge"],
-      readiness_requirements: ["acceptance_criteria_met", "tests_passed", "review_normal_green"],
-      review_suite: %{required: ["normal"], optional: ["deep"]}
-    },
+    "adapter" => @worker_package_policy,
     "standard_pr" => @worker_package_policy,
     "mcp" => @worker_package_policy,
     "mcp_ci_required" => @mcp_ci_required_policy,
-    "mcp_current_pr_state" => %{
-      work_package_kind: "mcp",
-      template: "worker_package",
-      constraints: %{
-        expiry_seconds: nil,
-        planning_depth: "package",
-        terminal_readiness_status: "ready_for_merge"
-      },
-      required_gates: ["package_acceptance", "focused_tests", "review_normal", "human_merge", "current_pr_state"],
-      readiness_requirements: [
-        "acceptance_criteria_met",
-        "tests_passed",
-        "review_normal_green",
-        "current_pr_state"
-      ],
-      review_suite: %{required: ["normal"], optional: ["deep"]}
-    },
-    "mcp_review_suite_artifact" => %{
-      work_package_kind: "mcp",
-      template: "worker_package",
-      constraints: %{
-        expiry_seconds: nil,
-        planning_depth: "package",
-        terminal_readiness_status: "ready_for_merge"
-      },
-      required_gates: ["package_acceptance", "focused_tests", "review_normal", "human_merge", "review_suite_result"],
-      readiness_requirements: [
-        "acceptance_criteria_met",
-        "tests_passed",
-        "review_normal_green",
-        "review_suite_result"
-      ],
-      review_suite: %{required: ["normal"], optional: ["deep"]}
-    },
-    "mcp_changed_file_scope_guard" => %{
-      work_package_kind: "mcp",
-      template: "worker_package",
-      constraints: %{
-        expiry_seconds: nil,
-        planning_depth: "package",
-        terminal_readiness_status: "ready_for_merge"
-      },
-      required_gates: [
-        "package_acceptance",
-        "focused_tests",
-        "review_normal",
-        "human_merge",
-        "current_pr_state",
-        "review_suite_result",
-        "scope_guard"
-      ],
-      readiness_requirements: [
-        "acceptance_criteria_met",
-        "tests_passed",
-        "review_normal_green",
-        "current_pr_state",
-        "review_suite_result",
-        "scope_guard"
-      ],
-      review_suite: %{required: ["normal"], optional: ["deep"]}
-    },
-    "skill" => %{
-      template: "worker_package",
-      constraints: %{
-        expiry_seconds: nil,
-        planning_depth: "package",
-        terminal_readiness_status: "ready_for_merge"
-      },
-      required_gates: ["package_acceptance", "focused_tests", "review_normal", "human_merge"],
-      readiness_requirements: ["acceptance_criteria_met", "tests_passed", "review_normal_green"],
-      review_suite: %{required: ["normal"], optional: ["deep"]}
-    },
-    "hooks" => %{
-      template: "worker_package",
-      constraints: %{
-        expiry_seconds: nil,
-        planning_depth: "package",
-        terminal_readiness_status: "ready_for_merge"
-      },
-      required_gates: ["package_acceptance", "focused_tests", "review_normal", "human_merge"],
-      readiness_requirements: ["acceptance_criteria_met", "tests_passed", "review_normal_green"],
-      review_suite: %{required: ["normal"], optional: ["deep"]}
-    },
+    "mcp_current_pr_state" =>
+      @worker_package_policy
+      |> Map.put(:work_package_kind, "mcp")
+      |> Map.update!(:required_gates, &(&1 ++ ["current_pr_state"]))
+      |> Map.update!(:readiness_requirements, &(&1 ++ ["current_pr_state"])),
+    "mcp_changed_file_scope_guard" =>
+      @worker_package_policy
+      |> Map.put(:work_package_kind, "mcp")
+      |> Map.update!(:required_gates, &(&1 ++ ["current_pr_state", "scope_guard"]))
+      |> Map.update!(:readiness_requirements, &(&1 ++ ["current_pr_state", "scope_guard"])),
+    "skill" => @worker_package_policy,
+    "hooks" => @worker_package_policy,
     "phase_child" => %{
       template: "phase_child",
-      constraints: %{
-        expiry_seconds: nil,
-        planning_depth: "package",
-        terminal_readiness_status: "ready_for_architect_merge"
-      },
-      required_gates: ["package_acceptance", "focused_tests", "review_normal", "architect_merge"],
-      readiness_requirements: [
-        "acceptance_criteria_met",
-        "tests_passed",
-        "review_normal_green",
-        "architect_ready"
-      ],
-      review_suite: %{required: ["normal"], optional: ["deep"]}
+      constraints: %{expiry_seconds: nil, planning_depth: "package", terminal_readiness_status: "ready_for_architect_merge"},
+      required_gates: ["package_acceptance", "focused_tests", "architect_merge"],
+      readiness_requirements: ["acceptance_criteria_met", "tests_passed", "architect_ready"]
     },
     "investigation" => %{
       template: "investigation",
-      constraints: %{
-        expiry_seconds: nil,
-        planning_depth: "findings",
-        terminal_readiness_status: "ready_for_merge"
-      },
+      constraints: %{expiry_seconds: nil, planning_depth: "findings", terminal_readiness_status: "ready_for_merge"},
       required_gates: ["findings_documented", "recommendation_artifact_recorded"],
-      readiness_requirements: ["findings_complete", "recommendation_artifact_recorded"],
-      review_suite: %{required: [], optional: ["normal"]}
+      readiness_requirements: ["findings_complete", "recommendation_artifact_recorded"]
     }
   }
 
@@ -185,8 +74,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
             terminal_readiness_status: String.t()
           },
           required_gates: [String.t()],
-          readiness_requirements: [String.t()],
-          review_suite: %{required: [String.t()], optional: [String.t()]}
+          readiness_requirements: [String.t()]
         }
 
   @spec expand(String.t()) :: {:ok, template()} | {:error, :unknown_policy_template}

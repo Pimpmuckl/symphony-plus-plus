@@ -157,7 +157,7 @@ defmodule SymphonyElixirWeb.SymppDetailLive do
             <p :if={!pr_url(@detail.metadata)} class="sympp-empty-inline">No PR attached.</p>
             <p class="mono sympp-branch"><%= branch_label(@detail.metadata) %></p>
             <p :if={pr_state_label(@detail.metadata)} class="mono sympp-branch"><%= pr_state_label(@detail.metadata) %></p>
-            <p :if={review_suite_label(@detail.metadata)} class="mono sympp-branch"><%= review_suite_label(@detail.metadata) %></p>
+            <p :if={review_completion_label(@detail.metadata)} class="mono sympp-branch"><%= review_completion_label(@detail.metadata) %></p>
             <dl :if={pr_summary_items(@detail.metadata) != []} class="sympp-pr-state-list">
               <div :for={{label, value} <- pr_summary_items(@detail.metadata)}>
                 <dt><%= label %></dt>
@@ -701,26 +701,17 @@ defmodule SymphonyElixirWeb.SymppDetailLive do
     end
   end
 
-  defp review_suite_label(metadata) do
-    result = map_value(metadata, :review_suite_result)
-    status = map_value(result, :status)
-    verdict = map_value(result, :verdict)
-    head_sha = map_value(result, :head_sha)
+  defp review_completion_label(metadata) do
+    completion = map_value(metadata, :review_completion)
+    review = map_value(completion, :review)
+    type = map_value(review, :type)
+    head_sha = map_value(completion, :head_sha)
 
-    cond do
-      is_binary(status) and is_binary(verdict) ->
-        "Review suite #{status}/#{verdict} @ #{display_sha(head_sha) || "unknown"}"
-
-      is_binary(status) ->
-        "Review suite #{status} @ #{display_sha(head_sha) || "unknown"}"
-
-      true ->
-        nil
-    end
+    if is_binary(type), do: "#{type} review complete @ #{display_sha(head_sha) || "unknown"}"
   end
 
   defp review_evidence_present?(metadata) do
-    not is_nil(review_suite_label(metadata)) or not is_nil(map_value(metadata, :review_package))
+    not is_nil(review_completion_label(metadata))
   end
 
   defp pr_summary_items(metadata) do

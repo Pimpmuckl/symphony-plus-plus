@@ -3,15 +3,16 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.HelpersTest do
 
   alias SymphonyElixirWeb.SymppWorkRequestLive.Helpers
 
-  test "planned-slice form defaults ordinary work and preserves policy-derived review lanes" do
+  test "planned-slice form defaults ordinary work and parses an optional generic review" do
     assert %{
              "work_package_kind" => "standard_pr",
              "target_base_branch" => "main"
            } = Helpers.planned_slice_form(%{}, %{base_branch: "main"})
 
-    attrs = Helpers.planned_slice_attrs(%{"review_lanes" => " \n "})
-    refute Map.has_key?(attrs, "review_lanes")
+    attrs = Helpers.planned_slice_attrs(%{"review_json" => " \n "})
+    refute Map.has_key?(attrs, "review_requirement")
 
-    assert Helpers.planned_slice_attrs(%{"review_lanes" => "fast\nnormal"})["review_lanes"] == ["fast", "normal"]
+    review = %{"type" => "human", "args" => %{"team" => "maintainers"}}
+    assert Helpers.planned_slice_attrs(%{"review_json" => Jason.encode!(review)})["review_requirement"] == review
   end
 end

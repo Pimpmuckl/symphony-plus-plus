@@ -323,6 +323,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       product_description: product_description(id),
       engineering_scope: "Exercise board/detail rendering with deterministic non-secret data.",
       allowed_file_globs: allowed_file_globs(id),
+      review_requirement: review_requirement(id),
       acceptance_criteria: acceptance_criteria(title),
       status: status,
       parent_id: nil,
@@ -363,6 +364,9 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   defp work_package_kind("SYMPP-DEMO-WP-MERGED"), do: "mcp"
   defp work_package_kind("SYMPP-DEMO-WP-MERGED-DOCS"), do: "docs"
   defp work_package_kind("SYMPP-DEMO-WP-CLOSED-SPIKE"), do: "investigation"
+
+  defp review_requirement(id) when id in ["SYMPP-DEMO-WP-BLOCKED", "SYMPP-DEMO-WP-CLOSED-SPIKE"], do: nil
+  defp review_requirement(_id), do: %{"type" => "review-suite", "args" => %{"mode" => "normal"}}
 
   defp branch_pattern(id), do: "feat/#{String.downcase(id)}/demo"
 
@@ -548,7 +552,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       forbidden_file_globs: ["config/runtime.exs", ".env"],
       acceptance_criteria: ["Slice #{sequence_hint} is visible with deterministic content."],
       validation_steps: ["mix test test/mix/tasks/sympp_demo_ledger_test.exs"],
-      review_lanes: ["normal"],
+      review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       stop_conditions: ["Stop before runtime defaults or auth changes."]
     }
   end
@@ -602,15 +606,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
        %{
          plan: [{"Review prompt copy", "done"}, {"Run local signoff", "pending"}],
          progress: [
-           {"Review profile opened", "reviewing",
-            %{
-              "type" => "review_progress",
-              "provider" => "review-suite",
-              "profile" => "normal",
-              "step_current" => 1,
-              "step_total" => 3,
-              "step_name" => "discovery"
-            }},
            {"Review branch attached", "branch_attached",
             %{
               "type" => "branch",
@@ -626,8 +621,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
               "tests" => ["mix test test/mix/tasks/sympp_demo_ledger_test.exs"],
               "artifacts" => ["implementation_docs_symphplusplus/runbooks/LOCAL_OPERATOR_GOLDEN_PATH.md"],
               "head_sha" => "2222222222222222222222222222222222222222",
-              "acceptance_criteria_met" => true,
-              "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+              "acceptance_criteria_met" => true
             }}
          ],
          findings: [{"Copy needs operator confirmation", "medium"}],
@@ -660,8 +654,8 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
        }},
       {"SYMPP-DEMO-WP-ARCH-READY",
        %{
-         plan: [{"Review suite green", "done"}, {"Architect merge gate", "pending"}],
-         progress: [{"Ready for architect merge", "ready_for_architect_merge", %{"review_normal" => "green"}}],
+         plan: [{"Required review complete", "done"}, {"Architect merge gate", "pending"}],
+         progress: [{"Ready for architect merge", "ready_for_architect_merge", %{"review_complete" => true}}],
          findings: [{"Architect signoff is the remaining gate", "info"}],
          artifacts: [{"Merge checklist", "implementation_docs_symphplusplus/templates/WORKFLOW.symfony_pp.md"}]
        }},

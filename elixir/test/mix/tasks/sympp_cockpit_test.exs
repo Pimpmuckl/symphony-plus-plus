@@ -513,7 +513,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
                forbidden_file_globs: [],
                acceptance_criteria: ["Done."],
                validation_steps: ["mix test"],
-               review_lanes: ["normal"],
+               review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
                stop_conditions: []
              })
 

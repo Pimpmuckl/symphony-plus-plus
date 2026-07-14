@@ -79,18 +79,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerScopeExpansionTest do
       "tests" => ["mix test"],
       "artifacts" => ["review.txt"],
       "head_sha" => head_sha,
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
-    })
-
-    attach_tool(repo, session, "attach_review_suite_result", %{
-      "work_package_id" => package.id,
-      "head_sha" => head_sha,
-      "suite" => "review-suite",
-      "anchor" => "phase_gate-scope-docs-head-a",
-      "summary" => "normal is green",
-      "status" => "passed",
-      "verdict" => "green"
+      "acceptance_criteria_met" => true
     })
 
     ready_response =

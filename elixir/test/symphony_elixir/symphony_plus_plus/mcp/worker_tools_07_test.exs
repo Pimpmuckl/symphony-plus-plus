@@ -19,7 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     missing = get_in(missing_response, ["error", "data", "missing"])
     assert get_in(missing_response, ["error", "data", "reason"]) == "readiness_failed"
     assert "tests_passed" in missing
-    assert "review_lanes_complete" in missing
     refute "findings_documented" in missing
     refute "recommendation_artifact_recorded" in missing
 
@@ -37,12 +36,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
       "idempotency_key" => "docs-validation"
     })
 
-    attach_tool(repo, session, "append_progress", %{
-      "summary" => "Docs normal review green",
-      "status" => "review_normal_green",
-      "idempotency_key" => "docs-review-normal"
-    })
-
     ready_response =
       MCPHarness.request(
         %{"jsonrpc" => "2.0", "id" => "ready-docs", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
@@ -55,7 +48,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     assert get_in(ready_response, ["result", "structuredContent", "work_package", "status"]) == "ready_for_merge"
   end
 
-  test "non-merge readiness accepts branchless review packages when branch metadata is not required", %{repo: repo} do
+  test "non-merge readiness accepts branchless validation packages when branch metadata is not required", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-BRANCHLESS-REVIEW", kind: "quick_fix", status: "ci_waiting"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
@@ -65,8 +58,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
       "summary" => "Branchless quick-fix review",
       "tests" => ["mix test"],
       "artifacts" => ["branchless-review.txt"],
-      "head_sha" => "standalone-head",
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "head_sha" => "standalone-head"
     })
 
     ready_response =
@@ -93,8 +85,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
       "summary" => "Ready hotfix",
       "tests" => ["mix test"],
       "artifacts" => ["hotfix-review.txt"],
-      "head_sha" => "hotfix-head",
-      "reviews" => [%{"lane" => "fast", "verdict" => "green"}]
+      "head_sha" => "hotfix-head"
     })
 
     ready_response =
@@ -633,9 +624,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
              "tests_passed",
              "branch_attached",
              "pr_attached",
-             "review_package_submitted",
-             "review_artifacts_attached",
-             "review_lanes_complete"
+             "review_artifacts_attached"
            ]
   end
 
@@ -706,8 +695,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
       "tests" => ["mix test"],
       "artifacts" => ["review-log.txt"],
       "head_sha" => "abc124",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     response =

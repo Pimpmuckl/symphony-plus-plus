@@ -63,7 +63,7 @@ attach_branch
 attach_pr
 sync_pr
 submit_review_package
-attach_review_suite_result
+complete_review
 mark_ready
 ```
 
@@ -88,12 +88,11 @@ calls should omit values the bound WorkPackage already carries:
   when those facts changed. Pass explicit PR identity or `recovery` only for
   manual evidence repair.
 
-For Review Suite evidence, prefer `mark_ready(review_suite_round_id)` when the
-package is otherwise ready. The server attaches the passing local Review Suite
-round before readiness checks. Use `attach_review_suite_result(round_id)` only
-when recording review evidence before the finish call. Verbose fields remain a
-fallback when the round cannot be resolved; `suite` must still identify Review
-Suite.
+`review.md` publishes an optional provider-agnostic review requirement as a
+`type` plus optional non-secret `args`. Symphony++ does not run or interpret
+the provider. After the declared review succeeds for the attached exact head,
+call `complete_review(reference?, note?)`; both fields are optional and the
+reference remains opaque.
 
 Retained explicit-id operations and their reasons:
 
@@ -224,9 +223,9 @@ target ids.
 `standard_pr`; reserve `mcp` for MCP servers, protocols, tools, or plugins.
 The selected WorkRequest supplies the default delivery repo and target base
 branch for its primary repo; pass the target base branch when selecting a
-secondary delivery repo. Branch pattern, forbidden globs, and review lanes may
-be omitted, while title, goal, owned globs, acceptance criteria, validation,
-and stop conditions remain required. Without a single current WorkRequest,
+secondary delivery repo. Branch pattern and forbidden globs may be omitted.
+Review is also optional and provider-agnostic. Title, goal, owned
+globs, acceptance criteria, validation, and stop conditions remain required. Without a single current WorkRequest,
 callers must supply `work_request_id` explicitly.
 
 Product-plan node authoring is split by intent: use
@@ -298,7 +297,7 @@ sympp://work-packages/{id}/task_plan.md
 sympp://work-packages/{id}/findings.md
 sympp://work-packages/{id}/progress.md
 sympp://work-packages/{id}/acceptance.md
-sympp://work-packages/{id}/review_suite.md
+sympp://work-packages/{id}/review.md
 sympp://work-packages/{id}/handoff.md
 ```
 

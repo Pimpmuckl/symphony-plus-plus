@@ -30,9 +30,7 @@ Rules:
 7. Require every worker to provide test results.
 8. Record clarification answers, decisions, assumptions, and `human_info_needed`
    instead of inventing product behavior.
-9. Require implementing workers to use the current Review Suite orchestrator
-   profile when installed, or another approved review provider with Symphony++
-   MCP progress/evidence when it is not. Rerun the same required profile after
-   material changes.
+9. Put any required review on the planned slice as an opaque provider type plus
+   optional non-secret arguments. Do not invent a default provider.
 10. Pause the train on permission leaks, raw secret exposure, or broken upstream behavior.
 11. Keep a running status summary after every accepted package.

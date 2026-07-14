@@ -17,8 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "tests" => ["mix test"],
       "artifacts" => ["pre-pr-review.txt"],
       "head_sha" => "pre-pr-head",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/456", "head_sha" => "later-head"})
@@ -32,7 +31,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
 
     missing = get_in(ready_response, ["error", "data", "missing"])
     assert "pr_attached" in missing
-    refute "review_lanes_complete" in missing
     refute "review_artifacts_attached" in missing
   end
 
@@ -49,8 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "summary" => "Old head review",
       "tests" => ["mix test"],
       "artifacts" => ["old-head-review.txt"],
-      "head_sha" => "old-head",
-      "reviews" => [%{"lane" => "fast", "verdict" => "green"}]
+      "head_sha" => "old-head"
     })
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-BRANCH-HEAD-REVIEW/worker", "head_sha" => "new-head"})
@@ -63,7 +60,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       )
 
     missing = get_in(ready_response, ["error", "data", "missing"])
-    assert "review_lanes_complete" in missing
+    assert "tests_passed" in missing
   end
 
   test "submit_review_package replay remains idempotent after branch head changes", %{repo: repo} do
@@ -82,8 +79,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "tests" => ["mix test"],
       "artifacts" => ["review-head-a.txt"],
       "head_sha" => "head-a",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     }
 
     first_response = attach_tool(repo, session, "submit_review_package", review_arguments)
@@ -113,7 +109,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
         session: session
       )
 
-    assert "review_package_submitted" in get_in(ready_response, ["error", "data", "missing"])
+    assert "acceptance_criteria_met" in get_in(ready_response, ["error", "data", "missing"])
+    assert "tests_passed" in get_in(ready_response, ["error", "data", "missing"])
   end
 
   test "submit_review_package exact replay survives worker grant renewal", %{repo: repo} do
@@ -132,8 +129,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "tests" => ["mix test"],
       "artifacts" => ["review-head-a.txt"],
       "head_sha" => "head-a",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     }
 
     first_response = attach_tool(repo, session, "submit_review_package", review_arguments)
@@ -719,8 +715,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "tests" => ["mix test"],
       "artifacts" => ["review.txt"],
       "head_sha" => head_sha,
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -1157,8 +1152,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
               "summary" => "Old PR head review",
               "tests" => ["mix test"],
               "artifacts" => ["old-pr-head-review.txt"],
-              "head_sha" => "head-a",
-              "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+              "head_sha" => "head-a"
             }
           }
         },
@@ -1172,8 +1166,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "summary" => "Latest branch head review",
       "tests" => ["mix test"],
       "artifacts" => ["latest-branch-head-review.txt"],
-      "head_sha" => "head-b",
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "head_sha" => "head-b"
     })
 
     ready_response =
@@ -1202,8 +1195,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "tests" => ["mix test"],
       "artifacts" => ["latest-branch-head-review.txt"],
       "head_sha" => "head-b",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     ready_response =

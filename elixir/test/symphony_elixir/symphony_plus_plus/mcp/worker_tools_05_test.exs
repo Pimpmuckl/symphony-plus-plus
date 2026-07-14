@@ -18,8 +18,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       "tests" => ["mix test"],
       "artifacts" => ["review.txt"],
       "head_sha" => "head-a",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     attach_only_response =
@@ -47,8 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       "tests" => ["mix test"],
       "artifacts" => ["review.txt"],
       "head_sha" => "legacy-head",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -96,8 +94,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       "tests" => ["mix test"],
       "artifacts" => ["review.txt"],
       "head_sha" => head_sha,
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -135,8 +132,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       "tests" => ["mix test"],
       "artifacts" => ["review.txt"],
       "head_sha" => "head-a",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     missing_state_response =
@@ -217,8 +213,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       "tests" => ["mix test"],
       "artifacts" => ["review-head-b.txt"],
       "head_sha" => "head-b",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -261,8 +256,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       "tests" => ["mix test"],
       "artifacts" => ["review.txt"],
       "head_sha" => "head-a",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -311,8 +305,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       "tests" => ["mix test"],
       "artifacts" => ["review-head-b.txt"],
       "head_sha" => "head-b",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -359,8 +352,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       "tests" => ["mix test"],
       "artifacts" => ["review.txt"],
       "head_sha" => "head-a",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -400,8 +392,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       "tests" => ["mix test"],
       "artifacts" => ["short-head-review.txt"],
       "head_sha" => "abcdef1",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -434,8 +425,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       "tests" => ["mix test"],
       "artifacts" => ["tiny-head-review.txt"],
       "head_sha" => "abc",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -446,124 +436,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       )
 
     assert "pr_attached" in get_in(ready_response, ["error", "data", "missing"])
-  end
-
-  test "validated review-suite result satisfies explicit readiness gate", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-REVIEW-SUITE-READY",
-                 kind: "mcp",
-                 status: "ci_waiting",
-                 policy_template: "mcp_review_suite_artifact"
-               )
-             )
-
-    append_done_plan(repo, package.id)
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-REVIEW-SUITE-READY/worker", "head_sha" => "suite-head"})
-    attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/900", "head_sha" => "suite-head"})
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review package",
-      "tests" => ["mix test"],
-      "artifacts" => ["review.txt"],
-      "head_sha" => "suite-head",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
-    })
-
-    repo.delete_all(Artifact)
-
-    missing_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "missing-review-suite", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    assert "review_suite_result" in get_in(missing_response, ["error", "data", "missing"])
-    assert "review_artifacts_attached" in get_in(missing_response, ["error", "data", "missing"])
-
-    attach_tool(repo, session, "attach_review_suite_result", %{
-      "work_package_id" => package.id,
-      "head_sha" => "suite-head",
-      "suite" => "review-suite",
-      "anchor" => "phase_gate-suite-head-lint",
-      "summary" => "lint is green",
-      "status" => "passed",
-      "verdict" => "green",
-      "lane" => "lint"
-    })
-
-    brief_only_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-review-suite-fast-only", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    brief_only_missing = get_in(brief_only_response, ["error", "data", "missing"])
-    assert "review_artifacts_attached" in brief_only_missing
-
-    result_response =
-      attach_tool(repo, session, "attach_review_suite_result", %{
-        "work_package_id" => package.id,
-        "head_sha" => "suite-head",
-        "suite" => "review-suite",
-        "anchor" => "phase_gate-suite-head",
-        "summary" => "normal is green",
-        "status" => "passed",
-        "verdict" => "green",
-        "lane" => "normal"
-      })
-
-    assert get_in(result_response, ["result", "structuredContent", "progress_event", "status"]) == "review_suite_passed"
-    result_payload = response_progress_payload(repo, result_response)
-    assert result_payload["type"] == "review_suite_result"
-    assert result_payload["status"] == "passed"
-
-    assert {:ok, artifacts} = PlanningRepository.list_artifacts(repo, package.id)
-    assert Enum.any?(artifacts, &(&1.kind == "review_suite" and &1.path == "review-suite-result.json"))
-
-    ready_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-review-suite", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
-
-    post_ready_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "post-ready-review-suite",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "attach_review_suite_result",
-            "arguments" => %{
-              "work_package_id" => package.id,
-              "head_sha" => "suite-head",
-              "suite" => "review-suite",
-              "anchor" => "phase_gate-suite-head-rerun",
-              "summary" => "Late review suite rerun",
-              "status" => "passed",
-              "verdict" => "green",
-              "idempotency_key" => "late-review-suite-rerun"
-            }
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(post_ready_response, ["error", "data", "reason"]) == "already_ready"
   end
 
   test "scope guard accepts attach_pr metadata for current changed files", %{repo: repo} do
@@ -608,18 +480,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       "tests" => ["mix test"],
       "artifacts" => ["review.txt"],
       "head_sha" => head_sha,
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
-    })
-
-    attach_tool(repo, session, "attach_review_suite_result", %{
-      "work_package_id" => package.id,
-      "head_sha" => head_sha,
-      "suite" => "review-suite",
-      "anchor" => "phase_gate-scope-attach-head",
-      "summary" => "normal is green",
-      "status" => "passed",
-      "verdict" => "green"
+      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -676,18 +537,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       "tests" => ["mix test"],
       "artifacts" => ["review.txt"],
       "head_sha" => head_sha,
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
-    })
-
-    attach_tool(repo, session, "attach_review_suite_result", %{
-      "work_package_id" => package.id,
-      "head_sha" => head_sha,
-      "suite" => "review-suite",
-      "anchor" => "phase_gate-scope-head-a",
-      "summary" => "normal is green",
-      "status" => "passed",
-      "verdict" => "green"
+      "acceptance_criteria_met" => true
     })
 
     request_response =

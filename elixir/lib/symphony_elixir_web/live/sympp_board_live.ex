@@ -16,7 +16,6 @@ defmodule SymphonyElixirWeb.SymppBoardLive do
 
   @empty_filter "all"
   @migrated_databases_key :sympp_board_live_migrated_databases
-  @review_lane_order ["review_deslop", "review_t1", "review_t2", "review_t3", "review_t4", "review_github"]
 
   @impl true
   def mount(params, session, socket) do
@@ -1617,14 +1616,8 @@ defmodule SymphonyElixirWeb.SymppBoardLive do
 
   defp review_pipeline_step(card) do
     case current_review_evidence(card) do
-      {:green, lane} ->
-        pipeline_step("Review", review_lane_label(lane), :ready)
-
-      {:failed, lane} ->
-        pipeline_step("Review", "#{review_lane_label(lane)} failed", :danger)
-
-      {:pending, lane} ->
-        pipeline_step("Review", "#{review_lane_label(lane)} pending", :active)
+      {:complete, type} ->
+        pipeline_step("Review", "#{type} complete", :ready)
 
       nil ->
         cond do
@@ -1657,101 +1650,19 @@ defmodule SymphonyElixirWeb.SymppBoardLive do
   end
 
   defp current_review_evidence(card) do
-    review_suite_result_evidence(card) || review_package_evidence(card)
-  end
+    case metadata_value(card, :review_completion, "review_completion") do
+      %{} = completion ->
+        review = Map.get(completion, :review) || Map.get(completion, "review") || %{}
+        type = Map.get(review, :type) || Map.get(review, "type") || "Review"
+        {:complete, type}
 
-  defp review_suite_result_evidence(card) do
-    card
-    |> metadata_value(:review_suite_result, "review_suite_result")
-    |> review_evidence_from_payload()
-  end
-
-  defp review_package_evidence(card) do
-    case metadata_value(card, :review_package, "review_package") do
-      %{} = review_package ->
-        review_package
-        |> review_entries()
-        |> best_review_lane()
-
-      _review_package ->
+      _completion ->
         nil
     end
   end
 
-  defp review_evidence_from_payload(%{} = payload) do
-    lane = review_lane_from_payload(payload)
-
-    if review_lane_known?(lane) do
-      {review_state_from_payload(payload), lane}
-    end
-  end
-
-  defp review_evidence_from_payload(_payload), do: nil
-
-  defp review_lane_from_payload(%{} = payload) do
-    Map.get(payload, :lane) || Map.get(payload, "lane") || Map.get(payload, :review_lane) || Map.get(payload, "review_lane") ||
-      Map.get(payload, :suite) || Map.get(payload, "suite")
-  end
-
-  defp review_entries(%{} = review_package) do
-    case Map.get(review_package, :reviews) || Map.get(review_package, "reviews") do
-      reviews when is_list(reviews) -> reviews
-      _reviews -> []
-    end
-  end
-
-  defp best_review_lane(reviews) when is_list(reviews) do
-    reviews
-    |> Enum.map(&review_evidence_from_payload/1)
-    |> Enum.reject(&is_nil/1)
-    |> latest_review_evidence()
-  end
-
-  defp latest_review_evidence([]), do: nil
-
-  defp latest_review_evidence(evidence) do
-    evidence
-    |> Enum.with_index()
-    |> Enum.max_by(fn {{_state, lane}, index} -> {index, review_lane_rank(lane)} end)
-    |> elem(0)
-  end
-
-  defp review_state_from_payload(%{} = payload) do
-    verdict = normalized_review_value(Map.get(payload, :verdict) || Map.get(payload, "verdict"))
-    status = normalized_review_value(Map.get(payload, :status) || Map.get(payload, "status"))
-
-    cond do
-      verdict in ["green", "clean", "passed", "pass"] or status in ["green", "clean", "passed", "pass"] -> :green
-      verdict in ["red", "failed", "fail", "findings"] or status in ["red", "failed", "fail", "findings"] -> :failed
-      true -> :pending
-    end
-  end
-
-  defp normalized_review_value(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
-  defp normalized_review_value(_value), do: nil
-
-  defp review_lane_known?(lane) when is_binary(lane), do: normalized_review_lane(lane) in @review_lane_order
-  defp review_lane_known?(_lane), do: false
-
-  defp review_lane_rank(lane), do: Enum.find_index(@review_lane_order, &(&1 == normalized_review_lane(lane))) || -1
-
-  defp normalized_review_lane(lane) when is_binary(lane), do: lane |> String.trim() |> String.downcase()
-
-  defp review_lane_label(lane) do
-    case normalized_review_lane(lane) do
-      "review_deslop" -> "Review-Deslop"
-      "review_t1" -> "Review-T1"
-      "review_t2" -> "Review-T2"
-      "review_t3" -> "Review-T3"
-      "review_t4" -> "Review-T4"
-      "review_github" -> "Review-GitHub"
-      _lane -> "Review attached"
-    end
-  end
-
   defp review_present?(card) do
-    not is_nil(metadata_value(card, :review_package, "review_package")) or
-      not is_nil(metadata_value(card, :review_suite_result, "review_suite_result"))
+    not is_nil(metadata_value(card, :review_completion, "review_completion"))
   end
 
   defp pr_url(card) do

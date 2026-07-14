@@ -349,7 +349,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       "forbidden_file_globs" => [],
       "acceptance_criteria" => ["WorkRequest is sliceable."],
       "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
-      "review_lanes" => ["normal"],
+      "review" => %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       "stop_conditions" => ["Stop before dispatch."]
     }
 
@@ -468,7 +468,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
         "forbidden_file_globs" => [],
         "acceptance_criteria" => [],
         "validation_steps" => [],
-        "review_lanes" => [],
         "stop_conditions" => []
       })
 

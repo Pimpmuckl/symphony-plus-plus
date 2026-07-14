@@ -15,9 +15,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
-  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes
   alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
 
@@ -165,7 +163,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
   @spec readiness_context(repo(), WorkPackage.t(), [PlanNode.t()], [ProgressEvent.t()], [term()], [term()]) :: map()
   def readiness_context(repo, %WorkPackage{} = work_package, plan_nodes, progress_events, artifacts, findings) do
-    readiness_context(repo, work_package, plan_nodes, progress_events, artifacts, findings, :load)
+    readiness_context(repo, work_package, plan_nodes, progress_events, artifacts, findings, work_package.review_requirement)
   end
 
   @spec readiness_context(
@@ -177,7 +175,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
           [term()],
           term()
         ) :: map()
-  def readiness_context(repo, %WorkPackage{} = work_package, plan_nodes, progress_events, artifacts, findings, planned_slice_review_lanes) do
+  def readiness_context(repo, %WorkPackage{} = work_package, plan_nodes, progress_events, artifacts, findings, review_requirement) do
     %{
       repo: repo,
       work_package: work_package,
@@ -185,7 +183,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       progress_events: chronological_progress_events(progress_events),
       artifacts: artifacts,
       findings: findings,
-      planned_slice_review_lanes: planned_slice_review_lanes,
+      review_requirement: review_requirement,
       artifact_count: length(artifacts),
       finding_count: length(findings)
     }
@@ -717,11 +715,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   end
 
   defp metadata_activity?(metadata) do
-    Enum.any?([:branch, :pr, :review_progress, :review_package, :review_suite_result], &present_metadata_value?(safe_map_get(metadata, &1)))
+    Enum.any?([:branch, :pr, :review_package, :review_completion], &present_metadata_value?(safe_map_get(metadata, &1)))
   end
 
   defp review_activity?(metadata) do
-    Enum.any?([:review_progress, :review_package, :review_suite_result], &present_metadata_value?(safe_map_get(metadata, &1)))
+    present_metadata_value?(safe_map_get(metadata, :review_completion))
   end
 
   defp present_metadata_value?(nil), do: false
@@ -888,8 +886,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   end
 
   defp readiness_failure_reasons(%{work_package: %WorkPackage{}} = context) do
-    required_review_lanes = required_review_lanes(context)
-
     [
       {active_blocker?(context.progress_events), "no_active_blockers"},
       {incomplete_plan?(context), "plan_complete"},
@@ -898,11 +894,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       {merge_metadata_missing?(context, "branch"), "branch_attached"},
       {merge_metadata_missing?(context, "pr"), "pr_attached"},
       {current_pr_state_missing?(context), "current_pr_state"},
-      {review_suite_result_missing?(context), "review_suite_result"},
       {ScopeGuard.missing?(context.work_package, context.progress_events), @scope_guard_gate},
-      {review_package_missing?(context, required_review_lanes), "review_package_submitted"},
-      {review_artifacts_missing?(context, required_review_lanes), "review_artifacts_attached"},
-      {review_lanes_missing?(context, required_review_lanes), "review_lanes_complete"},
+      {review_artifacts_missing?(context), "review_artifacts_attached"},
+      {review_current_head_missing?(context), "review_current_head"},
+      {review_completion_missing?(context), "review_complete"},
       {investigation_findings_missing?(context), "findings_documented"},
       {investigation_recommendation_missing?(context), "recommendation_artifact_recorded"}
     ]
@@ -928,10 +923,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   defp readiness_failure_message("branch_attached"), do: "Current branch metadata is missing."
   defp readiness_failure_message("pr_attached"), do: "Current PR metadata is missing."
   defp readiness_failure_message("current_pr_state"), do: "Current synced PR state is missing."
-  defp readiness_failure_message("review_suite_result"), do: "Current-head review-suite result evidence is missing."
-  defp readiness_failure_message("review_package_submitted"), do: "Current-head review package is missing."
-  defp readiness_failure_message("review_artifacts_attached"), do: "Current-head review artifacts are missing."
-  defp readiness_failure_message("review_lanes_complete"), do: "Required review profiles are not green."
+  defp readiness_failure_message("review_artifacts_attached"), do: "Current-head validation artifacts are missing."
+  defp readiness_failure_message("review_current_head"), do: "Required review is waiting for an attached exact head."
+  defp readiness_failure_message("review_complete"), do: "Required review is not completed for the current exact head and requirement."
   defp readiness_failure_message("findings_documented"), do: "Investigation findings are missing."
   defp readiness_failure_message("recommendation_artifact_recorded"), do: "Investigation recommendation artifact is missing."
   defp readiness_failure_message(_gate), do: "Readiness gate is not satisfied."
@@ -957,38 +951,50 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       not current_pr_state_present?(context.progress_events, latest_current_head_sha(context.progress_events))
   end
 
-  defp review_suite_result_missing?(context) do
-    required_gate?(context.work_package, "review_suite_result") and
-      not review_suite_result_present?(context.progress_events, context.artifacts, context.work_package.id, review_head_sha_for_readiness(context))
+  defp review_current_head_missing?(context) do
+    not is_nil(review_requirement(context)) and is_nil(latest_current_head_sha(context.progress_events))
   end
 
-  defp review_suite_result_present?(_progress_events, _artifacts, _work_package_id, nil), do: false
-
-  defp review_suite_result_present?(progress_events, artifacts, work_package_id, readiness_head_sha) do
-    case latest_review_suite_result_event(progress_events, work_package_id, readiness_head_sha) do
-      %ProgressEvent{payload: payload} ->
-        valid_review_suite_result_payload?(payload, work_package_id, readiness_head_sha) and
-          persisted_review_suite_artifact?(artifacts, work_package_id, Map.fetch!(payload, "head_sha"))
-
-      nil ->
+  defp review_completion_missing?(context) do
+    case {review_requirement(context), latest_current_head_sha(context.progress_events)} do
+      {nil, _head_sha} ->
         false
+
+      {_requirement, nil} ->
+        true
+
+      {requirement, head_sha} ->
+        not MetadataProjection.review_completion_present?(
+          context.progress_events,
+          context.work_package.id,
+          head_sha,
+          requirement
+        )
     end
   end
 
-  defp review_package_missing?(context, required_lanes) do
-    readiness_head_sha = review_head_sha_for_readiness(context)
+  defp review_requirement(context), do: Map.get(context, :review_requirement, context.work_package.review_requirement)
 
-    merge_required?(context.work_package) and review_lanes_required?(required_lanes) and
-      current_head_review_package_events(context.progress_events, readiness_head_sha) == []
+  defp review_artifacts_missing?(context) do
+    merge_required?(context.work_package) and not current_review_artifacts_present?(context)
   end
 
-  defp review_artifacts_missing?(context, required_lanes) do
-    merge_required?(context.work_package) and review_lanes_required?(required_lanes) and
-      not review_artifacts_present?(context, required_lanes)
-  end
+  defp current_review_artifacts_present?(context) do
+    current_head_sha = latest_current_head_sha(context.progress_events)
 
-  defp review_lanes_missing?(context, required_lanes) do
-    review_lanes_required?(required_lanes) and not review_lanes_present?(context, required_lanes)
+    case latest_review_package_event(context.progress_events, current_head_sha) do
+      %ProgressEvent{payload: payload} when is_map(payload) ->
+        artifacts = Map.get(payload, "artifacts")
+
+        is_list(artifacts) and artifacts != [] and
+          Enum.all?(artifacts, fn path ->
+            is_binary(path) and String.trim(path) != "" and
+              MetadataProjection.persisted_review_artifact?(context.artifacts, context.work_package.id, current_head_sha, path)
+          end)
+
+      _event ->
+        false
+    end
   end
 
   defp investigation_findings_missing?(context), do: context.work_package.kind == "investigation" and context.findings == []
@@ -1043,25 +1049,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     end
   end
 
-  defp required_review_lanes(%{work_package: %WorkPackage{} = work_package} = context) do
-    case Map.get(context, :planned_slice_review_lanes, :load) do
-      :load ->
-        case ReviewLanes.required(Map.get(context, :repo), work_package) do
-          {:ok, {required_lanes, _warnings}} -> required_lanes
-          {:error, _reason} -> ReviewLanes.policy_required(work_package)
-        end
-
-      planned_slice_review_lanes ->
-        {required_lanes, _warnings} =
-          ReviewLanes.required_from_planned_slice_lanes(work_package, planned_slice_review_lanes)
-
-        required_lanes
-    end
-  end
-
   defp policy_for(%WorkPackage{} = work_package), do: LifecycleService.policy_for(work_package)
-
-  defp review_lanes_required?(required_lanes), do: required_lanes != []
 
   @spec merge_required?(WorkPackage.t()) :: boolean()
   def merge_required?(%WorkPackage{} = work_package) do
@@ -1137,71 +1125,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     end
   end
 
-  defp review_lanes_present?(context, required_lanes) do
-    if merge_required?(context.work_package) do
-      review_package_lanes_present?(
-        context.progress_events,
-        required_lanes,
-        review_head_sha_for_readiness(context)
-      ) or review_suite_result_lanes_present?(context, required_lanes)
-    else
-      progress_events = current_branch_progress_events(context.progress_events)
-
-      review_package_lanes_present?(progress_events, required_lanes, review_head_sha_for_readiness(context)) or
-        review_suite_result_lanes_present?(context, required_lanes) or
-        progress_review_lanes_present?(progress_events, required_lanes)
-    end
-  end
-
-  defp review_package_lanes_present?(progress_events, required_lanes, readiness_head_sha) do
-    latest_verdicts =
-      case latest_review_package_event(progress_events, readiness_head_sha) do
-        %ProgressEvent{} = event ->
-          event
-          |> review_package_reviews(readiness_head_sha)
-          |> Enum.reduce(%{}, fn review, verdicts ->
-            Map.put(verdicts, ReviewProfiles.normalize_profile(Map.get(review, "lane")), Map.get(review, "verdict"))
-          end)
-
-        nil ->
-          %{}
-      end
-
-    Enum.all?(required_lanes, &ReviewProfiles.profile_verdicts_pass?(&1, latest_verdicts))
-  end
-
-  defp review_suite_result_lanes_present?(context, required_lanes) do
-    readiness_head_sha = review_head_sha_for_readiness(context)
-
-    payloads =
-      context.progress_events
-      |> MetadataProjection.current_head_review_suite_result_events(context.work_package.id, readiness_head_sha)
-      |> Enum.map(& &1.payload)
-      |> Enum.filter(
-        &(review_suite_result_payload_in_scope?(&1, context.work_package.id, readiness_head_sha) and
-            persisted_review_suite_artifact?(context.artifacts, context.work_package.id, Map.fetch!(&1, "head_sha")))
-      )
-
-    payloads != [] and
-      Enum.all?(required_lanes, &ReviewProfiles.review_suite_payloads_satisfy_required_profile?(payloads, &1))
-  end
-
-  defp progress_review_lanes_present?(progress_events, required_lanes) do
-    Enum.all?(required_lanes, &progress_review_lane_present?(progress_events, &1))
-  end
-
-  defp progress_review_lane_present?(progress_events, required_lane) do
-    satisfying_profiles = ReviewProfiles.satisfying_profiles(required_lane)
-
-    latest_statuses =
-      satisfying_profiles
-      |> Enum.map(&{&1, latest_generic_progress_status(progress_events, ReviewProfiles.statuses(&1))})
-      |> Enum.reject(fn {_profile, status} -> is_nil(status) end)
-
-    latest_statuses != [] and
-      Enum.all?(latest_statuses, fn {profile, status} -> status in ReviewProfiles.green_statuses(profile) end)
-  end
-
   defp progress_status_recorded?(progress_events, expected_status) do
     latest_generic_progress_status(progress_events, [expected_status, failed_status(expected_status)]) ==
       expected_status
@@ -1261,47 +1184,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     end)
   end
 
-  defp review_artifacts_present?(context, required_lanes) do
-    current_head_sha = latest_current_head_sha(context.progress_events)
-    artifact_references = current_head_review_artifact_references(context.progress_events, current_head_sha)
-
-    review_package_artifacts_present =
-      artifact_references != [] and
-        Enum.all?(artifact_references, fn {path, artifact_head_sha} ->
-          persisted_review_artifact?(context.artifacts, context.work_package.id, artifact_head_sha, path)
-        end)
-
-    review_package_artifacts_present or
-      review_suite_result_lanes_present?(context, required_lanes)
-  end
-
-  defp current_head_review_artifact_references(progress_events, current_head_sha) do
-    case latest_review_package_event(progress_events, current_head_sha) do
-      %ProgressEvent{} = event -> review_package_artifact_references(event, current_head_sha)
-      nil -> []
-    end
-  end
-
-  defp review_package_artifact_paths(%ProgressEvent{payload: payload}, readiness_head_sha) when is_map(payload) do
-    artifacts = Map.get(payload, "artifacts")
-
-    if is_list(artifacts) and review_head_matches?(payload, readiness_head_sha) do
-      Enum.filter(artifacts, &(is_binary(&1) and String.trim(&1) != ""))
-    else
-      []
-    end
-  end
-
-  defp review_package_artifact_paths(%ProgressEvent{}, _readiness_head_sha), do: []
-
-  defp review_package_artifact_references(%ProgressEvent{payload: payload} = event, readiness_head_sha) when is_map(payload) do
-    event
-    |> review_package_artifact_paths(readiness_head_sha)
-    |> Enum.map(&{&1, Map.get(payload, "head_sha")})
-  end
-
-  defp review_package_artifact_references(%ProgressEvent{}, _readiness_head_sha), do: []
-
   defp review_head_sha_for_readiness(context) do
     current_head_sha = latest_current_head_sha(context.progress_events)
 
@@ -1343,16 +1225,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   defp normalize_blocker_id(value) when is_binary(value), do: String.trim(value)
   defp normalize_blocker_id(value), do: to_string(value)
 
-  defp persisted_review_artifact?(artifacts, work_package_id, head_sha, path), do: MetadataProjection.persisted_review_artifact?(artifacts, work_package_id, head_sha, path)
-
-  defp latest_review_suite_result_event(progress_events, work_package_id, readiness_head_sha),
-    do: MetadataProjection.latest_review_suite_result_event(progress_events, work_package_id, readiness_head_sha)
-
-  defp valid_review_suite_result_payload?(payload, work_package_id, readiness_head_sha), do: MetadataProjection.valid_review_suite_result_payload?(payload, work_package_id, readiness_head_sha)
-  defp review_suite_result_payload_in_scope?(payload, work_package_id, readiness_head_sha), do: MetadataProjection.review_suite_result_payload_in_scope?(payload, work_package_id, readiness_head_sha)
-  defp persisted_review_suite_artifact?(artifacts, work_package_id, head_sha), do: MetadataProjection.persisted_review_suite_artifact?(artifacts, work_package_id, head_sha)
   defp recommendation_artifact_recorded?(artifacts, work_package_id), do: MetadataProjection.recommendation_artifact_recorded?(artifacts, work_package_id)
-  defp review_package_reviews(event, readiness_head_sha), do: MetadataProjection.review_package_reviews(event, readiness_head_sha)
   defp filled_string?(value), do: MetadataProjection.filled_string?(value)
   defp review_head_matches?(payload, readiness_head_sha), do: MetadataProjection.review_head_matches?(payload, readiness_head_sha)
   defp latest_current_head_sha(progress_events), do: MetadataProjection.latest_current_head_sha(progress_events)

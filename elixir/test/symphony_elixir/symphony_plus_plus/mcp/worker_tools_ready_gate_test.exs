@@ -3,8 +3,6 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes
-
   test "mark_ready requires plan nodes when package-depth planning is meaningful", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(
@@ -16,6 +14,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
+    bypass_response =
+      MCPHarness.request(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "ready-bypass",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "set_status",
+            "arguments" => %{"expected_status" => "ci_waiting", "status" => "ready_for_merge"}
+          }
+        },
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(bypass_response, ["error", "data", "reason"]) == "use_mark_ready"
+
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-READY-PACKAGE-PLAN/worker", "head_sha" => "abc126"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/126", "head_sha" => "abc126"})
 
@@ -24,8 +39,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
       "tests" => ["mix test"],
       "artifacts" => ["review-log.txt"],
       "head_sha" => "abc126",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     missing_plan_response =
@@ -69,7 +83,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
       )
 
     assert "pr_attached" in get_in(missing_merge_evidence_response, ["error", "data", "missing"])
-    assert "review_package_submitted" in get_in(missing_merge_evidence_response, ["error", "data", "missing"])
+    assert "tests_passed" in get_in(missing_merge_evidence_response, ["error", "data", "missing"])
 
     empty_review_response =
       MCPHarness.request(
@@ -127,8 +141,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
       "tests" => ["mix test"],
       "artifacts" => ["review-log.txt"],
       "head_sha" => "abc125",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "normal", "verdict" => "green"}]
+      "acceptance_criteria_met" => true
     })
 
     blocked_response =
@@ -187,296 +200,107 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
   end
 
-  test "mark_ready follows linked planned-slice review lanes over package policy defaults", %{repo: repo} do
-    work_request =
-      create_work_request!(
-        repo,
-        id: "WR-BRIEF-READY-SLICE",
-        status: "ready_for_slicing",
-        repo: "nextide/symphony-plus-plus",
-        base_branch: "main"
-      )
-
-    assert {:ok, planned} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               work_request_planned_slice_attrs(
-                 id: "WRS-BRIEF-READY-SLICE",
-                 title: "Brief review readiness",
-                 goal: "Keep readiness aligned with the planned slice review profile.",
-                 work_package_kind: "mcp",
-                 target_base_branch: "main",
-                 branch_pattern: "agent/fast-ready-slice",
-                 owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
-                 acceptance_criteria: ["Brief review evidence is enough for this slice."],
-                 validation_steps: ["mix test worker_tools_ready_gate_test.exs"],
-                 review_lanes: ["fast"],
-                 stop_conditions: ["Stop before broad lifecycle rewrites."]
-               )
-             )
-
-    assert {:ok, approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned.id, "planned")
+  test "complete_review satisfies only the configured provider requirement at the current exact head", %{repo: repo} do
+    review = %{"type" => "human", "args" => %{"team" => "maintainers"}}
 
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
                WorkPackageFactory.attrs(
-                 id: "SYMPP-BRIEF-READY-SLICE",
+                 id: "SYMPP-GENERIC-REVIEW",
                  kind: "mcp",
-                 title: approved.title,
-                 repo: "nextide/symphony-plus-plus",
-                 base_branch: "main",
-                 branch_pattern: approved.branch_pattern,
-                 product_description: work_request.human_description,
-                 allowed_file_globs: approved.owned_file_globs,
-                 acceptance_criteria: approved.acceptance_criteria,
-                 status: "ci_waiting"
+                 status: "ci_waiting",
+                 review_requirement: review
                )
              )
-
-    assert {:ok, _linked} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", package.id)
 
     append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+    pr_url = "https://github.com/example/repo/pull/392"
 
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/fast-ready-slice", "head_sha" => "fast-head"})
-    attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/392", "head_sha" => "fast-head"})
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Brief review passed",
-      "tests" => ["mix test worker_tools_ready_gate_test.exs"],
-      "artifacts" => ["review-fast-log.txt"],
-      "head_sha" => "fast-head",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "fast", "verdict" => "green"}]
-    })
-
-    ready_response =
+    no_head =
       MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-brief-slice", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
+        %{"jsonrpc" => "2.0", "id" => "review-no-head", "method" => "tools/call", "params" => %{"name" => "complete_review"}},
         repo: repo,
         session: session
       )
 
-    assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
-    refute Map.has_key?(get_in(ready_response, ["result", "structuredContent"]), "warnings")
-  end
+    assert get_in(no_head, ["error", "data", "reason"]) == "review_current_head_missing"
 
-  test "planned-slice review lanes reject retired and non-mode profiles", %{repo: repo} do
-    work_request =
-      create_work_request!(
-        repo,
-        id: "WR-GITHUB-READY-SLICE",
-        status: "ready_for_slicing",
-        repo: "nextide/symphony-plus-plus",
-        base_branch: "main"
-      )
-
-    for {profile, index} <- Enum.with_index(["review_github", "brief", "emergency", "review_t1", "review_t2"]) do
-      assert {:error, changeset} =
-               WorkRequestRepository.add_planned_slice(
-                 repo,
-                 work_request.id,
-                 work_request_planned_slice_attrs(
-                   id: "WRS-INVALID-REVIEW-MODE-#{index}",
-                   review_lanes: [profile]
-                 )
-               )
-
-      assert {"must be one of: fast, normal, deep", _metadata} = Keyword.fetch!(changeset.errors, :review_lanes)
-    end
-  end
-
-  test "planned-slice review lanes ignore invalid legacy values", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-READY-REDACTED-LANES", kind: "mcp", status: "ci_waiting")
-             )
-
-    {required_lanes, warnings} = ReviewLanes.required_from_planned_slice_lanes(package, ["brief", "raw_secret_review_lane"])
-
-    assert required_lanes == []
-    assert warnings == []
-  end
-
-  test "empty planned-slice review lanes disable policy review defaults", %{repo: repo} do
-    work_request =
-      create_work_request!(
-        repo,
-        id: "WR-NO-REVIEW-LANES",
-        status: "ready_for_slicing",
-        repo: "nextide/symphony-plus-plus",
-        base_branch: "main"
-      )
-
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               work_request_planned_slice_attrs(
-                 id: "WRS-NO-REVIEW-LANES",
-                 review_lanes: []
-               )
-             )
-
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-NO-REVIEW-LANES", kind: "mcp", status: "ci_waiting")
-             )
-
-    repo.query!(
-      "UPDATE sympp_work_request_planned_slices SET work_package_id = ? WHERE id = ?",
-      [package.id, planned_slice.id]
-    )
-
-    assert {:ok, {[], []}} = ReviewLanes.required(repo, package)
-  end
-
-  test "review lane resolver falls back to policy without repo context", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-READY-NIL-REPO-LANES", kind: "mcp", status: "ci_waiting")
-             )
-
-    assert {:ok, {["normal"], []}} = ReviewLanes.required(nil, package)
-  end
-
-  test "review lane resolver falls back to policy for duplicate linked planned slices", %{repo: repo} do
-    work_request =
-      create_work_request!(
-        repo,
-        id: "WR-DUPLICATE-REVIEW-LANES",
-        status: "ready_for_slicing",
-        repo: "nextide/symphony-plus-plus",
-        base_branch: "main"
-      )
-
-    assert {:ok, brief_slice} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               work_request_planned_slice_attrs(id: "WRS-DUPLICATE-REVIEW-LANES-A", review_lanes: ["fast"])
-             )
-
-    assert {:ok, normal_slice} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               work_request_planned_slice_attrs(id: "WRS-DUPLICATE-REVIEW-LANES-B", review_lanes: ["normal"])
-             )
-
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-DUPLICATE-REVIEW-LANES", kind: "mcp", status: "ci_waiting")
-             )
-
-    drop_planned_slice_work_package_unique_index!(repo)
-
-    try do
-      repo.query!(
-        "UPDATE sympp_work_request_planned_slices SET work_package_id = ? WHERE id IN (?, ?)",
-        [package.id, brief_slice.id, normal_slice.id]
-      )
-
-      assert {:ok, {["normal"], []}} = ReviewLanes.required(repo, package)
-    after
-      repo.query!(
-        "UPDATE sympp_work_request_planned_slices SET work_package_id = NULL WHERE id IN (?, ?)",
-        [brief_slice.id, normal_slice.id]
-      )
-
-      create_planned_slice_work_package_unique_index!(repo)
-    end
-  end
-
-  test "mark_ready ignores invalid legacy planned-slice review lanes", %{repo: repo} do
-    work_request =
-      create_work_request!(
-        repo,
-        id: "WR-SECRET-LANE-FAILURE",
-        status: "ready_for_slicing",
-        repo: "nextide/symphony-plus-plus",
-        base_branch: "main"
-      )
-
-    assert {:ok, planned} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               work_request_planned_slice_attrs(
-                 id: "WRS-SECRET-LANE-FAILURE",
-                 title: "Secret lane failure detail",
-                 goal: "Keep failure details redacted.",
-                 work_package_kind: "mcp",
-                 target_base_branch: "main",
-                 branch_pattern: "agent/secret-lane-failure",
-                 owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
-                 acceptance_criteria: ["Failure details do not leak lane values."],
-                 validation_steps: ["mix test worker_tools_ready_gate_test.exs"],
-                 review_lanes: ["fast"],
-                 stop_conditions: ["Stop before broad lifecycle rewrites."]
-               )
-             )
-
-    assert {:ok, approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned.id, "planned")
-
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-SECRET-LANE-FAILURE",
-                 kind: "mcp",
-                 title: approved.title,
-                 repo: "nextide/symphony-plus-plus",
-                 base_branch: "main",
-                 branch_pattern: approved.branch_pattern,
-                 product_description: work_request.human_description,
-                 allowed_file_globs: approved.owned_file_globs,
-                 acceptance_criteria: approved.acceptance_criteria,
-                 status: "ci_waiting"
-               )
-             )
-
-    assert {:ok, _linked} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", package.id)
-
-    repo.query!(
-      "UPDATE sympp_work_request_planned_slices SET review_lanes = ? WHERE id = ?",
-      [Jason.encode!(["brief", "raw_secret_review_lane"]), planned.id]
-    )
-
-    append_done_plan(repo, package.id)
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/secret-lane-failure", "head_sha" => "secret-lane-head"})
-    attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/393", "head_sha" => "secret-lane-head"})
+    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/generic-review", "head_sha" => "review-head-a"})
+    attach_tool(repo, session, "attach_pr", %{"url" => pr_url, "head_sha" => "review-head-a"})
+    sync_pr_state(repo, session, pr_url, "review-head-a")
 
     attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Brief review passed",
+      "summary" => "Validation passed",
       "tests" => ["mix test worker_tools_ready_gate_test.exs"],
-      "artifacts" => ["review-brief-log.txt"],
-      "head_sha" => "secret-lane-head",
-      "acceptance_criteria_met" => true,
-      "reviews" => [%{"lane" => "brief", "verdict" => "green"}]
+      "artifacts" => ["validation-log.txt"],
+      "head_sha" => "review-head-a",
+      "acceptance_criteria_met" => true
     })
 
-    ready_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "secret-lane-ready-fail", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
+    attach_tool(repo, session, "append_progress", %{
+      "summary" => "Spoofed review completion",
+      "idempotency_key" => "spoofed-review-completion",
+      "payload" => %{"type" => "review_completion", "source_tool" => "complete_review", "review" => review, "head_sha" => "review-head-a"}
+    })
 
-    assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
-    refute inspect(ready_response) =~ "raw_secret_review_lane"
+    missing_review = mark_ready(repo, session, "ready-missing-review")
+    assert "review_complete" in get_in(missing_review, ["error", "data", "missing"])
+
+    completion =
+      attach_tool(repo, session, "complete_review", %{
+        "reference" => "human-review-42",
+        "note" => "Maintainers approved the exact head."
+      })
+
+    assert response_progress_payload(repo, completion) == %{
+             "type" => "review_completion",
+             "source_tool" => "complete_review",
+             "work_package_id" => package.id,
+             "review" => review,
+             "head_sha" => "review-head-a",
+             "reference" => "human-review-42",
+             "note" => "Maintainers approved the exact head."
+           }
+
+    replay =
+      attach_tool(repo, session, "complete_review", %{
+        "reference" => "human-review-42",
+        "note" => "Maintainers approved the exact head."
+      })
+
+    assert get_in(replay, ["result", "structuredContent", "progress_event", "id"]) ==
+             get_in(completion, ["result", "structuredContent", "progress_event", "id"])
+
+    changed_review = %{"type" => "automated", "args" => %{"policy" => "internal"}}
+    package |> Ecto.Changeset.change(review_requirement: changed_review) |> repo.update!()
+    requirement_changed = mark_ready(repo, session, "ready-changed-requirement")
+    assert "review_complete" in get_in(requirement_changed, ["error", "data", "missing"])
+
+    assert {:ok, package} = WorkPackageRepository.get(repo, package.id)
+    package |> Ecto.Changeset.change(review_requirement: review) |> repo.update!()
+
+    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/generic-review", "head_sha" => "review-head-b"})
+    attach_tool(repo, session, "attach_pr", %{"url" => pr_url, "head_sha" => "review-head-b"})
+    sync_pr_state(repo, session, pr_url, "review-head-b")
+
+    attach_tool(repo, session, "submit_review_package", %{
+      "summary" => "Validation passed at new head",
+      "tests" => ["mix test worker_tools_ready_gate_test.exs"],
+      "artifacts" => ["validation-log.txt"],
+      "head_sha" => "review-head-b",
+      "acceptance_criteria_met" => true
+    })
+
+    stale_review = mark_ready(repo, session, "ready-stale-review")
+    assert "review_complete" in get_in(stale_review, ["error", "data", "missing"])
+
+    attach_tool(repo, session, "complete_review", %{})
+    ready = mark_ready(repo, session, "ready-current-review")
+    assert get_in(ready, ["result", "structuredContent", "ready"]) == true
   end
 
   test "mark_ready does not require review-package metadata for non-merge-gated policies", %{repo: repo} do
@@ -504,7 +328,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     refute "pr_attached" in missing
     refute "review_package_submitted" in missing
     assert "tests_passed" in missing
-    assert "review_lanes_complete" in missing
 
     attach_tool(repo, session, "request_scope_expansion", %{
       "summary" => "Unrelated scope request",
@@ -522,18 +345,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
 
     unrelated_missing = get_in(unrelated_status_response, ["error", "data", "missing"])
     assert "tests_passed" in unrelated_missing
-    assert "review_lanes_complete" in unrelated_missing
 
     attach_tool(repo, session, "append_progress", %{
       "summary" => "Focused tests passed",
       "status" => "tests_passed",
       "idempotency_key" => "quick-fix-tests"
-    })
-
-    attach_tool(repo, session, "append_progress", %{
-      "summary" => "normal review green",
-      "status" => "review_normal_green",
-      "idempotency_key" => "quick-fix-review-normal"
     })
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-READY-QUICK-FIX/worker", "head_sha" => "quick-fix-head-b"})
@@ -547,7 +363,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
 
     stale_progress_missing = get_in(stale_progress_response, ["error", "data", "missing"])
     assert "tests_passed" in stale_progress_missing
-    assert "review_lanes_complete" in stale_progress_missing
 
     attach_tool(repo, session, "append_progress", %{
       "summary" => "Focused tests passed for latest head",
@@ -556,21 +371,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     })
 
     attach_tool(repo, session, "append_progress", %{
-      "summary" => "normal review green for latest head",
-      "status" => "review_normal_green",
-      "idempotency_key" => "quick-fix-review-normal-head-b"
-    })
-
-    attach_tool(repo, session, "append_progress", %{
       "summary" => "Focused tests failed after latest pass",
       "status" => "tests_failed",
       "idempotency_key" => "quick-fix-tests-head-b-failed"
-    })
-
-    attach_tool(repo, session, "append_progress", %{
-      "summary" => "normal review red after latest green",
-      "status" => "review_normal_red",
-      "idempotency_key" => "quick-fix-review-normal-head-b-red"
     })
 
     stale_green_response =
@@ -582,18 +385,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
 
     stale_green_missing = get_in(stale_green_response, ["error", "data", "missing"])
     assert "tests_passed" in stale_green_missing
-    assert "review_lanes_complete" in stale_green_missing
 
     attach_tool(repo, session, "append_progress", %{
       "summary" => "Focused tests passed after failure",
       "status" => "tests_passed",
       "idempotency_key" => "quick-fix-tests-head-b-repassed"
-    })
-
-    attach_tool(repo, session, "append_progress", %{
-      "summary" => "normal review green after red",
-      "status" => "review_normal_green",
-      "idempotency_key" => "quick-fix-review-normal-head-b-regreen"
     })
 
     ready_response =
@@ -620,15 +416,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert updated.status == "merged"
   end
 
-  defp drop_planned_slice_work_package_unique_index!(repo) do
-    repo.query!("DROP INDEX IF EXISTS sympp_work_request_planned_slices_work_package_id_unique_index")
-  end
-
-  defp create_planned_slice_work_package_unique_index!(repo) do
-    repo.query!("""
-    CREATE UNIQUE INDEX IF NOT EXISTS sympp_work_request_planned_slices_work_package_id_unique_index
-    ON sympp_work_request_planned_slices (work_package_id)
-    WHERE work_package_id IS NOT NULL
-    """)
+  defp mark_ready(repo, session, id) do
+    MCPHarness.request(
+      %{"jsonrpc" => "2.0", "id" => id, "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
+      repo: repo,
+      session: session
+    )
   end
 end

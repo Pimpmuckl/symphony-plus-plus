@@ -34,6 +34,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
@@ -161,7 +162,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, forbidden_file_globs} <- optional_string_list_argument(arguments, "forbidden_file_globs"),
          {:ok, acceptance_criteria} <- required_string_array(arguments, "acceptance_criteria"),
          {:ok, validation_steps} <- required_string_array(arguments, "validation_steps"),
-         {:ok, review_lanes} <- optional_string_list_argument(arguments, "review_lanes"),
+         {:ok, review} <- optional_object_argument(arguments, "review"),
+         {:ok, review} <- normalize_review_requirement(review),
          {:ok, stop_conditions} <- required_string_array(arguments, "stop_conditions"),
          {:ok, branch_pattern} <- optional_string_argument(arguments, "branch_pattern"),
          :ok <- require_supported_branch_pattern(branch_pattern),
@@ -179,7 +181,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              "validation_steps" => validation_steps,
              "stop_conditions" => stop_conditions
            }
-           |> optional_put_present("review_lanes", review_lanes, not is_nil(Map.get(arguments, "review_lanes")))
+           |> optional_put_present("review_requirement", review, Map.has_key?(arguments, "review"))
            |> optional_put("branch_pattern", branch_pattern),
          {:ok, {planned_slice, updated_work_request}} <-
            mutate_product_tree(
@@ -849,6 +851,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
       "reason" => "forbidden_path_overlap",
       "forbidden_path" => forbidden_path
     }
+  end
+
+  defp normalize_review_requirement(review) do
+    case ReviewRequirement.normalize(review) do
+      {:ok, requirement} -> {:ok, requirement}
+      {:error, reason} -> {:tool_error, Atom.to_string(reason)}
+    end
   end
 
   defp auth_error(:unauthorized, resource), do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}

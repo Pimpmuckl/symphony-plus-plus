@@ -37,7 +37,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
@@ -55,7 +54,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     "attach_pr",
     "sync_pr",
     "submit_review_package",
-    "attach_review_suite_result",
+    "complete_review",
     "mark_ready"
   ]
   @terminal_work_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
@@ -195,25 +194,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     end
   end
 
-  def call("attach_review_suite_result", %Config{} = config, session, arguments) do
+  def call("complete_review", %Config{} = config, session, arguments) do
     with {:ok, session} <- scoped_session(config.repo, session, arguments),
          :ok <- authorize_current_package_policy(config.repo, session, :review_evidence_append, :review_evidence),
-         {:ok, result} <- ReviewReadiness.attach_review_suite_result(config.repo, session, arguments) do
+         {:ok, result} <- ReviewReadiness.complete_review(config.repo, session, arguments) do
       {:ok, result}
     else
-      {:tool_error, reason} -> invalid_params_error("attach_review_suite_result", reason)
+      {:tool_error, reason} -> invalid_params_error("complete_review", reason)
       {:error, _code, _message, _data} = error -> error
-      {:error, reason} -> worker_error(reason, "attach_review_suite_result")
+      {:error, reason} -> worker_error(reason, "complete_review")
     end
   end
 
   def call("mark_ready", %Config{} = config, session, arguments) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          :ok <- require_worker_assignment(session.assignment),
-         {:ok, review_suite_result} <- ReviewReadiness.mark_ready_review_suite_result(arguments, session),
          {:ok, blocker_closeout_plan} <- ArchitectDeliveryTools.prepare_scoped_blocker_closeout(config.repo, session, [Session.work_package_id(session)], arguments, "mark_ready"),
          {:ok, {work_package, blocker_closeout, warnings}} <-
-           ReviewReadiness.mark_ready(config.repo, session, blocker_closeout_plan, review_suite_result, &ArchitectDeliveryTools.apply_prepared_blocker_closeout/3) do
+           ReviewReadiness.mark_ready(config.repo, session, blocker_closeout_plan, &ArchitectDeliveryTools.apply_prepared_blocker_closeout/3) do
       {:ok,
        ToolResult.tool_result(
          %{"work_package" => work_package_payload(work_package), "ready" => true, "blocker_closeout" => blocker_closeout}
@@ -741,129 +739,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp worker_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp worker_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp worker_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
-
-  defp invalid_params_error(tool, {:non_passing_review_suite_result, status, verdict}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "non_passing_review_suite_result",
-       "status_domain" => "review_suite_result",
-       "got" => %{"status" => status, "verdict" => verdict},
-       "expected_statuses" => ReviewProfiles.passing_statuses(),
-       "expected_verdicts" => ReviewProfiles.passing_verdicts()
-     }}
-  end
-
-  defp invalid_params_error(tool, {:review_suite_round_unavailable, round_id, missing, fallback_fields}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "review_suite_round_unavailable",
-       "round_id" => round_id,
-       "missing" => missing,
-       "fallback_explicit_fields" => fallback_fields,
-       "message" => "Local Review Suite state for this round is unavailable. Retry with a resolvable round_id, or pass the explicit review-suite fields listed in fallback_explicit_fields."
-     }}
-  end
-
-  defp invalid_params_error(tool, {:review_suite_round_ambiguous, round_id, cycle_keys, fallback_fields}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "review_suite_round_ambiguous",
-       "round_id" => round_id,
-       "matching_cycle_ids" => cycle_keys,
-       "fallback_explicit_fields" => fallback_fields,
-       "message" => "Local Review Suite round id matches multiple cycles. Retry with the Review Suite public id rvw_* or cycle id orc-*."
-     }}
-  end
-
-  defp invalid_params_error(tool, {:review_suite_round_not_green, round_id, stage, fallback_fields}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "review_suite_round_not_green",
-       "round_id" => round_id,
-       "stage" => stage,
-       "fallback_explicit_fields" => fallback_fields
-     }}
-  end
-
-  defp invalid_params_error(tool, {:review_suite_round_not_passing, round_id, fallback_fields}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "review_suite_round_not_passing",
-       "round_id" => round_id,
-       "expected_verdicts" => ReviewProfiles.passing_verdicts(),
-       "fallback_explicit_fields" => fallback_fields
-     }}
-  end
-
-  defp invalid_params_error(tool, {:review_suite_round_missing_head, round_id, fallback_fields}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "review_suite_round_missing_head",
-       "round_id" => round_id,
-       "fallback_explicit_fields" => fallback_fields
-     }}
-  end
-
-  defp invalid_params_error(tool, {:review_suite_round_missing_profile, round_id, fallback_fields}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "review_suite_round_missing_profile",
-       "round_id" => round_id,
-       "fallback_explicit_fields" => fallback_fields
-     }}
-  end
-
-  defp invalid_params_error(tool, {:review_suite_round_profile_mismatch, round_id, resolved_profile, requested_profile, fallback_fields}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "review_suite_round_profile_mismatch",
-       "round_id" => round_id,
-       "resolved_profile" => resolved_profile,
-       "requested_profile" => requested_profile,
-       "fallback_explicit_fields" => fallback_fields
-     }}
-  end
-
-  defp invalid_params_error(tool, {:review_suite_round_identity_mismatch, field, expected, got}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "review_suite_round_identity_mismatch",
-       "field" => field,
-       "expected" => expected,
-       "got" => got,
-       "message" => "Local Review Suite round identity does not match the current work package/session."
-     }}
-  end
-
-  defp invalid_params_error(tool, {:review_suite_round_blocked, round_id, fallback_fields}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "review_suite_round_blocked",
-       "round_id" => round_id,
-       "fallback_explicit_fields" => fallback_fields
-     }}
-  end
-
-  defp invalid_params_error(tool, {:review_suite_round_incomplete, round_id, status, fallback_fields}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "review_suite_round_incomplete",
-       "round_id" => round_id,
-       "status" => status,
-       "fallback_explicit_fields" => fallback_fields
-     }}
-  end
 
   defp invalid_params_error(tool, {:blocker_closeout_required, blockers}) do
     {:error, -32_602, "Invalid params",

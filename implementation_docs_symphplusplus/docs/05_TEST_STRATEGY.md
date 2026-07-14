@@ -90,7 +90,7 @@ mise exec -- mix sympp.integration
 
 The profile runs `test/symphony_elixir/symphony_plus_plus/integration_harness_test.exs`.
 It uses local SQLite ledgers and in-process MCP calls only. GitHub metadata,
-review-suite results, branch heads, PR URLs, and phase merge artifacts are
+generic review completions, branch heads, PR URLs, and phase merge artifacts are
 deterministic fixtures; the harness must not call GitHub, Linear, OpenAI, MCP
 workers, or production services.
 

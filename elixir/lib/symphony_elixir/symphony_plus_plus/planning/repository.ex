@@ -11,10 +11,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
-  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ReviewLanes
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion, as: WorkRequestCompletion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
@@ -449,8 +447,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
          {:ok, findings} <- list_findings(repo, work_package_id),
          {:ok, progress_events} <- list_progress_events(repo, work_package_id),
          {:ok, artifacts} <- list_artifacts(repo, work_package_id) do
-      review_suite_required_profiles = review_suite_required_profiles(repo, work_package)
-
       {:ok,
        %State{
          work_package: work_package,
@@ -462,8 +458,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
          plan_nodes_omitted_count: 0,
          findings_omitted_count: 0,
          progress_events_omitted_count: 0,
-         artifacts_omitted_count: 0,
-         review_suite_required_profiles: review_suite_required_profiles
+         artifacts_omitted_count: 0
        }}
     end
   end
@@ -474,8 +469,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
          {findings, findings_omitted_count} <- list_findings_for_render(repo, work_package_id),
          {progress_events, progress_events_omitted_count} <- list_progress_events_for_render(repo, work_package_id),
          {artifacts, artifacts_omitted_count} <- list_artifacts_for_render(repo, work_package_id) do
-      review_suite_required_profiles = review_suite_required_profiles(repo, work_package)
-
       {:ok,
        %State{
          work_package: work_package,
@@ -486,8 +479,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
          plan_nodes_omitted_count: plan_nodes_omitted_count,
          findings_omitted_count: findings_omitted_count,
          progress_events_omitted_count: progress_events_omitted_count,
-         artifacts_omitted_count: artifacts_omitted_count,
-         review_suite_required_profiles: review_suite_required_profiles
+         artifacts_omitted_count: artifacts_omitted_count
        }}
     end
   end
@@ -496,13 +488,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     with {:ok, %State{} = state} <- load_state(repo, work_package_id, :bounded),
          {:ok, plan_version_material} <- list_plan_nodes_version_material(repo, work_package_id) do
       {:ok, %State{state | plan_version_material: plan_version_material}}
-    end
-  end
-
-  defp review_suite_required_profiles(repo, %WorkPackage{} = work_package) do
-    case ReviewLanes.required(repo, work_package) do
-      {:ok, {required_profiles, _warnings}} -> required_profiles
-      {:error, _reason} -> ReviewLanes.policy_required(work_package)
     end
   end
 

@@ -85,7 +85,7 @@ reorganize UI.
 Before live cutover:
 
 1. Push the `v3` branch and open a draft PR against `main`.
-2. Keep local Review Suite green on the final PR head.
+2. Complete any declared review requirement on the final PR head.
 3. Run GitHub review for the PR, or record an explicit waiver if no PR review is
    available.
 4. Wait for CI/checks when present, or record that no checks are configured.

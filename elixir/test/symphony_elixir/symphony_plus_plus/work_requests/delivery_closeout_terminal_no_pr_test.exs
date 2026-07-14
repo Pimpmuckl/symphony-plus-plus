@@ -591,7 +591,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
       forbidden_file_globs: ["elixir/assets/**"],
       acceptance_criteria: ["Delivery closeout is transactional."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/work_request_delivery_closeout_test.exs"],
-      review_lanes: ["normal"],
+      review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       stop_conditions: ["Do not bypass phase-child merge semantics."]
     }
 

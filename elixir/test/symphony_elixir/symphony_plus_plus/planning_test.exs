@@ -10,7 +10,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.State
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -47,7 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
              "findings.md",
              "handoff.md",
              "progress.md",
-             "review_suite.md",
+             "review.md",
              "task_plan.md"
            ]
 
@@ -246,7 +245,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
     assert rendered["findings.md"] =~ "Scope stays local"
     assert rendered["progress.md"] =~ "Renderer added"
     assert rendered["acceptance.md"] =~ "- [ ] source: `Render context`\n"
-    assert rendered["review_suite.md"] =~ "architect_merge"
+    assert rendered["review.md"] =~ "No review required."
     assert rendered["handoff.md"] =~ "Package spec"
   end
 
@@ -688,30 +687,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
              "source: `z-last.md` - source: `First artifact` (`reference`)\n- source: `a-first.md` - source: `Second artifact` (`reference`)"
   end
 
-  test "renders review suite for hotfix and phase-child policy templates", %{repo: repo} do
+  test "renders optional review requirements without policy defaults", %{repo: repo} do
     assert {:ok, hotfix} = create_work_package(repo, id: "SYMPP-HOTFIX", kind: "hotfix")
     assert {:ok, phase_child} = create_work_package(repo, id: "SYMPP-PHASE", kind: "phase_child")
+    review = %{"type" => "human", "args" => %{"team" => "maintainers"}}
 
-    assert {:ok, hotfix_markdown} = Renderer.render(repo, hotfix.id, "review_suite.md")
-    assert {:ok, phase_child_markdown} = Renderer.render(repo, phase_child.id, "review_suite.md")
+    assert {:ok, reviewed} =
+             create_work_package(repo,
+               id: "SYMPP-EXPLICIT-REVIEW",
+               kind: "mcp",
+               review_requirement: review
+             )
 
-    assert hotfix_markdown =~ "Policy template: `hotfix`"
-    assert hotfix_markdown =~ "human_merge"
-    assert hotfix_markdown =~ "- Required: fast"
-    assert phase_child_markdown =~ "Policy template: `phase_child`"
-    assert phase_child_markdown =~ "package_acceptance"
-    assert phase_child_markdown =~ "- Optional: deep"
-  end
+    assert {:ok, hotfix_markdown} = Renderer.render(repo, hotfix.id, "review.md")
+    assert {:ok, phase_child_markdown} = Renderer.render(repo, phase_child.id, "review.md")
+    assert {:ok, reviewed_markdown} = Renderer.render(repo, reviewed.id, "review.md")
 
-  test "renders resolved review suite profiles when state provides them", %{repo: repo} do
-    assert {:ok, work_package} = create_work_package(repo, id: "SYMPP-RENDER-RESOLVED-REVIEW", kind: "mcp", policy_template: "mcp")
-
-    state = %State{work_package: work_package, review_suite_required_profiles: ["deep", "raw_secret_review_lane"]}
-
-    assert {:ok, markdown} = Renderer.render_state(state, "review_suite.md")
-    assert markdown =~ "- Required: deep, [REDACTED]"
-    refute markdown =~ "- Required: normal"
-    refute markdown =~ "raw_secret_review_lane"
+    assert hotfix_markdown =~ "No review required."
+    assert phase_child_markdown =~ "No review required."
+    assert reviewed_markdown =~ "\"type\": \"human\""
+    assert reviewed_markdown =~ "\"team\": \"maintainers\""
   end
 
   test "rendering does not mutate canonical planning state", %{repo: repo} do

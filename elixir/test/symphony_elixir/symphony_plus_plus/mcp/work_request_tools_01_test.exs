@@ -479,7 +479,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
              "WRS-MCP-WR-SKIPPED"
            ]
 
-    assert Enum.at(read_payload["planned_slices"], 0)["review_lanes"] == ["fast", "normal"]
+    assert Enum.at(read_payload["planned_slices"], 0)["review"] == %{
+             "type" => "review-suite",
+             "args" => %{"mode" => "normal"}
+           }
 
     assert read_payload["summary"] == %{
              "open_question_count" => 1,
@@ -548,7 +551,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       "forbidden_file_globs" => [],
       "acceptance_criteria" => ["Answered clarification questions no longer require manual status ceremony."],
       "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp/work_request_tools_01_test.exs"],
-      "review_lanes" => ["normal"],
+      "review" => %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       "stop_conditions" => ["Do not bypass open questions."]
     }
 

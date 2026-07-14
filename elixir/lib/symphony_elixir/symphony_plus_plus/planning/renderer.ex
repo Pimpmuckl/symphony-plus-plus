@@ -8,8 +8,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
-  alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @virtual_files [
@@ -18,7 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
     "findings.md",
     "progress.md",
     "acceptance.md",
-    "review_suite.md",
+    "review.md",
     "handoff.md"
   ]
 
@@ -40,10 +38,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
   end
 
   @spec render_all(Repository.repo(), String.t(), keyword()) :: {:ok, %{String.t() => String.t()}} | {:error, error()}
-  def render_all(repo, work_package_id, opts \\ []) when is_atom(repo) and is_binary(work_package_id) do
+  def render_all(repo, work_package_id, _opts \\ []) when is_atom(repo) and is_binary(work_package_id) do
     with {:ok, state} <- Repository.get_render_state(repo, work_package_id) do
-      state = maybe_put_required_review_profiles(state, opts)
-
       rendered =
         Map.new(@virtual_files, fn file_name ->
           {:ok, markdown} = render_state(state, file_name)
@@ -60,7 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
   def render_state(%State{} = state, "findings.md"), do: {:ok, findings_markdown(state)}
   def render_state(%State{} = state, "progress.md"), do: {:ok, progress_markdown(state)}
   def render_state(%State{} = state, "acceptance.md"), do: {:ok, acceptance_markdown(state)}
-  def render_state(%State{} = state, "review_suite.md"), do: {:ok, review_suite_markdown(state)}
+  def render_state(%State{} = state, "review.md"), do: {:ok, review_markdown(state)}
   def render_state(%State{} = state, "handoff.md"), do: {:ok, handoff_markdown(state)}
   def render_state(%State{}, _file_name), do: {:error, :unknown_virtual_file}
 
@@ -146,58 +142,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
     |> flatten_join()
   end
 
-  defp review_suite_markdown(%State{work_package: work_package} = state) do
-    case Templates.expand(policy_key(work_package)) do
-      {:ok, template} ->
-        template = effective_review_policy(state, template)
+  defp review_markdown(%State{work_package: work_package} = state) do
+    completion = current_review_completion(state)
 
-        [
-          "# Review Suite",
-          "",
-          "Policy template: `#{template.template}`",
-          "",
-          "## Required Gates",
-          "",
-          list_or_empty(template.required_gates),
-          "## Readiness Requirements",
-          "",
-          list_or_empty(template.readiness_requirements),
-          "## Review Profiles",
-          "",
-          "- Required: #{inline_list(review_suite_required_profiles(state, template))}",
-          "- Optional: #{inline_list(template.review_suite.optional)}"
-        ]
-        |> flatten_join()
-
-      {:error, :unknown_policy_template} ->
-        [
-          "# Review Suite",
-          "",
-          "No policy template is registered for kind `#{work_package.kind}`."
-        ]
-        |> flatten_join()
-    end
-  end
-
-  defp effective_review_policy(%State{review_suite_required_profiles: profiles}, template) when is_list(profiles) do
-    ReviewProfiles.apply_required_profiles(template, profiles)
-  end
-
-  defp effective_review_policy(%State{}, template), do: template
-
-  defp review_suite_required_profiles(%State{review_suite_required_profiles: profiles}, _template) when is_list(profiles),
-    do: Redactor.redact_output(profiles)
-
-  defp review_suite_required_profiles(%State{}, template), do: template.review_suite.required
-
-  defp maybe_put_required_review_profiles(%State{} = state, opts) do
-    case Keyword.fetch(opts, :review_suite_required_profiles) do
-      {:ok, profiles} ->
-        %State{state | review_suite_required_profiles: ReviewProfiles.normalize_review_suite_profiles(profiles)}
-
-      :error ->
-        state
-    end
+    [
+      "# Review",
+      "",
+      "## Requirement",
+      "",
+      review_requirement_line(work_package.review_requirement),
+      "## Current-head completion",
+      "",
+      review_completion_lines(completion)
+    ]
+    |> flatten_join()
   end
 
   defp handoff_markdown(%State{} = state) do
@@ -235,6 +193,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
       "- Repo: #{source_inline(work_package.repo)}",
       "- Base branch: #{source_inline(work_package.base_branch)}",
       "- Branch pattern: #{source_inline(work_package.branch_pattern)}",
+      "- Review requirement: #{source_inline(encoded_review_requirement(work_package.review_requirement))}",
       "- Allowed file globs: #{source_inline(allowed_file_globs_text(work_package))}",
       "- Parent: #{source_inline(work_package.parent_id)}",
       "- Owner: #{source_inline(work_package.owner_id)}"
@@ -354,10 +313,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
     ]
   end
 
-  defp list_or_empty(values), do: Enum.map(values, &("- " <> &1))
+  defp review_requirement_line(nil), do: "No review required."
+  defp review_requirement_line(requirement), do: fenced_text(Jason.encode!(Redactor.redact_output(requirement), pretty: true))
 
-  defp inline_list([]), do: "none"
-  defp inline_list(values), do: Enum.join(values, ", ")
+  defp review_completion_lines(nil), do: "Not completed for the current head and requirement."
+
+  defp review_completion_lines(%ProgressEvent{} = event) do
+    payload = event.payload || %{}
+
+    [
+      "- Head: `#{Map.get(payload, "head_sha")}`",
+      "- Reference: #{source_inline(Map.get(payload, "reference"))}",
+      "- Note: #{source_inline(Map.get(payload, "note"))}",
+      "- Actor: #{source_inline(event.actor_id)}",
+      "- Completed: #{timestamp(event.created_at)}"
+    ]
+  end
+
+  defp current_review_completion(%State{work_package: %WorkPackage{review_requirement: nil}}), do: nil
+
+  defp current_review_completion(%State{work_package: work_package, progress_events: progress_events}) do
+    current_head = latest_current_head(progress_events)
+
+    Enum.find(Enum.reverse(progress_events), fn %ProgressEvent{payload: payload} ->
+      is_map(payload) and Map.get(payload, "type") == "review_completion" and
+        Map.get(payload, "source_tool") == "complete_review" and Map.get(payload, "head_sha") == current_head and
+        Map.get(payload, "review") == work_package.review_requirement
+    end)
+  end
+
+  defp latest_current_head(progress_events) do
+    Enum.find_value(Enum.reverse(progress_events), fn %ProgressEvent{payload: payload} ->
+      if is_map(payload) and Map.get(payload, "type") == "branch" and Map.get(payload, "source_tool") == "attach_branch",
+        do: Map.get(payload, "head_sha")
+    end)
+  end
+
+  defp encoded_review_requirement(nil), do: nil
+  defp encoded_review_requirement(requirement), do: Jason.encode!(Redactor.redact_output(requirement))
 
   defp capped_head_items(items, omitted_count) do
     item_count = length(items)

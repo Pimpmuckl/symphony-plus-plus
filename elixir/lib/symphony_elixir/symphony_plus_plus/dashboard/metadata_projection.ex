@@ -5,7 +5,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewProfiles
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @spec persisted_review_artifact?([term()], String.t(), String.t() | nil, String.t()) :: boolean()
@@ -14,64 +13,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
     Enum.any?(artifacts, &(&1.id == expected_id and &1.kind == "review" and &1.path == path))
   end
 
-  @spec latest_review_suite_result_event([ProgressEvent.t()], String.t(), String.t() | :any_head) ::
-          ProgressEvent.t() | nil
-  def latest_review_suite_result_event(progress_events, work_package_id, readiness_head_sha) do
+  @spec latest_review_completion_event([ProgressEvent.t()], String.t(), String.t(), map()) :: ProgressEvent.t() | nil
+  def latest_review_completion_event(progress_events, work_package_id, head_sha, requirement) do
     progress_events
-    |> current_head_review_suite_result_events(work_package_id, readiness_head_sha)
+    |> chronological_progress_events()
+    |> Enum.filter(&review_completion_event?(&1, work_package_id, head_sha, requirement))
     |> List.last()
   end
 
-  @spec current_head_review_suite_result_events([ProgressEvent.t()], String.t(), String.t() | :any_head) :: [
-          ProgressEvent.t()
-        ]
-  def current_head_review_suite_result_events(progress_events, work_package_id, readiness_head_sha) do
-    progress_events
-    |> chronological_progress_events()
-    |> Enum.filter(
-      &(dedicated_review_suite_result_event?(&1, work_package_id) and
-          review_head_matches?(&1.payload, readiness_head_sha))
-    )
+  @spec review_completion_present?([ProgressEvent.t()], String.t(), String.t(), map()) :: boolean()
+  def review_completion_present?(progress_events, work_package_id, head_sha, requirement) do
+    not is_nil(latest_review_completion_event(progress_events, work_package_id, head_sha, requirement))
   end
 
-  defp dedicated_review_suite_result_event?(%ProgressEvent{idempotency_key: idempotency_key} = event, work_package_id) do
-    payload_type?(event, "review_suite_result", "attach_review_suite_result") and
-      is_binary(idempotency_key) and
-      String.starts_with?(idempotency_key, "attach_review_suite_result:#{work_package_id}:")
-  end
-
-  @spec valid_review_suite_result_payload?(term(), String.t(), String.t() | :any_head) :: boolean()
-  def valid_review_suite_result_payload?(%{} = payload, work_package_id, readiness_head_sha) do
-    review_suite_result_payload_in_scope?(payload, work_package_id, readiness_head_sha) and
-      ReviewProfiles.review_suite_payload_passes?(payload)
-  end
-
-  def valid_review_suite_result_payload?(_payload, _work_package_id, _readiness_head_sha), do: false
-
-  @spec review_suite_result_payload_in_scope?(term(), String.t(), String.t() | :any_head) :: boolean()
-  def review_suite_result_payload_in_scope?(%{} = payload, work_package_id, readiness_head_sha) do
-    Map.get(payload, "work_package_id") == work_package_id and
-      review_head_matches?(payload, readiness_head_sha) and
-      filled_string?(Map.get(payload, "suite")) and
-      filled_string?(Map.get(payload, "anchor")) and
-      filled_string?(Map.get(payload, "summary"))
-  end
-
-  def review_suite_result_payload_in_scope?(_payload, _work_package_id, _readiness_head_sha), do: false
-
-  @spec persisted_review_suite_artifact?([term()], String.t(), String.t()) :: boolean()
-  def persisted_review_suite_artifact?(artifacts, work_package_id, head_sha) do
-    expected_id = review_suite_artifact_id(work_package_id, head_sha)
-
-    Enum.any?(
-      artifacts,
-      &(&1.id == expected_id and &1.work_package_id == work_package_id and &1.kind == "review_suite" and &1.path == "review-suite-result.json")
-    )
-  end
-
-  defp review_suite_artifact_id(work_package_id, head_sha) do
-    material = [work_package_id, head_sha, "review-suite-result.json"] |> Enum.join(":")
-    "artifact_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
+  defp review_completion_event?(%ProgressEvent{idempotency_key: idempotency_key, payload: payload}, work_package_id, head_sha, requirement) do
+    is_map(payload) and Map.get(payload, "type") == "review_completion" and
+      Map.get(payload, "source_tool") == "complete_review" and Map.get(payload, "work_package_id") == work_package_id and
+      Map.get(payload, "head_sha") == head_sha and Map.get(payload, "review") == requirement and
+      is_binary(idempotency_key) and String.starts_with?(idempotency_key, "complete_review:#{work_package_id}:")
   end
 
   defp review_artifact_id(work_package_id, head_sha, artifact) do
@@ -94,31 +53,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
     material = [work_package_id, "recommendation", "recommendation.md"] |> Enum.join(":")
     "artifact_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
   end
-
-  @spec review_package_reviews(ProgressEvent.t(), String.t() | :any_head) :: [map()]
-  def review_package_reviews(%ProgressEvent{payload: payload}, readiness_head_sha) when is_map(payload) do
-    reviews = Map.get(payload, "reviews")
-
-    if is_list(reviews) and review_head_matches?(payload, readiness_head_sha) do
-      Enum.flat_map(reviews, &normalize_review_entry/1)
-    else
-      []
-    end
-  end
-
-  defp normalize_review_entry(%{} = review) do
-    keys = review |> Map.keys() |> Enum.map(&to_string/1) |> Enum.sort()
-    lane = Map.get(review, "lane")
-    verdict = Map.get(review, "verdict")
-
-    if keys == ["lane", "verdict"] and filled_string?(lane) and filled_string?(verdict) do
-      [%{"lane" => lane |> String.trim() |> String.downcase(), "verdict" => verdict |> String.trim() |> String.downcase()}]
-    else
-      []
-    end
-  end
-
-  defp normalize_review_entry(_review), do: []
 
   @spec filled_string?(term()) :: boolean()
   def filled_string?(value), do: is_binary(value) and String.trim(value) != ""
@@ -273,7 +207,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
   def normalized_status(_status), do: ""
 
   @spec metadata([ProgressEvent.t()], [term()], String.t()) :: map()
-  def metadata(progress_events, artifacts, work_package_id) do
+  def metadata(progress_events, _artifacts, work_package_id) do
     branch = latest_payload(progress_events, "branch", "attach_branch")
     head_filter = metadata_head_filter(progress_events, branch)
     pr = latest_pr_payload(progress_events, head_filter)
@@ -281,9 +215,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
     %{
       branch: branch,
       pr: pr_metadata(pr, head_filter),
-      review_progress: latest_payload(progress_events, "review_progress", nil),
       review_package: latest_current_payload(progress_events, "review_package", "submit_review_package", head_filter),
-      review_suite_result: review_suite_result_payload(progress_events, artifacts, work_package_id, head_filter)
+      review_completion: review_completion_payload(progress_events, work_package_id, head_filter)
     }
   end
 
@@ -314,22 +247,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
     end)
   end
 
-  defp review_suite_result_payload(progress_events, artifacts, work_package_id, {:head, head_sha}) do
-    case latest_review_suite_result_event(progress_events, work_package_id, head_sha) do
-      %ProgressEvent{payload: payload} ->
-        if valid_review_suite_result_payload?(payload, work_package_id, head_sha) and
-             persisted_review_suite_artifact?(artifacts, work_package_id, Map.fetch!(payload, "head_sha")) do
-          Sanitizer.redacted_json(payload)
-        else
-          nil
-        end
+  defp review_completion_payload(progress_events, work_package_id, {:head, head_sha}) do
+    progress_events
+    |> chronological_progress_events()
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %ProgressEvent{payload: %{"type" => "review_completion", "source_tool" => "complete_review", "work_package_id" => ^work_package_id, "head_sha" => ^head_sha} = payload} ->
+        Sanitizer.redacted_json(payload)
 
-      nil ->
+      _event ->
         nil
-    end
+    end)
   end
 
-  defp review_suite_result_payload(_progress_events, _artifacts, _work_package_id, _head_filter), do: nil
+  defp review_completion_payload(_progress_events, _work_package_id, _head_filter), do: nil
 
   defp pr_metadata(nil, _head_filter), do: nil
 

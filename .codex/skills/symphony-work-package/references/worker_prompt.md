@@ -24,7 +24,7 @@ Before coding:
    the local ledger scope mismatches, stop and ask the architect or operator to
    repair that state. Do not request raw secrets.
 4. Read `read_context()`, `read_task_plan()`, findings, progress,
-   acceptance, review-suite, and handoff virtual resources.
+   acceptance, review, and handoff virtual resources.
 5. Update the virtual task plan with `update_task_plan(patch, expected_version)`.
 6. Stop and ask the architecture agent if dependency evidence, permission
    grants, or source context are missing.
@@ -53,17 +53,24 @@ plain.
 
 Before ready:
 1. Run relevant validation.
-2. Attach branch metadata with `attach_branch(branch, head_sha)` when the policy
-   requires branch metadata.
+2. Attach branch metadata with `attach_branch(head_sha)` when the package
+   branch pattern is literal; pass `branch` only when the pattern is templated
+   or absent.
 3. Open the PR and attach it with `attach_pr(url, head_sha)` when the policy
-   requires PR metadata.
-4. Refresh current PR metadata with `sync_pr(url_or_number, metadata)` when the
-   policy requires current PR state; `sync_pr` must target the attached PR.
-5. Submit review evidence when available with
-   `submit_review_package(summary, tests, artifacts, head_sha)`.
-6. Call `mark_ready()` only after acceptance criteria, tests, required review
-   profile evidence, progress, findings, branch/PR evidence, and blockers are
-   settled.
+   requires PR metadata. Include current check, review, or merge metadata there
+   when it is already available.
+4. Refresh current state only for the attached PR with `sync_pr()`. Pass
+   top-level current-state fields when they changed; use explicit PR identity
+   or `recovery` only for repair.
+5. Submit validation evidence with
+   `submit_review_package(summary, tests, artifacts)` after branch metadata is
+   current.
+6. If `review.md` declares a review requirement, complete it for the current
+   exact head and call `complete_review(reference?, note?)`.
+7. Call `mark_ready()` only after acceptance criteria, tests, required review,
+   progress, findings, branch/PR evidence, and blockers are settled. If active
+   blockers must be addressed during the finish transition, pass
+   `blocker_closeout`.
 
 Final output:
 - PR URL and final head SHA.

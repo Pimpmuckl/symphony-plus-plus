@@ -398,7 +398,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSliceDeliveriesTest 
       forbidden_file_globs: ["elixir/assets/**"],
       acceptance_criteria: ["Delivery outcome persists independently of raw planned-slice status."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/work_request_planned_slice_deliveries_test.exs"],
-      review_lanes: ["normal"],
+      review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       stop_conditions: ["Do not add terminal planned-slice statuses."]
     }
 
