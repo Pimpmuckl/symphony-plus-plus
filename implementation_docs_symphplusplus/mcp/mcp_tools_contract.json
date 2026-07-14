@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "mcp_contract_fingerprint": "34c02a92fd1a532103728ee114045c2d7173ccff8cfbb17e06dd4d0ed046fad6",
+  "mcp_contract_fingerprint": "68b83b92617e1083bb031305175ccc96c3fbcbee64cd4069a38f45ba19ef16e0",
   "schema_source": "ToolCatalog owns the live runtime tool surfaces. This JSON publishes those names plus the canonical MCP contract fingerprint for scripts, docs, and release artifacts.",
   "compatibility_policy": "Version 4 replaces provider-specific review profiles and round attachment with one optional generic review requirement and complete_review. Consumers should read role tool names from discovery_policy and per-tool arguments from tool_schemas.",
   "human_text_policy": "Human-facing long text fields are Markdown unless a field is explicitly a compact label, status, identifier, branch, PR URL, or other machine-readable value. Dashboard renderers must not turn raw Markdown HTML into executable or trusted HTML.",

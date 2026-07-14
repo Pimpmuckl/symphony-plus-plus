@@ -473,7 +473,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "artifacts", "items", "pattern"]) == "\\S"
     assert get_in(tools_by_name, ["complete_review", "inputSchema", "required"]) == []
     assert get_in(tools_by_name, ["complete_review", "inputSchema", "properties", "reference", "type"]) == ["string", "null"]
-    assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "reviews", "items", "additionalProperties"]) == true
+    refute Map.has_key?(get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties"]), "reviews")
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "head_sha", "type"]) == "string"
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "acceptance_criteria_met", "type"]) == "boolean"
 

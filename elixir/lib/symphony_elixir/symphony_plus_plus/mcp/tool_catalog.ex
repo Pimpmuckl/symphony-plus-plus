@@ -660,7 +660,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   def worker_tool_input_schema("complete_review") do
     schema(
       session_scoped_properties(%{
-        "reference" => described_string_schema("Optional opaque provider or human review reference."),
+        "reference" =>
+          nullable_string_schema()
+          |> Map.put("description", "Optional opaque provider or human review reference."),
         "note" => markdown_nullable_string_schema("Optional human-facing completion note.")
       }),
       []
