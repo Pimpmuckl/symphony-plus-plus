@@ -333,7 +333,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
              "sync_pr",
              false
            ),
-         {:ok, result} <- MergeReconciler.reconcile_work_package(repo, work_package.id) do
+         {:ok, result} <- MergeReconciler.reconcile_work_package(repo, work_package.id, pr_payload: payload) do
       terminal_sync_result(repo, work_package.id, result)
     end
   end

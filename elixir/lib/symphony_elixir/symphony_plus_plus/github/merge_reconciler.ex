@@ -38,12 +38,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   def reconcile_work_package(repo, work_package_id, opts \\ [])
       when is_atom(repo) and is_binary(work_package_id) and is_list(opts) do
     client = Keyword.get(opts, :client, terminal_github_client())
-    client_opts = Keyword.drop(opts, [:client])
+    client_opts = Keyword.drop(opts, [:client, :pr_payload])
+    pr_payload = Keyword.get(opts, :pr_payload)
 
     with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
          {:ok, state} <- PlanningRepository.get_state(repo, work_package.id) do
       if terminal_candidate?(work_package) do
-        fetch_and_reconcile_terminal(repo, work_package, state.progress_events, client, client_opts)
+        fetch_and_reconcile_terminal(repo, work_package, state.progress_events, pr_payload, client, client_opts)
       else
         {:ok, error_result(work_package, %{}, :not_merge_ready)}
       end
@@ -76,8 +77,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   defp terminal_candidate?(%WorkPackage{status: "merged", kind: kind}), do: kind in StateMachine.dispatchable_kinds()
   defp terminal_candidate?(%WorkPackage{} = work_package), do: merge_ready_candidate?(work_package)
 
-  defp fetch_and_reconcile_terminal(repo, %WorkPackage{} = work_package, progress_events, client, client_opts) do
-    with {:ok, pr_context} <- current_pr_context(progress_events),
+  defp fetch_and_reconcile_terminal(repo, %WorkPackage{} = work_package, progress_events, pr_payload, client, client_opts) do
+    with {:ok, pr_context} <- terminal_pr_context(progress_events, pr_payload),
          {:ok, metadata} <- Client.fetch_pull_request(client, pr_context.ref, client_opts),
          {:ok, payload} <- PullRequest.metadata(metadata, pr_context.ref, nil) do
       payload = Map.put(payload, "source_tool", "sync_pr")
@@ -93,20 +94,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
 
   defp reconcile_verified_terminal_merge(repo, %WorkPackage{status: "merged"} = work_package, progress_events, payload, metadata) do
     with :ok <- validate_strong_merge_evidence(payload),
-         :ok <- existing_merge_evidence(progress_events, work_package, payload),
-         {:ok, delivery} <- DeliveryReconciler.reconcile_work_package(repo, work_package.id, recorded_by: @operator_source_tool) do
-      {:ok,
-       work_package
-       |> base_result(payload)
-       |> Map.merge(%{
-         status: "already_merged",
-         reason: "github_pr_merge_already_recorded",
-         before_status: "merged",
-         after_status: "merged",
-         merged_at: Map.get(metadata, "merged_at"),
-         merge_commit_sha: Map.get(metadata, "merge_commit_sha"),
-         delivery_reconciliation: delivery
-       })}
+         :ok <- existing_merge_evidence(progress_events, work_package, payload) do
+      result =
+        work_package
+        |> base_result(payload)
+        |> Map.merge(%{
+          status: "already_merged",
+          reason: "github_pr_merge_already_recorded",
+          before_status: "merged",
+          after_status: "merged",
+          merged_at: Map.get(metadata, "merged_at"),
+          merge_commit_sha: Map.get(metadata, "merge_commit_sha")
+        })
+
+      repo
+      |> DeliveryReconciler.reconcile_work_package(work_package.id, recorded_by: @operator_source_tool)
+      |> terminal_delivery_result(result)
     else
       {:error, reason} -> {:ok, error_result(work_package, payload, reason)}
     end
@@ -139,8 +142,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
      result
      |> Map.put(:status, "error")
      |> Map.put(:reason, "delivery_reconciliation_failed")
-     |> Map.put(:delivery_error, error_reason(reason))}
+     |> Map.put(:delivery_error, delivery_error_reason(reason))}
   end
+
+  defp delivery_error_reason({:delivery_reconciliation_failed, reason}), do: error_reason(reason)
+  defp delivery_error_reason(reason), do: error_reason(reason)
 
   defp fetch_and_reconcile(repo, %WorkPackage{} = work_package, pr_context, client, client_opts) do
     with {:ok, metadata} <- Client.fetch_pull_request(client, pr_context.ref, client_opts),
@@ -332,6 +338,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
        }}
     end
   end
+
+  defp terminal_pr_context(progress_events, pr_payload) do
+    case current_pr_context(progress_events) do
+      {:error, :missing_attached_pr} -> repaired_pr_context(progress_events, pr_payload)
+      result -> result
+    end
+  end
+
+  defp repaired_pr_context(progress_events, %{"attachment_repair" => true} = payload) do
+    with {:ok, ref} <- PullRequest.parse(payload, nil) do
+      {:ok, %{ref: ref, expected_head_sha: PullRequestProgress.expected_head_sha(progress_events, ref)}}
+    end
+  end
+
+  defp repaired_pr_context(_progress_events, _payload), do: {:error, :missing_attached_pr}
 
   defp synced_result(%WorkPackage{} = work_package, payload, reason) do
     work_package

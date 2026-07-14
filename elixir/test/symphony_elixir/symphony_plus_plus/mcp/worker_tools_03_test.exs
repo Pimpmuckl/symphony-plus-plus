@@ -754,7 +754,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
     assert ready_package.status == "ready_for_merge"
   end
 
-  test "sync_pr records only a verified terminal merge after readiness", %{repo: repo} do
+  test "sync_pr repairs PR identity and records only a verified terminal merge after readiness", %{repo: repo} do
     original_client = Application.get_env(:symphony_elixir, :sympp_github_client)
     Application.put_env(:symphony_elixir, :sympp_github_client, SymphonyElixir.FakeGitHubClient)
     SymphonyElixir.FakeGitHubClient.clear()
@@ -788,14 +788,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
                payload: %{type: "branch", source_tool: "attach_branch", branch: "fix/ready-sync", head_sha: "head-a"}
              })
 
-    assert {:ok, _pr} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: package.id,
-               summary: "PR attached",
-               status: "pr_attached",
-               payload: %{type: "pr", source_tool: "attach_pr", url: "https://github.com/nextide/repo/pull/27", head_sha: "head-a"}
-             })
-
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -809,7 +801,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
 
     open_response =
       MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "sync-open", "method" => "tools/call", "params" => %{"name" => "sync_pr", "arguments" => %{}}},
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "sync-open",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "sync_pr",
+            "arguments" => %{"url" => "https://github.com/nextide/repo/pull/27", "head_sha" => "head-a"}
+          }
+        },
         repo: repo,
         session: session
       )
@@ -827,7 +827,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
 
     merged_response =
       MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "sync-merged", "method" => "tools/call", "params" => %{"name" => "sync_pr", "arguments" => %{}}},
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "sync-merged",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "sync_pr",
+            "arguments" => %{"url" => "https://github.com/nextide/repo/pull/27", "head_sha" => "head-a"}
+          }
+        },
         repo: repo,
         session: session
       )
@@ -837,7 +845,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
 
     replay_response =
       MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "sync-replay", "method" => "tools/call", "params" => %{"name" => "sync_pr", "arguments" => %{}}},
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "sync-replay",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "sync_pr",
+            "arguments" => %{"url" => "https://github.com/nextide/repo/pull/27", "head_sha" => "head-a"}
+          }
+        },
         repo: repo,
         session: session
       )
