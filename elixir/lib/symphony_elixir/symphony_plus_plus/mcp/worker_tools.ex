@@ -18,6 +18,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.ActorResolver
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
@@ -171,10 +172,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   end
 
   def call("sync_pr", %Config{} = config, session, arguments) do
-    with {:ok, session} <- scoped_session(config.repo, session, arguments),
+    with {:ok, session} <- scoped_sync_pr_session(config.repo, session, arguments),
          :ok <- authorize_current_package_policy(config.repo, session, :review_evidence_append, :review_evidence),
          {:ok, payload} <- PullRequestMetadata.payload(config.repo, session, arguments, "sync_pr") do
-      append_pr_metadata(config.repo, session, arguments, "sync_pr", "pr_synced", payload)
+      sync_pr(config.repo, session, arguments, payload)
       |> metadata_tool_response("sync_pr")
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "sync_pr", "reason" => reason}}
@@ -314,6 +315,52 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
       end)
     end
   end
+
+  defp sync_pr(repo, %Session{} = session, arguments, payload) do
+    with {:ok, work_package} <- WorkPackageRepository.get(repo, Session.work_package_id(session)) do
+      sync_pr_for_package(repo, session, work_package, arguments, payload)
+    end
+  end
+
+  defp sync_pr_for_package(repo, session, %WorkPackage{status: status} = work_package, arguments, payload)
+       when status in ["ready_for_merge", "ready_for_human_merge", "merged"] do
+    with :ok <-
+           PullRequestMetadata.validate_sync_target_unless_replay(
+             repo,
+             session,
+             arguments,
+             payload,
+             "sync_pr",
+             false
+           ),
+         {:ok, result} <- MergeReconciler.reconcile_work_package(repo, work_package.id) do
+      terminal_sync_result(repo, work_package.id, result)
+    end
+  end
+
+  defp sync_pr_for_package(repo, session, %WorkPackage{}, arguments, payload),
+    do: append_pr_metadata(repo, session, arguments, "sync_pr", "pr_synced", payload)
+
+  defp terminal_sync_result(repo, work_package_id, %{status: status} = result) when status in ["merged", "already_merged"] do
+    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
+      {:ok, ToolResult.agent_tool_result(%{"work_package" => work_package_payload(work_package), "pr_sync" => stringify_keys(result)})}
+    end
+  end
+
+  defp terminal_sync_result(_repo, _work_package_id, result) do
+    data =
+      result
+      |> Map.take([:reason, :expected_repository, :actual_repository, :expected_base_branch, :actual_base_branch, :expected_head_sha, :actual_head_sha, :delivery_error])
+      |> Map.new(fn {key, value} -> {to_string(key), value} end)
+      |> Map.put("tool", "sync_pr")
+      |> Map.put_new("reason", "terminal_pr_sync_failed")
+
+    {:error, -32_602, "Invalid params", data}
+  end
+
+  defp stringify_keys(%{} = map), do: Map.new(map, fn {key, value} -> {to_string(key), stringify_keys(value)} end)
+  defp stringify_keys(values) when is_list(values), do: Enum.map(values, &stringify_keys/1)
+  defp stringify_keys(value), do: value
 
   defp append_pr_metadata_event(repo, session, attrs, idempotency_key, tool, payload, replay?) do
     with {:ok, event_result} <- ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, tool),
@@ -569,6 +616,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp scoped_sync_pr_session(repo, session, arguments) do
+    case scoped_session(repo, session, arguments) do
+      {:error, {:unauthorized, :work_package_terminal}} ->
+        with {:ok, session} <- Auth.require_terminal_session(session, repo),
+             :ok <- require_worker_assignment(session.assignment) do
+          require_argument_scope(session, Map.get(arguments, "work_package_id"))
+        end
+
+      result ->
+        result
     end
   end
 

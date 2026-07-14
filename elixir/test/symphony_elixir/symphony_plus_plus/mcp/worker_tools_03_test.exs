@@ -754,6 +754,97 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
     assert ready_package.status == "ready_for_merge"
   end
 
+  test "sync_pr records only a verified terminal merge after readiness", %{repo: repo} do
+    original_client = Application.get_env(:symphony_elixir, :sympp_github_client)
+    Application.put_env(:symphony_elixir, :sympp_github_client, SymphonyElixir.FakeGitHubClient)
+    SymphonyElixir.FakeGitHubClient.clear()
+
+    on_exit(fn ->
+      SymphonyElixir.FakeGitHubClient.clear()
+
+      case original_client do
+        nil -> Application.delete_env(:symphony_elixir, :sympp_github_client)
+        client -> Application.put_env(:symphony_elixir, :sympp_github_client, client)
+      end
+    end)
+
+    assert {:ok, package} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-READY-SYNC-MERGED",
+                 kind: "standard_pr",
+                 repo: "nextide/repo",
+                 base_branch: "main",
+                 status: "ready_for_merge"
+               )
+             )
+
+    assert {:ok, _branch} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: package.id,
+               summary: "Branch attached",
+               status: "branch_attached",
+               payload: %{type: "branch", source_tool: "attach_branch", branch: "fix/ready-sync", head_sha: "head-a"}
+             })
+
+    assert {:ok, _pr} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: package.id,
+               summary: "PR attached",
+               status: "pr_attached",
+               payload: %{type: "pr", source_tool: "attach_pr", url: "https://github.com/nextide/repo/pull/27", head_sha: "head-a"}
+             })
+
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
+    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+    assert {:ok, initial_events} = PlanningRepository.list_progress_events(repo, package.id)
+
+    SymphonyElixir.FakeGitHubClient.put_response(
+      "nextide/repo",
+      27,
+      SymphonyElixir.GitHubPullRequestFixtures.metadata(27, "head-a", merged?: false)
+    )
+
+    open_response =
+      MCPHarness.request(
+        %{"jsonrpc" => "2.0", "id" => "sync-open", "method" => "tools/call", "params" => %{"name" => "sync_pr", "arguments" => %{}}},
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(open_response, ["error", "data", "reason"]) == "pr_not_merged"
+    assert {:ok, unchanged_events} = PlanningRepository.list_progress_events(repo, package.id)
+    assert length(unchanged_events) == length(initial_events)
+    assert repo.get!(WorkPackage, package.id).status == "ready_for_merge"
+
+    SymphonyElixir.FakeGitHubClient.put_response(
+      "nextide/repo",
+      27,
+      SymphonyElixir.GitHubPullRequestFixtures.metadata(27, "head-a", merged?: true)
+    )
+
+    merged_response =
+      MCPHarness.request(
+        %{"jsonrpc" => "2.0", "id" => "sync-merged", "method" => "tools/call", "params" => %{"name" => "sync_pr", "arguments" => %{}}},
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(merged_response, ["result", "structuredContent", "work_package", "status"]) == "merged"
+    assert get_in(merged_response, ["result", "structuredContent", "pr_sync", "status"]) == "merged"
+
+    replay_response =
+      MCPHarness.request(
+        %{"jsonrpc" => "2.0", "id" => "sync-replay", "method" => "tools/call", "params" => %{"name" => "sync_pr", "arguments" => %{}}},
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(replay_response, ["result", "structuredContent", "pr_sync", "status"]) == "already_merged"
+  end
+
   test "mark_ready does not require ci_waiting when package policy omits CI", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-READY-NO-CI", kind: "mcp", status: "reviewing"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
