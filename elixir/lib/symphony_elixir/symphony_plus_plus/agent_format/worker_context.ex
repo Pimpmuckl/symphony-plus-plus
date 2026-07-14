@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.Toon
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
@@ -189,11 +190,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
   defp review_completion_payload(%WorkPackage{} = work_package, progress_events) do
     current_head = latest_current_head(progress_events)
 
-    Enum.find_value(Enum.reverse(progress_events), fn %ProgressEvent{} = event ->
-      payload = event.payload || %{}
+    event =
+      if is_binary(current_head) do
+        MetadataProjection.latest_review_completion_event(
+          progress_events,
+          work_package.id,
+          current_head,
+          work_package.review_requirement
+        )
+      end
 
-      if Map.get(payload, "type") == "review_completion" and Map.get(payload, "source_tool") == "complete_review" and
-           Map.get(payload, "head_sha") == current_head and Map.get(payload, "review") == work_package.review_requirement do
+    case event do
+      %ProgressEvent{} = event ->
+        payload = event.payload || %{}
+
         %{
           "head_sha" => current_head,
           "reference" => Redactor.redact_text(Map.get(payload, "reference")),
@@ -201,8 +211,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
           "actor_id" => Redactor.redact_text(event.actor_id),
           "completed_at" => timestamp(event.created_at)
         }
-      end
-    end)
+
+      nil ->
+        nil
+    end
   end
 
   defp latest_current_head(progress_events) do

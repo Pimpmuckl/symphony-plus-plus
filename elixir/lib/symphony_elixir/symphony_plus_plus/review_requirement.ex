@@ -40,6 +40,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewRequirement do
 
   def normalize(_requirement), do: {:error, :invalid_review_requirement}
 
+  @spec fingerprint(map()) :: String.t()
+  def fingerprint(requirement) when is_map(requirement) do
+    requirement
+    |> Jason.encode!()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.url_encode64(padding: false)
+  end
+
   @spec validation_error(term()) :: String.t() | nil
   def validation_error(requirement) do
     case normalize(requirement) do

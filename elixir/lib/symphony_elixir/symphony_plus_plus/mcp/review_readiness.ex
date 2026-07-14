@@ -15,6 +15,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
@@ -355,6 +356,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       "source_tool" => "complete_review",
       "work_package_id" => work_package_id,
       "review" => requirement,
+      "review_fingerprint" => ReviewRequirement.fingerprint(requirement),
       "head_sha" => head_sha
     }
     |> put_if_present("reference", reference)

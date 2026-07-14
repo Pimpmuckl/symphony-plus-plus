@@ -3,6 +3,8 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
+
   test "mark_ready requires plan nodes when package-depth planning is meaningful", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(
@@ -201,7 +203,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
   end
 
   test "complete_review satisfies only the configured provider requirement at the current exact head", %{repo: repo} do
-    review = %{"type" => "human", "args" => %{"team" => "maintainers"}}
+    review = %{
+      "type" => "human",
+      "args" => %{"team" => "maintainers", "context" => String.duplicate("x", 5_000)}
+    }
 
     assert {:ok, package} =
              WorkPackageRepository.create(
@@ -256,15 +261,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
         "note" => "Maintainers approved the exact head."
       })
 
-    assert response_progress_payload(repo, completion) == %{
-             "type" => "review_completion",
-             "source_tool" => "complete_review",
-             "work_package_id" => package.id,
-             "review" => review,
-             "head_sha" => "review-head-a",
-             "reference" => "human-review-42",
-             "note" => "Maintainers approved the exact head."
-           }
+    completion_payload = response_progress_payload(repo, completion)
+    assert completion_payload["type"] == "review_completion"
+    assert completion_payload["source_tool"] == "complete_review"
+    assert completion_payload["work_package_id"] == package.id
+    assert completion_payload["head_sha"] == "review-head-a"
+    assert completion_payload["reference"] == "human-review-42"
+    assert completion_payload["note"] == "Maintainers approved the exact head."
+    assert completion_payload["review_fingerprint"] == ReviewRequirement.fingerprint(review)
+    assert String.ends_with?(get_in(completion_payload, ["review", "args", "context"]), "[truncated]")
 
     replay =
       attach_tool(repo, session, "complete_review", %{

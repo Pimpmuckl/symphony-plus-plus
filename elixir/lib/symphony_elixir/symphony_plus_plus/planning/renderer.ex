@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
@@ -335,11 +336,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
   defp current_review_completion(%State{work_package: work_package, progress_events: progress_events}) do
     current_head = latest_current_head(progress_events)
 
-    Enum.find(Enum.reverse(progress_events), fn %ProgressEvent{payload: payload} ->
-      is_map(payload) and Map.get(payload, "type") == "review_completion" and
-        Map.get(payload, "source_tool") == "complete_review" and Map.get(payload, "head_sha") == current_head and
-        Map.get(payload, "review") == work_package.review_requirement
-    end)
+    if is_binary(current_head) do
+      MetadataProjection.latest_review_completion_event(
+        progress_events,
+        work_package.id,
+        current_head,
+        work_package.review_requirement
+      )
+    end
   end
 
   defp latest_current_head(progress_events) do

@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @spec persisted_review_artifact?([term()], String.t(), String.t() | nil, String.t()) :: boolean()
@@ -29,8 +30,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
   defp review_completion_event?(%ProgressEvent{idempotency_key: idempotency_key, payload: payload}, work_package_id, head_sha, requirement) do
     is_map(payload) and Map.get(payload, "type") == "review_completion" and
       Map.get(payload, "source_tool") == "complete_review" and Map.get(payload, "work_package_id") == work_package_id and
-      Map.get(payload, "head_sha") == head_sha and Map.get(payload, "review") == requirement and
+      Map.get(payload, "head_sha") == head_sha and review_identity_matches?(payload, requirement) and
       is_binary(idempotency_key) and String.starts_with?(idempotency_key, "complete_review:#{work_package_id}:")
+  end
+
+  defp review_identity_matches?(payload, requirement) do
+    case Map.get(payload, "review_fingerprint") do
+      fingerprint when is_binary(fingerprint) -> fingerprint == ReviewRequirement.fingerprint(requirement)
+      _fingerprint -> Map.get(payload, "review") == requirement
+    end
   end
 
   defp review_artifact_id(work_package_id, head_sha, artifact) do
