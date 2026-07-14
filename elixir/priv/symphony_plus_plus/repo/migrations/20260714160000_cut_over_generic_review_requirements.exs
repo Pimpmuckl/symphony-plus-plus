@@ -32,13 +32,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverGenericReviewRe
   end
 
   def down do
-    alter table(:sympp_work_packages) do
-      remove(:review_requirement)
-    end
-
-    alter table(:sympp_work_request_planned_slices) do
-      remove(:review_requirement)
-    end
+    raise Ecto.MigrationError,
+      message: "generic review cutover cannot be rolled back without losing migrated review requirements and policy provenance"
   end
 
   defp migrate_review_lanes(table) do

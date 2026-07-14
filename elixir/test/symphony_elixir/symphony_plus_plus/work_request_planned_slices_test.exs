@@ -1130,6 +1130,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestPlannedSlicesTest do
 
     assert "must contain a non-empty type and optional args object" in errors_on(invalid_review_changeset).review_requirement
 
+    assert {:error, %Ecto.Changeset{} = oversized_review_changeset} =
+             Repository.add_planned_slice(
+               repo,
+               work_request.id,
+               planned_slice_attrs(
+                 id: "WRS-OVERSIZED-REVIEW",
+                 review_requirement: %{"type" => "custom", "args" => %{"input" => String.duplicate("x", 16_385)}}
+               )
+             )
+
+    assert "args must not exceed 16384 encoded bytes" in errors_on(oversized_review_changeset).review_requirement
+
+    deeply_nested_args = Enum.reduce(1..9, "leaf", fn depth, nested -> %{"level_#{depth}" => nested} end)
+
+    assert {:error, %Ecto.Changeset{} = deep_review_changeset} =
+             Repository.add_planned_slice(
+               repo,
+               work_request.id,
+               planned_slice_attrs(
+                 id: "WRS-DEEP-REVIEW",
+                 review_requirement: %{"type" => "custom", "args" => deeply_nested_args}
+               )
+             )
+
+    assert "args must not exceed 8 nested containers" in errors_on(deep_review_changeset).review_requirement
+
     assert {:error, %Ecto.Changeset{} = branch_pattern_changeset} =
              Repository.add_planned_slice(
                repo,
