@@ -535,6 +535,7 @@ function Get-ProcessCommandLines {
           ProcessId = [int]$_.ProcessId
           ParentProcessId = [int]$_.ParentProcessId
           Name = [string]$_.Name
+          ExecutablePath = [string]$_.ExecutablePath
           CommandLine = [string]$_.CommandLine
         }
       }
@@ -566,12 +567,156 @@ function Test-CommandLineContainsPath([string]$CommandLine, [string]$Path) {
   return $normalizedCommand.IndexOf($normalizedPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
-function Get-SymppProcessKind($Process, [string]$MarketplaceSourceRoot, [string]$InstalledPluginRoot) {
+function Test-CutoverPathWithinRoot([string]$Path, [string]$Root) {
+  try {
+    $fullPath = ConvertTo-FullPath $Path
+    $fullRoot = (ConvertTo-FullPath $Root).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    return $fullPath.StartsWith("$fullRoot$([System.IO.Path]::DirectorySeparatorChar)", [System.StringComparison]::OrdinalIgnoreCase)
+  } catch {
+    return $false
+  }
+}
+
+function Test-InstalledPluginRootOrigin([string]$RecordedPluginRoot, [string]$InstalledPluginRoot) {
+  try {
+    $recordedRoot = ConvertTo-FullPath $RecordedPluginRoot
+    $currentRoot = ConvertTo-FullPath $InstalledPluginRoot
+    if ([System.StringComparer]::OrdinalIgnoreCase.Equals($recordedRoot, $currentRoot)) {
+      return $true
+    }
+
+    $pluginCacheRoot = Split-Path -Parent $currentRoot
+    if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals((Split-Path -Parent $recordedRoot), $pluginCacheRoot) -or
+        [string]::IsNullOrWhiteSpace((Split-Path -Leaf $recordedRoot))) {
+      return $false
+    }
+    if (Test-Path -LiteralPath $recordedRoot) {
+      $recordedItem = Get-Item -LiteralPath $recordedRoot -Force
+      if (-not $recordedItem.PSIsContainer -or ($recordedItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        return $false
+      }
+    }
+
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Resolve-ManagedArtifactRuntimeContext(
+  [string]$RuntimeFile,
+  [string]$SymppHome,
+  [string]$InstalledPluginRoot,
+  [string]$ExpectedContractFingerprint
+) {
+  $contract = Normalize-McpContractFingerprint $ExpectedContractFingerprint
+  if (-not $contract -or -not (Test-Path -LiteralPath $RuntimeFile -PathType Leaf)) {
+    return $null
+  }
+
+  try {
+    $state = Get-Content -LiteralPath $RuntimeFile -Raw | ConvertFrom-Json
+    $backend = $state.backend
+    $artifactRevision = ([string]$backend.source_revision).Trim().ToLowerInvariant()
+    $expectedArtifactRevision = ([string]$backend.expected_source_revision).Trim().ToLowerInvariant()
+    if ([string]$state.runtime_kind -ne "artifact" -or [string]$state.runtime_mode -ne "artifact" -or
+        -not $backend -or $backend.managed -ne $true -or [int]$backend.pid -le 0 -or
+        -not (Test-InstalledPluginRootOrigin ([string]$state.plugin_root) $InstalledPluginRoot) -or
+        $artifactRevision -notmatch "^[0-9a-f]{40}$" -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals($expectedArtifactRevision, $artifactRevision) -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals((Normalize-McpContractFingerprint ([string]$backend.contract_fingerprint)), $contract) -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals((Normalize-McpContractFingerprint ([string]$backend.expected_contract_fingerprint)), $contract)) {
+      return $null
+    }
+
+    $artifactCacheRoot = ConvertTo-FullPath (Join-Path $SymppHome "artifacts\mcp")
+    if (-not (Test-Path -LiteralPath $artifactCacheRoot -PathType Container)) {
+      return $null
+    }
+
+    return [pscustomobject]@{
+      ProcessId = [int]$backend.pid
+      ArtifactCacheRoot = $artifactCacheRoot
+      SourceRevision = $artifactRevision
+      ExpectedSourceRevision = $expectedArtifactRevision
+      ContractFingerprint = $contract
+      RecordedPluginRoot = ConvertTo-FullPath ([string]$state.plugin_root)
+    }
+  } catch {
+    return $null
+  }
+}
+
+function Test-ManagedArtifactRuntimeProcess($Process, $Context) {
+  if (-not $Context -or [int]$Process.ProcessId -ne [int]$Context.ProcessId -or
+      [string]$Process.Name -ne "erl.exe" -or [string]::IsNullOrWhiteSpace([string]$Process.ExecutablePath) -or
+      [string]::IsNullOrWhiteSpace([string]$Process.CommandLine)) {
+    return $false
+  }
+
+  try {
+    $cacheRoot = ConvertTo-FullPath ([string]$Context.ArtifactCacheRoot)
+    $executable = Get-Item -LiteralPath (ConvertTo-FullPath ([string]$Process.ExecutablePath)) -Force
+    if (-not (Test-CutoverPathWithinRoot $executable.FullName $cacheRoot) -or
+        ($executable.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+      return $false
+    }
+
+    $runtimeRoot = $null
+    $current = $executable.Directory
+    while ($current -and (Test-CutoverPathWithinRoot $current.FullName $cacheRoot)) {
+      if ($current.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+        return $false
+      }
+      if ((Test-Path -LiteralPath (Join-Path $current.FullName ".sympp-artifact.json") -PathType Leaf) -and
+          (Test-Path -LiteralPath (Join-Path $current.FullName "runtime-manifest.json") -PathType Leaf)) {
+        $runtimeRoot = $current.FullName
+        break
+      }
+      $current = $current.Parent
+    }
+    if (-not $runtimeRoot -or -not (Test-CommandLineContainsPath ([string]$Process.CommandLine) $runtimeRoot)) {
+      return $false
+    }
+
+    $relativeRoot = $runtimeRoot.Substring($cacheRoot.TrimEnd("\").Length).TrimStart("\")
+    $parts = $relativeRoot.Split([System.IO.Path]::DirectorySeparatorChar, [System.StringSplitOptions]::RemoveEmptyEntries)
+    $marker = Get-Content -LiteralPath (Join-Path $runtimeRoot ".sympp-artifact.json") -Raw | ConvertFrom-Json
+    $manifest = Get-Content -LiteralPath (Join-Path $runtimeRoot "runtime-manifest.json") -Raw | ConvertFrom-Json
+    $sha256 = ([string]$marker.sha256).Trim().ToLowerInvariant()
+    $revision = ([string]$Context.SourceRevision).Trim().ToLowerInvariant()
+    $contract = Normalize-McpContractFingerprint ([string]$Context.ContractFingerprint)
+    $manifestContract = Normalize-McpContractFingerprint ([string]$manifest.launcher_contract.mcp_contract_fingerprint)
+    if ($parts.Count -ne 4 -or $parts[3] -ne "runtime" -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals($parts[0], ([string]$marker.platform).Trim()) -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals($parts[1], $revision.Substring(0, 12)) -or
+        $sha256 -notmatch "^[0-9a-f]{64}$" -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals($parts[2], $sha256.Substring(0, 16)) -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals(([string]$marker.source_revision).Trim(), $revision) -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals(([string]$manifest.source_revision).Trim(), $revision) -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals(([string]$manifest.plugin.name).Trim(), "symphony-plus-plus-mcp") -or
+        [string]$manifest.backend.kind -ne "mix_release" -or [string]$manifest.backend.relative_path -ne "runtime" -or
+        -not $contract -or -not [System.StringComparer]::OrdinalIgnoreCase.Equals($manifestContract, $contract) -or
+        -not (Test-CutoverPathWithinRoot $executable.FullName (Join-Path $runtimeRoot "runtime"))) {
+      return $false
+    }
+
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Get-SymppProcessKind($Process, [string]$MarketplaceSourceRoot, [string]$InstalledPluginRoot, $ManagedArtifactRuntimeContext = $null) {
   $commandLine = [string]$Process.CommandLine
   $name = [string]$Process.Name
 
   if ([string]::IsNullOrWhiteSpace($commandLine)) {
     return $null
+  }
+
+  if (Test-ManagedArtifactRuntimeProcess $Process $ManagedArtifactRuntimeContext) {
+    return "managed_artifact_runtime"
   }
 
   if ((Test-CommandLineContainsPath $commandLine $InstalledPluginRoot) -and $commandLine -match "start-sympp-mcp") {
@@ -604,7 +749,7 @@ function Get-SymppProcessKind($Process, [string]$MarketplaceSourceRoot, [string]
   return $null
 }
 
-function Get-CandidateProcesses([string]$MarketplaceSourceRoot, [string]$InstalledPluginRoot, [int[]]$Ports) {
+function Get-CandidateProcesses([string]$MarketplaceSourceRoot, [string]$InstalledPluginRoot, [int[]]$Ports, $ManagedArtifactRuntimeContext = $null) {
   $processes = Get-ProcessCommandLines
   $listeners = Get-ListeningPorts $Ports
   $processByPid = @{}
@@ -623,7 +768,7 @@ function Get-CandidateProcesses([string]$MarketplaceSourceRoot, [string]$Install
   $safeProcessByPid = @{}
   $nonSymppListeners = @()
   foreach ($process in $processes) {
-    $kind = Get-SymppProcessKind $process $MarketplaceSourceRoot $InstalledPluginRoot
+    $kind = Get-SymppProcessKind $process $MarketplaceSourceRoot $InstalledPluginRoot $ManagedArtifactRuntimeContext
     if ($kind) {
       $safeProcessByPid[$process.ProcessId] = [pscustomobject]@{
         Process = $process
@@ -670,7 +815,11 @@ function Get-CandidateProcesses([string]$MarketplaceSourceRoot, [string]$Install
         Name = $safe.Process.Name
         Kind = $safe.Kind
         ListeningPorts = ($listeningPorts -join ",")
-        CommandLine = $safe.Process.CommandLine
+        CommandLine = if ($safe.Kind -eq "managed_artifact_runtime") {
+          "$($safe.Process.ExecutablePath) [arguments redacted]"
+        } else {
+          $safe.Process.CommandLine
+        }
       }
     }
   )
@@ -710,16 +859,17 @@ function Wait-ListeningPort([int]$Port, [int]$TimeoutSeconds) {
   throw "Timed out waiting for port $Port to listen."
 }
 
-function Assert-ListenerKind([int]$ProcessId, [string[]]$ExpectedKinds, [string]$Label, [string]$MarketplaceSourceRoot, [string]$InstalledPluginRoot) {
+function Assert-ListenerKind([int]$ProcessId, [string[]]$ExpectedKinds, [string]$Label, [string]$MarketplaceSourceRoot, [string]$InstalledPluginRoot, $ManagedArtifactRuntimeContext = $null) {
   $process = Get-ProcessByPidFromInventory $ProcessId
   if (-not $process) {
     throw "$Label listener PID $ProcessId was not found in the process table."
   }
 
-  $kind = Get-SymppProcessKind $process $MarketplaceSourceRoot $InstalledPluginRoot
+  $kind = Get-SymppProcessKind $process $MarketplaceSourceRoot $InstalledPluginRoot $ManagedArtifactRuntimeContext
   if ($ExpectedKinds -notcontains $kind) {
     throw "$Label listener PID $ProcessId ($($process.Name)) did not match the expected S++ runtime kind. Expected $($ExpectedKinds -join ', '), got '$kind'."
   }
+  return $kind
 }
 
 function Invoke-ElixirSetup([string]$MarketplaceSourceRoot) {
@@ -950,7 +1100,7 @@ function New-RuntimeKey([string]$BackendUrl, [string]$DashboardOrigin, [string]$
   return "contract=$contract;backend=$backend;dashboard=$dashboard"
 }
 
-function Update-RuntimeStatePids([string]$RuntimeFile, [string]$InstalledPluginRoot, [int]$BackendPid, [int]$DashboardPid, [string]$SourceRevision, [int]$BackendPort, [int]$DashboardPort, [string]$ExpectedContractFingerprint) {
+function Update-RuntimeStatePids([string]$RuntimeFile, [string]$InstalledPluginRoot, [int]$BackendPid, [int]$DashboardPid, [string]$SourceRevision, [int]$BackendPort, [int]$DashboardPort, [string]$ExpectedContractFingerprint, $ManagedArtifactRuntimeContext = $null) {
   $runtimeFilePath = ConvertTo-FullPath $RuntimeFile
   $state = if (Test-Path -LiteralPath $runtimeFilePath -PathType Leaf) {
     Get-Content -LiteralPath $runtimeFilePath -Raw | ConvertFrom-Json
@@ -971,6 +1121,17 @@ function Update-RuntimeStatePids([string]$RuntimeFile, [string]$InstalledPluginR
       }
       superseded_runtimes = @()
     }
+  }
+  if ($ManagedArtifactRuntimeContext -and [int]$ManagedArtifactRuntimeContext.ProcessId -eq $BackendPid -and
+      [string]$state.runtime_kind -eq "artifact" -and [string]$state.runtime_mode -eq "artifact" -and
+      $state.backend.managed -eq $true -and [int]$state.backend.pid -eq $BackendPid -and
+      [System.StringComparer]::OrdinalIgnoreCase.Equals((ConvertTo-FullPath ([string]$state.plugin_root)), ([string]$ManagedArtifactRuntimeContext.RecordedPluginRoot))) {
+    if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals((ConvertTo-FullPath ([string]$state.plugin_root)), (ConvertTo-FullPath $InstalledPluginRoot))) {
+      $state.plugin_root = ConvertTo-FullPath $InstalledPluginRoot
+      New-Item -ItemType Directory -Path (Split-Path -Parent $runtimeFilePath) -Force | Out-Null
+      $state | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $runtimeFilePath -Encoding UTF8
+    }
+    return $state
   }
   $backendUrl = "http://127.0.0.1:$BackendPort"
   $dashboardOrigin = "http://127.0.0.1:$DashboardPort"
@@ -1109,7 +1270,13 @@ if (-not $Json) {
   Write-InstalledCacheStatus $initialCacheStatus
 }
 
-$initialInventory = Get-CandidateProcesses $marketplaceSourceRoot $installedPluginRoot $allPorts
+$initialManagedArtifactContext = if (-not $initialCacheStatus.refreshNeeded) {
+  $initialContractFingerprint = Resolve-CutoverMcpContractFingerprint $installedPluginRoot $marketplaceSourceRoot
+  Resolve-ManagedArtifactRuntimeContext $runtimeFile $symppHomePath $installedPluginRoot $initialContractFingerprint
+} else {
+  $null
+}
+$initialInventory = Get-CandidateProcesses $marketplaceSourceRoot $installedPluginRoot $allPorts $initialManagedArtifactContext
 Write-Section "Existing S++ Processes (Preserved)"
 if (-not $Json) {
   Write-ProcessTable $initialInventory.Candidates "No verified S++ launcher/runtime processes are currently running."
@@ -1213,49 +1380,74 @@ if (-not $Json) {
   Write-Host "Launcher target: $installedMcpUrl"
 }
 
-Write-Section "Installed Runtime Setup"
-Invoke-ElixirSetup $marketplaceSourceRoot
-if (-not $Json) {
-  Write-Host "Elixir dependencies and compiled runtime are ready."
-}
+$expectedContractFingerprint = Resolve-CutoverMcpContractFingerprint $installedPluginRoot $marketplaceSourceRoot
+$managedArtifactContext = Resolve-ManagedArtifactRuntimeContext $runtimeFile $symppHomePath $installedPluginRoot $expectedContractFingerprint
 
-Write-Section "Start Singleton"
 $backendStart = $null
 $dashboardStart = $null
 $backendListeners = @(Get-ListeningPorts @($BackendPort))
 if ($backendListeners.Count -gt 1) {
   throw "Multiple listeners were found on the configured backend port $BackendPort."
 }
+$backendPid = $null
+$backendKind = $null
+$acceptedManagedArtifactContext = $null
+if ($backendListeners.Count -eq 1) {
+  $backendPid = Wait-ListeningPort $BackendPort 60
+  $backendKind = Assert-ListenerKind $backendPid @("marketplace_elixir_runtime", "marketplace_runtime_wrapper", "managed_artifact_runtime") "Backend" $marketplaceSourceRoot $installedPluginRoot $managedArtifactContext
+  if ($backendKind -eq "managed_artifact_runtime") {
+    $acceptedManagedArtifactContext = $managedArtifactContext
+  }
+}
+
+Write-Section "Installed Runtime Setup"
+if ($acceptedManagedArtifactContext) {
+  if (-not $Json) {
+    Write-Host "Verified managed artifact runtime is ready; source setup is not required."
+  }
+} else {
+  Invoke-ElixirSetup $marketplaceSourceRoot
+  if (-not $Json) {
+    Write-Host "Elixir dependencies and compiled runtime are ready."
+  }
+}
+
+Write-Section "Start Singleton"
 if ($backendListeners.Count -eq 0 -and $PSCmdlet.ShouldProcess("127.0.0.1:$BackendPort", "Start Symphony++ backend singleton from installed marketplace cache")) {
   $backendStart = Start-Backend $marketplaceSourceRoot $sourceRevision $BackendPort $DashboardPort $logDir
 }
-$dashboardListeners = @(Get-ListeningPorts @($DashboardPort))
-if ($dashboardListeners.Count -gt 1) {
-  throw "Multiple listeners were found on the configured dashboard port $DashboardPort."
+if (-not $backendPid) {
+  $backendPid = Wait-ListeningPort $BackendPort 60
+  $backendKind = Assert-ListenerKind $backendPid @("elixir_runtime", "marketplace_elixir_runtime", "marketplace_runtime_wrapper") "Backend" $marketplaceSourceRoot $installedPluginRoot $managedArtifactContext
 }
-if ($dashboardListeners.Count -eq 0 -and $PSCmdlet.ShouldProcess("127.0.0.1:$DashboardPort", "Start Symphony++ dashboard from installed marketplace cache")) {
-  $dashboardStart = Start-Dashboard $marketplaceSourceRoot $BackendPort $DashboardPort $logDir
+$dashboardPid = $null
+$dashboardRuntimePort = $BackendPort
+if (-not $acceptedManagedArtifactContext) {
+  $dashboardRuntimePort = $DashboardPort
+  $dashboardListeners = @(Get-ListeningPorts @($DashboardPort))
+  if ($dashboardListeners.Count -gt 1) {
+    throw "Multiple listeners were found on the configured dashboard port $DashboardPort."
+  }
+  if ($dashboardListeners.Count -eq 0 -and $PSCmdlet.ShouldProcess("127.0.0.1:$DashboardPort", "Start Symphony++ dashboard from installed marketplace cache")) {
+    $dashboardStart = Start-Dashboard $marketplaceSourceRoot $BackendPort $DashboardPort $logDir
+  }
+  $dashboardPid = Wait-ListeningPort $DashboardPort 60
+  $dashboardKind = Assert-ListenerKind $dashboardPid @("dashboard_vite", "marketplace_runtime_wrapper") "Dashboard" $marketplaceSourceRoot $installedPluginRoot $managedArtifactContext
 }
-
-$backendPid = Wait-ListeningPort $BackendPort 60
-$dashboardPid = Wait-ListeningPort $DashboardPort 60
-$backendKinds = if ($backendStart) {
-  @("elixir_runtime", "marketplace_elixir_runtime", "marketplace_runtime_wrapper")
-} else {
-  @("marketplace_elixir_runtime", "marketplace_runtime_wrapper")
-}
-Assert-ListenerKind $backendPid $backendKinds "Backend" $marketplaceSourceRoot $installedPluginRoot
-Assert-ListenerKind $dashboardPid @("dashboard_vite", "marketplace_runtime_wrapper") "Dashboard" $marketplaceSourceRoot $installedPluginRoot
 
 if (-not $Json) {
   Write-Host "Backend listener: PID $backendPid on 127.0.0.1:$BackendPort"
-  Write-Host "Dashboard listener: PID $dashboardPid on 127.0.0.1:$DashboardPort"
+  if ($acceptedManagedArtifactContext) {
+    Write-Host "Dashboard route: packaged artifact on 127.0.0.1:$BackendPort"
+  } else {
+    Write-Host "Dashboard listener: PID $dashboardPid on 127.0.0.1:$DashboardPort"
+  }
 }
 
 Write-Section "Refresh Runtime State"
-$expectedContractFingerprint = Resolve-CutoverMcpContractFingerprint $installedPluginRoot $marketplaceSourceRoot
-$smokeJson = Invoke-McpSmoke $marketplaceSourceRoot $sourceRevision $BackendPort
-$runtimeState = Update-RuntimeStatePids $runtimeFile $installedPluginRoot $backendPid $dashboardPid $sourceRevision $BackendPort $DashboardPort $expectedContractFingerprint
+$smokeSourceRevision = if ($acceptedManagedArtifactContext) { $acceptedManagedArtifactContext.SourceRevision } else { $sourceRevision }
+$smokeJson = Invoke-McpSmoke $marketplaceSourceRoot $smokeSourceRevision $BackendPort
+$runtimeState = Update-RuntimeStatePids $runtimeFile $installedPluginRoot $backendPid $dashboardPid $sourceRevision $BackendPort $dashboardRuntimePort $expectedContractFingerprint $acceptedManagedArtifactContext
 if (-not $Json) {
   Write-Host "Runtime key: $($runtimeState.runtime_key)"
   Write-Host "Runtime kind: $($runtimeState.runtime_kind)"
@@ -1265,7 +1457,7 @@ if (-not $Json) {
 }
 
 Write-Section "Verification"
-$finalInventory = Get-CandidateProcesses $marketplaceSourceRoot $installedPluginRoot $allPorts
+$finalInventory = Get-CandidateProcesses $marketplaceSourceRoot $installedPluginRoot $allPorts $managedArtifactContext
 $dynamicListeners = @(
   $finalInventory.Candidates |
     Where-Object {
@@ -1280,9 +1472,9 @@ if ($dynamicListeners.Count -gt 0) {
   throw "Unexpected dynamic S++ leak/listener ports remain in 20000-20120: $dynamicSummary"
 }
 
-$dashboardSmoke = Invoke-DashboardSmoke $DashboardPort
+$dashboardSmoke = Invoke-DashboardSmoke $dashboardRuntimePort
 if (-not $dashboardSmoke.HasRoot) {
-  throw "Dashboard route returned HTTP $($dashboardSmoke.StatusCode) but did not include the Vite root element."
+  throw "Dashboard route returned HTTP $($dashboardSmoke.StatusCode) but did not include the root element."
 }
 
 if (-not $Json) {
@@ -1324,7 +1516,7 @@ $summary = [pscustomobject]@{
     stderrLog = if ($backendStart) { $backendStart.StderrLog } else { $null }
   }
   dashboard = @{
-    port = $DashboardPort
+    port = $dashboardRuntimePort
     pid = $dashboardPid
     startedProcessId = if ($dashboardStart) { $dashboardStart.ProcessId } else { $null }
     stdoutLog = if ($dashboardStart) { $dashboardStart.StdoutLog } else { $null }
