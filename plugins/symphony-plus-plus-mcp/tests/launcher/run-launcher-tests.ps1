@@ -95,6 +95,8 @@ Assert-True ($LASTEXITCODE -eq 0) "Node bridge must parse"
 Assert-True ($LASTEXITCODE -eq 0) "Current Node runtime must satisfy the conservative bridge check"
 & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "state-identity-tests.js")
 Assert-True ($LASTEXITCODE -eq 0) "Node state identity tests must pass"
+& (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "dashboard-health-tests.js")
+Assert-True ($LASTEXITCODE -eq 0) "Node dashboard health tests must pass"
 $process = Get-Process -Id $PID
 $startIdentity = Get-ProcessStartIdentity $process
 $processMap = @{ [string]$PID = [pscustomobject]@{ exists = $true; start_time_utc_ticks = $startIdentity } }

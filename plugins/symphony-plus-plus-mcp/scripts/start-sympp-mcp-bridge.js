@@ -11,6 +11,7 @@ const { spawnSync } = require("child_process");
 const WARM_MISS = 42;
 const POWERSHELL_FALLBACK = 43;
 const BOARD_PATH = "/sympp/board";
+const MAX_DASHBOARD_REDIRECTS = 3;
 const DOTNET_EPOCH_TICKS = 621355968000000000n;
 const GENERATION_SETTLE_MS = 100;
 const synchronousWait = new Int32Array(new SharedArrayBuffer(4));
@@ -399,6 +400,20 @@ function request(urlString, method, body, headers, timeoutMs) {
   });
 }
 
+async function requestDashboard(urlString, redirects = 0, visited = new Set()) {
+  let url;
+  try { url = new URL(urlString); } catch (_) { return null; }
+  if (!loopbackOrigin(url.origin) || visited.has(url.href)) return null;
+  visited.add(url.href);
+  const response = await request(url, "GET", null, {}, 2000);
+  if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+  if (redirects >= MAX_DASHBOARD_REDIRECTS || !response.headers.location) return null;
+  let target;
+  try { target = new URL(response.headers.location, url); } catch (_) { return null; }
+  if (target.username || target.password || !loopbackOrigin(target.origin)) return null;
+  return requestDashboard(target.href, redirects + 1, visited);
+}
+
 function responseLines(response) {
   const content = response.body.trim();
   if (!content) return [];
@@ -507,8 +522,8 @@ async function preflightRuntimeHealth(runtimeFile, state, identity) {
 async function dashboardHealthy(identity) {
   if (identity.headless) return true;
   try {
-    const response = await request(`${identity.dashboard}${BOARD_PATH}`, "GET", null, {}, 2000);
-    if (response.status < 200 || response.status >= 400 || !response.body.includes("Symphony++ Dashboard")) return false;
+    const response = await requestDashboard(`${identity.dashboard}${BOARD_PATH}`);
+    if (!response || response.status < 200 || response.status >= 300 || !response.body.includes("Symphony++ Dashboard")) return false;
     if (identity.dashboard === identity.backend) return true;
     const health = await backendHealth(identity.dashboard);
     return !!health && health.healthy && health.contract === identity.contract;
@@ -705,5 +720,5 @@ if (require.main === module) {
     process.exit(1);
   });
 } else {
-  module.exports = { resolveStateIdentity };
+  module.exports = { dashboardHealthy, resolveStateIdentity };
 }
