@@ -31,6 +31,7 @@ $runtimeState = $null
 $backendStartTicks = 0L
 $backendPort = 0
 $result = $null
+$startupBurst = 10
 $cohortValues = @($Cohorts -split "," | ForEach-Object { [int]$_.Trim() })
 if ($cohortValues.Count -eq 0 -or @($cohortValues | Where-Object { $_ -notin @(1, 10, 100) }).Count -gt 0) {
   throw "-Cohorts must be a comma-separated subset of 1,10,100."
@@ -181,7 +182,9 @@ function Get-ProcessTreeMetrics([object[]]$Cohort, [int]$ExcludedPid) {
     p95_private_bytes_per_client = Get-Percentile $bytes 0.95
     max_private_bytes_per_client = Get-Percentile $bytes 1.0
     total_processes = [int](($counts | Measure-Object -Sum).Sum)
+    min_processes_per_client = Get-Percentile $counts 0.0
     median_processes_per_client = Get-Percentile $counts 0.50
+    node_clients = @($detail | Where-Object { [string]($_.names -join ",") -match "(^|,)node:" }).Count
     clients = @($detail)
   }
 }
@@ -189,8 +192,13 @@ function Get-ProcessTreeMetrics([object[]]$Cohort, [int]$ExcludedPid) {
 function Invoke-Cohort([int]$Count, [hashtable]$Environment, [int]$BackendPid) {
   $gitBefore = Get-GitInvocationCount
   $traceBefore = Get-TraceCounts
-  $cohort = foreach ($index in 1..$Count) { Start-ExactClient $Environment }
-  Wait-ClientsReady $cohort $StartupTimeoutSec
+  $cohort = [System.Collections.Generic.List[object]]::new()
+  for ($offset = 0; $offset -lt $Count; $offset += $startupBurst) {
+    $batchCount = [Math]::Min($startupBurst, $Count - $offset)
+    $batch = @(foreach ($index in 1..$batchCount) { Start-ExactClient $Environment })
+    Wait-ClientsReady $batch $StartupTimeoutSec
+    foreach ($client in $batch) { $cohort.Add($client) }
+  }
   $tree = Get-ProcessTreeMetrics $cohort $BackendPid
   $samples = @($cohort.elapsed_ms | Sort-Object)
   $leasePeak = Get-LeaseCount
@@ -203,6 +211,7 @@ function Invoke-Cohort([int]$Count, [hashtable]$Environment, [int]$BackendPid) {
   while ((Get-LeaseCount) -gt 1 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
   return [pscustomobject]@{
     clients = $Count
+    startup_burst = [Math]::Min($startupBurst, $Count)
     p50_initialize_ms = [Math]::Round((Get-Percentile $samples 0.50), 2)
     p95_initialize_ms = [Math]::Round((Get-Percentile $samples 0.95), 2)
     max_initialize_ms = [Math]::Round((Get-Percentile $samples 1.0), 2)

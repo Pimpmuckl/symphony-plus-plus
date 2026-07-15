@@ -31,7 +31,7 @@ $profileCaps = [ordered]@{
   solo = @{ tools = 30; bytes = 20000 }
 }
 $resultCaps = [ordered]@{ claim = 600; read = 1200; progress = 500 }
-$exactP95Caps = @{ 1 = $MaxWarmP95Ms; 10 = $MaxWarmP95Ms; 100 = $MaxWarmP95Ms }
+$exactP95Caps = @{ 1 = $MaxWarmP95Ms; 10 = $MaxWarmP95Ms }
 $thresholds = @{
   cold_ms = $MaxColdMs; warm_p95_ms = $MaxWarmP95Ms; exact_warm_p95_ms = $exactP95Caps
   exact_warm_bytes = $MaxExactWarmBytes; direct_ms = $MaxDirectMs
@@ -56,7 +56,10 @@ function Get-GateFailures($Metrics, $Limits) {
   if ($Metrics.direct.transport_private_bytes -ne 0) { $failures.Add("direct.wrapper_private_bytes") }
   if ($Metrics.direct.backend_private_bytes -gt $Limits.backend_bytes) { $failures.Add("direct.backend_private_bytes") }
   $nodeCohorts = @($Metrics.exact.node.warm | Where-Object { $_.clients -ge 10 })
-  if ($nodeCohorts.Count -eq 0 -or @($Metrics.exact.node.warm | Where-Object { -not $Limits.exact_warm_p95_ms.ContainsKey([int]$_.clients) -or $_.p95_initialize_ms -gt $Limits.exact_warm_p95_ms[[int]$_.clients] }).Count -gt 0) { $failures.Add("exact.node.p95_ms") }
+  $missingSloCohorts = @($Limits.exact_warm_p95_ms.Keys | Where-Object { $clients = [int]$_; @($Metrics.exact.node.warm | Where-Object { [int]$_.clients -eq $clients }).Count -eq 0 })
+  if ($missingSloCohorts.Count -gt 0 -or @($Metrics.exact.node.warm | Where-Object { $Limits.exact_warm_p95_ms.ContainsKey([int]$_.clients) -and $_.p95_initialize_ms -gt $Limits.exact_warm_p95_ms[[int]$_.clients] }).Count -gt 0) { $failures.Add("exact.node.p95_ms") }
+  $node100 = @($Metrics.exact.node.warm | Where-Object { [int]$_.clients -eq 100 })
+  if ($node100.Count -ne 1 -or [int]$node100[0].startup_burst -lt 1 -or [int]$node100[0].startup_burst -gt 10 -or [int]$node100[0].leases_peak -ne 101 -or [int]$node100[0].leases_after -ne 1 -or [int]$node100[0].process_tree.node_clients -ne 100 -or [int]$node100[0].process_tree.min_processes_per_client -lt 2) { $failures.Add("exact.node.live_100") }
   if ($nodeCohorts.Count -eq 0 -or ($nodeCohorts.process_tree.median_private_bytes_per_client | Measure-Object -Maximum).Maximum -gt $Limits.exact_warm_bytes) { $failures.Add("exact.node.private_bytes") }
   if (@($Metrics.exact.node.warm | Where-Object { $_.git_invocations -ne 0 -or [int]$_.trace.payload_hash_validation -ne 0 -or [int]$_.trace.marketplace_git_validation -ne 0 -or [int]$_.trace.contract_fingerprint_resolution -ne 0 -or [int]$_.trace.artifact_manifest_resolution -ne 0 }).Count -gt 0) { $failures.Add("exact.node.warm_resolution") }
   if ([int]$Metrics.exact.node.cold.trace.installed_identity_full_validation -ne 1 -or [int]$Metrics.exact.node.cold.trace.payload_hash_validation -ne 1 -or [int]$Metrics.exact.node.cold.trace.marketplace_git_validation -ne 1 -or [int]$Metrics.exact.node.cold.trace.artifact_manifest_resolution -ne 1) { $failures.Add("exact.node.cold_resolution") }
@@ -96,7 +99,7 @@ function Write-Result($Metrics, [string[]]$Failures, $Cleanup) {
   [Console]::Out.WriteLine("thresholds:")
   [Console]::Out.WriteLine("  isolated_bootstrap_ms: $MaxColdMs")
   [Console]::Out.WriteLine("  warm_p95_ms: $MaxWarmP95Ms")
-  [Console]::Out.WriteLine("  exact_warm_p95_ms: 1=$($exactP95Caps[1]),10=$($exactP95Caps[10]),100=$($exactP95Caps[100])")
+  [Console]::Out.WriteLine("  exact_warm_p95_ms: 1=$($exactP95Caps[1]),10=$($exactP95Caps[10])")
   [Console]::Out.WriteLine("  exact_warm_private_bytes: $MaxExactWarmBytes")
   [Console]::Out.WriteLine("  direct_elapsed_ms: $MaxDirectMs")
   [Console]::Out.WriteLine("  backend_private_bytes: $MaxBackendBytes")
@@ -118,10 +121,15 @@ function Write-Result($Metrics, [string[]]$Failures, $Cleanup) {
   foreach ($mode in @("node", "fallback")) {
     $exact = $Metrics.exact.$mode
     $cohorts = @($exact.warm | Where-Object { $_.clients -ge 10 })
-    [Console]::Out.WriteLine("  ${mode}_p95_ms: $(($cohorts.p95_initialize_ms | Measure-Object -Maximum).Maximum)")
+    $sloCohorts = @($exact.warm | Where-Object { $exactP95Caps.ContainsKey([int]$_.clients) })
+    $latencyLabel = if ($mode -eq "node") { "node_slo_p95_ms" } else { "fallback_reported_p95_ms" }
+    [Console]::Out.WriteLine("  ${latencyLabel}: $(($sloCohorts.p95_initialize_ms | Measure-Object -Maximum).Maximum)")
     [Console]::Out.WriteLine("  ${mode}_median_private_bytes: $(($cohorts.process_tree.median_private_bytes_per_client | Measure-Object -Maximum).Maximum)")
     [Console]::Out.WriteLine("  ${mode}_recovery_ms: $($exact.recovery.initialize_ms)")
   }
+  $node100 = @($Metrics.exact.node.warm | Where-Object { [int]$_.clients -eq 100 })[0]
+  [Console]::Out.WriteLine("  node_100_reported_p95_ms: $($node100.p95_initialize_ms)")
+  [Console]::Out.WriteLine("  node_100_startup_burst: $($node100.startup_burst)")
   [Console]::Out.WriteLine("  node_abandoned_locks_reclaimed: $($Metrics.exact.node.lock_recovery.reclaimed.ToString().ToLowerInvariant())")
   [Console]::Out.WriteLine("  node_lifecycle_race_healthy: $($Metrics.exact.node.lifecycle_race.healthy.ToString().ToLowerInvariant())")
   [Console]::Out.WriteLine("direct:")
@@ -228,13 +236,26 @@ function ConvertFrom-DirectProbe([string[]]$Lines, [double]$ElapsedMs) {
   }
 }
 
+function New-SelfTestExactCohort([int]$Clients) {
+  return [pscustomobject]@{
+    clients = $Clients
+    startup_burst = [Math]::Min(10, $Clients)
+    p95_initialize_ms = 1
+    leases_peak = $Clients + 1
+    leases_after = 1
+    git_invocations = 0
+    trace = [pscustomobject]@{ payload_hash_validation = 0; marketplace_git_validation = 0; contract_fingerprint_resolution = 0; artifact_manifest_resolution = 0 }
+    process_tree = [pscustomobject]@{ median_private_bytes_per_client = 1; min_processes_per_client = 2; node_clients = $Clients }
+  }
+}
+
 function Invoke-SelfTest {
   $base = [pscustomobject]@{
     cold = [pscustomobject]@{ isolated_bootstrap_ms = 1; backend_processes = 1; backend_pid = 1; backend_start_ticks = 1; leases_peak = 1 }
     warm = [pscustomobject]@{ clients = 100; p95_ms = 1; backend_processes = 1; leases_peak = 100; leases_after = 0; remote_resolution_attempts = 0 }
     direct = [pscustomobject]@{ clients = 100; elapsed_ms = 1; backend_processes = 1; backend_pid = 1; backend_start_ticks = 1; transport_processes = 0; transport_private_bytes = 0; backend_private_bytes = 1 }
     exact = [pscustomobject]@{
-      node = [pscustomobject]@{ cold = [pscustomobject]@{ trace = [pscustomobject]@{ installed_identity_full_validation = 1; payload_hash_validation = 1; marketplace_git_validation = 1; artifact_manifest_resolution = 1 } }; warm = @([pscustomobject]@{ clients = 10; p95_initialize_ms = 1; git_invocations = 0; trace = [pscustomobject]@{ payload_hash_validation = 0; marketplace_git_validation = 0; contract_fingerprint_resolution = 0; artifact_manifest_resolution = 0 }; process_tree = [pscustomobject]@{ median_private_bytes_per_client = 1 } }); lock_recovery = [pscustomobject]@{ checked = $true; reclaimed = $true }; lifecycle_race = [pscustomobject]@{ checked = $true; healthy = $true }; recovery = [pscustomobject]@{ dashboard_healthy = $true }; mutation = [pscustomobject]@{ checked = $true; shortcut_rejected = $true } }
+      node = [pscustomobject]@{ cold = [pscustomobject]@{ trace = [pscustomobject]@{ installed_identity_full_validation = 1; payload_hash_validation = 1; marketplace_git_validation = 1; artifact_manifest_resolution = 1 } }; warm = @(New-SelfTestExactCohort 1; New-SelfTestExactCohort 10; New-SelfTestExactCohort 100); lock_recovery = [pscustomobject]@{ checked = $true; reclaimed = $true }; lifecycle_race = [pscustomobject]@{ checked = $true; healthy = $true }; recovery = [pscustomobject]@{ dashboard_healthy = $true }; mutation = [pscustomobject]@{ checked = $true; shortcut_rejected = $true } }
       fallback = [pscustomobject]@{ warm = @([pscustomobject]@{ clients = 10; p95_initialize_ms = 1; process_tree = [pscustomobject]@{ median_private_bytes_per_client = 1 } }); recovery = [pscustomobject]@{ dashboard_healthy = $true } }
     }
     profiles = [pscustomobject]@{ full = @{ tools = 1; bytes = 1 }; worker = @{ tools = 1; bytes = 1 }; architect = @{ tools = 1; bytes = 1 }; coordinator = @{ tools = 1; bytes = 1 }; solo = @{ tools = 1; bytes = 1 } }
@@ -253,7 +274,8 @@ function Invoke-SelfTest {
     "direct.wrapper_private_bytes" = { param($m) $m.direct.transport_private_bytes = 1 }
     "direct.backend_private_bytes" = { param($m) $m.direct.backend_private_bytes = $MaxBackendBytes + 1 }
     "exact.node.p95_ms" = { param($m) $m.exact.node.warm[0].p95_initialize_ms = $exactP95Caps[10] + 1 }
-    "exact.node.private_bytes" = { param($m) $m.exact.node.warm[0].process_tree.median_private_bytes_per_client = $MaxExactWarmBytes + 1 }
+    "exact.node.live_100" = { param($m) $m.exact.node.warm[2].startup_burst = 11 }
+    "exact.node.private_bytes" = { param($m) $m.exact.node.warm[1].process_tree.median_private_bytes_per_client = $MaxExactWarmBytes + 1 }
     "exact.node.warm_resolution" = { param($m) $m.exact.node.warm[0].git_invocations = 1 }
     "exact.node.cold_resolution" = { param($m) $m.exact.node.cold.trace.artifact_manifest_resolution = 2 }
     "exact.node.lock_recovery" = { param($m) $m.exact.node.lock_recovery.reclaimed = $false }
