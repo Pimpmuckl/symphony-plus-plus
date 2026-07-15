@@ -708,7 +708,7 @@ function Invoke-McpPost([string]$Url, [string]$Body, [string]$SessionId, [string
   }
 }
 
-function Get-SymppBackendHealth([string]$BackendUrl, [bool]$RequireDashboardReady = $true) {
+function Get-SymppBackendHealth([string]$BackendUrl, [bool]$RequireDashboardReady = $false) {
   if ([string]::IsNullOrWhiteSpace($BackendUrl)) {
     return New-SymppBackendHealth $false $null "missing_url" $false
   }
@@ -774,7 +774,7 @@ function Get-LegacySymppBackendHealth([string]$BackendUrl, [bool]$TcpOpen) {
   }
 }
 
-function Get-SymppBackendHealthWithRetry([string]$BackendUrl, [int]$Attempts = 4, [int]$DelayMs = 500, [bool]$RequireDashboardReady = $true) {
+function Get-SymppBackendHealthWithRetry([string]$BackendUrl, [int]$Attempts = 4, [int]$DelayMs = 500, [bool]$RequireDashboardReady = $false) {
   $last = $null
   for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
     $last = Get-SymppBackendHealth $BackendUrl $RequireDashboardReady
@@ -922,7 +922,7 @@ function Test-SymppDashboardMcpProxyMatches([string]$DashboardOrigin, [string]$E
     return $false
   }
 
-  $proxyHealth = Get-SymppBackendHealthWithRetry $DashboardOrigin 2 250
+  $proxyHealth = Get-SymppBackendHealthWithRetry $DashboardOrigin 2 250 $true
   return Test-BackendContractMatches $proxyHealth $ExpectedContractFingerprint
 }
 
