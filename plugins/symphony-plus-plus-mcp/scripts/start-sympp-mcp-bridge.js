@@ -135,6 +135,47 @@ function closeLivenessProbe() {
   livenessToken = null;
 }
 
+function tryAcquireProcessLock(lockFile) {
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  try {
+    const fd = fs.openSync(lockFile, "wx");
+    const lockId = crypto.randomUUID();
+    fs.writeFileSync(fd, `${JSON.stringify({ lock_id: lockId, owner_pid: process.pid, owner_pipe: livenessPipe, owner_token: livenessToken })}\n`);
+    fs.fsyncSync(fd);
+    return { fd, lockId };
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    const owner = readJson(lockFile);
+    const ownerValid = owner && owner.lock_id && owner.owner_pipe && owner.owner_token && Number(owner.owner_pid) > 0;
+    let reclaim = ownerValid && !livenessMatches(owner.owner_pid, owner.owner_pipe, owner.owner_token);
+    if (!ownerValid) {
+      try { reclaim = Date.now() - fs.statSync(lockFile).mtimeMs > 5000; } catch (_) { reclaim = true; }
+    }
+    if (reclaim) { try { fs.unlinkSync(lockFile); trace("abandoned_lock_reclaimed"); } catch (_) { } }
+    return null;
+  }
+}
+
+function releaseProcessLock(lockFile, lock) {
+  if (!lock) return;
+  try { fs.closeSync(lock.fd); } catch (_) { }
+  const owner = readJson(lockFile);
+  if (owner && owner.lock_id === lock.lockId) { try { fs.unlinkSync(lockFile); } catch (_) { } }
+}
+
+async function enterStartupLock(runtimeFile) {
+  const lockFile = path.join(path.dirname(runtimeFile), "codex-plugin.lock");
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    try { return fs.openSync(lockFile, "a+"); } catch (error) {
+      if (!["EACCES", "EBUSY", "EPERM"].includes(error.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  throw new Error(`Timed out waiting for Symphony++ launcher startup lock: ${lockFile}`);
+}
+
 function closeGenerationWatchers() {
   for (const watcher of generationWatchers.splice(0)) {
     try { watcher.close(); } catch (_) { }
@@ -176,8 +217,7 @@ function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, marker
   const lockFile = `${markerFile}.lock`;
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
-    let lock = null;
-    try { lock = fs.openSync(lockFile, "wx"); } catch (error) { if (error.code !== "EEXIST") return null; }
+    const lock = tryAcquireProcessLock(lockFile);
     if (lock !== null) {
       try {
         generation = liveGeneration(markerFile);
@@ -199,8 +239,7 @@ function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, marker
         trace("generation_full_scan");
         return generation;
       } finally {
-        fs.closeSync(lock);
-        try { fs.unlinkSync(lockFile); } catch (_) { }
+        releaseProcessLock(lockFile, lock);
       }
     }
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
@@ -383,8 +422,7 @@ async function ensureRuntimeHealth(mcpUrl, session, protocol, runtimeFile, state
   if (healthCacheMatches(readJson(cacheFile), state, identity)) return true;
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
-    let lock = null;
-    try { lock = fs.openSync(lockFile, "wx"); } catch (error) { if (error.code !== "EEXIST") throw error; }
+    const lock = tryAcquireProcessLock(lockFile);
     if (lock !== null) {
       try {
         if (healthCacheMatches(readJson(cacheFile), state, identity)) return true;
@@ -395,8 +433,7 @@ async function ensureRuntimeHealth(mcpUrl, session, protocol, runtimeFile, state
         fs.renameSync(temporary, cacheFile);
         return true;
       } finally {
-        fs.closeSync(lock);
-        try { fs.unlinkSync(lockFile); } catch (_) { }
+        releaseProcessLock(lockFile, lock);
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -482,13 +519,16 @@ function cleanupLastDetach(runtimeFile, key) {
 async function bridge(identity, state, runtimeFile) {
   const mcpUrl = `${identity.backend}/mcp`;
   const clientId = `bridge-${process.pid}-${crypto.randomUUID().replace(/-/g, "")}`;
-  const localLease = createLocalLease(runtimeFile, state, identity);
+  let localLease = null;
+  let startupLock = null;
   let attached = false;
   let heartbeat = null;
   let sessionId = null;
   let protocol = null;
   const timeoutMs = Math.max(1, Math.min(3600, Number(process.env.SYMPP_MCP_HTTP_TIMEOUT_SEC || 300))) * 1000;
   try {
+    startupLock = await enterStartupLock(runtimeFile);
+    localLease = createLocalLease(runtimeFile, state, identity);
     let attachedResponse;
     try {
       attachedResponse = await clientLease(mcpUrl, clientId, "attach", true);
@@ -497,13 +537,15 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_backend");
       return false;
     }
+    const confirmedState = readJson(runtimeFile);
+    const confirmed = resolveStateIdentity(confirmedState, path.resolve(__dirname, ".."));
+    if (!confirmed || confirmed.runtimeKey.toLowerCase() !== identity.runtimeKey.toLowerCase()) throw new Error("runtime changed before bridge attach");
+    fs.closeSync(startupLock);
+    startupLock = null;
     const requestedHeartbeat = Math.max(5, Math.min(540, Number(process.env.SYMPP_MCP_CLIENT_HEARTBEAT_SEC || 300))) * 1000;
     const stale = Number(attachedResponse && attachedResponse.stale_after_ms) || 0;
     const heartbeatMs = stale > 1000 ? Math.min(requestedHeartbeat, Math.max(1000, stale - Math.min(60000, Math.max(1000, Math.floor(stale / 10))))) : requestedHeartbeat;
     heartbeat = setInterval(() => { clientLease(mcpUrl, clientId, "heartbeat", false); }, heartbeatMs);
-    const confirmedState = readJson(runtimeFile);
-    const confirmed = resolveStateIdentity(confirmedState, path.resolve(__dirname, ".."));
-    if (!confirmed || confirmed.runtimeKey.toLowerCase() !== identity.runtimeKey.toLowerCase()) throw new Error("runtime changed before bridge attach");
     trace("node_bridge_selected");
     diagnostic(`Symphony++ MCP bridge attached: backend=${confirmed.backend} dashboard=${confirmed.dashboard ? confirmed.dashboard + BOARD_PATH : "disabled"} runtime=${runtimeFile}`);
 
@@ -541,8 +583,9 @@ async function bridge(identity, state, runtimeFile) {
     }
     return true;
   } finally {
+    if (startupLock) { try { fs.closeSync(startupLock); } catch (_) { } }
     if (heartbeat) clearInterval(heartbeat);
-    try { fs.unlinkSync(localLease); } catch (_) { }
+    if (localLease) { try { fs.unlinkSync(localLease); } catch (_) { } }
     if (attached) await clientLease(mcpUrl, clientId, "detach", false);
     closeGenerationWatchers();
     cleanupLastDetach(runtimeFile, identity.runtimeKey);

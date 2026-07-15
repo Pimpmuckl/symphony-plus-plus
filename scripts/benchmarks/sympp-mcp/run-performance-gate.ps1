@@ -61,6 +61,8 @@ function Get-GateFailures($Metrics, $Limits) {
   if ($nodeCohorts.Count -eq 0 -or ($nodeCohorts.process_tree.median_private_bytes_per_client | Measure-Object -Maximum).Maximum -gt $Limits.exact_warm_bytes) { $failures.Add("exact.node.private_bytes") }
   if (@($Metrics.exact.node.warm | Where-Object { $_.git_invocations -ne 0 -or [int]$_.trace.payload_hash_validation -ne 0 -or [int]$_.trace.marketplace_git_validation -ne 0 -or [int]$_.trace.contract_fingerprint_resolution -ne 0 -or [int]$_.trace.artifact_manifest_resolution -ne 0 }).Count -gt 0) { $failures.Add("exact.node.warm_resolution") }
   if ([int]$Metrics.exact.node.cold.trace.installed_identity_full_validation -ne 1 -or [int]$Metrics.exact.node.cold.trace.payload_hash_validation -ne 1 -or [int]$Metrics.exact.node.cold.trace.marketplace_git_validation -ne 1 -or [int]$Metrics.exact.node.cold.trace.artifact_manifest_resolution -ne 1) { $failures.Add("exact.node.cold_resolution") }
+  if (-not $Metrics.exact.node.lock_recovery.checked -or -not $Metrics.exact.node.lock_recovery.reclaimed) { $failures.Add("exact.node.lock_recovery") }
+  if (-not $Metrics.exact.node.lifecycle_race.checked -or -not $Metrics.exact.node.lifecycle_race.healthy) { $failures.Add("exact.node.lifecycle_race") }
   if (-not $Metrics.exact.node.recovery.dashboard_healthy -or -not $Metrics.exact.node.mutation.checked -or -not $Metrics.exact.node.mutation.shortcut_rejected) { $failures.Add("exact.node.recovery_integrity") }
   $fallbackCohorts = @($Metrics.exact.fallback.warm)
   if ($fallbackCohorts.Count -eq 0 -or ($fallbackCohorts.p95_initialize_ms | Measure-Object -Maximum).Maximum -gt $Limits.fallback_warm_p95_ms -or -not $Metrics.exact.fallback.recovery.dashboard_healthy) { $failures.Add("exact.fallback.functional") }
@@ -122,6 +124,8 @@ function Write-Result($Metrics, [string[]]$Failures, $Cleanup) {
     [Console]::Out.WriteLine("  ${mode}_median_private_bytes: $(($cohorts.process_tree.median_private_bytes_per_client | Measure-Object -Maximum).Maximum)")
     [Console]::Out.WriteLine("  ${mode}_recovery_ms: $($exact.recovery.initialize_ms)")
   }
+  [Console]::Out.WriteLine("  node_abandoned_locks_reclaimed: $($Metrics.exact.node.lock_recovery.reclaimed.ToString().ToLowerInvariant())")
+  [Console]::Out.WriteLine("  node_lifecycle_race_healthy: $($Metrics.exact.node.lifecycle_race.healthy.ToString().ToLowerInvariant())")
   [Console]::Out.WriteLine("direct:")
   foreach ($name in @("clients", "elapsed_ms", "backend_processes", "backend_pid", "backend_start_ticks", "backend_private_bytes", "transport_processes", "transport_private_bytes", "host_private_bytes_delta")) {
     [Console]::Out.WriteLine("  ${name}: $($Metrics.direct.$name)")
@@ -232,7 +236,7 @@ function Invoke-SelfTest {
     warm = [pscustomobject]@{ clients = 100; p95_ms = 1; backend_processes = 1; leases_peak = 100; leases_after = 0; remote_resolution_attempts = 0 }
     direct = [pscustomobject]@{ clients = 100; elapsed_ms = 1; backend_processes = 1; backend_pid = 1; backend_start_ticks = 1; transport_processes = 0; transport_private_bytes = 0; backend_private_bytes = 1 }
     exact = [pscustomobject]@{
-      node = [pscustomobject]@{ cold = [pscustomobject]@{ trace = [pscustomobject]@{ installed_identity_full_validation = 1; payload_hash_validation = 1; marketplace_git_validation = 1; artifact_manifest_resolution = 1 } }; warm = @([pscustomobject]@{ clients = 10; p95_initialize_ms = 1; git_invocations = 0; trace = [pscustomobject]@{ payload_hash_validation = 0; marketplace_git_validation = 0; contract_fingerprint_resolution = 0; artifact_manifest_resolution = 0 }; process_tree = [pscustomobject]@{ median_private_bytes_per_client = 1 } }); recovery = [pscustomobject]@{ dashboard_healthy = $true }; mutation = [pscustomobject]@{ checked = $true; shortcut_rejected = $true } }
+      node = [pscustomobject]@{ cold = [pscustomobject]@{ trace = [pscustomobject]@{ installed_identity_full_validation = 1; payload_hash_validation = 1; marketplace_git_validation = 1; artifact_manifest_resolution = 1 } }; warm = @([pscustomobject]@{ clients = 10; p95_initialize_ms = 1; git_invocations = 0; trace = [pscustomobject]@{ payload_hash_validation = 0; marketplace_git_validation = 0; contract_fingerprint_resolution = 0; artifact_manifest_resolution = 0 }; process_tree = [pscustomobject]@{ median_private_bytes_per_client = 1 } }); lock_recovery = [pscustomobject]@{ checked = $true; reclaimed = $true }; lifecycle_race = [pscustomobject]@{ checked = $true; healthy = $true }; recovery = [pscustomobject]@{ dashboard_healthy = $true }; mutation = [pscustomobject]@{ checked = $true; shortcut_rejected = $true } }
       fallback = [pscustomobject]@{ warm = @([pscustomobject]@{ clients = 10; p95_initialize_ms = 1; process_tree = [pscustomobject]@{ median_private_bytes_per_client = 1 } }); recovery = [pscustomobject]@{ dashboard_healthy = $true } }
     }
     profiles = [pscustomobject]@{ full = @{ tools = 1; bytes = 1 }; worker = @{ tools = 1; bytes = 1 }; architect = @{ tools = 1; bytes = 1 }; coordinator = @{ tools = 1; bytes = 1 }; solo = @{ tools = 1; bytes = 1 } }
@@ -254,6 +258,8 @@ function Invoke-SelfTest {
     "exact.node.private_bytes" = { param($m) $m.exact.node.warm[0].process_tree.median_private_bytes_per_client = $MaxExactWarmBytes + 1 }
     "exact.node.warm_resolution" = { param($m) $m.exact.node.warm[0].git_invocations = 1 }
     "exact.node.cold_resolution" = { param($m) $m.exact.node.cold.trace.artifact_manifest_resolution = 2 }
+    "exact.node.lock_recovery" = { param($m) $m.exact.node.lock_recovery.reclaimed = $false }
+    "exact.node.lifecycle_race" = { param($m) $m.exact.node.lifecycle_race.healthy = $false }
     "exact.node.recovery_integrity" = { param($m) $m.exact.node.mutation.shortcut_rejected = $false }
     "exact.fallback.functional" = { param($m) $m.exact.fallback.warm[0].p95_initialize_ms = $MaxFallbackWarmP95Ms + 1 }
   }

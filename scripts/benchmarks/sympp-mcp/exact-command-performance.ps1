@@ -323,6 +323,56 @@ exit /b %ERRORLEVEL%
     }
   }
 
+  $lockRecovery = [pscustomobject]@{ checked = $false; reclaimed = $null }
+  $lifecycleRace = [pscustomobject]@{ checked = $false; healthy = $null; backend_reused = $null }
+  if ($LauncherMode -eq "NodePresent") {
+    $lockRecovery.checked = $true
+    $identityDir = Join-Path $environment.SYMPP_HOME "runtime/launcher-validation"
+    $generationMarker = @(Get-ChildItem -LiteralPath $identityDir -Filter "*.generation" -File -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($generationMarker.Count -ne 1) { throw "Exact Node launcher did not publish a generation marker." }
+    $generationLock = "$($generationMarker[0].FullName).lock"
+    $healthCache = Join-Path (Split-Path -Parent $runtimeFile) "codex-plugin-health.json"
+    $healthLock = "$healthCache.lock"
+    $staleOwner = @{ lock_id = "abandoned"; owner_pid = 2147483647; owner_pipe = "\\.\pipe\sympp-missing"; owner_token = "abandoned" } | ConvertTo-Json -Compress
+    Remove-Item -LiteralPath $generationMarker[0].FullName -Force
+    Remove-Item -LiteralPath $healthCache -Force -ErrorAction SilentlyContinue
+    Set-Content -LiteralPath $generationLock -Value $staleOwner -Encoding utf8NoBOM
+    Set-Content -LiteralPath $healthLock -Value $staleOwner -Encoding utf8NoBOM
+    $reclaimedBefore = [int](Get-TraceCounts)["abandoned_lock_reclaimed"]
+    $lockClient = Start-ExactClient $environment
+    Wait-ClientsReady @($lockClient) $StartupTimeoutSec
+    Stop-ExactClient $lockClient
+    $reclaimedAfter = [int](Get-TraceCounts)["abandoned_lock_reclaimed"]
+    $lockRecovery.reclaimed = $reclaimedAfter - $reclaimedBefore -ge 2 -and
+      -not (Test-Path -LiteralPath $generationLock) -and -not (Test-Path -LiteralPath $healthLock)
+    if (-not $lockRecovery.reclaimed) { throw "Exact Node launcher did not reclaim abandoned validation locks." }
+
+    $lifecycleRace.checked = $true
+    [Console]::Error.WriteLine("Racing a fresh attach against last-detach cleanup...")
+    $previousBackendPid = $backend.Id
+    $cold.process.StandardInput.Close()
+    $raceClient = Start-ExactClient $environment
+    Wait-ClientsReady @($raceClient) $StartupTimeoutSec
+    if (-not $cold.process.WaitForExit(60000)) { throw "Previous anchor did not exit during lifecycle race." }
+    $cold.process.Dispose()
+    $cold.process = $null
+    $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSec)
+    do {
+      try { $raceState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json } catch { $raceState = $null }
+      $raceOwners = @(Get-ListenerPids $backendPort)
+      $lifecycleRace.healthy = $raceState -and $raceOwners.Count -eq 1 -and
+        [int]$raceOwners[0] -eq [int]$raceState.backend.pid -and (Test-Dashboard ([string]$raceState.frontend.url))
+      if ($lifecycleRace.healthy) { break }
+      Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if (-not $lifecycleRace.healthy) { throw "Attach versus last-detach cleanup did not leave one healthy runtime." }
+    $lifecycleRace.backend_reused = [int]$raceState.backend.pid -eq $previousBackendPid
+    $cold = $raceClient
+    $runtimeState = $raceState
+    $backend = Get-Process -Id ([int]$raceState.backend.pid) -ErrorAction Stop
+    $backendStartTicks = $backend.StartTime.ToUniversalTime().Ticks
+  }
+
   [Console]::Error.WriteLine("Killing the artifact backend and measuring automatic recovery...")
   Stop-Process -Id $backend.Id -Force -ErrorAction Stop
   [void]$backend.WaitForExit(30000)
@@ -360,6 +410,8 @@ exit /b %ERRORLEVEL%
     backend_port = $backendPort
     cold = $coldMetrics
     warm = @($warmResults)
+    lock_recovery = $lockRecovery
+    lifecycle_race = $lifecycleRace
     recovery = $recoveryMetrics
     mutation = $mutation
   }
