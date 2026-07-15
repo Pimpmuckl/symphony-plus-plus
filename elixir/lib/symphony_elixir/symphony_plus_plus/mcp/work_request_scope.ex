@@ -214,16 +214,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
   @spec filter_scoped_work_requests(repo(), [term()], filters(), term(), keyword()) :: term()
   def filter_scoped_work_requests(repo, work_requests, filters, %Session{} = session, opts) do
+    work_request_ids = Enum.map(work_requests, & &1.id)
+
+    with {:ok, repo_scopes_by_work_request_id} <-
+           WorkRequestRepository.list_repo_scopes_by_work_request(repo, work_request_ids) do
+      opts = Keyword.put(opts, :repo_scopes_by_work_request_id, repo_scopes_by_work_request_id)
+      reduce_scoped_work_requests(repo, work_requests, filters, session, opts)
+    end
+  end
+
+  defp reduce_scoped_work_requests(repo, work_requests, filters, session, opts) do
     Enum.reduce_while(work_requests, {:ok, []}, fn work_request, {:ok, scoped} ->
       case work_request_matches_filters?(repo, work_request, filters, opts) do
-        {:ok, true} ->
-          filter_policy_allowed_work_request(repo, session, work_request, scoped, opts)
-
-        {:ok, false} ->
-          {:cont, {:ok, scoped}}
-
-        {:error, reason} ->
-          {:halt, {:error, reason}}
+        {:ok, true} -> filter_policy_allowed_work_request(repo, session, work_request, scoped, opts)
+        {:ok, false} -> {:cont, {:ok, scoped}}
+        {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
     |> case do
@@ -442,7 +447,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
   @spec authorize_work_request_policy(repo(), term(), atom(), term(), String.t(), keyword()) :: authorization_result()
   def authorize_work_request_policy(repo, %Session{} = session, action, %WorkRequest{} = work_request, tool, opts \\ []) do
-    with {:ok, repo_scopes} <- work_request_repo_scope_payloads(repo, work_request) do
+    with {:ok, repo_scopes} <- work_request_repo_scope_payloads(repo, work_request, opts) do
       target =
         Target.work_request(work_request.id,
           repo: work_request.repo,
@@ -653,7 +658,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   end
 
   defp work_request_matches_filters?(repo, %WorkRequest{} = work_request, filters, opts) do
-    with {:ok, repo_scopes} <- work_request_repo_scope_payloads(repo, work_request) do
+    with {:ok, repo_scopes} <- work_request_repo_scope_payloads(repo, work_request, opts) do
       {:ok,
        repo_scope_matches_filters?(repo_scopes, filters, opts) and
          Enum.all?(filters, fn
@@ -715,14 +720,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
     [repo_scope_trusted_remotes: work_request_repo_scope_trusted_remotes(config)]
   end
 
-  defp work_request_repo_scope_payloads(repo, %WorkRequest{} = work_request) do
-    with {:ok, repo_scopes} <- WorkRequestRepository.list_repo_scopes(repo, work_request.id) do
-      scopes =
-        [%{repo: work_request.repo, base_branch: work_request.base_branch} | Enum.map(repo_scopes, &%{repo: &1.repo, base_branch: &1.base_branch})]
-        |> Enum.filter(&is_binary(&1.repo))
-        |> Enum.uniq_by(&{&1.repo, &1.base_branch})
+  defp work_request_repo_scope_payloads(repo, %WorkRequest{} = work_request, opts) do
+    repo_scopes_result =
+      case Keyword.fetch(opts, :repo_scopes_by_work_request_id) do
+        {:ok, repo_scopes_by_work_request_id} -> {:ok, Map.get(repo_scopes_by_work_request_id, work_request.id, [])}
+        :error -> WorkRequestRepository.list_repo_scopes(repo, work_request.id)
+      end
 
-      {:ok, scopes}
+    with {:ok, repo_scopes} <- repo_scopes_result do
+      {:ok,
+       [%{repo: work_request.repo, base_branch: work_request.base_branch} | Enum.map(repo_scopes, &%{repo: &1.repo, base_branch: &1.base_branch})]
+       |> Enum.filter(&is_binary(&1.repo))
+       |> Enum.uniq_by(&{&1.repo, &1.base_branch})}
     end
   end
 

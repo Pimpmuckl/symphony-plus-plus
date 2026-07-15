@@ -30,12 +30,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
          uri = "sympp://work-packages/#{work_package_id}/task_plan.md",
          version = plan_version(state.plan_version_material),
          {:ok, virtual_payload} <- WorkerContext.virtual_file_payload(state, "task_plan.md", uri: uri, version: version) do
-      toon = WorkerContext.encode_tool_payload(virtual_payload)
-
       {:ok,
        ToolResult.agent_tool_result(
          Map.put(virtual_payload, "text", markdown),
-         toon
+         fn -> WorkerContext.encode_tool_payload(virtual_payload) end
        )}
     end
   end

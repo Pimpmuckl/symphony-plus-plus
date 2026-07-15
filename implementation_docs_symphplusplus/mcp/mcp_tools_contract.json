@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "mcp_contract_fingerprint": "68b83b92617e1083bb031305175ccc96c3fbcbee64cd4069a38f45ba19ef16e0",
+  "mcp_contract_fingerprint": "3ba388da8e165c5e1abbd5749ebca4a8f34909904d6e3495cc8d18fb4f8e3f06",
   "schema_source": "ToolCatalog owns the live runtime tool surfaces. This JSON publishes those names plus the canonical MCP contract fingerprint for scripts, docs, and release artifacts.",
   "compatibility_policy": "Version 4 replaces provider-specific review profiles and round attachment with one optional generic review requirement and complete_review. Consumers should read role tool names from discovery_policy and per-tool arguments from tool_schemas.",
   "human_text_policy": "Human-facing long text fields are Markdown unless a field is explicitly a compact label, status, identifier, branch, PR URL, or other machine-readable value. Dashboard renderers must not turn raw Markdown HTML into executable or trusted HTML.",
@@ -307,7 +307,7 @@
     {"name": "create_child_work_package", "required_arguments": ["package"], "optional_arguments": []},
     {"name": "mint_child_worker_key", "required_arguments": ["work_package_id"], "optional_arguments": ["template"], "template_policy": "Optional template may set capabilities, expires_at, and claimed_by only."},
     {"name": "revoke_child_worker_key", "required_arguments": ["grant_id", "reason"], "optional_arguments": []},
-    {"name": "list_work_requests", "required_arguments": [], "optional_arguments": ["status"]},
+    {"name": "list_work_requests", "required_arguments": [], "optional_arguments": ["cursor", "limit", "status"], "pagination_policy": "Defaults to 50 authorized rows per page, accepts limits from 1 through 200, rejects values above 200, and scans a bounded candidate window per call. Sparse authorization can produce a short or empty page with next_cursor. Follow next_cursor until absent when completeness matters."},
     {"name": "read_work_request", "required_arguments": ["work_request_id"], "optional_arguments": []},
     {"name": "read_plan", "required_arguments": ["work_request_id"], "optional_arguments": ["view"]},
     {"name": "read_delivery_board", "required_arguments": ["work_request_id"], "optional_arguments": [], "current_work_request_required_arguments": [], "current_work_request_optional_arguments": ["work_request_id"], "current_work_request_policy": "Omit work_request_id only when the claimed architect session has exactly one current WorkRequest. Explicit ids are still scope-checked."},

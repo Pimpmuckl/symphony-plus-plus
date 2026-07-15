@@ -3,6 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
+      optional_positive_integer_argument: 2,
       optional_string_argument: 2,
       optional_string_argument: 3,
       required_argument: 2
@@ -64,6 +65,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     "cleanup_work_package_worktree"
   ]
   @work_request_product_tree_views ToolCatalog.work_request_product_tree_views()
+  @default_list_limit 50
+  @max_list_limit 200
+  @list_candidate_batch_size @max_list_limit + 1
+  @max_list_candidate_batches 3
 
   @spec tools() :: [String.t()]
   def tools, do: @tools
@@ -90,17 +95,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp call_tool("list_work_requests", config, nil, arguments, opts) do
     with :ok <- authorize_local_trusted_work_request_read_tool_call(opts, "list_work_requests"),
          {:ok, status} <- optional_work_request_status(arguments),
+         {:ok, pagination} <- list_pagination(arguments),
          filters = WorkRequestScope.work_request_list_filters(%{}, status),
-         {:ok, work_requests} <- WorkRequestService.list(config.repo, WorkRequestScope.work_request_repository_filters(filters)) do
+         {:ok, work_requests, next_cursor} <-
+           local_work_request_page(
+             config.repo,
+             WorkRequestScope.work_request_repository_filters(filters),
+             pagination
+           ) do
       cards = WorkRequestPayloads.work_request_cards(work_requests)
 
       {:ok,
-       ToolResult.agent_tool_result(%{
-         "work_requests" => cards,
-         "total_count" => length(cards),
-         "scope" => %{"visibility" => "local_ledger"},
-         "filters" => WorkRequestPayloads.work_request_filter(status)
-       })}
+       ToolResult.agent_tool_result(
+         work_request_list_payload(
+           cards,
+           %{"visibility" => "local_ledger"},
+           status,
+           pagination.limit,
+           next_cursor
+         )
+       )}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "list_work_requests", "reason" => reason}}
       {:error, code, message, data} -> {:error, code, message, data}
@@ -113,23 +127,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, status} <- optional_work_request_status(arguments),
+         {:ok, pagination} <- list_pagination(arguments),
          {:ok, filters, scope} <-
            WorkRequestScope.scoped_work_request_filters(config.repo, session, handoff_phase_scope?: false),
          policy_session = WorkRequestScope.read_scoped_work_request_session(config.repo, session, scope, :work_request_read),
          :ok <- WorkRequestScope.authorize_work_request_list_policy(policy_session, scope, "list_work_requests", repo_scope_opts),
          filters = WorkRequestScope.work_request_list_filters(filters, status),
-         {:ok, work_requests} <- WorkRequestService.list(config.repo, WorkRequestScope.work_request_repository_filters(filters)),
-         {:ok, work_requests} <-
-           WorkRequestScope.filter_scoped_work_requests(config.repo, work_requests, filters, policy_session, repo_scope_opts) do
+         {:ok, work_requests, next_cursor} <-
+           scoped_work_request_page(
+             config.repo,
+             WorkRequestScope.work_request_repository_filters(filters),
+             filters,
+             policy_session,
+             repo_scope_opts,
+             pagination
+           ) do
       cards = WorkRequestPayloads.work_request_cards(work_requests)
 
-      {:ok,
-       ToolResult.agent_tool_result(%{
-         "work_requests" => cards,
-         "total_count" => length(cards),
-         "scope" => scope,
-         "filters" => WorkRequestPayloads.work_request_filter(status)
-       })}
+      {:ok, ToolResult.agent_tool_result(work_request_list_payload(cards, scope, status, pagination.limit, next_cursor))}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "list_work_requests", "reason" => reason}}
       {:error, reason} -> architect_error(reason, "list_work_requests")
@@ -650,6 +665,115 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
         {:tool_error, "invalid_status"}
     end
   end
+
+  defp list_pagination(arguments) do
+    with {:ok, limit} <- optional_positive_integer_argument(arguments, "limit"),
+         limit = limit || @default_list_limit,
+         :ok <- require_list_limit(limit),
+         {:ok, cursor} <- optional_string_argument(arguments, "cursor"),
+         {:ok, cursor} <- decode_list_cursor(cursor) do
+      {:ok, %{limit: limit, cursor: cursor}}
+    end
+  end
+
+  defp require_list_limit(limit) when limit <= @max_list_limit, do: :ok
+  defp require_list_limit(_limit), do: {:tool_error, "limit_exceeds_maximum"}
+
+  defp decode_list_cursor(nil), do: {:ok, nil}
+
+  defp decode_list_cursor(cursor) do
+    with {:ok, json} <- Base.url_decode64(cursor, padding: false),
+         {:ok, %{"inserted_at" => inserted_at, "id" => id}} <- Jason.decode(json),
+         {:ok, inserted_at, _offset} <- DateTime.from_iso8601(inserted_at),
+         true <- is_binary(id) and String.trim(id) != "" do
+      {:ok, {inserted_at, id}}
+    else
+      _invalid -> {:tool_error, "invalid_cursor"}
+    end
+  end
+
+  defp local_work_request_page(repo, repository_filters, %{limit: limit, cursor: cursor}) do
+    with {:ok, candidates} <- WorkRequestService.list_page(repo, repository_filters, limit + 1, cursor) do
+      {work_requests, additional} = Enum.split(candidates, limit)
+      next_cursor = if additional == [], do: nil, else: encode_list_cursor(List.last(work_requests))
+      {:ok, work_requests, next_cursor}
+    end
+  end
+
+  defp scoped_work_request_page(repo, repository_filters, filters, session, opts, %{limit: limit, cursor: cursor}) do
+    page = %{limit: limit, cursor: cursor, collected: [], batches_left: @max_list_candidate_batches}
+
+    collect_scoped_work_request_page(
+      repo,
+      repository_filters,
+      filters,
+      session,
+      opts,
+      page
+    )
+  end
+
+  defp collect_scoped_work_request_page(repo, repository_filters, filters, session, opts, page) do
+    with {:ok, candidates} <-
+           WorkRequestService.list_page(repo, repository_filters, @list_candidate_batch_size, page.cursor),
+         {:ok, visible} <- WorkRequestScope.filter_scoped_work_requests(repo, candidates, filters, session, opts) do
+      collected = page.collected ++ visible
+
+      cond do
+        length(collected) > page.limit ->
+          {work_requests, _additional} = Enum.split(collected, page.limit)
+          {:ok, work_requests, encode_list_cursor(List.last(work_requests))}
+
+        length(candidates) < @list_candidate_batch_size ->
+          {:ok, collected, nil}
+
+        page.batches_left == 1 ->
+          {:ok, collected, encode_list_cursor(List.last(candidates))}
+
+        true ->
+          collect_scoped_work_request_page(
+            repo,
+            repository_filters,
+            filters,
+            session,
+            opts,
+            %{
+              page
+              | cursor: list_cursor_position(List.last(candidates)),
+                collected: collected,
+                batches_left: page.batches_left - 1
+            }
+          )
+      end
+    end
+  end
+
+  defp encode_list_cursor(%WorkRequest{} = work_request) do
+    work_request
+    |> list_cursor_position()
+    |> then(fn {inserted_at, id} ->
+      %{"inserted_at" => DateTime.to_iso8601(inserted_at), "id" => id}
+      |> Jason.encode!()
+      |> Base.url_encode64(padding: false)
+    end)
+  end
+
+  defp list_cursor_position(%WorkRequest{inserted_at: %DateTime{} = inserted_at, id: id}) when is_binary(id),
+    do: {inserted_at, id}
+
+  defp work_request_list_payload(cards, scope, status, limit, next_cursor) do
+    %{
+      "work_requests" => cards,
+      "total_count" => length(cards),
+      "scope" => scope,
+      "filters" => WorkRequestPayloads.work_request_filter(status),
+      "limit" => limit
+    }
+    |> maybe_put_next_cursor(next_cursor)
+  end
+
+  defp maybe_put_next_cursor(payload, nil), do: payload
+  defp maybe_put_next_cursor(payload, next_cursor), do: Map.put(payload, "next_cursor", next_cursor)
 
   defp optional_product_tree_view(arguments) do
     case Map.fetch(arguments, "view") do

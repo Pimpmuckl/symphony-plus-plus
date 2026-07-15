@@ -697,7 +697,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     schema(%{"grant_id" => string_schema(), "reason" => string_schema()}, ["grant_id", "reason"])
   end
 
-  def architect_tool_input_schema("list_work_requests"), do: schema(%{"status" => string_schema()}, [])
+  def architect_tool_input_schema("list_work_requests") do
+    schema(
+      %{
+        "status" => string_schema(),
+        "limit" => integer_schema() |> Map.merge(%{"minimum" => 1, "maximum" => 200, "description" => "Page size. Defaults to 50; values above 200 are rejected."}),
+        "cursor" => described_string_schema("Opaque cursor returned by the previous list_work_requests page.")
+      },
+      []
+    )
+  end
 
   def architect_tool_input_schema("read_work_request"), do: schema(%{"work_request_id" => string_schema()}, ["work_request_id"])
 

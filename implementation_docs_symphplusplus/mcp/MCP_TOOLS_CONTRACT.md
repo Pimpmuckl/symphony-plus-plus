@@ -219,6 +219,13 @@ grant scope. Reads that can intentionally target sibling WorkRequests,
 status/question tools, durable decision tools, and package tools keep explicit
 target ids.
 
+`list_work_requests` returns at most 50 authorized WorkRequests by default and
+accepts `limit` values from 1 through 200. Values above 200 are rejected rather
+than clamped. When `next_cursor` is present, pass it back as `cursor`; callers
+that need a complete list must continue until `next_cursor` is absent. A page
+may be short or empty when authorization is sparse because each call scans a
+bounded candidate window before returning a continuation.
+
 `plan_slice` defaults ordinary PR-backed work to
 `standard_pr`; reserve `mcp` for MCP servers, protocols, tools, or plugins.
 The selected WorkRequest supplies the default delivery repo and target base

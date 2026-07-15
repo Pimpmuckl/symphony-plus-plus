@@ -133,6 +133,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
+  @spec list_page(repo(), map() | keyword(), pos_integer(), nil | {DateTime.t(), String.t()}) ::
+          {:ok, [WorkRequest.t()]} | {:error, error()}
+  def list_page(repo, filters, limit, cursor)
+      when is_atom(repo) and (is_map(filters) or is_list(filters)) and is_integer(limit) and limit > 0 do
+    work_requests =
+      filters
+      |> normalize_keys()
+      |> list_query()
+      |> page_after(cursor)
+      |> then(&repo.all(from(work_request in &1, limit: ^limit)))
+
+    {:ok, work_requests}
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
   @spec list_repo_scopes(repo(), String.t()) :: {:ok, [RepoScope.t()]} | {:error, error()}
   def list_repo_scopes(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
     repo_scopes =
@@ -144,6 +160,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       )
 
     {:ok, repo_scopes}
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  @spec list_repo_scopes_by_work_request(repo(), [String.t()]) ::
+          {:ok, %{optional(String.t()) => [RepoScope.t()]}} | {:error, error()}
+  def list_repo_scopes_by_work_request(_repo, []), do: {:ok, %{}}
+
+  def list_repo_scopes_by_work_request(repo, work_request_ids) when is_atom(repo) and is_list(work_request_ids) do
+    repo_scopes =
+      repo.all(
+        from(scope in RepoScope,
+          where: scope.work_request_id in ^work_request_ids,
+          order_by: [asc: scope.work_request_id, asc: scope.scope_key, asc: scope.id]
+        )
+      )
+
+    {:ok, Enum.group_by(repo_scopes, & &1.work_request_id)}
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
@@ -436,6 +470,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       _filter, query ->
         query
     end)
+  end
+
+  defp page_after(query, nil), do: query
+
+  defp page_after(query, {%DateTime{} = inserted_at, id}) when is_binary(id) do
+    from(work_request in query,
+      where:
+        work_request.inserted_at > ^inserted_at or
+          (work_request.inserted_at == ^inserted_at and work_request.id > ^id)
+    )
   end
 
   defp include_archived?(filters) do

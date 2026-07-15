@@ -696,7 +696,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, arguments} ->
         case release_current_assignment(arguments, server) do
           {:ok, result, updated_server} ->
-            {Response.response(id, response_result(ToolResult.release_tool_result(result), server)), updated_server}
+            tool_result = build_release_tool_result(server, result)
+            {Response.response(id, tool_result), updated_server}
 
           {:tool_error, reason} ->
             {:error, code, message, data} = invalid_params_error(@assignment_release_tool, reason)
@@ -711,8 +712,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp handle_session_claim_tool(@local_assignment_claim_tool, params, id, %__MODULE__{} = server) do
     case claim_local_assignment(params, server) do
       {:ok, result, session} ->
+        tool_result = build_tool_result(server, fn -> ToolResult.claim_tool_result(result) end)
+
         {
-          Response.response(id, response_result(ToolResult.claim_tool_result(result), server)),
+          Response.response(id, tool_result),
           %{server | session: session, session_refresh_required: false}
         }
 
@@ -724,8 +727,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp handle_session_claim_tool(@local_architect_assignment_claim_tool, params, id, %__MODULE__{} = server) do
     case claim_local_architect_assignment(params, server) do
       {:ok, result, session} ->
+        tool_result = build_tool_result(server, fn -> ToolResult.claim_tool_result(result) end)
+
         {
-          Response.response(id, response_result(ToolResult.claim_tool_result(result), server)),
+          Response.response(id, tool_result),
           %{server | session: session, session_refresh_required: false}
         }
 
@@ -2196,12 +2201,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch_request_state({:ok, params}, method, id, %__MODULE__{} = server) do
     case require_current_session_claim_for_bound_call(server, method, params) do
       {:ok, server} ->
-        case dispatch(method, params, server) do
+        case dispatch_with_text_profile(method, params, server) do
           {:ok, result} ->
-            {Response.response(id, response_result(result, server)), server}
+            {Response.response(id, result), server}
 
           {:ok, result, %__MODULE__{} = updated_server} ->
-            {Response.response(id, response_result(result, server)), updated_server}
+            {Response.response(id, result), updated_server}
 
           {:error, code, message, data} ->
             {Response.error(id, code, message, data), server}
@@ -2216,13 +2221,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     {Response.error(id, code, message, data), server}
   end
 
-  defp response_result(result, %__MODULE__{config: %Config{mode: :stdio, surface_profile: :full}}), do: result
-  defp response_result(result, %__MODULE__{}), do: ToolResult.canonical_agent_result(result)
+  defp dispatch_with_text_profile(method, params, %__MODULE__{} = server) do
+    build_tool_result(server, fn -> dispatch(method, params, server) end)
+  end
+
+  defp build_tool_result(%__MODULE__{} = server, fun) when is_function(fun, 0) do
+    ToolResult.with_text_profile(response_text_profile(server), fun)
+  end
+
+  defp build_release_tool_result(%__MODULE__{} = server, result) do
+    build_tool_result(server, fn -> ToolResult.release_tool_result(result) end)
+  end
+
+  defp response_text_profile(%__MODULE__{config: %Config{mode: :stdio, surface_profile: :full}}), do: :full
+  defp response_text_profile(%__MODULE__{}), do: :canonical
 
   defp dispatch_notification({:ok, params}, method, %__MODULE__{} = server) do
     case require_current_session_claim_for_bound_call(server, method, params) do
       {:ok, server} ->
-        case dispatch(method, params, server) do
+        case dispatch_with_text_profile(method, params, server) do
           {:ok, _result} ->
             server
 

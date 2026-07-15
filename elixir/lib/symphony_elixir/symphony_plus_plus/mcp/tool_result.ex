@@ -6,45 +6,51 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ClaimToolText
 
   @summary_fields ~w(action binding_cleared claimed_by grant_role id outcome reachable status summary title uri work_package_id work_request_id)
+  @text_profile_key {__MODULE__, :text_profile}
+
+  @spec with_text_profile(:canonical | :full, (-> result)) :: result when result: term()
+  def with_text_profile(profile, fun) when profile in [:canonical, :full] and is_function(fun, 0) do
+    previous = Process.get(@text_profile_key)
+    Process.put(@text_profile_key, profile)
+
+    try do
+      fun.()
+    after
+      if is_nil(previous), do: Process.delete(@text_profile_key), else: Process.put(@text_profile_key, previous)
+    end
+  end
 
   @spec tool_result(term()) :: map()
   def tool_result(payload) do
     payload = compact_tool_payload(payload)
-
-    %{
-      "content" => [%{"type" => "text", "text" => WorkerContext.encode_tool_payload(payload)}],
-      "structuredContent" => payload,
-      "isError" => false
-    }
+    agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(payload) end)
   end
 
   @spec claim_tool_result(term()) :: map()
-  def claim_tool_result(payload), do: agent_tool_result(payload, ClaimToolText.claim(payload))
+  def claim_tool_result(payload), do: result(payload, ClaimToolText.claim(payload))
 
   @spec release_tool_result(term()) :: map()
-  def release_tool_result(payload), do: agent_tool_result(payload, ClaimToolText.release(payload))
+  def release_tool_result(payload), do: agent_tool_result(payload, fn -> ClaimToolText.release(payload) end)
 
   @spec agent_tool_result(term()) :: map()
   def agent_tool_result(payload) do
     payload = compact_tool_payload(payload)
-    agent_tool_result(payload, WorkerContext.encode_tool_payload(payload))
+    agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(payload) end)
   end
 
   @spec read_tool_result(term()) :: map()
-  def read_tool_result(payload), do: agent_tool_result(payload, WorkerContext.encode_tool_payload(payload))
+  def read_tool_result(payload), do: agent_tool_result(payload, fn -> WorkerContext.encode_tool_payload(payload) end)
 
-  @spec agent_tool_result(term(), String.t()) :: map()
-  def agent_tool_result(payload, agent_text) when is_binary(agent_text) do
-    %{
-      "content" => [%{"type" => "text", "text" => agent_text}],
-      "structuredContent" => payload,
-      "isError" => false
-    }
-  end
+  @spec agent_tool_result(term(), String.t() | (-> String.t())) :: map()
+  def agent_tool_result(payload, agent_text) when is_binary(agent_text),
+    do: result(payload, text_for_profile(payload, fn -> agent_text end))
+
+  def agent_tool_result(payload, encoder) when is_function(encoder, 0),
+    do: result(payload, text_for_profile(payload, encoder))
 
   @spec architect_agent_tool_result(term(), atom()) :: map()
   def architect_agent_tool_result(payload, kind) do
-    agent_tool_result(payload, ArchitectContext.encode_tool_payload(payload, kind))
+    agent_tool_result(payload, fn -> ArchitectContext.encode_tool_payload(payload, kind) end)
   end
 
   @spec canonical_agent_result(map()) :: map()
@@ -55,6 +61,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   end
 
   def canonical_agent_result(result), do: result
+
+  defp text_for_profile(payload, encoder) do
+    case Process.get(@text_profile_key, :full) do
+      :canonical -> payload |> summary_payload() |> WorkerContext.encode_tool_payload()
+      :full -> encoder.()
+    end
+  end
+
+  defp result(payload, agent_text) do
+    %{
+      "content" => [%{"type" => "text", "text" => agent_text}],
+      "structuredContent" => payload,
+      "isError" => false
+    }
+  end
 
   defp compact_tool_payload(%{} = payload) do
     payload
