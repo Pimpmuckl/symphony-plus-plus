@@ -140,7 +140,7 @@ function Get-SymppPluginPayloadFiles([string]$PluginRoot) {
 function Get-SymppPluginGenerationKey([string]$PluginRoot, [string]$SourcePluginRoot, [string]$SourceRoot) {
   $parts = [System.Collections.Generic.List[string]]::new()
   foreach ($entry in @(Get-SymppPluginPayloadFiles $PluginRoot) + @(Get-SymppPluginPayloadFiles $SourcePluginRoot)) {
-    $parts.Add("$($entry.relative_path)|$($entry.file.Length)|$($entry.file.LastWriteTimeUtc.Ticks)")
+    $parts.Add("$($entry.relative_path)|$($entry.file.Length)|$($entry.file.LastWriteTimeUtc.Ticks)|$(Get-FileSha256 $entry.file.FullName)")
   }
   foreach ($path in @(
       (Join-Path $PluginRoot ".sympp-source-revision"),
@@ -149,7 +149,7 @@ function Get-SymppPluginGenerationKey([string]$PluginRoot, [string]$SourcePlugin
     )) {
     $file = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
     if (-not $file) { return $null }
-    $parts.Add("$([System.IO.Path]::GetFullPath($path))|$($file.Length)|$($file.LastWriteTimeUtc.Ticks)")
+    $parts.Add("$([System.IO.Path]::GetFullPath($path))|$($file.Length)|$($file.LastWriteTimeUtc.Ticks)|$(Get-FileSha256 $file.FullName)")
   }
   return Get-SymppStringSha256 ($parts -join "`n")
 }

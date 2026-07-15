@@ -82,6 +82,7 @@ Assert-True ($cmd.Contains('-CleanupPreparedRuntime') -and $source.Contains('if 
 Assert-True ($source.Contains('if ($PrepareRuntimeOnly)') -and $source.IndexOf('if ($PrepareRuntimeOnly)') -lt $source.LastIndexOf('Invoke-HttpMcpBridge')) "Prepared cold runtime must exit before any PowerShell stdio bridge"
 Assert-True ($preflightCall -ge 0 -and $preflightCall -lt $stdinRead -and $node.Contains('trace("warm_miss_health");')) "Node health mismatches must route through cold recovery before consuming stdin"
 Assert-True ($node.Contains('confirmed.runtimeKey.toLowerCase()') -and $node.Contains('trace("warm_miss_state");')) "Concurrent runtime rotation must route through cold recovery"
+Assert-True ($node.Contains('/^(disabled|failed)/.test(String(state.frontend.status))')) "Node warm attach must accept every launcher-produced disabled or failed headless status"
 Assert-True ($node.Contains('SYMPP_STARTUP_LOCK_TIMEOUT_SEC || 1800') -and $node.Contains('trace("warm_miss_lock");')) "Node startup locking must honor the configured timeout and remain recoverable"
 Assert-True ((@([regex]::Matches($node, 'require\("([^./][^"]*)"\)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique) -join ",") -eq "child_process,crypto,fs,http,net,os,path,readline") "Node bridge must use standard-library modules only"
 & (Get-Command node.exe -ErrorAction Stop).Source --check $nodePath
@@ -107,6 +108,30 @@ try {
 }
 Assert-True (-not (Test-BridgeLeaseActive $liveLease @{})) "Missing process must be stale"
 Assert-True ((Get-Content -LiteralPath $helperPath -Raw) -notmatch 'Get-CimInstance|Get-WmiObject') "Lease validation must not use CIM/WMI"
+
+$generationRoot = Join-Path $PSScriptRoot (".generation-" + [guid]::NewGuid().ToString("N"))
+try {
+  $installedRoot = Join-Path $generationRoot "installed"
+  $sourceRoot = Join-Path $generationRoot "source"
+  $sourcePluginRoot = Join-Path $sourceRoot "plugin"
+  foreach ($directory in @($installedRoot, $sourcePluginRoot, (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp"))) {
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  }
+  Set-Content -LiteralPath (Join-Path $installedRoot "payload.txt") -Value "first" -NoNewline
+  Set-Content -LiteralPath (Join-Path $sourcePluginRoot "payload.txt") -Value "first" -NoNewline
+  Set-Content -LiteralPath (Join-Path $installedRoot ".sympp-source-revision") -Value ("a" * 40) -NoNewline
+  Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json") -Value "{}" -NoNewline
+  Set-Content -LiteralPath (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json") -Value "{}" -NoNewline
+  $payloadPath = Join-Path $installedRoot "payload.txt"
+  $originalWriteTime = [System.IO.File]::GetLastWriteTimeUtc($payloadPath)
+  $beforeGeneration = Get-SymppPluginGenerationKey $installedRoot $sourcePluginRoot $sourceRoot
+  Set-Content -LiteralPath $payloadPath -Value "other" -NoNewline
+  [System.IO.File]::SetLastWriteTimeUtc($payloadPath, $originalWriteTime)
+  $afterGeneration = Get-SymppPluginGenerationKey $installedRoot $sourcePluginRoot $sourceRoot
+  Assert-True ($beforeGeneration -ne $afterGeneration) "Generation identity must detect same-length payload replacement with restored mtime"
+} finally {
+  Remove-Item -LiteralPath $generationRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 $benchmark = & (Join-Path $PSScriptRoot "warm-attach-benchmark.ps1") | ConvertFrom-Json
 Assert-True ($benchmark.clients -eq 100 -and $benchmark.p95_ms -lt 2000) "100-client PowerShell fallback warm attach p95 must stay below 2 seconds"

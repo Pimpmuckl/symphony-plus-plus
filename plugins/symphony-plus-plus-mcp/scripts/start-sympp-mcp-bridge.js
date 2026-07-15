@@ -80,7 +80,7 @@ function listPayloadFiles(root) {
 function fileGenerationPart(file, label) {
   const stat = fs.statSync(file, { bigint: true });
   const ticks = stat.mtimeNs / 100n + DOTNET_EPOCH_TICKS;
-  return `${label}|${stat.size}|${ticks}`;
+  return `${label}|${stat.size}|${ticks}|${sha256(fs.readFileSync(file))}`;
 }
 
 function generationKey(pluginRoot, sourcePluginRoot, sourceRoot) {
@@ -363,7 +363,7 @@ function resolveStateIdentity(state, pluginRoot, cachedIdentity) {
 
   const artifactStatic = state.runtime_mode === "artifact" && state.backend.managed === true && state.frontend.status === "artifact_static";
   const managed = state.backend.managed === true && state.frontend.managed === true;
-  const headless = state.backend.managed === true && !dashboard && /^(disabled|failed)$/.test(String(state.frontend.status));
+  const headless = state.backend.managed === true && !dashboard && /^(disabled|failed)/.test(String(state.frontend.status));
   const external = state.backend.managed !== true && state.frontend.managed !== true && state.backend.status === "external_loopback" && state.frontend.status === "external_loopback";
   if (!artifactStatic && !managed && !headless && !external) return null;
   const key = runtimeKey(backend, dashboard, contract);
