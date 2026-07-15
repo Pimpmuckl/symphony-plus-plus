@@ -367,7 +367,8 @@ function resolveStateIdentity(state, pluginRoot, cachedIdentity) {
       (process.env.SYMPP_BACKEND_URL && trimOrigin(process.env.SYMPP_BACKEND_URL) !== backend) ||
       (process.env.SYMPP_DASHBOARD_ORIGIN && trimOrigin(process.env.SYMPP_DASHBOARD_ORIGIN) !== dashboard)) return null;
 
-  const artifactStatic = state.runtime_mode === "artifact" && state.backend.managed === true && state.frontend.status === "artifact_static";
+  const artifactStatic = state.runtime_mode === "artifact" && state.frontend.status === "artifact_static" &&
+    (state.backend.managed === true || (state.backend.status === "external_loopback" && state.frontend.managed !== true));
   const managed = state.backend.managed === true && state.frontend.managed === true;
   const headless = state.backend.managed === true && !dashboard && /^(disabled|failed)/.test(String(state.frontend.status));
   const external = state.backend.managed !== true && state.frontend.managed !== true && state.backend.status === "external_loopback" && state.frontend.status === "external_loopback";
@@ -698,7 +699,11 @@ async function main() {
   if (!await bridge(identity, state, runtimeFile)) process.exit(WARM_MISS);
 }
 
-main().catch((error) => {
-  diagnostic(error && error.stack ? error.stack : String(error));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    diagnostic(error && error.stack ? error.stack : String(error));
+    process.exit(1);
+  });
+} else {
+  module.exports = { resolveStateIdentity };
+}
