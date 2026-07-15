@@ -93,6 +93,8 @@ Assert-True ((@([regex]::Matches($node, 'require\("([^./][^"]*)"\)') | ForEach-O
 Assert-True ($LASTEXITCODE -eq 0) "Node bridge must parse"
 & (Get-Command node.exe -ErrorAction Stop).Source $nodePath --runtime-supported
 Assert-True ($LASTEXITCODE -eq 0) "Current Node runtime must satisfy the conservative bridge check"
+& (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "state-identity-tests.js")
+Assert-True ($LASTEXITCODE -eq 0) "Node state identity tests must pass"
 $process = Get-Process -Id $PID
 $startIdentity = Get-ProcessStartIdentity $process
 $processMap = @{ [string]$PID = [pscustomobject]@{ exists = $true; start_time_utc_ticks = $startIdentity } }

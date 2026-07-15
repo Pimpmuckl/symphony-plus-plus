@@ -1,0 +1,57 @@
+"use strict";
+
+const assert = require("assert/strict");
+const path = require("path");
+const { resolveStateIdentity } = require("../../scripts/start-sympp-mcp-bridge.js");
+
+const pluginRoot = path.resolve("test-installed/codex/plugins/cache/marketplace/symphony-plus-plus-mcp/0.1.9");
+const contract = "a".repeat(64);
+const revision = "b".repeat(40);
+const backend = "http://127.0.0.1:19998";
+const runtimeKey = `contract=${contract};backend=${backend};dashboard=${backend}`;
+const identity = {
+  contract_fingerprint: contract,
+  revision,
+  generation_key: "c".repeat(64),
+  generation_marker: "marker",
+  generation_watch_version: 1,
+};
+const state = {
+  plugin_root: pluginRoot,
+  runtime_key: runtimeKey,
+  runtime_kind: "external_loopback",
+  runtime_mode: "artifact",
+  backend: {
+    status: "external_loopback",
+    url: backend,
+    managed: false,
+    pid: null,
+    source_revision: revision,
+    expected_contract_fingerprint: contract,
+    contract_fingerprint: contract,
+  },
+  frontend: { status: "artifact_static", origin: backend, managed: false, pid: null },
+};
+
+function changed(update) {
+  const copy = structuredClone(state);
+  update(copy);
+  return copy;
+}
+
+const resolved = resolveStateIdentity(state, pluginRoot, identity);
+assert.ok(resolved, "cutover external backend with artifact frontend must use the Node bridge");
+assert.equal(resolved.revision, revision, "installed revision identity must be preserved");
+assert.equal(resolved.contract, contract, "installed contract identity must be preserved");
+
+assert.equal(resolveStateIdentity(changed((value) => { value.backend.status = "started"; }), pluginRoot, identity), null);
+assert.equal(resolveStateIdentity(changed((value) => { value.frontend.managed = true; }), pluginRoot, identity), null);
+assert.equal(resolveStateIdentity(changed((value) => { value.runtime_mode = "external"; }), pluginRoot, identity), null);
+assert.equal(resolveStateIdentity(changed((value) => { value.backend.expected_contract_fingerprint = "d".repeat(64); }), pluginRoot, identity), null);
+assert.equal(resolveStateIdentity(changed((value) => { value.backend.url = "http://example.com:19998"; }), pluginRoot, identity), null);
+assert.equal(resolveStateIdentity(changed((value) => { value.frontend.origin = "http://example.com:19998"; }), pluginRoot, identity), null);
+assert.equal(resolveStateIdentity(changed((value) => { value.runtime_key = "wrong"; }), pluginRoot, identity), null);
+assert.equal(resolveStateIdentity(state, path.join(pluginRoot, "other"), identity), null);
+assert.equal(resolveStateIdentity(state, pluginRoot, null), null);
+
+process.stdout.write("Node cutover state identity tests passed.\n");
