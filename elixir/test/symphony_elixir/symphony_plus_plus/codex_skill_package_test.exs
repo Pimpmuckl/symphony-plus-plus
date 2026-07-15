@@ -575,7 +575,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     assert File.read!(@mcp_plugin_readme_path) =~ "codex plugin add symphony-plus-plus-mcp@symphony-plus-plus"
     assert File.read!(@mcp_plugin_readme_path) =~ "codex plugin marketplace upgrade"
     assert File.read!(@mcp_plugin_readme_path) =~ "marketplace-installed plugin"
-    assert File.read!(@mcp_plugin_readme_path) =~ "failure recovery is an explicit cutover rerun"
+    assert File.read!(@mcp_plugin_readme_path) =~ "next MCP-enabled Codex session starts it again"
     assert File.read!(@mcp_plugin_readme_path) =~ "diagnose-mcp-lifecycle.ps1 -MarketplaceName symphony-plus-plus -Doctor"
     assert File.read!(@mcp_plugin_readme_path) =~ "cannot inspect"
     assert File.read!(@mcp_plugin_readme_path) =~ "smoke-sympp-mcp-http.ps1 -RepoRoot ."
@@ -593,16 +593,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
 
     assert %{
              "symphony_plus_plus" => %{
-               "url" => "http://127.0.0.1:19998/mcp",
-               "startup_timeout_sec" => 10.0,
+               "type" => "stdio",
+               "command" => "cmd.exe",
+               "args" => ["/d", "/s", "/c", "scripts\\start-sympp-mcp.cmd"],
+               "cwd" => ".",
+               "startup_timeout_sec" => 360.0,
                "tool_timeout_sec" => 300.0
              }
            } = documented_mcp_server_map(mcp_config)
 
     server = documented_mcp_server_map(mcp_config)["symphony_plus_plus"]
-    refute Map.has_key?(server, "command")
-    refute Map.has_key?(server, "args")
-    refute Map.has_key?(server, "cwd")
+    refute Map.has_key?(server, "url")
 
     serialized = Jason.encode!(manifest) <> Jason.encode!(mcp_config)
     refute serialized =~ "SYMPP_WORK_KEY_SECRET"

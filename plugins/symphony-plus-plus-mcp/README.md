@@ -19,19 +19,17 @@ plugin session.
 
 This plugin intentionally bundles:
 
-- `mcpServers: "./.mcp.json"` for native Codex streamable HTTP at
-  `http://127.0.0.1:19998/mcp`. New sessions connect directly to the singleton,
-  so they retain no `cmd.exe` or PowerShell bridge. Run the marketplace-backed
-  cutover helper before the first session and again after singleton failure;
-  direct HTTP intentionally does not bootstrap or supervise a missing backend.
+- `mcpServers: "./.mcp.json"` for the bundled command-backed launcher. The first
+  MCP-enabled Codex session starts the local backend/dashboard singleton when it
+  is missing; later sessions reuse it and bridge stdio to its HTTP MCP endpoint.
   Installed artifact runtimes serve the packaged dashboard from the backend
   origin by default.
 - The same `assets/splusplus-logo.png` icon used by the default Symphony++ plugin.
 - `assets/sympp-runtime-artifacts.json`, a stable release-channel pointer for
   prebuilt installed-runtime artifacts.
 - The MCP-mode Solo Session, worker, coordinator, architect, and WorkPackage skills.
-- The legacy local MCP launcher for draining pre-cutover sessions plus the Solo
-  wrapper script needed after marketplace/cache packaging. The cutover helper
+- The local MCP launcher plus the Solo wrapper script needed after
+  marketplace/cache packaging. The cutover helper
   discovers the full Codex marketplace source clone automatically, so normal
   marketplace installs do not require users to set `SYMPP_REPO_ROOT`.
 
@@ -47,9 +45,9 @@ enabled broadly for non-MCP work. Dedicated MCP homes should enable this
 companion plugin instead of the default plugin so the session has the full MCP
 skill set and the `symphony_plus_plus` tool namespace from one package. Do not
 enable both packages in the same Codex home unless you intentionally want both
-skill prefixes visible. Codex connects this companion directly to the loopback
-HTTP singleton; background backend/frontend logs remain under the local runtime
-log directory instead of streaming through every MCP call.
+skill prefixes visible. Codex starts a quiet bridge that launches or reuses the
+loopback HTTP singleton; background backend/frontend logs remain under the local
+runtime log directory instead of streaming through every MCP call.
 
 ## Activation
 
@@ -72,7 +70,7 @@ next action:
 .\plugins\symphony-plus-plus\scripts\diagnose-mcp-lifecycle.ps1 -MarketplaceName symphony-plus-plus -Doctor
 ```
 
-The doctor checks cache, direct HTTP config, singleton reachability, and package
+The doctor checks cache, launcher config, singleton reachability, and package
 fingerprints against the Codex marketplace snapshot. It cannot inspect tools
 already registered inside an open Codex model session; if the doctor is healthy
 but tools are still absent, restart or reload the dedicated MCP-enabled session.
@@ -80,22 +78,19 @@ but tools are still absent, restart or reload the dedicated MCP-enabled session.
 Keep this companion out of generic worker, `worker_smart`, review-suite, and
 `codex review` configs so ordinary review and execution sessions stay MCP-clean.
 
-Before starting a newly installed dedicated Codex session, run
-`scripts/sympp-mcp-cutover.ps1` from the marketplace source clone. It upgrades
-and validates the marketplace-installed plugin, starts or reuses exactly one
-compatible singleton, records it as `external_loopback`, and verifies HTTP MCP
-before the operator starts a fresh session. It never resolves runtime code from
-a developer checkout unless explicit debug validation selected that checkout.
-Use `codex plugin marketplace upgrade` to install the new marketplace payload
-before this cutover step.
-Rerun the same helper after singleton failure. Existing stdio sessions may
-drain; the cutover does not restore per-agent wrappers for new sessions.
+Use `codex plugin marketplace upgrade` to install a new marketplace payload,
+then start or reload the dedicated Codex session. Its launcher resolves runtime
+code from the marketplace-installed plugin payload, starts a compatible
+singleton when none is healthy, and reuses an existing one when possible. The
+cutover helper remains available from the marketplace source clone for explicit
+operator preflight and repair; ordinary startup and crash recovery do not
+require it.
 
 Runtime identity is the agent-facing MCP contract fingerprint plus the backend
 and dashboard endpoints. In artifact mode, the dashboard URL is normally
 `http://127.0.0.1:19998/sympp/board`; a separate `19999` listener is only
-expected for source/Vite dashboard development. Direct Codex connections do not
-own singleton lifetime; failure recovery is an explicit cutover rerun.
+expected for source/Vite dashboard development. If the singleton disappears,
+the next MCP-enabled Codex session starts it again.
 
 To prove the daemon independently of Codex plugin loading, run this from the
 marketplace source checkout after cutover or `mix sympp.cockpit` is running.

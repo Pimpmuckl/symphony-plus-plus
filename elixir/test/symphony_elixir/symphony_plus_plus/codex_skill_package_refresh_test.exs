@@ -92,13 +92,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshTest do
           assert File.read!(mcp_architect_skill_path) == File.read!(@mcp_plugin_architect_skill_path)
 
           mcp_server = documented_mcp_server_map(mcp_config)["symphony_plus_plus"]
-          assert mcp_server["url"] == "http://127.0.0.1:19998/mcp"
-          assert mcp_server["startup_timeout_sec"] == 10.0
+          assert mcp_server["type"] == "stdio"
+          assert mcp_server["command"] == "cmd.exe"
+          assert mcp_server["args"] == ["/d", "/s", "/c", "scripts\\start-sympp-mcp.cmd"]
+          assert mcp_server["cwd"] == "."
+          assert mcp_server["startup_timeout_sec"] == 360.0
           assert mcp_server["tool_timeout_sec"] == 300.0
-          refute Map.has_key?(mcp_server, "type")
-          refute Map.has_key?(mcp_server, "command")
-          refute Map.has_key?(mcp_server, "args")
-          refute Map.has_key?(mcp_server, "cwd")
+          refute Map.has_key?(mcp_server, "url")
           refute Map.has_key?(mcp_server, "env")
         end
       after

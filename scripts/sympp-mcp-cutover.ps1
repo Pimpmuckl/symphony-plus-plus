@@ -243,23 +243,30 @@ function Invoke-MarketplaceUpgrade([string]$CodexHomePath) {
 }
 
 function Resolve-InstalledMcpPluginRoot([string]$CacheRoot) {
-  return Resolve-InstalledPluginRoot $CacheRoot $McpPluginName ".mcp.json" $true
+  return Resolve-InstalledPluginRoot $CacheRoot $McpPluginName "scripts\start-sympp-mcp.cmd" $true
 }
 
-function Assert-InstalledDirectMcpConfig([string]$InstalledPluginRoot, [int]$BackendPort) {
+function Assert-InstalledCommandMcpConfig([string]$InstalledPluginRoot, [int]$BackendPort) {
   $configPath = Require-File (Join-Path $InstalledPluginRoot ".mcp.json") "Installed MCP config"
+  Require-File (Join-Path $InstalledPluginRoot "scripts\start-sympp-mcp.cmd") "Installed MCP launcher command" | Out-Null
   $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
   $servers = if ($config.PSObject.Properties["mcp_servers"]) { $config.mcp_servers } else { $config }
-  $server = $servers.PSObject.Properties["symphony_plus_plus"].Value
+  $serverProperty = $servers.PSObject.Properties["symphony_plus_plus"]
   $expectedUrl = "http://127.0.0.1:$BackendPort/mcp"
 
-  if ($null -eq $server -or [string]$server.url -ne $expectedUrl) {
-    throw "Installed Symphony++ MCP config must use direct streamable HTTP at $expectedUrl."
+  if ($null -eq $serverProperty) {
+    throw "Installed Symphony++ MCP config does not define symphony_plus_plus."
   }
-  foreach ($stdioField in @("command", "args", "cwd")) {
-    if ($server.PSObject.Properties[$stdioField]) {
-      throw "Installed Symphony++ MCP config mixes direct HTTP with stdio field '$stdioField'."
-    }
+  $server = $serverProperty.Value
+  if ($server.PSObject.Properties["url"]) {
+    throw "Installed Symphony++ MCP config must use the command-backed launcher, not direct HTTP."
+  }
+  if ([string]$server.type -ne "stdio" -or [string]$server.command -ne "cmd.exe" -or [string]$server.cwd -ne ".") {
+    throw "Installed Symphony++ MCP config must use the stdio cmd.exe launcher from the plugin root."
+  }
+  $args = @($server.args)
+  if ($args -notcontains "/c" -or -not @($args | Where-Object { [string]$_ -match "scripts[\\/]start-sympp-mcp\.cmd" })) {
+    throw "Installed Symphony++ MCP config must invoke scripts/start-sympp-mcp.cmd through cmd.exe /c."
   }
 
   return $expectedUrl
@@ -1200,10 +1207,10 @@ if ($cacheStatus.refreshNeeded) {
   }
 }
 
-Write-Section "Installed Direct HTTP Validation"
-$installedMcpUrl = Assert-InstalledDirectMcpConfig $installedPluginRoot $BackendPort
+Write-Section "Installed Launcher Validation"
+$installedMcpUrl = Assert-InstalledCommandMcpConfig $installedPluginRoot $BackendPort
 if (-not $Json) {
-  Write-Host "MCP URL: $installedMcpUrl"
+  Write-Host "Launcher target: $installedMcpUrl"
 }
 
 Write-Section "Installed Runtime Setup"
@@ -1300,7 +1307,7 @@ if (-not $Json) {
 
 $summary = [pscustomobject]@{
   status = "ok"
-  message = "Installed Symphony++ direct HTTP cutover completed."
+  message = "Installed Symphony++ MCP cutover completed."
   sourceRevision = $sourceRevision
   mcpContractFingerprint = if ($runtimeState.backend.PSObject.Properties["contract_fingerprint"]) { $runtimeState.backend.contract_fingerprint } else { $null }
   marketplaceSourceRoot = $marketplaceSourceRoot

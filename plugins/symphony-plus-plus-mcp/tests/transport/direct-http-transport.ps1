@@ -20,20 +20,22 @@ function Assert-StaticContract {
   $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
   $server = $config.symphony_plus_plus
 
-  if ([string]$server.url -ne "http://127.0.0.1:19998/mcp") {
-    throw "plugin MCP URL is not the fixed loopback singleton"
+  if ($server.PSObject.Properties["url"]) {
+    throw "plugin MCP config bypasses the cold-start launcher"
   }
-  if ([double]$server.startup_timeout_sec -ne 10.0) {
-    throw "plugin MCP startup timeout must fail fast after cutover preflight"
+  if ([string]$server.type -ne "stdio" -or [string]$server.command -ne "cmd.exe" -or [string]$server.cwd -ne ".") {
+    throw "plugin MCP config is not command-backed stdio"
   }
-  foreach ($field in @("command", "args", "cwd")) {
-    if ($server.PSObject.Properties[$field]) {
-      throw "plugin MCP config still contains stdio field '$field'"
-    }
+  if ([double]$server.startup_timeout_sec -ne 360.0) {
+    throw "plugin MCP startup timeout does not cover singleton cold start"
+  }
+  $args = @($server.args)
+  if ($args -notcontains "/c" -or -not @($args | Where-Object { [string]$_ -match "scripts[\\/]start-sympp-mcp\.cmd" })) {
+    throw "plugin MCP config does not invoke the bundled launcher"
   }
 
   $cutover = Get-Content -LiteralPath $cutoverPath -Raw
-  foreach ($required in @("Assert-InstalledDirectMcpConfig", "Existing S++ Processes (Preserved)", "external_loopback")) {
+  foreach ($required in @("Assert-InstalledCommandMcpConfig", "Existing S++ Processes (Preserved)", "external_loopback")) {
     if (-not $cutover.Contains($required)) {
       throw "cutover is missing '$required'"
     }
