@@ -1964,6 +1964,7 @@ if (-not [string]::IsNullOrWhiteSpace($CleanupRuntimeKey)) {
 }
 
 $pluginRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+if ($PrepareRuntimeOnly) { [void](Resolve-SymppInstalledMarketplaceIdentity $pluginRoot) }
 $runtimeFile = Resolve-RuntimeFile
 $bridgeMode = Get-EnvMode "SYMPP_MCP_BRIDGE_MODE" "http" @("http", "direct_stdio")
 if (-not $ValidateOnly -and -not $PrepareRuntimeOnly -and $bridgeMode -eq "http" -and [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT)) {

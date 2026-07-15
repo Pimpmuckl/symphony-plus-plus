@@ -32,7 +32,7 @@ $profileCaps = [ordered]@{
   solo = @{ tools = 30; bytes = 20000 }
 }
 $resultCaps = [ordered]@{ claim = 600; read = 1200; progress = 500 }
-$exactP95Caps = [ordered]@{ 1 = 1529; 10 = 1391; 100 = 109674 }
+$exactP95Caps = @{ 1 = 1529; 10 = 1391; 100 = 109674 }
 $thresholds = @{
   cold_ms = $MaxColdMs; warm_p95_ms = $MaxWarmP95Ms; exact_warm_p95_ms = $exactP95Caps
   exact_warm_bytes = $MaxExactWarmBytes; fallback_warm_p95_ms = $MaxFallbackWarmP95Ms; direct_ms = $MaxDirectMs
@@ -57,7 +57,7 @@ function Get-GateFailures($Metrics, $Limits) {
   if ($Metrics.direct.transport_private_bytes -ne 0) { $failures.Add("direct.wrapper_private_bytes") }
   if ($Metrics.direct.backend_private_bytes -gt $Limits.backend_bytes) { $failures.Add("direct.backend_private_bytes") }
   $nodeCohorts = @($Metrics.exact.node.warm | Where-Object { $_.clients -ge 10 })
-  if ($nodeCohorts.Count -eq 0 -or @($Metrics.exact.node.warm | Where-Object { -not $Limits.exact_warm_p95_ms.Contains([int]$_.clients) -or $_.p95_initialize_ms -gt $Limits.exact_warm_p95_ms[[int]$_.clients] }).Count -gt 0) { $failures.Add("exact.node.p95_ms") }
+  if ($nodeCohorts.Count -eq 0 -or @($Metrics.exact.node.warm | Where-Object { -not $Limits.exact_warm_p95_ms.ContainsKey([int]$_.clients) -or $_.p95_initialize_ms -gt $Limits.exact_warm_p95_ms[[int]$_.clients] }).Count -gt 0) { $failures.Add("exact.node.p95_ms") }
   if ($nodeCohorts.Count -eq 0 -or ($nodeCohorts.process_tree.median_private_bytes_per_client | Measure-Object -Maximum).Maximum -gt $Limits.exact_warm_bytes) { $failures.Add("exact.node.private_bytes") }
   if (@($Metrics.exact.node.warm | Where-Object { $_.git_invocations -ne 0 -or [int]$_.trace.payload_hash_validation -ne 0 -or [int]$_.trace.marketplace_git_validation -ne 0 -or [int]$_.trace.contract_fingerprint_resolution -ne 0 -or [int]$_.trace.artifact_manifest_resolution -ne 0 }).Count -gt 0) { $failures.Add("exact.node.warm_resolution") }
   if ([int]$Metrics.exact.node.cold.trace.installed_identity_full_validation -ne 1 -or [int]$Metrics.exact.node.cold.trace.payload_hash_validation -ne 1 -or [int]$Metrics.exact.node.cold.trace.marketplace_git_validation -ne 1 -or [int]$Metrics.exact.node.cold.trace.artifact_manifest_resolution -ne 1) { $failures.Add("exact.node.cold_resolution") }
@@ -198,7 +198,7 @@ function Invoke-ExactCommandProbe([string]$Mode, [string]$Cohorts, [switch]$Chec
   if (-not $CheckMutation) { [void]$info.ArgumentList.Add("-SkipMutationCheck") }
   $info.WorkingDirectory = $repoRoot
   $run = Invoke-CapturedProcess $info 900000 "exact shipped command ($Mode)"
-  if ($run.exit_code -ne 0) { throw "exact shipped command ($Mode) failed: $($run.stderr.Trim())" }
+  if ($run.exit_code -ne 0) { throw "exact shipped command ($Mode) failed: $(([string]$run.stderr).Trim()) $(([string]$run.stdout).Trim())" }
   return $run.stdout | ConvertFrom-Json
 }
 
@@ -209,7 +209,7 @@ function Invoke-IsolatedMix([string[]]$Arguments, [hashtable]$Environment) {
   foreach ($arg in $arguments) { [void]$info.ArgumentList.Add($arg) }
   $info.WorkingDirectory = Join-Path $repoRoot "elixir"; Set-IsolatedEnvironment $info $Environment
   $result = Invoke-CapturedProcess $info 600000 "isolated mix command"
-  if ($result.exit_code -ne 0) { throw "isolated mix command failed: $($result.stderr.Trim())" }
+  if ($result.exit_code -ne 0) { throw "isolated mix command failed: $(([string]$result.stderr).Trim())" }
   return $result.stdout
 }
 
@@ -257,6 +257,8 @@ function Invoke-SelfTest {
     "exact.node.recovery_integrity" = { param($m) $m.exact.node.mutation.shortcut_rejected = $false }
     "exact.fallback.functional" = { param($m) $m.exact.fallback.warm[0].p95_initialize_ms = $MaxFallbackWarmP95Ms + 1 }
   }
+  $baseFailures = @(Get-GateFailures $base $thresholds)
+  if ($baseFailures.Count -ne 0) { throw "valid baseline unexpectedly failed: $($baseFailures -join ',')" }
   $detected = [System.Collections.Generic.List[string]]::new()
   foreach ($expected in $cases.Keys) {
     $metrics = $base | ConvertTo-Json -Depth 8 | ConvertFrom-Json
@@ -320,7 +322,7 @@ try {
   $coldWatch = [System.Diagnostics.Stopwatch]::StartNew(); $launcherProcess = Start-IsolatedLauncher $environment
   $deadline = [DateTime]::UtcNow.AddMinutes(15)
   do {
-    if ($launcherProcess.HasExited) { throw "isolated launcher exited early: $($launcherProcess.GateStderrTask.GetAwaiter().GetResult().Trim())" }
+    if ($launcherProcess.HasExited) { throw "isolated launcher exited early: $(([string]$launcherProcess.GateStderrTask.GetAwaiter().GetResult()).Trim())" }
     if (Test-Path $runtimeFile) { try { $runtime = Get-Content $runtimeFile -Raw | ConvertFrom-Json } catch { $runtime = $null } }
     $leases = @(Get-ChildItem (Join-Path $tempRoot "state/codex-plugin-leases") -Filter "bridge-*.json" -File -ErrorAction SilentlyContinue)
     if ($runtime -and [int]$runtime.backend.port -eq $backendPort -and $leases.Count -eq 1) { break }
@@ -339,11 +341,11 @@ try {
   foreach ($arg in @("-NoProfile", "-File", $directProbe, "-Url", "http://127.0.0.1:$backendPort/mcp", "-ClientCounts", [string]$Clients)) { [void]$directInfo.ArgumentList.Add($arg) }
   $directInfo.WorkingDirectory = $repoRoot; Set-IsolatedEnvironment $directInfo $environment
   $directWatch = [System.Diagnostics.Stopwatch]::StartNew(); $directRun = Invoke-CapturedProcess $directInfo 120000 "direct HTTP probe"; $directWatch.Stop()
-  if ($directRun.exit_code -ne 0) { throw "direct HTTP probe failed: $($directRun.stdout.Trim()) $($directRun.stderr.Trim())" }
+  if ($directRun.exit_code -ne 0) { throw "direct HTTP probe failed: $(([string]$directRun.stdout).Trim()) $(([string]$directRun.stderr).Trim())" }
   $direct = ConvertFrom-DirectProbe @($directRun.stdout -split "`r?`n") $directWatch.Elapsed.TotalMilliseconds
   [Console]::Error.WriteLine("Measuring the shipped command with Node present and missing...")
-  $exactNode = Invoke-ExactCommandProbe "NodePresent" "1,10,100" -CheckMutation
   $exactFallback = Invoke-ExactCommandProbe "NodeMissing" "1,10"
+  $exactNode = Invoke-ExactCommandProbe "NodePresent" "1,10,100" -CheckMutation
   [Console]::Error.WriteLine("Measuring MCP profiles and representative payloads...")
   $payloadOutput = Invoke-IsolatedMix @("run", "--no-start", $payloadProbe) $environment
   $payloadJson = @($payloadOutput -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1)
@@ -352,7 +354,7 @@ try {
   $revision = [string](& git -C $repoRoot rev-parse HEAD); $metrics = [pscustomobject]@{ revision = $revision.Trim(); cold = $cold; warm = $warm; direct = $direct; exact = [pscustomobject]@{ node = $exactNode; fallback = $exactFallback }; profiles = $payloads.profiles; results = $payloads.results }
 } catch {
   $failure = $_.Exception.Message
-  $backendLog = @(Get-ChildItem (Join-Path $tempRoot "logs") -Filter "backend-*.err.log" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -Last 1); if ($backendLog) { $detail = (Get-Content $backendLog.FullName -Raw).Trim(); if ($detail.Length -gt 2000) { $detail = $detail.Substring($detail.Length - 2000) }; $failure += "`nbackend stderr: $detail" }
+  $backendLog = @(Get-ChildItem (Join-Path $tempRoot "logs") -Filter "backend-*.err.log" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -Last 1); if ($backendLog) { $detail = ([string](Get-Content $backendLog.FullName -Raw)).Trim(); if ($detail.Length -gt 2000) { $detail = $detail.Substring($detail.Length - 2000) }; $failure += "`nbackend stderr: $detail" }
 } finally {
   if ($launcherProcess) {
     try { $launcherProcess.StandardInput.Close() } catch { }

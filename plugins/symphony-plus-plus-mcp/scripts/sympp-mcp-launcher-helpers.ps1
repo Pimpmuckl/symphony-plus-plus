@@ -174,7 +174,27 @@ function Get-InstalledPluginPayloadIdentity([string]$PluginRoot, [string]$Source
 }
 
 function Test-InstalledPluginPayloadMatchesMarketplaceSource([string]$PluginRoot, [string]$SourceRoot) {
-  return -not [string]::IsNullOrWhiteSpace((Get-InstalledPluginPayloadIdentity $PluginRoot $SourceRoot))
+  $packageRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($PluginRoot))
+  $sourcePluginRoot = Join-Path $SourceRoot ("plugins/" + (Split-Path -Leaf $packageRoot))
+  $relativePaths = @(
+    ".codex-plugin/plugin.json",
+    ".mcp.json",
+    "scripts/start-sympp-mcp.ps1",
+    "scripts/sympp-launcher-runtime.ps1",
+    "scripts/sympp-mcp-artifact-manifest.ps1",
+    "scripts/sympp-mcp-artifact-runtime.ps1",
+    "scripts/sympp-mcp-process-runtime.ps1",
+    "scripts/sympp-mcp-launcher-helpers.ps1"
+  )
+  $checked = 0
+  foreach ($relativePath in $relativePaths) {
+    $installedPath = Join-Path $PluginRoot $relativePath
+    if (-not (Test-Path -LiteralPath $installedPath)) { continue }
+    $sourcePath = Join-Path $sourcePluginRoot $relativePath
+    if (-not (Test-Path -LiteralPath $sourcePath) -or (Get-FileSha256 $installedPath) -ne (Get-FileSha256 $sourcePath)) { return $false }
+    $checked += 1
+  }
+  return $checked -gt 0
 }
 
 function Get-SymppInstalledIdentityCachePath([string]$PluginRoot) {
@@ -233,7 +253,10 @@ function Resolve-SymppInstalledMarketplaceIdentity([string]$PluginRoot) {
   $generationKey = Get-SymppPluginGenerationKey $versionRoot $sourcePluginRoot $sourceRoot
   $cachePath = Get-SymppInstalledIdentityCachePath $versionRoot
   $cached = Read-SymppInstalledIdentityCache $cachePath $versionRoot $sourceRoot $generationKey
-  if ($cached) { return $cached }
+  if ($cached) {
+    $script:SymppPreparedInstalledIdentity = $cached
+    return $cached
+  }
 
   Write-SymppLauncherTrace "installed_identity_full_validation"
   $installedRevision = Get-SymppPinnedSourceRevision $versionRoot
@@ -268,12 +291,42 @@ function Resolve-SymppInstalledMarketplaceIdentity([string]$PluginRoot) {
     payload_identity = $payloadIdentity.ToLowerInvariant()
   }
   Write-SymppInstalledIdentityCache $cachePath $identity
+  $script:SymppPreparedInstalledIdentity = $identity
   return $identity
 }
 
 function Resolve-RepoRootFromMarketplaceCache([string]$PluginRoot) {
-  $identity = Resolve-SymppInstalledMarketplaceIdentity $PluginRoot
-  if ($identity) { return [string]$identity.source_root }
+  $versionRoot = [System.IO.Path]::GetFullPath($PluginRoot)
+  if ($script:SymppPreparedInstalledIdentity -and
+      [System.StringComparer]::OrdinalIgnoreCase.Equals([string]$script:SymppPreparedInstalledIdentity.plugin_root, $versionRoot)) {
+    return [string]$script:SymppPreparedInstalledIdentity.source_root
+  }
+  try {
+    $identity = Resolve-SymppInstalledMarketplaceIdentity $versionRoot
+    if ($identity) { return [string]$identity.source_root }
+  } catch {
+    # The PowerShell fallback retains the legacy artifact/source selection contract.
+  }
+  $packageRoot = Split-Path -Parent $versionRoot
+  $marketplaceRoot = Split-Path -Parent $packageRoot
+  $cacheRoot = Split-Path -Parent $marketplaceRoot
+  $pluginsRoot = Split-Path -Parent $cacheRoot
+  if ((Split-Path -Leaf $cacheRoot) -ne "cache" -or (Split-Path -Leaf $pluginsRoot) -ne "plugins") { return $null }
+
+  $codexHome = Split-Path -Parent $pluginsRoot
+  $marketplaceName = Split-Path -Leaf $marketplaceRoot
+  $candidate = [System.IO.Path]::GetFullPath((Join-Path $codexHome ".tmp/marketplaces/$marketplaceName"))
+  if ((Test-SymphonySourceRoot $candidate) -and
+      (Test-Path -LiteralPath (Join-Path $candidate "plugins/symphony-plus-plus/.codex-plugin/plugin.json")) -and
+      (Test-Path -LiteralPath (Join-Path $candidate "plugins/symphony-plus-plus-mcp/.codex-plugin/plugin.json"))) {
+    $installedRevision = Get-SymppPinnedSourceRevision $versionRoot
+    $marketplaceRevision = Get-SymppMarketplaceSourceRevision $candidate
+    if (-not $installedRevision -or -not $marketplaceRevision -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals($installedRevision, $marketplaceRevision) -or
+        -not (Test-SymppMarketplaceContractMatchesRevision $candidate $marketplaceRevision) -or
+        -not (Test-InstalledPluginPayloadMatchesMarketplaceSource $versionRoot $candidate)) { return $null }
+    return $candidate
+  }
   return $null
 }
 

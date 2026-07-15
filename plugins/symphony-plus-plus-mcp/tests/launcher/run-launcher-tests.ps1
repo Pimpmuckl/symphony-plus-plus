@@ -74,7 +74,7 @@ $cmdPath = Join-Path $pluginRoot "scripts/start-sympp-mcp.cmd"
 $nodePath = Join-Path $pluginRoot "scripts/start-sympp-mcp-bridge.js"
 $cmd = Get-Content -LiteralPath $cmdPath -Raw
 $node = Get-Content -LiteralPath $nodePath -Raw
-Assert-True ($cmd.Contains('where node.exe') -and $cmd.Contains('-PrepareRuntimeOnly') -and $cmd.Contains('goto :run_powershell')) "Bootstrap must select Node opportunistically and preserve PowerShell fallback"
+Assert-True ($cmd.Contains('where node.exe') -and $cmd.Contains('-PrepareRuntimeOnly') -and $cmd.Contains('goto :run_pwsh')) "Bootstrap must select Node opportunistically and preserve PowerShell fallback"
 Assert-True ($source.Contains('if ($PrepareRuntimeOnly)') -and $source.IndexOf('if ($PrepareRuntimeOnly)') -lt $source.LastIndexOf('Invoke-HttpMcpBridge')) "Prepared cold runtime must exit before any PowerShell stdio bridge"
 Assert-True ((@([regex]::Matches($node, 'require\("([^./][^"]*)"\)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique) -join ",") -eq "child_process,crypto,fs,http,os,path,readline") "Node bridge must use standard-library modules only"
 & (Get-Command node.exe -ErrorAction Stop).Source --check $nodePath

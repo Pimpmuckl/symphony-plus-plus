@@ -356,7 +356,7 @@ exit /b %ERRORLEVEL%
   $result = [pscustomobject]@{
     revision = $revision
     launcher_mode = $LauncherMode
-    command = "cmd.exe /d /s /c scripts\\start-sympp-mcp.cmd"
+    command = "cmd.exe /d /s /c scripts\start-sympp-mcp.cmd"
     backend_port = $backendPort
     cold = $coldMetrics
     warm = @($warmResults)
