@@ -4299,6 +4299,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end
   end
 
+  test "hydrated dashboard rejects unsupported methods" do
+    assert json_response(post(build_conn(), "/api/v1/sympp/operator/dashboard/hydrated", %{}), 405) ==
+             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+  end
+
   test "local operator dashboard returns compact WorkRequest board details and lazy full detail", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request =

@@ -386,17 +386,23 @@ export function enqueueLatestTask<T>(
   queue.pending = queue.pending === null ? task : mergePending(queue.pending, task);
   if (queue.active) return queue.active;
 
-  queue.active = (async () => {
+  return startLatestTaskQueue(queue, run);
+}
+
+function startLatestTaskQueue<T>(queue: LatestTaskQueue<T>, run: (task: T) => Promise<void>) {
+  const active = (async () => {
     while (queue.pending !== null) {
       const next = queue.pending;
       queue.pending = null;
       await run(next);
     }
   })().finally(() => {
-    queue.active = null;
+    if (queue.active === active) queue.active = null;
+    if (queue.pending !== null) return startLatestTaskQueue(queue, run);
   });
 
-  return queue.active;
+  queue.active = active;
+  return active;
 }
 
 export type WorkRequestMutationPatch = Partial<WorkRequestCard> & { id: string };

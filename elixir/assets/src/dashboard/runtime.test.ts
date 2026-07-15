@@ -57,6 +57,23 @@ describe("dashboard runtime mutation helpers", () => {
     expect(runs).toEqual(["first", "reconnect"]);
   });
 
+  it("drains work enqueued during queue finalization", async () => {
+    const queue = createLatestTaskQueue<string>();
+    const runs: string[] = [];
+    const run = async (task: string) => {
+      runs.push(task);
+      if (task === "first") {
+        void Promise.resolve().then(() => {
+          queueMicrotask(() => void enqueueLatestTask(queue, "late", run));
+        });
+      }
+    };
+
+    await enqueueLatestTask(queue, "first", run);
+    expect(runs).toEqual(["first", "late"]);
+    expect(queue).toEqual({ active: null, pending: null });
+  });
+
   it("keeps cold loading split and uses one endpoint after hydration", () => {
     expect(dashboardRefreshPath(null)).toBe("/dashboard");
     expect(dashboardRefreshPath({ deferred: { dashboard_sections: true } })).toBe("/dashboard");

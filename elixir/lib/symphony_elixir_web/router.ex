@@ -99,6 +99,7 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/sympp/board", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/dashboard", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/dashboard/deferred", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/sympp/operator/dashboard/hydrated", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/dashboard/events", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/settings", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/sympp/operator/work-requests/:work_request_id/state", ObservabilityApiController, :method_not_allowed)
