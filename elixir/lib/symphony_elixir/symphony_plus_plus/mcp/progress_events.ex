@@ -316,8 +316,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     work_package_id = Session.work_package_id(session)
 
     with :ok <- lock_work_package(repo, work_package_id),
-         {:ok, state} <- PlanningRepository.get_state(repo, work_package_id) do
-      reject_ready_work_package(state.work_package)
+         {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
+      reject_ready_work_package(work_package)
     end
   end
 

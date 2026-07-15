@@ -25,6 +25,7 @@ $warmProbe = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/tests/launcher/
 $directProbe = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/tests/transport/direct-http-transport.ps1"
 $exactProbe = Join-Path $PSScriptRoot "exact-command-performance.ps1"
 $payloadProbe = Join-Path $PSScriptRoot "measure-payloads.exs"
+$stateProbe = Join-Path $PSScriptRoot "measure-state-hot-path.exs"
 $profileCaps = [ordered]@{
   full = @{ tools = 80; bytes = 55000 }; worker = @{ tools = 35; bytes = 25000 }
   architect = @{ tools = 65; bytes = 45000 }; coordinator = @{ tools = 30; bytes = 20000 }
@@ -55,6 +56,10 @@ function Get-GateFailures($Metrics, $Limits) {
   if ($Metrics.direct.transport_processes -ne 0) { $failures.Add("direct.wrapper_processes") }
   if ($Metrics.direct.transport_private_bytes -ne 0) { $failures.Add("direct.wrapper_private_bytes") }
   if ($Metrics.direct.backend_private_bytes -gt $Limits.backend_bytes) { $failures.Add("direct.backend_private_bytes") }
+  if ($Metrics.state_hot_path.readiness_state.entry_growth -ne 0 -or $Metrics.state_hot_path.readiness_state.alias_growth -ne 0 -or $Metrics.state_hot_path.readiness_state.deadline_growth -ne 0) { $failures.Add("state_hot_path.readiness_state") }
+  if ($Metrics.state_hot_path.operations.recovery_steady.write_statements -ne 0) { $failures.Add("state_hot_path.recovery_writes") }
+  if ($Metrics.state_hot_path.ready_guard.package_reads_after_lock -ne 1 -or $Metrics.state_hot_path.ready_guard.history_reads_after_lock -ne 0) { $failures.Add("state_hot_path.ready_guard") }
+  if (@($Metrics.state_hot_path.operations.PSObject.Properties.Value | Where-Object { $_.busy_retries -ne 0 }).Count -gt 0) { $failures.Add("state_hot_path.busy_retries") }
   $nodeCohorts = @($Metrics.exact.node.warm | Where-Object { $_.clients -ge 10 })
   $missingSloCohorts = @($Limits.exact_warm_p95_ms.Keys | Where-Object { $clients = [int]$_; @($Metrics.exact.node.warm | Where-Object { [int]$_.clients -eq $clients }).Count -eq 0 })
   if ($missingSloCohorts.Count -gt 0 -or @($Metrics.exact.node.warm | Where-Object { $Limits.exact_warm_p95_ms.ContainsKey([int]$_.clients) -and $_.p95_initialize_ms -gt $Limits.exact_warm_p95_ms[[int]$_.clients] }).Count -gt 0) { $failures.Add("exact.node.p95_ms") }
@@ -92,7 +97,7 @@ function Write-Result($Metrics, [string[]]$Failures, $Cleanup) {
   $bin = [System.IO.Path]::GetFullPath($PSCommandPath)
   if ($HOME -and $bin.StartsWith($HOME, [System.StringComparison]::OrdinalIgnoreCase)) { $bin = "~" + $bin.Substring($HOME.Length) }
   [Console]::Out.WriteLine("bin: $(Quote-Toon $bin)")
-  [Console]::Out.WriteLine("description: Run isolated Symphony++ MCP cold, warm, direct HTTP, and payload performance gates")
+  [Console]::Out.WriteLine("description: Run isolated Symphony++ MCP cold, warm, direct HTTP, state, SQLite, and payload performance gates")
   [Console]::Out.WriteLine("status: $(if ($Failures.Count -eq 0) { 'pass' } else { 'fail' })")
   [Console]::Out.WriteLine("revision: $(Quote-Toon $Metrics.revision)")
   [Console]::Out.WriteLine("clients: $($Metrics.warm.clients)")
@@ -135,6 +140,14 @@ function Write-Result($Metrics, [string[]]$Failures, $Cleanup) {
   [Console]::Out.WriteLine("direct:")
   foreach ($name in @("clients", "elapsed_ms", "backend_processes", "backend_pid", "backend_start_ticks", "backend_private_bytes", "transport_processes", "transport_private_bytes", "host_private_bytes_delta")) {
     [Console]::Out.WriteLine("  ${name}: $($Metrics.direct.$name)")
+  }
+  [Console]::Out.WriteLine("state_hot_path:")
+  [Console]::Out.WriteLine("  readiness_state_growth: entries=$($Metrics.state_hot_path.readiness_state.entry_growth),aliases=$($Metrics.state_hot_path.readiness_state.alias_growth),deadlines=$($Metrics.state_hot_path.readiness_state.deadline_growth)")
+  [Console]::Out.WriteLine("  ready_guard_1000: package_reads=$($Metrics.state_hot_path.ready_guard.package_reads_after_lock),history_reads=$($Metrics.state_hot_path.ready_guard.history_reads_after_lock)")
+  [Console]::Out.WriteLine("  operations[7]{name,samples,p50_ms,p95_ms,max_ms,sql_statements,write_statements,busy_retries}:")
+  foreach ($property in $Metrics.state_hot_path.operations.PSObject.Properties) {
+    $row = $property.Value
+    [Console]::Out.WriteLine("    $($property.Name),$($row.samples),$($row.p50_ms),$($row.p95_ms),$($row.max_ms),$($row.sql_statements),$($row.write_statements),$($row.busy_retries)")
   }
   [Console]::Out.WriteLine("profiles[5]{name,tools,bytes,tokens_estimate,max_tools,max_bytes}:")
   foreach ($name in $profileCaps.Keys) {
@@ -260,6 +273,15 @@ function Invoke-SelfTest {
     }
     profiles = [pscustomobject]@{ full = @{ tools = 1; bytes = 1 }; worker = @{ tools = 1; bytes = 1 }; architect = @{ tools = 1; bytes = 1 }; coordinator = @{ tools = 1; bytes = 1 }; solo = @{ tools = 1; bytes = 1 } }
     results = [pscustomobject]@{ claim = @{ bytes = 1 }; read = @{ bytes = 1 }; progress = @{ bytes = 1 } }
+    state_hot_path = [pscustomobject]@{
+      readiness_state = [pscustomobject]@{ entry_growth = 0; alias_growth = 0; deadline_growth = 0 }
+      ready_guard = [pscustomobject]@{ package_reads_after_lock = 1; history_reads_after_lock = 0 }
+      operations = [pscustomobject]@{
+        readiness = @{ busy_retries = 0 }; recovery_steady = @{ busy_retries = 0; write_statements = 0 }
+        worker_read = @{ busy_retries = 0 }; worker_write = @{ busy_retries = 0 }
+        architect_read = @{ busy_retries = 0 }; architect_write = @{ busy_retries = 0 }; ready_guard_1000 = @{ busy_retries = 0 }
+      }
+    }
   }
   $cases = [ordered]@{
     "cold.isolated_bootstrap_ms" = { param($m) $m.cold.isolated_bootstrap_ms = $MaxColdMs + 1 }
@@ -282,6 +304,10 @@ function Invoke-SelfTest {
     "exact.node.lifecycle_race" = { param($m) $m.exact.node.lifecycle_race.healthy = $false }
     "exact.node.recovery_integrity" = { param($m) $m.exact.node.mutation.shortcut_rejected = $false }
     "exact.fallback.functional" = { param($m) $m.exact.fallback.recovery.dashboard_healthy = $false }
+    "state_hot_path.readiness_state" = { param($m) $m.state_hot_path.readiness_state.entry_growth = 1 }
+    "state_hot_path.recovery_writes" = { param($m) $m.state_hot_path.operations.recovery_steady.write_statements = 1 }
+    "state_hot_path.ready_guard" = { param($m) $m.state_hot_path.ready_guard.history_reads_after_lock = 1 }
+    "state_hot_path.busy_retries" = { param($m) $m.state_hot_path.operations.worker_read.busy_retries = 1 }
   }
   $baseFailures = @(Get-GateFailures $base $thresholds)
   if ($baseFailures.Count -ne 0) { throw "valid baseline unexpectedly failed: $($baseFailures -join ',')" }
@@ -377,7 +403,12 @@ try {
   $payloadJson = @($payloadOutput -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1)
   if ($payloadJson.Count -ne 1) { throw "payload probe omitted JSON output" }
   $payloads = $payloadJson[0] | ConvertFrom-Json
-  $revision = [string](& git -C $repoRoot rev-parse HEAD); $metrics = [pscustomobject]@{ revision = $revision.Trim(); cold = $cold; warm = $warm; direct = $direct; exact = [pscustomobject]@{ node = $exactNode; fallback = $exactFallback }; profiles = $payloads.profiles; results = $payloads.results }
+  [Console]::Error.WriteLine("Measuring MCP state and SQLite hot paths...")
+  $stateOutput = Invoke-IsolatedMix @("run", "--no-start", $stateProbe) $environment
+  $stateJson = @($stateOutput -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1)
+  if ($stateJson.Count -ne 1) { throw "state hot-path probe omitted JSON output" }
+  $stateHotPath = $stateJson[0] | ConvertFrom-Json
+  $revision = [string](& git -C $repoRoot rev-parse HEAD); $metrics = [pscustomobject]@{ revision = $revision.Trim(); cold = $cold; warm = $warm; direct = $direct; exact = [pscustomobject]@{ node = $exactNode; fallback = $exactFallback }; profiles = $payloads.profiles; results = $payloads.results; state_hot_path = $stateHotPath }
 } catch {
   $failure = $_.Exception.Message
   $backendLog = @(Get-ChildItem (Join-Path $tempRoot "logs") -Filter "backend-*.err.log" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -Last 1); if ($backendLog) { $detail = ([string](Get-Content $backendLog.FullName -Raw)).Trim(); if ($detail.Length -gt 2000) { $detail = $detail.Substring($detail.Length - 2000) }; $failure += "`nbackend stderr: $detail" }

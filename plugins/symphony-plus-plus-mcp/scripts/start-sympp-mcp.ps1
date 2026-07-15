@@ -440,16 +440,16 @@ function Get-ResponseProtocolVersion([string[]]$ContentLines) {
 }
 
 function Get-HealthSourceRevision($Payload) {
-  if ($null -eq $Payload -or -not $Payload.PSObject.Properties["result"]) {
+  if ($null -eq $Payload) {
     return $null
   }
 
-  $structuredContent = $Payload.result.structuredContent
-  if ($null -eq $structuredContent -or -not $structuredContent.PSObject.Properties["source"]) {
+  $content = if ($Payload.PSObject.Properties["source"]) { $Payload } elseif ($Payload.PSObject.Properties["result"]) { $Payload.result.structuredContent } else { $null }
+  if ($null -eq $content -or -not $content.PSObject.Properties["source"]) {
     return $null
   }
 
-  $source = $structuredContent.source
+  $source = $content.source
   if ($null -eq $source -or -not $source.PSObject.Properties["revision"]) {
     return $null
   }
@@ -557,27 +557,21 @@ function Resolve-ExpectedMcpContractFingerprint([string]$PluginRoot) {
 }
 
 function Get-HealthContractFingerprint($Payload) {
-  if ($null -eq $Payload -or -not $Payload.PSObject.Properties["result"]) {
+  if ($null -eq $Payload) {
     return $null
   }
 
-  $structuredContent = $Payload.result.structuredContent
-  if ($null -eq $structuredContent) {
+  $content = if ($Payload.PSObject.Properties["source"]) { $Payload } elseif ($Payload.PSObject.Properties["result"]) { $Payload.result.structuredContent } else { $null }
+  if ($null -eq $content -or -not $content.PSObject.Properties["source"]) {
     return $null
   }
 
-  if ($structuredContent.PSObject.Properties["source"] -and
-      $null -ne $structuredContent.source -and
-      $structuredContent.source.PSObject.Properties["mcp_contract"] -and
-      $null -ne $structuredContent.source.mcp_contract -and
-      $structuredContent.source.mcp_contract.PSObject.Properties["fingerprint"]) {
-    return Normalize-McpContractFingerprint ([string]$structuredContent.source.mcp_contract.fingerprint)
-  }
-
-  if ($structuredContent.PSObject.Properties["mcp_contract"] -and
-      $null -ne $structuredContent.mcp_contract -and
-      $structuredContent.mcp_contract.PSObject.Properties["fingerprint"]) {
-    return Normalize-McpContractFingerprint ([string]$structuredContent.mcp_contract.fingerprint)
+  $source = $content.source
+  if ($null -ne $source -and
+      $source.PSObject.Properties["mcp_contract"] -and
+      $null -ne $source.mcp_contract -and
+      $source.mcp_contract.PSObject.Properties["fingerprint"]) {
+    return Normalize-McpContractFingerprint ([string]$source.mcp_contract.fingerprint)
   }
 
   return $null
@@ -714,22 +708,42 @@ function Invoke-McpPost([string]$Url, [string]$Body, [string]$SessionId, [string
   }
 }
 
-function Get-SymppBackendHealth([string]$BackendUrl) {
+function Get-SymppBackendHealth([string]$BackendUrl, [bool]$RequireDashboardReady = $false) {
   if ([string]::IsNullOrWhiteSpace($BackendUrl)) {
     return New-SymppBackendHealth $false $null "missing_url" $false
   }
 
   $tcpOpen = Test-LoopbackHttpTcpOpen $BackendUrl
+  $readinessUrl = $BackendUrl.TrimEnd("/") + "/mcp/readiness"
+
+  try {
+    $response = Invoke-WebRequest -Uri $readinessUrl -Method Get -Headers @{ Accept = "application/json" } -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+    $payload = [string]$response.Content | ConvertFrom-Json
+    $status = if ($payload.PSObject.Properties["status"]) { [string]$payload.status } else { $null }
+    $ledgerReachable = $null -ne $payload.ledger -and $payload.ledger.PSObject.Properties["reachable"] -and $payload.ledger.reachable -eq $true
+    $dashboardReady = $null -ne $payload.dashboard -and $payload.dashboard.PSObject.Properties["ready"] -and $payload.dashboard.ready -eq $true
+    $healthy = [System.StringComparer]::OrdinalIgnoreCase.Equals($status, "ok") -and $ledgerReachable -and (-not $RequireDashboardReady -or $dashboardReady)
+    $detail = if ($healthy) { $null } else { "health_degraded" }
+    return New-SymppBackendHealth $healthy (Get-HealthSourceRevision $payload) $detail $true $true $ledgerReachable $status (Get-HealthContractFingerprint $payload)
+  } catch {
+    if ($null -ne $_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) {
+      return Get-LegacySymppBackendHealth $BackendUrl $tcpOpen
+    }
+    return New-SymppBackendHealth $false $null "readiness_failed" $tcpOpen
+  }
+}
+
+function Get-LegacySymppBackendHealth([string]$BackendUrl, [bool]$TcpOpen) {
   $mcpUrl = $BackendUrl.TrimEnd("/") + "/mcp"
   $initializeBody = ConvertTo-JsonBody (New-InitializeRequest)
   $init = Invoke-McpPost $mcpUrl $initializeBody $null $null 2
   if (-not $init.ok -or [string]::IsNullOrWhiteSpace($init.content)) {
-    return New-SymppBackendHealth $false $null "initialize_failed" $tcpOpen
+    return New-SymppBackendHealth $false $null "initialize_failed" $TcpOpen
   }
 
   $sessionId = Get-ResponseHeaderValue $init.headers "Mcp-Session-Id"
   if ([string]::IsNullOrWhiteSpace($sessionId)) {
-    return New-SymppBackendHealth $false $null "missing_session_id" $tcpOpen
+    return New-SymppBackendHealth $false $null "missing_session_id" $TcpOpen
   }
 
   $protocolVersion = Get-ResponseProtocolVersion @($init.content_lines)
@@ -740,36 +754,30 @@ function Get-SymppBackendHealth([string]$BackendUrl) {
   $health = Invoke-McpPost $mcpUrl (ConvertTo-JsonBody (New-HealthRequest)) $sessionId $protocolVersion 2
   $healthLines = @($health.content_lines)
   if (-not $health.ok -or $healthLines.Count -eq 0) {
-    return New-SymppBackendHealth $false $null "health_failed" $tcpOpen
+    return New-SymppBackendHealth $false $null "health_failed" $TcpOpen
   }
 
   try {
     $payload = $healthLines[0] | ConvertFrom-Json
-    if ($null -ne $payload.result -and $null -eq $payload.error) {
-      $structuredContent = $payload.result.structuredContent
-      $status = if ($null -ne $structuredContent -and $structuredContent.PSObject.Properties["status"]) { [string]$structuredContent.status } else { $null }
-      $ledgerReachable = $false
-      if ($null -ne $structuredContent -and
-          $structuredContent.PSObject.Properties["ledger"] -and
-          $null -ne $structuredContent.ledger -and
-          $structuredContent.ledger.PSObject.Properties["reachable"]) {
-        $ledgerReachable = $structuredContent.ledger.reachable -eq $true
-      }
-      $healthy = [System.StringComparer]::OrdinalIgnoreCase.Equals($status, "ok") -and $ledgerReachable
-      $detail = if ($healthy) { $null } else { "health_degraded" }
-      return New-SymppBackendHealth $healthy (Get-HealthSourceRevision $payload) $detail $true $true $ledgerReachable $status (Get-HealthContractFingerprint $payload)
+    if ($null -eq $payload.result -or $null -ne $payload.error) {
+      return New-SymppBackendHealth $false $null "health_error" $TcpOpen $true $false $null
     }
 
-    return New-SymppBackendHealth $false $null "health_error" $tcpOpen $true $false $null
+    $structuredContent = $payload.result.structuredContent
+    $status = if ($null -ne $structuredContent -and $structuredContent.PSObject.Properties["status"]) { [string]$structuredContent.status } else { $null }
+    $ledgerReachable = $null -ne $structuredContent -and $null -ne $structuredContent.ledger -and $structuredContent.ledger.PSObject.Properties["reachable"] -and $structuredContent.ledger.reachable -eq $true
+    $healthy = [System.StringComparer]::OrdinalIgnoreCase.Equals($status, "ok") -and $ledgerReachable
+    $detail = if ($healthy) { $null } else { "health_degraded" }
+    return New-SymppBackendHealth $healthy (Get-HealthSourceRevision $payload) $detail $true $true $ledgerReachable $status (Get-HealthContractFingerprint $payload)
   } catch {
-    return New-SymppBackendHealth $false $null "health_parse_failed" $tcpOpen
+    return New-SymppBackendHealth $false $null "health_parse_failed" $TcpOpen
   }
 }
 
-function Get-SymppBackendHealthWithRetry([string]$BackendUrl, [int]$Attempts = 4, [int]$DelayMs = 500) {
+function Get-SymppBackendHealthWithRetry([string]$BackendUrl, [int]$Attempts = 4, [int]$DelayMs = 500, [bool]$RequireDashboardReady = $false) {
   $last = $null
   for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-    $last = Get-SymppBackendHealth $BackendUrl
+    $last = Get-SymppBackendHealth $BackendUrl $RequireDashboardReady
     if ($last.healthy -or -not $last.tcp_open) {
       return $last
     }
@@ -914,7 +922,7 @@ function Test-SymppDashboardMcpProxyMatches([string]$DashboardOrigin, [string]$E
     return $false
   }
 
-  $proxyHealth = Get-SymppBackendHealthWithRetry $DashboardOrigin 2 250
+  $proxyHealth = Get-SymppBackendHealthWithRetry $DashboardOrigin 2 250 $true
   return Test-BackendContractMatches $proxyHealth $ExpectedContractFingerprint
 }
 
@@ -1786,7 +1794,7 @@ function Resolve-FastAttachRuntimePlan {
     return $null
   }
 
-  $backendHealth = if ($null -ne $BackendHealthOverride) { $BackendHealthOverride } else { Get-SymppBackendHealthWithRetry $backendUrl }
+  $backendHealth = if ($null -ne $BackendHealthOverride) { $BackendHealthOverride } else { Get-SymppBackendHealthWithRetry $backendUrl 4 500 (-not $headlessManagedRuntime) }
   if (-not (Test-BackendLaunchCompatible $backendHealth $ExpectedContractFingerprint)) {
     return $null
   }

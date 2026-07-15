@@ -421,11 +421,107 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert updated.status == "merged"
   end
 
+  test "ready evidence guard reads only the package with 1,000 history rows", %{repo: repo} do
+    assert {:ok, package} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(id: "SYMPP-READY-GUARD-BOUNDED", kind: "mcp", status: "ready_for_worker")
+             )
+
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
+    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+
+    assert {1, nil} =
+             repo.update_all(
+               from(work_package in WorkPackage, where: work_package.id == ^package.id),
+               set: [status: "ready_for_merge"]
+             )
+
+    now = DateTime.utc_now(:microsecond)
+
+    rows =
+      for sequence <- 1..1_000 do
+        %{
+          id: "progress-ready-guard-#{sequence}",
+          work_package_id: package.id,
+          summary: "Historical progress #{sequence}",
+          status: "recorded",
+          sequence: sequence,
+          idempotency_scope: "direct",
+          payload: %{},
+          created_at: now,
+          inserted_at: now,
+          updated_at: now
+        }
+      end
+
+    assert {1_000, nil} = repo.insert_all(ProgressEvent, rows)
+
+    {response, queries} =
+      capture_queries(repo, fn ->
+        MCPHarness.request(
+          %{
+            "jsonrpc" => "2.0",
+            "id" => "ready-guard-bounded",
+            "method" => "tools/call",
+            "params" => %{
+              "name" => "append_progress",
+              "arguments" => %{"summary" => "Must remain rejected", "idempotency_key" => "ready-guard-bounded"}
+            }
+          },
+          repo: repo,
+          session: session
+        )
+      end)
+
+    assert get_in(response, ["error", "data", "reason"]) == "already_ready"
+
+    lock_index =
+      Enum.find_index(queries, fn query ->
+        String.starts_with?(query, "UPDATE \"sympp_work_packages\"") and String.contains?(query, "SET \"id\"")
+      end)
+
+    assert is_integer(lock_index)
+    guard_queries = Enum.drop(queries, lock_index + 1)
+
+    assert Enum.count(guard_queries, &String.contains?(&1, "FROM \"sympp_work_packages\"")) == 1
+    refute Enum.any?(guard_queries, &String.contains?(&1, "FROM \"sympp_progress_events\""))
+  end
+
   defp mark_ready(repo, session, id) do
     MCPHarness.request(
       %{"jsonrpc" => "2.0", "id" => id, "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
       repo: repo,
       session: session
     )
+  end
+
+  defp capture_queries(repo, fun) do
+    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
+    event = repo.config()[:telemetry_prefix] ++ [:query]
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn _event, _measurements, metadata, test_pid -> send(test_pid, {handler_id, metadata.query}) end,
+        self()
+      )
+
+    try do
+      result = fun.()
+      {result, drain_queries(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_queries(handler_id, queries) do
+    receive do
+      {^handler_id, query} -> drain_queries(handler_id, [query | queries])
+    after
+      0 -> Enum.reverse(queries)
+    end
   end
 end

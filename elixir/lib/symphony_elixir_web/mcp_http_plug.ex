@@ -2,7 +2,7 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
   @moduledoc false
 
   alias Plug.Conn
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{ClientLeases, Config, HTTPStateStore, HTTPTransport}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{ClientLeases, Config, Health, HTTPStateStore, HTTPTransport}
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixirWeb.Endpoint
   alias SymphonyElixirWeb.SymppBoardLive
@@ -26,6 +26,18 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
       {:error, reason} -> send_json_rpc_error(conn, 403, reason)
     end
   end
+
+  def call(%Conn{path_info: ["mcp", "readiness"], method: "GET"} = conn, _opts) do
+    with {:ok, local_daemon_trusted?} <- validate_local_request(conn),
+         :ok <- validate_origin(conn) do
+      config = mcp_config(configured_repo(), local_daemon_trusted?)
+      send_json(conn, 200, Health.readiness(config, dashboard_ready?()))
+    else
+      {:error, reason} -> send_json_rpc_error(conn, 403, reason)
+    end
+  end
+
+  def call(%Conn{path_info: ["mcp", "readiness"]} = conn, _opts), do: send_readiness_method_not_allowed(conn)
 
   def call(%Conn{path_info: ["mcp", "client-lease"]} = conn, _opts) do
     with {:ok, _trusted?} <- validate_local_request(conn),
@@ -173,6 +185,12 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
     |> send_json_rpc_error(405, :method_not_allowed)
   end
 
+  defp send_readiness_method_not_allowed(conn) do
+    conn
+    |> Conn.put_resp_header("allow", "GET")
+    |> send_json_rpc_error(405, :method_not_allowed)
+  end
+
   defp send_json_rpc_error(conn, status, reason, id \\ nil) do
     send_json(conn, status, json_rpc_error(id, reason))
   end
@@ -312,6 +330,13 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
   defp loopback_address?(_remote_ip), do: false
 
   defp configured_repo, do: endpoint_config(:sympp_repo) || Repo
+
+  defp dashboard_ready? do
+    case endpoint_config(:sympp_dashboard_origin) do
+      origin when is_binary(origin) -> String.trim(origin) != ""
+      _missing -> File.exists?(Path.join(:code.priv_dir(:symphony_elixir), "static/index.html"))
+    end
+  end
 
   defp mcp_config(repo, local_daemon_trusted?) do
     database = configured_database(repo)

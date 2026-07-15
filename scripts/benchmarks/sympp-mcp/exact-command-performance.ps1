@@ -390,6 +390,8 @@ exit /b %ERRORLEVEL%
   $recoveredState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json
   if ([int]$recoveredState.backend.pid -eq $backend.Id -or -not (Test-Dashboard ([string]$recoveredState.frontend.url))) { throw "Backend kill did not recover a fresh artifact dashboard runtime." }
   $recovered = Get-Process -Id ([int]$recoveredState.backend.pid) -ErrorAction Stop
+  $runtimeState = $recoveredState
+  $backendStartTicks = $recovered.StartTime.ToUniversalTime().Ticks
   $recoveryMetrics = [pscustomobject]@{
     initialize_ms = [Math]::Round($recovery.elapsed_ms, 2)
     previous_backend_pid = $backend.Id
@@ -462,6 +464,13 @@ exit /b %ERRORLEVEL%
   throw
 } finally {
   foreach ($client in @($clients)) { if ($client.process) { Stop-ExactClient $client } }
+  if ((-not $runtimeState -or -not $runtimeState.backend) -and (Test-Path -LiteralPath $runtimeFile -PathType Leaf)) {
+    try { $runtimeState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json } catch { $runtimeState = $null }
+    if ($runtimeState -and $runtimeState.backend) {
+      $process = Get-Process -Id ([int]$runtimeState.backend.pid) -ErrorAction SilentlyContinue
+      if ($process) { $backendStartTicks = $process.StartTime.ToUniversalTime().Ticks }
+    }
+  }
   if ($runtimeState -and $runtimeState.backend -and $backendStartTicks) {
     $process = Get-Process -Id ([int]$runtimeState.backend.pid) -ErrorAction SilentlyContinue
     if ($process -and $process.StartTime.ToUniversalTime().Ticks -eq $backendStartTicks) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
