@@ -160,7 +160,7 @@ export function DashboardShell({
           <div className="mx-auto flex max-w-[1500px] flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between lg:px-8">
             <div className="flex items-center gap-3">
               <div className="flex size-10 items-center justify-center overflow-hidden rounded-lg border bg-card shadow-sm motion-pop">
-                <img src={DASHBOARD_LOGO_URL} alt="Symphony++" className="h-full w-full scale-[1.34] object-contain" />
+                <img src={DASHBOARD_LOGO_URL} alt="Symphony++" width={40} height={40} className="h-full w-full scale-[1.34] object-contain" />
               </div>
               <div>
                 <h1 className="text-xl font-semibold">Symphony++</h1>
