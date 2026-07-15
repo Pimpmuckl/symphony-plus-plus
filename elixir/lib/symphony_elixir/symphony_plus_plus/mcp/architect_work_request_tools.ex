@@ -68,6 +68,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   @default_list_limit 50
   @max_list_limit 200
   @list_candidate_batch_size @max_list_limit + 1
+  @max_list_candidate_batches 3
 
   @spec tools() :: [String.t()]
   def tools, do: @tools
@@ -700,31 +701,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   end
 
   defp scoped_work_request_page(repo, repository_filters, filters, session, opts, %{limit: limit, cursor: cursor}) do
-    collect_scoped_work_request_page(repo, repository_filters, filters, session, opts, limit, cursor, [])
+    page = %{limit: limit, cursor: cursor, collected: [], batches_left: @max_list_candidate_batches}
+
+    collect_scoped_work_request_page(
+      repo,
+      repository_filters,
+      filters,
+      session,
+      opts,
+      page
+    )
   end
 
-  defp collect_scoped_work_request_page(
-         repo,
-         repository_filters,
-         filters,
-         session,
-         opts,
-         limit,
-         cursor,
-         collected
-       ) do
+  defp collect_scoped_work_request_page(repo, repository_filters, filters, session, opts, page) do
     with {:ok, candidates} <-
-           WorkRequestService.list_page(repo, repository_filters, @list_candidate_batch_size, cursor),
+           WorkRequestService.list_page(repo, repository_filters, @list_candidate_batch_size, page.cursor),
          {:ok, visible} <- WorkRequestScope.filter_scoped_work_requests(repo, candidates, filters, session, opts) do
-      collected = collected ++ visible
+      collected = page.collected ++ visible
 
       cond do
-        length(collected) > limit ->
-          {work_requests, _additional} = Enum.split(collected, limit)
+        length(collected) > page.limit ->
+          {work_requests, _additional} = Enum.split(collected, page.limit)
           {:ok, work_requests, encode_list_cursor(List.last(work_requests))}
 
         length(candidates) < @list_candidate_batch_size ->
           {:ok, collected, nil}
+
+        page.batches_left == 1 ->
+          {:ok, collected, encode_list_cursor(List.last(candidates))}
 
         true ->
           collect_scoped_work_request_page(
@@ -733,9 +737,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
             filters,
             session,
             opts,
-            limit,
-            list_cursor_position(List.last(candidates)),
-            collected
+            %{
+              page
+              | cursor: list_cursor_position(List.last(candidates)),
+                collected: collected,
+                batches_left: page.batches_left - 1
+            }
           )
       end
     end
