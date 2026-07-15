@@ -13,6 +13,7 @@ const POWERSHELL_FALLBACK = 43;
 const BOARD_PATH = "/sympp/board";
 const DOTNET_EPOCH_TICKS = 621355968000000000n;
 const GENERATION_SETTLE_MS = 100;
+const synchronousWait = new Int32Array(new SharedArrayBuffer(4));
 const agent = new http.Agent({ keepAlive: true });
 const generationWatchers = [];
 let ownedGenerationMarker = null;
@@ -127,7 +128,12 @@ function ensureLivenessProbe() {
 function livenessMatches(pid, pipe, token) {
   if (!pipe || !token || !processAlive(pid)) return false;
   if (Number(pid) === process.pid) return pipe === livenessPipe && token === livenessToken;
-  try { return fs.readFileSync(pipe, "utf8") === token; } catch (_) { return false; }
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try { return fs.readFileSync(pipe, "utf8") === token; } catch (_) {
+      if (attempt < 4) Atomics.wait(synchronousWait, 0, 0, 10);
+    }
+  }
+  return false;
 }
 
 function closeLivenessProbe() {
