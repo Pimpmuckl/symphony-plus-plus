@@ -83,6 +83,8 @@ Assert-True ($source.Contains('if ($PrepareRuntimeOnly)') -and $source.IndexOf('
 Assert-True ($preflightCall -ge 0 -and $preflightCall -lt $stdinRead -and $node.Contains('trace("warm_miss_health");')) "Node health mismatches must route through cold recovery before consuming stdin"
 Assert-True ($node.Contains('/mcp/readiness') -and $node.Contains('response.status === 404') -and $node.Contains('legacyBackendHealth')) "Node launcher health probes must prefer stateless readiness and retain a 404-only legacy runtime fallback"
 Assert-True ($source.Contains('/mcp/readiness') -and $source.Contains('StatusCode -eq 404') -and $source.Contains('Get-LegacySymppBackendHealth')) "PowerShell launcher health probes must prefer stateless readiness and retain a 404-only legacy runtime fallback"
+Assert-True ($node.Contains('backendHealth(identity.backend, !identity.headless)') -and $node.Contains('!requireDashboard || dashboardReady')) "Node backend readiness must preserve supported headless runtime reuse"
+Assert-True ($source.Contains('Get-SymppBackendHealthWithRetry $backendUrl 4 500 (-not $headlessManagedRuntime)')) "PowerShell backend readiness must preserve supported headless runtime reuse"
 Assert-True ($node.Contains('confirmed.runtimeKey.toLowerCase()') -and $node.Contains('trace("warm_miss_state");')) "Concurrent runtime rotation must route through cold recovery"
 Assert-True ($node.Contains('/^(disabled|failed)/.test(String(state.frontend.status))')) "Node warm attach must accept every launcher-produced disabled or failed headless status"
 Assert-True ($node.Contains('SYMPP_STARTUP_LOCK_TIMEOUT_SEC || 1800') -and $node.Contains('trace("warm_miss_lock");')) "Node startup locking must honor the configured timeout and remain recoverable"

@@ -43,7 +43,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
   end
 
   defp persist_action(config, repo, {:touch, id, now}) do
-    if HTTPStateStore.recovery_persistence_due?(config, id, @heartbeat_ms), do: touch(repo, id, now), else: :ok
+    HTTPStateStore.persist_recovery_if_due(config, id, @heartbeat_ms, fn -> touch(repo, id, now) end)
   end
 
   defp persist_action(_config, _repo, :skip), do: :ok
@@ -324,7 +324,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
     end)
     |> case do
       {:ok, %SessionBinding{}} -> :ok
-      {:error, _reason} -> :ok
+      {:error, _reason} -> {:error, :persistence_failed}
     end
   end
 
@@ -334,12 +334,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
         binding
         |> SessionBinding.changeset(%{last_seen_at: now})
         |> repo.update()
+        |> case do
+          {:ok, %SessionBinding{}} -> :ok
+          {:error, _reason} -> {:error, :persistence_failed}
+        end
 
       nil ->
-        :ok
+        {:error, :not_found}
     end
-
-    :ok
   end
 
   defp get_binding(repo, client_key, state_key) do
@@ -390,7 +392,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
   end
 
   defp maybe_cleanup_stale(config, repo) do
-    if HTTPStateStore.recovery_cleanup_due?(config, @cleanup_interval_ms), do: cleanup_stale(repo), else: :ok
+    HTTPStateStore.cleanup_recovery_if_due(config, @cleanup_interval_ms, fn -> cleanup_stale(repo) end)
   end
 
   defp require_fresh(%SessionBinding{last_seen_at: %DateTime{} = last_seen_at}) do

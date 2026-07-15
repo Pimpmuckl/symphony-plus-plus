@@ -433,7 +433,7 @@ function protocolFrom(lines) {
   return null;
 }
 
-async function backendHealth(origin) {
+async function backendHealth(origin, requireDashboard = true) {
   try {
     const mcpUrl = `${trimOrigin(origin)}/mcp`;
     const response = await request(`${trimOrigin(origin)}/mcp/readiness`, "GET", null, { Accept: "application/json" }, 2000);
@@ -441,7 +441,8 @@ async function backendHealth(origin) {
     if (response.status < 200 || response.status >= 300 || !response.body) return null;
     const readiness = JSON.parse(response.body);
     const contract = String((readiness.source && readiness.source.mcp_contract && readiness.source.mcp_contract.fingerprint) || "").toLowerCase();
-    const healthy = readiness.status === "ok" && readiness.ledger && readiness.ledger.reachable === true && readiness.dashboard && readiness.dashboard.ready === true;
+    const dashboardReady = readiness.dashboard && readiness.dashboard.ready === true;
+    const healthy = readiness.status === "ok" && readiness.ledger && readiness.ledger.reachable === true && (!requireDashboard || dashboardReady);
     return { healthy, contract };
   } catch (_) {
     return null;
@@ -479,7 +480,7 @@ async function ensureRuntimeHealth(runtimeFile, state, identity) {
     if (lock !== null) {
       try {
         if (healthCacheMatches(readJson(cacheFile), state, identity)) return true;
-        const health = await backendHealth(identity.backend);
+        const health = await backendHealth(identity.backend, !identity.headless);
         if (!health || !health.healthy || health.contract !== identity.contract) return false;
         const temporary = `${cacheFile}.${process.pid}.tmp`;
         fs.writeFileSync(temporary, `${JSON.stringify({ runtime_key: identity.runtimeKey, backend_pid: Number(state.backend.pid), contract: identity.contract, validated_at_ms: Date.now() })}\n`);

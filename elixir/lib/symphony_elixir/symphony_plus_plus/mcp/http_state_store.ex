@@ -99,6 +99,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
     deadline_due?({:recovery_persistence, LedgerNamespace.key(config), binding_id}, interval_ms)
   end
 
+  @spec persist_recovery_if_due(Config.t(), String.t(), pos_integer(), (-> term())) :: :ok
+  def persist_recovery_if_due(%Config{} = config, binding_id, interval_ms, fun)
+      when is_binary(binding_id) and is_integer(interval_ms) and interval_ms > 0 and is_function(fun, 0) do
+    run_if_due({:recovery_persistence, LedgerNamespace.key(config), binding_id}, interval_ms, fun)
+  end
+
   @spec defer_recovery_persistence(Config.t(), String.t(), pos_integer()) :: :ok
   def defer_recovery_persistence(%Config{} = config, binding_id, interval_ms)
       when is_binary(binding_id) and is_integer(interval_ms) and interval_ms > 0 do
@@ -108,6 +114,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
   @spec recovery_cleanup_due?(Config.t(), pos_integer()) :: boolean()
   def recovery_cleanup_due?(%Config{} = config, interval_ms) when is_integer(interval_ms) and interval_ms > 0 do
     deadline_due?({:recovery_cleanup, LedgerNamespace.key(config)}, interval_ms)
+  end
+
+  @spec cleanup_recovery_if_due(Config.t(), pos_integer(), (-> term())) :: :ok
+  def cleanup_recovery_if_due(%Config{} = config, interval_ms, fun)
+      when is_integer(interval_ms) and interval_ms > 0 and is_function(fun, 0) do
+    run_if_due({:recovery_cleanup, LedgerNamespace.key(config)}, interval_ms, fun)
   end
 
   @spec reset!() :: :ok
@@ -234,19 +246,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
     {:reply, {Map.get(state.key_versions, key, 0), token}, state}
   end
 
-  def handle_call({:deadline_due, key, interval_ms}, _from, state) do
+  def handle_call({:deadline_due, key, _interval_ms}, _from, state) do
     state = cleanup(state)
     now = now_ms()
 
     case Map.fetch(state.deadlines, key) do
-      :error ->
-        {:reply, true, %{state | deadlines: Map.put(state.deadlines, key, now + interval_ms)}}
-
-      {:ok, deadline} when deadline <= now ->
-        {:reply, true, %{state | deadlines: Map.put(state.deadlines, key, now + interval_ms)}}
-
-      {:ok, _deadline} ->
-        {:reply, false, state}
+      :error -> {:reply, true, state}
+      {:ok, deadline} -> {:reply, deadline <= now, state}
     end
   end
 
@@ -343,6 +349,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
   defp deadline_due?(key, interval_ms), do: GenServer.call(__MODULE__, {:deadline_due, key, interval_ms})
   defp acquire_lock(key), do: GenServer.call(__MODULE__, {:acquire_lock, key}, :infinity)
   defp release_lock_call(key), do: GenServer.call(__MODULE__, {:release_lock, key}, :infinity)
+
+  defp run_if_due(key, interval_ms, fun) do
+    with_lock({:deadline, key}, fn ->
+      maybe_run_due(deadline_due?(key, interval_ms), key, interval_ms, fun)
+    end)
+  end
+
+  defp maybe_run_due(false, _key, _interval_ms, _fun), do: :ok
+
+  defp maybe_run_due(true, key, interval_ms, fun) do
+    case fun.() do
+      :ok -> GenServer.call(__MODULE__, {:defer_deadline, key, interval_ms})
+      _failed -> :ok
+    end
+  end
 
   defp with_lock(key, fun) do
     :ok = acquire_lock(key)

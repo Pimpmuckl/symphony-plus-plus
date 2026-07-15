@@ -708,7 +708,7 @@ function Invoke-McpPost([string]$Url, [string]$Body, [string]$SessionId, [string
   }
 }
 
-function Get-SymppBackendHealth([string]$BackendUrl) {
+function Get-SymppBackendHealth([string]$BackendUrl, [bool]$RequireDashboardReady = $true) {
   if ([string]::IsNullOrWhiteSpace($BackendUrl)) {
     return New-SymppBackendHealth $false $null "missing_url" $false
   }
@@ -722,7 +722,7 @@ function Get-SymppBackendHealth([string]$BackendUrl) {
     $status = if ($payload.PSObject.Properties["status"]) { [string]$payload.status } else { $null }
     $ledgerReachable = $null -ne $payload.ledger -and $payload.ledger.PSObject.Properties["reachable"] -and $payload.ledger.reachable -eq $true
     $dashboardReady = $null -ne $payload.dashboard -and $payload.dashboard.PSObject.Properties["ready"] -and $payload.dashboard.ready -eq $true
-    $healthy = [System.StringComparer]::OrdinalIgnoreCase.Equals($status, "ok") -and $ledgerReachable -and $dashboardReady
+    $healthy = [System.StringComparer]::OrdinalIgnoreCase.Equals($status, "ok") -and $ledgerReachable -and (-not $RequireDashboardReady -or $dashboardReady)
     $detail = if ($healthy) { $null } else { "health_degraded" }
     return New-SymppBackendHealth $healthy (Get-HealthSourceRevision $payload) $detail $true $true $ledgerReachable $status (Get-HealthContractFingerprint $payload)
   } catch {
@@ -774,10 +774,10 @@ function Get-LegacySymppBackendHealth([string]$BackendUrl, [bool]$TcpOpen) {
   }
 }
 
-function Get-SymppBackendHealthWithRetry([string]$BackendUrl, [int]$Attempts = 4, [int]$DelayMs = 500) {
+function Get-SymppBackendHealthWithRetry([string]$BackendUrl, [int]$Attempts = 4, [int]$DelayMs = 500, [bool]$RequireDashboardReady = $true) {
   $last = $null
   for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-    $last = Get-SymppBackendHealth $BackendUrl
+    $last = Get-SymppBackendHealth $BackendUrl $RequireDashboardReady
     if ($last.healthy -or -not $last.tcp_open) {
       return $last
     }
@@ -1794,7 +1794,7 @@ function Resolve-FastAttachRuntimePlan {
     return $null
   }
 
-  $backendHealth = if ($null -ne $BackendHealthOverride) { $BackendHealthOverride } else { Get-SymppBackendHealthWithRetry $backendUrl }
+  $backendHealth = if ($null -ne $BackendHealthOverride) { $BackendHealthOverride } else { Get-SymppBackendHealthWithRetry $backendUrl 4 500 (-not $headlessManagedRuntime) }
   if (-not (Test-BackendLaunchCompatible $backendHealth $ExpectedContractFingerprint)) {
     return $null
   }
