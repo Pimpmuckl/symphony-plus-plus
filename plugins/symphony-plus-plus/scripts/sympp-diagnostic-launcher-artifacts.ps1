@@ -79,7 +79,8 @@ function Import-DiagnosticMcpArtifactHelpers([string]$Root) {
     "Test-SourceCheckout",
     "Test-SourceFallbackAllowed",
     "Test-SymphonySourceRoot",
-    "Test-Sympp"
+    "Test-Sympp",
+    "Write-SymppLauncherTrace"
   )
   foreach ($command in @(Get-Command -CommandType Function)) {
     foreach ($prefix in $promotedPrefixes) {

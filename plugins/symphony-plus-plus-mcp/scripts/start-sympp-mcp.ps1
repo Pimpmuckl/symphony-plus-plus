@@ -1,6 +1,9 @@
 param(
   [switch]$Help,
-  [switch]$ValidateOnly
+  [switch]$ValidateOnly,
+  [switch]$PrepareRuntimeOnly,
+  [switch]$CleanupPreparedRuntime,
+  [string]$CleanupRuntimeKey
 )
 
 $ErrorActionPreference = "Stop"
@@ -503,6 +506,7 @@ function Get-McpContractFingerprintFromMarketplaceSource([string]$PluginRoot) {
 }
 
 function Resolve-LocalMcpContractFingerprint([string]$PluginRoot) {
+  Write-SymppLauncherTrace "contract_fingerprint_resolution"
   $sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $PluginRoot "../.."))
   if (Test-SymphonySourceRoot $sourceRoot) {
     $fingerprint = Get-McpContractFingerprintFromContractFile (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
@@ -1955,11 +1959,27 @@ if ($Help) {
   exit 0
 }
 
+if (-not [string]::IsNullOrWhiteSpace($CleanupRuntimeKey)) {
+  Stop-ManagedServersIfUnused (Resolve-RuntimeFile) $CleanupRuntimeKey
+  exit 0
+}
+if ($CleanupPreparedRuntime) {
+  $cleanupRuntimeFile = Resolve-RuntimeFile
+  $cleanupState = Read-RuntimeState $cleanupRuntimeFile
+  if ($null -ne $cleanupState) {
+    $cleanupKey = Get-RuntimeStateKey $cleanupState
+    if (-not [string]::IsNullOrWhiteSpace($cleanupKey)) {
+      Stop-ManagedServersIfUnused $cleanupRuntimeFile $cleanupKey
+    }
+  }
+  exit 0
+}
 
 $pluginRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+if ($PrepareRuntimeOnly) { [void](Resolve-SymppInstalledMarketplaceIdentity $pluginRoot) }
 $runtimeFile = Resolve-RuntimeFile
 $bridgeMode = Get-EnvMode "SYMPP_MCP_BRIDGE_MODE" "http" @("http", "direct_stdio")
-if (-not $ValidateOnly -and $bridgeMode -eq "http" -and [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT)) {
+if (-not $ValidateOnly -and -not $PrepareRuntimeOnly -and $bridgeMode -eq "http" -and [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT)) {
   $warmBackendPortExplicit = -not [string]::IsNullOrWhiteSpace($env:SYMPP_BACKEND_PORT)
   $warmDashboardPortExplicit = -not [string]::IsNullOrWhiteSpace($env:SYMPP_DASHBOARD_PORT)
   $warmBackendPort = Get-EnvInteger "SYMPP_BACKEND_PORT" $DefaultBackendPort 0 65535
@@ -2327,12 +2347,18 @@ try {
     superseded_runtimes = $supersededStates
   }
   Write-RuntimeState $runtimeFile $state
-  $bridgeLeasePath = New-BridgeLease $runtimeFile $backendPlan $dashboardPlan $runtimeKey
+  if (-not $PrepareRuntimeOnly) {
+    $bridgeLeasePath = New-BridgeLease $runtimeFile $backendPlan $dashboardPlan $runtimeKey
+  }
 
   $dashboardSummary = if ($dashboardPlan.url) { "$($dashboardPlan.url) [$($dashboardPlan.status)]" } else { $dashboardPlan.status }
-  Write-Diagnostic "Symphony++ MCP bridge ready: backend=$($backendPlan.url) dashboard=$dashboardSummary runtime=$runtimeFile"
+  $readyKind = if ($PrepareRuntimeOnly) { "runtime" } else { "MCP bridge" }
+  Write-Diagnostic "Symphony++ $readyKind ready: backend=$($backendPlan.url) dashboard=$dashboardSummary runtime=$runtimeFile"
 } finally {
   Exit-FileLock $startupLock
+}
+if ($PrepareRuntimeOnly) {
+  exit 0
 }
 try {
   Invoke-HttpMcpBridge $backendPlan.mcp_url $bridgeTimeout (New-McpClientLeaseId) $clientHeartbeatInterval

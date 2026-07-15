@@ -313,6 +313,7 @@ function Resolve-SymppPreparedArtifactRuntime([string]$PluginRoot, [string]$Expe
         manifest_path = $manifest.manifest_path
         cache_root = $cacheRoot
         runtime = $runtimeDescriptor
+        selected_artifact = $artifact
       }
     }
 
@@ -383,7 +384,19 @@ function Resolve-LaunchArtifactSelection(
 
   if ($ArtifactProbe.status -eq "ready" -or $ArtifactProbe.status -eq "artifact_selected") {
     try {
-      $preparedArtifact = Resolve-SymppArtifactProbe $PluginRoot $sourceRevision $ExpectedContractFingerprint $ArtifactRuntimeAllowed $SourceFallbackAllowed
+      $preparedArtifact = if ($ArtifactProbe.status -eq "ready" -and $ArtifactProbe.runtime) {
+        $ArtifactProbe
+      } elseif ($ArtifactProbe.PSObject.Properties["selected_artifact"] -and $ArtifactProbe.selected_artifact -and $ArtifactProbe.runtime) {
+        $runtime = $ArtifactProbe.runtime
+        $dashboardRoot = [System.IO.Path]::GetRelativePath([string]$runtime.root, [string]$runtime.dashboard_root)
+        $prepareDetail = Ensure-SymppArtifactPrepared $ArtifactProbe.selected_artifact $ArtifactProbe.manifest_path $ArtifactProbe.cache_root (Join-Path $ArtifactProbe.cache_root "artifact.zip") $runtime.root $runtime.entrypoint_relative $runtime.sha256 $runtime.platform $runtime.source_revision $runtime.plugin_version $dashboardRoot $runtime.dashboard_fingerprint
+        if ($prepareDetail -eq "cache_ready") {
+          Write-Diagnostic "ready: reusing verified Symphony++ runtime artifact at $($runtime.root)."
+        }
+        [pscustomobject]@{ status = "ready"; detail = "artifact_ready"; runtime = $runtime }
+      } else {
+        Resolve-SymppArtifactProbe $PluginRoot $sourceRevision $ExpectedContractFingerprint $ArtifactRuntimeAllowed $SourceFallbackAllowed
+      }
       if ($preparedArtifact.status -eq "ready" -and $preparedArtifact.runtime) {
         $artifactRuntime = $preparedArtifact.runtime
         $runtimeMode = "artifact"

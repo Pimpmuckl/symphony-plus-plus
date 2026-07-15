@@ -1,5 +1,17 @@
 $ErrorActionPreference = "Stop"
 
+function Write-SymppLauncherTrace([string]$Event) {
+  $traceDir = $env:SYMPP_LAUNCHER_TRACE_DIR
+  if ([string]::IsNullOrWhiteSpace($traceDir)) {
+    return
+  }
+
+  try {
+    [System.IO.File]::AppendAllText((Join-Path $traceDir "$PID.log"), "$Event`n")
+  } catch {
+  }
+}
+
 function Resolve-OptionalPath([string]$Path) {
   if ([string]::IsNullOrWhiteSpace($Path)) {
     return $null
@@ -69,6 +81,7 @@ function Get-SymppMarketplaceSourceRevision([string]$SourceRoot) {
 }
 
 function Test-SymppMarketplaceContractMatchesRevision([string]$SourceRoot, [string]$ExpectedRevision) {
+  Write-SymppLauncherTrace "marketplace_git_validation"
   $contractRelativePath = "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json"
   $contractPath = Join-Path $SourceRoot $contractRelativePath
   if (-not (Test-Path -LiteralPath $contractPath -PathType Leaf)) {
@@ -102,10 +115,67 @@ function Test-SymppMarketplaceContractMatchesRevision([string]$SourceRoot, [stri
   }
 }
 
+function Get-SymppStringSha256([string]$Value) {
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+    return (($sha256.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join "")
+  } finally {
+    $sha256.Dispose()
+  }
+}
+
+function Get-SymppPluginPayloadFiles([string]$PluginRoot) {
+  $root = [System.IO.Path]::GetFullPath($PluginRoot).TrimEnd("\", "/")
+  [string[]]$relativePaths = @(
+    Get-ChildItem -LiteralPath $root -File -Recurse -Force | ForEach-Object {
+      $relative = $_.FullName.Substring($root.Length).TrimStart("\", "/").Replace("\", "/")
+      if ($relative -ne ".sympp-source-revision") { $relative }
+    }
+  )
+  [System.Array]::Sort($relativePaths, [System.StringComparer]::Ordinal)
+  return @($relativePaths | ForEach-Object { [pscustomobject]@{ relative_path = $_; file = Get-Item -LiteralPath (Join-Path $root $_) } })
+}
+
+function Get-SymppPluginGenerationKey([string]$PluginRoot, [string]$SourcePluginRoot, [string]$SourceRoot) {
+  $parts = [System.Collections.Generic.List[string]]::new()
+  foreach ($entry in @(Get-SymppPluginPayloadFiles $PluginRoot) + @(Get-SymppPluginPayloadFiles $SourcePluginRoot)) {
+    $parts.Add("$($entry.relative_path)|$($entry.file.Length)|$($entry.file.LastWriteTimeUtc.Ticks)|$(Get-FileSha256 $entry.file.FullName)")
+  }
+  foreach ($path in @(
+      (Join-Path $PluginRoot ".sympp-source-revision"),
+      (Join-Path $SourceRoot ".codex-marketplace-install.json"),
+      (Join-Path $SourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+    )) {
+    $file = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
+    if (-not $file) { return $null }
+    $parts.Add("$([System.IO.Path]::GetFullPath($path))|$($file.Length)|$($file.LastWriteTimeUtc.Ticks)|$(Get-FileSha256 $file.FullName)")
+  }
+  return Get-SymppStringSha256 ($parts -join "`n")
+}
+
+function Get-InstalledPluginPayloadIdentity([string]$PluginRoot, [string]$SourceRoot) {
+  Write-SymppLauncherTrace "payload_hash_validation"
+  $packageRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($PluginRoot))
+  $sourcePluginRoot = Join-Path $SourceRoot ("plugins/" + (Split-Path -Leaf $packageRoot))
+  $installedFiles = @(Get-SymppPluginPayloadFiles $PluginRoot)
+  $sourceFiles = @(Get-SymppPluginPayloadFiles $sourcePluginRoot)
+  if ($installedFiles.Count -eq 0 -or $installedFiles.Count -ne $sourceFiles.Count) { return $null }
+
+  $identity = [System.Collections.Generic.List[string]]::new()
+  for ($index = 0; $index -lt $installedFiles.Count; $index++) {
+    if ($installedFiles[$index].relative_path -cne $sourceFiles[$index].relative_path) { return $null }
+    $installedHash = Get-FileSha256 $installedFiles[$index].file.FullName
+    $sourceHash = Get-FileSha256 $sourceFiles[$index].file.FullName
+    if (-not $installedHash -or -not [System.StringComparer]::OrdinalIgnoreCase.Equals($installedHash, $sourceHash)) { return $null }
+    $identity.Add("$($installedFiles[$index].relative_path):$installedHash")
+  }
+  return Get-SymppStringSha256 ($identity -join "`n")
+}
+
 function Test-InstalledPluginPayloadMatchesMarketplaceSource([string]$PluginRoot, [string]$SourceRoot) {
   $packageRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($PluginRoot))
-  $packageName = Split-Path -Leaf $packageRoot
-  $sourcePluginRoot = Join-Path $SourceRoot "plugins/$packageName"
+  $sourcePluginRoot = Join-Path $SourceRoot ("plugins/" + (Split-Path -Leaf $packageRoot))
   $relativePaths = @(
     ".codex-plugin/plugin.json",
     ".mcp.json",
@@ -117,63 +187,146 @@ function Test-InstalledPluginPayloadMatchesMarketplaceSource([string]$PluginRoot
     "scripts/sympp-mcp-launcher-helpers.ps1"
   )
   $checked = 0
-
   foreach ($relativePath in $relativePaths) {
     $installedPath = Join-Path $PluginRoot $relativePath
-    if (-not (Test-Path -LiteralPath $installedPath)) {
-      continue
-    }
-
+    if (-not (Test-Path -LiteralPath $installedPath)) { continue }
     $sourcePath = Join-Path $sourcePluginRoot $relativePath
-    if (-not (Test-Path -LiteralPath $sourcePath)) {
-      return $false
-    }
-
-    if ((Get-FileSha256 $installedPath) -ne (Get-FileSha256 $sourcePath)) {
-      return $false
-    }
+    if (-not (Test-Path -LiteralPath $sourcePath) -or (Get-FileSha256 $installedPath) -ne (Get-FileSha256 $sourcePath)) { return $false }
     $checked += 1
   }
-
   return $checked -gt 0
 }
 
-function Resolve-RepoRootFromMarketplaceCache([string]$PluginRoot) {
+function Get-SymppInstalledIdentityCachePath([string]$PluginRoot) {
+  $key = Get-SymppStablePathKey ([System.IO.Path]::GetFullPath($PluginRoot).ToLowerInvariant())
+  return Join-Path (Resolve-SymppPluginHome) "runtime/launcher-validation/$key.json"
+}
+
+function Read-SymppInstalledIdentityCache([string]$CachePath, [string]$PluginRoot, [string]$SourceRoot, [string]$GenerationKey) {
+  if ([string]::IsNullOrWhiteSpace($GenerationKey) -or -not (Test-Path -LiteralPath $CachePath -PathType Leaf)) { return $null }
+  try {
+    $cache = Get-Content -LiteralPath $CachePath -Raw | ConvertFrom-Json
+    if ([int]$cache.schema_version -ne 1 -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals([string]$cache.plugin_root, [System.IO.Path]::GetFullPath($PluginRoot)) -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals([string]$cache.source_root, [System.IO.Path]::GetFullPath($SourceRoot)) -or
+        -not [System.StringComparer]::Ordinal.Equals([string]$cache.generation_key, $GenerationKey) -or
+        [string]$cache.revision -notmatch "^[0-9a-f]{40}$" -or
+        [string]$cache.contract_fingerprint -notmatch "^[0-9a-f]{64}$" -or
+        [string]$cache.payload_identity -notmatch "^[0-9a-f]{64}$") {
+      return $null
+    }
+    Write-SymppLauncherTrace "installed_identity_cache_hit"
+    return $cache
+  } catch {
+    return $null
+  }
+}
+
+function Write-SymppInstalledIdentityCache([string]$CachePath, $Identity) {
+  $directory = Split-Path -Parent $CachePath
+  New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  $tempPath = "$CachePath.$PID.$([guid]::NewGuid().ToString('N')).tmp"
+  try {
+    [System.IO.File]::WriteAllText($tempPath, ($Identity | ConvertTo-Json -Depth 4), [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $tempPath -Destination $CachePath -Force
+  } finally {
+    Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Resolve-SymppInstalledMarketplaceIdentity([string]$PluginRoot) {
   $versionRoot = [System.IO.Path]::GetFullPath($PluginRoot)
   $packageRoot = Split-Path -Parent $versionRoot
   $marketplaceRoot = Split-Path -Parent $packageRoot
   $cacheRoot = Split-Path -Parent $marketplaceRoot
   $pluginsRoot = Split-Path -Parent $cacheRoot
+  if ((Split-Path -Leaf $cacheRoot) -ne "cache" -or (Split-Path -Leaf $pluginsRoot) -ne "plugins") { return $null }
 
-  if ((Split-Path -Leaf $cacheRoot) -ne "cache" -or (Split-Path -Leaf $pluginsRoot) -ne "plugins") {
-    return $null
+  $codexHome = Split-Path -Parent $pluginsRoot
+  $marketplaceName = Split-Path -Leaf $marketplaceRoot
+  $sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $codexHome ".tmp/marketplaces/$marketplaceName"))
+  $sourcePluginRoot = Join-Path $sourceRoot ("plugins/" + (Split-Path -Leaf $packageRoot))
+  if (-not (Test-SymphonySourceRoot $sourceRoot) -or -not (Test-Path -LiteralPath $sourcePluginRoot -PathType Container)) {
+    throw "installed_marketplace_identity_invalid: marketplace source is missing for $versionRoot. Run codex plugin marketplace upgrade."
   }
+
+  $generationKey = Get-SymppPluginGenerationKey $versionRoot $sourcePluginRoot $sourceRoot
+  $cachePath = Get-SymppInstalledIdentityCachePath $versionRoot
+  $cached = Read-SymppInstalledIdentityCache $cachePath $versionRoot $sourceRoot $generationKey
+  if ($cached) {
+    $script:SymppPreparedInstalledIdentity = $cached
+    return $cached
+  }
+
+  Write-SymppLauncherTrace "installed_identity_full_validation"
+  $installedRevision = Get-SymppPinnedSourceRevision $versionRoot
+  $marketplaceRevision = Get-SymppMarketplaceSourceRevision $sourceRoot
+  if (-not $installedRevision -or -not $marketplaceRevision -or
+      -not [System.StringComparer]::OrdinalIgnoreCase.Equals($installedRevision, $marketplaceRevision)) {
+    throw "installed_marketplace_identity_invalid: installed and marketplace revisions do not match. Run codex plugin marketplace upgrade."
+  }
+  if (-not (Test-SymppMarketplaceContractMatchesRevision $sourceRoot $marketplaceRevision)) {
+    throw "installed_marketplace_identity_invalid: marketplace contract does not match revision $marketplaceRevision."
+  }
+  $payloadIdentity = Get-InstalledPluginPayloadIdentity $versionRoot $sourceRoot
+  if (-not $payloadIdentity) {
+    throw "installed_marketplace_identity_invalid: installed plugin payload differs from the marketplace source. Run codex plugin marketplace upgrade."
+  }
+  try {
+    $contractFingerprint = [string]((Get-Content -LiteralPath (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json") -Raw | ConvertFrom-Json).mcp_contract_fingerprint)
+  } catch {
+    $contractFingerprint = $null
+  }
+  if ($contractFingerprint -notmatch "^[0-9a-fA-F]{64}$") {
+    throw "installed_marketplace_identity_invalid: marketplace MCP contract fingerprint is missing or invalid."
+  }
+
+  $identity = [pscustomobject]@{
+    schema_version = 1
+    plugin_root = $versionRoot
+    source_root = $sourceRoot
+    generation_key = $generationKey
+    revision = $marketplaceRevision.ToLowerInvariant()
+    contract_fingerprint = $contractFingerprint.ToLowerInvariant()
+    payload_identity = $payloadIdentity.ToLowerInvariant()
+  }
+  Write-SymppInstalledIdentityCache $cachePath $identity
+  $script:SymppPreparedInstalledIdentity = $identity
+  return $identity
+}
+
+function Resolve-RepoRootFromMarketplaceCache([string]$PluginRoot) {
+  $versionRoot = [System.IO.Path]::GetFullPath($PluginRoot)
+  if ($script:SymppPreparedInstalledIdentity -and
+      [System.StringComparer]::OrdinalIgnoreCase.Equals([string]$script:SymppPreparedInstalledIdentity.plugin_root, $versionRoot)) {
+    return [string]$script:SymppPreparedInstalledIdentity.source_root
+  }
+  try {
+    $identity = Resolve-SymppInstalledMarketplaceIdentity $versionRoot
+    if ($identity) { return [string]$identity.source_root }
+  } catch {
+    # The PowerShell fallback retains the legacy artifact/source selection contract.
+  }
+  $packageRoot = Split-Path -Parent $versionRoot
+  $marketplaceRoot = Split-Path -Parent $packageRoot
+  $cacheRoot = Split-Path -Parent $marketplaceRoot
+  $pluginsRoot = Split-Path -Parent $cacheRoot
+  if ((Split-Path -Leaf $cacheRoot) -ne "cache" -or (Split-Path -Leaf $pluginsRoot) -ne "plugins") { return $null }
 
   $codexHome = Split-Path -Parent $pluginsRoot
   $marketplaceName = Split-Path -Leaf $marketplaceRoot
   $candidate = [System.IO.Path]::GetFullPath((Join-Path $codexHome ".tmp/marketplaces/$marketplaceName"))
-
   if ((Test-SymphonySourceRoot $candidate) -and
       (Test-Path -LiteralPath (Join-Path $candidate "plugins/symphony-plus-plus/.codex-plugin/plugin.json")) -and
       (Test-Path -LiteralPath (Join-Path $candidate "plugins/symphony-plus-plus-mcp/.codex-plugin/plugin.json"))) {
     $installedRevision = Get-SymppPinnedSourceRevision $versionRoot
     $marketplaceRevision = Get-SymppMarketplaceSourceRevision $candidate
     if (-not $installedRevision -or -not $marketplaceRevision -or
-        -not [System.StringComparer]::OrdinalIgnoreCase.Equals($installedRevision, $marketplaceRevision)) {
-      return $null
-    }
-
-    if (-not (Test-SymppMarketplaceContractMatchesRevision $candidate $marketplaceRevision)) {
-      return $null
-    }
-
-    if (-not (Test-InstalledPluginPayloadMatchesMarketplaceSource $versionRoot $candidate)) {
-      return $null
-    }
-
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals($installedRevision, $marketplaceRevision) -or
+        -not (Test-SymppMarketplaceContractMatchesRevision $candidate $marketplaceRevision) -or
+        -not (Test-InstalledPluginPayloadMatchesMarketplaceSource $versionRoot $candidate)) { return $null }
     return $candidate
   }
-
   return $null
 }
 
@@ -367,6 +520,17 @@ function Test-BridgeLeaseActive($Lease, $ProcessIdentities) {
 
   $processIdentity = $ProcessIdentities[[string]$leasePid]
   $actualStart = [string]$processIdentity.start_time_utc_ticks
+  if ($Lease.PSObject.Properties["process_liveness_pipe"] -and
+      $Lease.PSObject.Properties["process_liveness_token"] -and
+      -not [string]::IsNullOrWhiteSpace([string]$Lease.process_liveness_pipe) -and
+      -not [string]::IsNullOrWhiteSpace([string]$Lease.process_liveness_token)) {
+    try {
+      $token = [System.IO.File]::ReadAllText([string]$Lease.process_liveness_pipe)
+      return [System.StringComparer]::Ordinal.Equals($token, [string]$Lease.process_liveness_token)
+    } catch {
+      return $false
+    }
+  }
   if ($Lease.PSObject.Properties["process_start_time_utc_ticks"] -and
       -not [string]::IsNullOrWhiteSpace([string]$Lease.process_start_time_utc_ticks)) {
     return [string]::IsNullOrWhiteSpace($actualStart) -or
