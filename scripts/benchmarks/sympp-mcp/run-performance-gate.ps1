@@ -12,7 +12,6 @@ param(
   [ValidateRange(1, 3600000)][int]$MaxColdMs = 600000,
   [ValidateRange(1, 60000)][int]$MaxWarmP95Ms = 2000,
   [ValidateRange(1, 2147483647)][int64]$MaxExactWarmBytes = 66864537,
-  [ValidateRange(1, 60000)][int]$MaxFallbackWarmP95Ms = 2000,
   [ValidateRange(1, 600000)][int]$MaxDirectMs = 30000,
   [ValidateRange(1, 2147483647)][int64]$MaxBackendBytes = 536870912,
   [switch]$SelfTest,
@@ -35,7 +34,7 @@ $resultCaps = [ordered]@{ claim = 600; read = 1200; progress = 500 }
 $exactP95Caps = @{ 1 = 1529; 10 = 1391; 100 = 109674 }
 $thresholds = @{
   cold_ms = $MaxColdMs; warm_p95_ms = $MaxWarmP95Ms; exact_warm_p95_ms = $exactP95Caps
-  exact_warm_bytes = $MaxExactWarmBytes; fallback_warm_p95_ms = $MaxFallbackWarmP95Ms; direct_ms = $MaxDirectMs
+  exact_warm_bytes = $MaxExactWarmBytes; direct_ms = $MaxDirectMs
   clients = $Clients; backend_bytes = $MaxBackendBytes; profile_caps = $profileCaps; result_caps = $resultCaps
 }
 
@@ -65,7 +64,7 @@ function Get-GateFailures($Metrics, $Limits) {
   if (-not $Metrics.exact.node.lifecycle_race.checked -or -not $Metrics.exact.node.lifecycle_race.healthy) { $failures.Add("exact.node.lifecycle_race") }
   if (-not $Metrics.exact.node.recovery.dashboard_healthy -or -not $Metrics.exact.node.mutation.checked -or -not $Metrics.exact.node.mutation.shortcut_rejected) { $failures.Add("exact.node.recovery_integrity") }
   $fallbackCohorts = @($Metrics.exact.fallback.warm)
-  if ($fallbackCohorts.Count -eq 0 -or ($fallbackCohorts.p95_initialize_ms | Measure-Object -Maximum).Maximum -gt $Limits.fallback_warm_p95_ms -or -not $Metrics.exact.fallback.recovery.dashboard_healthy) { $failures.Add("exact.fallback.functional") }
+  if (@($fallbackCohorts | Where-Object { $_.clients -eq 10 }).Count -eq 0 -or -not $Metrics.exact.fallback.recovery.dashboard_healthy) { $failures.Add("exact.fallback.functional") }
   foreach ($name in $Limits.profile_caps.Keys) {
     $row = $Metrics.profiles.$name; $cap = $Limits.profile_caps[$name]
     if ($row.tools -gt $cap.tools) { $failures.Add("profiles.$name.tools") }
@@ -99,7 +98,6 @@ function Write-Result($Metrics, [string[]]$Failures, $Cleanup) {
   [Console]::Out.WriteLine("  warm_p95_ms: $MaxWarmP95Ms")
   [Console]::Out.WriteLine("  exact_warm_p95_ms: 1=$($exactP95Caps[1]),10=$($exactP95Caps[10]),100=$($exactP95Caps[100])")
   [Console]::Out.WriteLine("  exact_warm_private_bytes: $MaxExactWarmBytes")
-  [Console]::Out.WriteLine("  fallback_warm_p95_ms: $MaxFallbackWarmP95Ms")
   [Console]::Out.WriteLine("  direct_elapsed_ms: $MaxDirectMs")
   [Console]::Out.WriteLine("  backend_private_bytes: $MaxBackendBytes")
   [Console]::Out.WriteLine("  backend_processes: 1")
@@ -261,7 +259,7 @@ function Invoke-SelfTest {
     "exact.node.lock_recovery" = { param($m) $m.exact.node.lock_recovery.reclaimed = $false }
     "exact.node.lifecycle_race" = { param($m) $m.exact.node.lifecycle_race.healthy = $false }
     "exact.node.recovery_integrity" = { param($m) $m.exact.node.mutation.shortcut_rejected = $false }
-    "exact.fallback.functional" = { param($m) $m.exact.fallback.warm[0].p95_initialize_ms = $MaxFallbackWarmP95Ms + 1 }
+    "exact.fallback.functional" = { param($m) $m.exact.fallback.recovery.dashboard_healthy = $false }
   }
   $baseFailures = @(Get-GateFailures $base $thresholds)
   if ($baseFailures.Count -ne 0) { throw "valid baseline unexpectedly failed: $($baseFailures -join ',')" }

@@ -577,7 +577,10 @@ async function bridge(identity, state, runtimeFile) {
       }
       if (requestProtocol) {
         protocol = protocolFrom(response.lines) || requestProtocol;
-        if (!sessionId || !await ensureRuntimeHealth(mcpUrl, sessionId, protocol, runtimeFile, state, identity)) throw new Error("backend MCP contract or ledger health did not match the prepared runtime");
+        if (!sessionId || !await ensureRuntimeHealth(mcpUrl, sessionId, protocol, runtimeFile, state, identity)) {
+          trace("warm_miss_health");
+          return false;
+        }
       }
       for (const content of response.lines) process.stdout.write(`${content.replace(/\r?\n/g, "")}\n`);
     }

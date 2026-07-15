@@ -19,6 +19,8 @@ if "%bridge_exit%"=="0" exit /b 0
 if "%bridge_exit%"=="42" goto :run_pwsh
 if "%bridge_exit%"=="43" goto :run_pwsh
 >&2 echo Symphony++ Node bridge could not attach after PowerShell prepared the runtime.
+%SYMPP_POWERSHELL% -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0start-sympp-mcp.ps1" -CleanupPreparedRuntime
+if errorlevel 1 >&2 echo Symphony++ prepared runtime cleanup failed.
 exit /b %bridge_exit%
 
 :run_pwsh

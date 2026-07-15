@@ -66,6 +66,7 @@ $coldPlan = $source.LastIndexOf('$backendPlan = Resolve-BackendPlan')
 Assert-True ($artifactCall -ge 0) "Cold launcher must retain artifact probing"
 Assert-True ($warmCall -ge 0 -and $warmCall -lt $artifactCall) "PowerShell fallback warm attach must run before artifact probing"
 Assert-True ($coldLock -ge 0 -and $coldLock -lt $coldPlan) "Cold singleton planning must remain under the startup lock"
+Assert-True ((@([regex]::Matches($source, 'Resolve-SymppArtifactProbe \$pluginRoot[^\r\n]+')).Count -eq 2) -and -not $source.Contains('-ValidateOnly:$ValidateOnly')) "Fallback artifact probes must stay metadata-only until backend startup is required"
 
 $mcp = Get-Content -LiteralPath (Join-Path $pluginRoot ".mcp.json") -Raw | ConvertFrom-Json
 $server = $mcp.symphony_plus_plus
@@ -75,7 +76,9 @@ $nodePath = Join-Path $pluginRoot "scripts/start-sympp-mcp-bridge.js"
 $cmd = Get-Content -LiteralPath $cmdPath -Raw
 $node = Get-Content -LiteralPath $nodePath -Raw
 Assert-True ($cmd.Contains('where node.exe') -and $cmd.Contains('-PrepareRuntimeOnly') -and $cmd.Contains('if "%bridge_exit%"=="42" goto :run_pwsh')) "Bootstrap must select Node opportunistically and preserve PowerShell fallback after preparation"
+Assert-True ($cmd.Contains('-CleanupPreparedRuntime') -and $source.Contains('if ($CleanupPreparedRuntime)')) "Unexpected post-prepare Node failures must clean an unleased managed runtime"
 Assert-True ($source.Contains('if ($PrepareRuntimeOnly)') -and $source.IndexOf('if ($PrepareRuntimeOnly)') -lt $source.LastIndexOf('Invoke-HttpMcpBridge')) "Prepared cold runtime must exit before any PowerShell stdio bridge"
+Assert-True ($node.Contains('trace("warm_miss_health");') -and $node.Contains('if (!await bridge(identity, state, runtimeFile)) process.exit(WARM_MISS);')) "Node health mismatches must route through cold recovery"
 Assert-True ((@([regex]::Matches($node, 'require\("([^./][^"]*)"\)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique) -join ",") -eq "child_process,crypto,fs,http,net,os,path,readline") "Node bridge must use standard-library modules only"
 & (Get-Command node.exe -ErrorAction Stop).Source --check $nodePath
 Assert-True ($LASTEXITCODE -eq 0) "Node bridge must parse"
