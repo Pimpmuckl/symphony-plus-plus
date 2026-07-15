@@ -71,6 +71,34 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     end
   end
 
+  @spec operator_dashboard_hydrated_payload(module()) :: {:ok, map()} | {:error, term()}
+  def operator_dashboard_hydrated_payload(repo) do
+    with {:ok, context} <- operator_dashboard_context(repo) do
+      opts = dashboard_opts(context)
+
+      with {:ok, board} <- Dashboard.operator_board(repo, opts),
+           {:ok, work_request_sections} <- Dashboard.work_request_sections(repo, opts),
+           {:ok, guidance_requests} <- Dashboard.human_guidance_requests(repo, opts),
+           {:ok, solo_sessions} <- Dashboard.solo_sessions(repo, %{}, opts),
+           {:ok, work_request_details} <-
+             operator_work_request_board_details(repo, Map.get(work_request_sections.active, :work_requests, []), context.repo_identity_catalog) do
+        {board, active_blocking_edges} = local_operator_board(board, context.hidden_work_package_ids)
+
+        {:ok,
+         context
+         |> base_payload(board, active_blocking_edges)
+         |> Map.merge(%{
+           work_requests: work_request_sections.active,
+           archived_work_requests: work_request_sections.archived,
+           work_request_details: work_request_details,
+           guidance_requests: guidance_requests,
+           solo_sessions: solo_sessions,
+           deferred: %{dashboard_sections: false}
+         })}
+      end
+    end
+  end
+
   defp operator_dashboard_context(repo) do
     with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo),
          {:ok, settings} <- OperatorSettingsRepository.get(repo),

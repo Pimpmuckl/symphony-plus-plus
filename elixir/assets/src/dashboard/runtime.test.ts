@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { dashboardEventsUrl, dashboardMutationWorkRequest, mergeDashboardPayload, mutationShouldRefreshDashboard, patchDashboardWorkRequest, removeDashboardWorkRequest, shouldSkipDashboardLoad } from "./runtime";
+import { createLatestTaskQueue, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, enqueueLatestTask, mergeDashboardPayload, mutationShouldRefreshDashboard, patchDashboardWorkRequest, removeDashboardWorkRequest } from "./runtime";
 import type { DashboardPayload, WorkRequestCard } from "@/types/dashboard";
 
 describe("dashboard runtime mutation helpers", () => {
@@ -13,10 +13,31 @@ describe("dashboard runtime mutation helpers", () => {
     expect(mutationShouldRefreshDashboard({ ok: true, refresh: { dashboard: false } })).toBe(false);
   });
 
-  it("only skips overlapping unforced silent dashboard loads", () => {
-    expect(shouldSkipDashboardLoad(true, "silent", false)).toBe(true);
-    expect(shouldSkipDashboardLoad(true, "silent", true)).toBe(false);
-    expect(shouldSkipDashboardLoad(true, "refresh", false)).toBe(false);
+  it("runs one active and one latest trailing task for a burst", async () => {
+    const queue = createLatestTaskQueue<string>();
+    const runs: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const run = async (task: string) => {
+      runs.push(task);
+      if (task === "first") await firstGate;
+    };
+
+    const settled = enqueueLatestTask(queue, "first", run);
+    for (let index = 0; index < 20; index += 1) void enqueueLatestTask(queue, `burst-${index}`, run);
+
+    expect(runs).toEqual(["first"]);
+    releaseFirst();
+    await settled;
+    expect(runs).toEqual(["first", "burst-19"]);
+  });
+
+  it("keeps cold loading split and uses one endpoint after hydration", () => {
+    expect(dashboardRefreshPath(null)).toBe("/dashboard");
+    expect(dashboardRefreshPath({ deferred: { dashboard_sections: true } })).toBe("/dashboard");
+    expect(dashboardRefreshPath({ deferred: { dashboard_sections: false } })).toBe("/dashboard/hydrated");
   });
 
   it("patches completed WorkRequests in-place", () => {

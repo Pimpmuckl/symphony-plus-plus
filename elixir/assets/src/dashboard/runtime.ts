@@ -55,6 +55,8 @@ export type DashboardApiResponse = unknown;
 
 export type DashboardResponseSelector = (payload: DashboardApiResponse) => DashboardPayload | null | undefined;
 
+export type LatestTaskQueue<T> = { active: Promise<void> | null; pending: T | null };
+
 class DashboardApiError extends Error {
   readonly reconnectableLocalSession: boolean;
 
@@ -240,6 +242,10 @@ export function dashboardEventsUrl() {
   return operatorApiUrl("/dashboard/events");
 }
 
+export function dashboardRefreshPath(dashboard: DashboardPayload | null) {
+  return dashboard?.deferred?.dashboard_sections === false ? "/dashboard/hydrated" : "/dashboard";
+}
+
 function operatorConfigUrl() {
   const url = operatorApiUrl("/config");
   const token = currentOperatorBootstrapToken();
@@ -367,8 +373,25 @@ export function mutationShouldRefreshDashboard(payload: DashboardApiResponse) {
   return payload.refresh.dashboard !== false;
 }
 
-export function shouldSkipDashboardLoad(inFlight: boolean, mode: string, force: boolean) {
-  return inFlight && mode === "silent" && !force;
+export function createLatestTaskQueue<T>(): LatestTaskQueue<T> {
+  return { active: null, pending: null };
+}
+
+export function enqueueLatestTask<T>(queue: LatestTaskQueue<T>, task: T, run: (task: T) => Promise<void>) {
+  queue.pending = task;
+  if (queue.active) return queue.active;
+
+  queue.active = (async () => {
+    while (queue.pending !== null) {
+      const next = queue.pending;
+      queue.pending = null;
+      await run(next);
+    }
+  })().finally(() => {
+    queue.active = null;
+  });
+
+  return queue.active;
 }
 
 export type WorkRequestMutationPatch = Partial<WorkRequestCard> & { id: string };

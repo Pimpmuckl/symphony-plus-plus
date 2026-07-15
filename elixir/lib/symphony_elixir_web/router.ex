@@ -37,6 +37,7 @@ defmodule SymphonyElixirWeb.Router do
     get("/api/v1/sympp/operator/config", SymppDashboardApiController, :operator_config)
     get("/api/v1/sympp/operator/dashboard", SymppDashboardApiController, :operator_dashboard)
     get("/api/v1/sympp/operator/dashboard/deferred", SymppDashboardApiController, :operator_dashboard_deferred)
+    get("/api/v1/sympp/operator/dashboard/hydrated", SymppDashboardApiController, :operator_dashboard_hydrated)
     get("/api/v1/sympp/operator/dashboard/events", SymppDashboardApiController, :operator_dashboard_events)
     post("/api/v1/sympp/operator/settings", SymppDashboardApiController, :operator_update_settings)
     post("/api/v1/sympp/operator/github/sync-prs", SymppDashboardApiController, :operator_sync_github_prs)
