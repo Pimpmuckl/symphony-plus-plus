@@ -16,6 +16,7 @@ const agent = new http.Agent({ keepAlive: true });
 const generationWatchers = [];
 let ownedGenerationMarker = null;
 let generationWatchReady = false;
+let generationWatchVersion = 0;
 let livenessServer = null;
 let livenessPipe = null;
 let livenessToken = null;
@@ -197,7 +198,9 @@ process.on("exit", closeLivenessProbe);
 function watchGeneration(paths, markerFile) {
   if (generationWatchers.length) return generationWatchReady;
   const invalidate = () => {
-    try { fs.unlinkSync(markerFile); trace("generation_watch_invalidated"); } catch (_) { }
+    generationWatchVersion += 1;
+    try { fs.unlinkSync(markerFile); } catch (_) { }
+    trace("generation_watch_invalidated");
   };
   for (const entry of paths) {
     try { generationWatchers.push(fs.watch(entry.path, { recursive: entry.recursive }, invalidate)); } catch (_) { closeGenerationWatchers(); generationWatchReady = false; return false; }
@@ -212,7 +215,7 @@ function liveGeneration(markerFile) {
     livenessMatches(marker.validator_pid, marker.validator_pipe, marker.validator_token) ? marker.generation_key : null;
 }
 
-function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, markerFile) {
+async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, markerFile) {
   let generation = liveGeneration(markerFile);
   if (generation) { trace("generation_cache_hit"); return generation; }
 
@@ -230,16 +233,33 @@ function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, marker
           { path: path.join(sourceRoot, ".codex-marketplace-install.json"), recursive: false },
           { path: path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp", "mcp_tools_contract.json"), recursive: false },
         ], markerFile);
-        generation = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
-        if (!generation) return null;
-        if (!watched) return generation;
-        const temporary = `${markerFile}.${process.pid}.tmp`;
-        fs.writeFileSync(temporary, `${JSON.stringify({ generation_key: generation, validator_pid: process.pid, validator_pipe: livenessPipe, validator_token: livenessToken })}\n`);
-        try { fs.unlinkSync(markerFile); } catch (_) { }
-        fs.renameSync(temporary, markerFile);
-        ownedGenerationMarker = markerFile;
-        trace("generation_full_scan");
-        return generation;
+        if (!watched) return null;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const watchVersion = generationWatchVersion;
+          generation = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
+          if (!generation) return null;
+          trace("generation_scan_complete");
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          const confirmed = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          if (!confirmed || confirmed !== generation || generationWatchVersion !== watchVersion) {
+            trace("generation_scan_retry");
+            continue;
+          }
+          const temporary = `${markerFile}.${process.pid}.tmp`;
+          fs.writeFileSync(temporary, `${JSON.stringify({ generation_key: generation, validator_pid: process.pid, validator_pipe: livenessPipe, validator_token: livenessToken })}\n`);
+          try { fs.unlinkSync(markerFile); } catch (_) { }
+          fs.renameSync(temporary, markerFile);
+          ownedGenerationMarker = markerFile;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          if (generationWatchVersion !== watchVersion || liveGeneration(markerFile) !== generation) {
+            trace("generation_scan_retry");
+            continue;
+          }
+          trace("generation_full_scan");
+          return generation;
+        }
+        return null;
       } finally {
         releaseProcessLock(lockFile, lock);
       }
@@ -251,7 +271,7 @@ function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, marker
   return null;
 }
 
-function resolveCachedIdentity(pluginRoot) {
+async function resolveCachedIdentity(pluginRoot) {
   const versionRoot = path.resolve(pluginRoot);
   const packageRoot = path.dirname(versionRoot);
   const marketplaceRoot = path.dirname(packageRoot);
@@ -265,7 +285,7 @@ function resolveCachedIdentity(pluginRoot) {
   const sourcePluginRoot = path.join(sourceRoot, "plugins", path.basename(packageRoot));
   const cacheName = sha256(versionRoot.toLowerCase()).slice(0, 12) + ".json";
   const cacheFile = path.join(resolveHome(), "runtime", "launcher-validation", cacheName);
-  const generation = coalescedGenerationKey(versionRoot, sourcePluginRoot, sourceRoot, `${cacheFile}.generation`);
+  const generation = await coalescedGenerationKey(versionRoot, sourcePluginRoot, sourceRoot, `${cacheFile}.generation`);
   if (!generation) return null;
   const cache = readJson(cacheFile);
   if (!cache || cache.schema_version !== 1 ||
@@ -307,7 +327,7 @@ function runtimeKey(backend, dashboard, contract) {
 function resolveStateIdentity(state, pluginRoot, cachedIdentity) {
   if (!state || !state.backend || !state.frontend || !state.plugin_root) return null;
   if (path.resolve(String(state.plugin_root)).toLowerCase() !== path.resolve(pluginRoot).toLowerCase()) return null;
-  const identity = cachedIdentity || resolveCachedIdentity(pluginRoot);
+  const identity = cachedIdentity;
   if (!identity) return null;
 
   const contract = String(identity.contract_fingerprint || identity.contract).toLowerCase();
@@ -628,7 +648,8 @@ async function main() {
   const state = readJson(runtimeFile);
   if (!state) { trace("warm_miss_state"); process.exit(WARM_MISS); }
   const pluginRoot = path.resolve(__dirname, "..");
-  const identity = resolveStateIdentity(state, pluginRoot);
+  const cachedIdentity = await resolveCachedIdentity(pluginRoot);
+  const identity = resolveStateIdentity(state, pluginRoot, cachedIdentity);
   if (!identity) { trace("warm_miss_state"); process.exit(WARM_MISS); }
   if (!await dashboardHealthy(identity)) { trace("warm_miss_dashboard"); process.exit(WARM_MISS); }
   if (!await bridge(identity, state, runtimeFile)) process.exit(WARM_MISS);

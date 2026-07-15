@@ -398,18 +398,28 @@ exit /b %ERRORLEVEL%
   }
   Stop-ExactClient $recovery
 
-  $mutation = [pscustomobject]@{ checked = $false; shortcut_rejected = $null }
+  $mutation = [pscustomobject]@{ checked = $false; shortcut_rejected = $null; scan_race_retried = $null }
   if (-not $SkipMutationCheck) {
     $mutation.checked = $true
-    Add-Content -LiteralPath (Join-Path $pluginRoot "scripts/start-sympp-mcp.ps1") -Value "`n# benchmark mutation"
+    if ($LauncherMode -eq "NodePresent") {
+      Remove-Item -LiteralPath $generationMarker[0].FullName -Force -ErrorAction SilentlyContinue
+    }
+    $scanBefore = [int](Get-TraceCounts)["generation_scan_complete"]
+    $retryBefore = [int](Get-TraceCounts)["generation_scan_retry"]
     $mutated = Start-ExactClient $environment
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    if ($LauncherMode -eq "NodePresent") {
+      while ([int](Get-TraceCounts)["generation_scan_complete"] -le $scanBefore -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+      if ([int](Get-TraceCounts)["generation_scan_complete"] -le $scanBefore) { throw "Mutation race did not observe an in-progress generation scan." }
+    }
+    Add-Content -LiteralPath (Join-Path $pluginRoot "scripts/start-sympp-mcp.ps1") -Value "`n# benchmark mutation"
     while (-not $mutated.process.HasExited -and -not $mutated.line_task.IsCompleted -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
     $mutation.shortcut_rejected = $mutated.process.HasExited -and
       $mutated.line_task.IsCompleted -and
       [string]::IsNullOrWhiteSpace([string]$mutated.line_task.GetAwaiter().GetResult())
+    $mutation.scan_race_retried = $LauncherMode -ne "NodePresent" -or [int](Get-TraceCounts)["generation_scan_retry"] -gt $retryBefore
     Stop-ExactClient $mutated
-    if (-not $mutation.shortcut_rejected) { throw "Mutated installed payload was not rejected before warm attach." }
+    if (-not $mutation.shortcut_rejected -or -not $mutation.scan_race_retried) { throw "Installed payload mutation during generation scan was not retried and rejected before warm attach." }
   }
 
   $result = [pscustomobject]@{
