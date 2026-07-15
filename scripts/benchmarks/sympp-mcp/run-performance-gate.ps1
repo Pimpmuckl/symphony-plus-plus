@@ -26,17 +26,23 @@ $directProbe = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/tests/transpo
 $exactProbe = Join-Path $PSScriptRoot "exact-command-performance.ps1"
 $payloadProbe = Join-Path $PSScriptRoot "measure-payloads.exs"
 $stateProbe = Join-Path $PSScriptRoot "measure-state-hot-path.exs"
+$responseListProbe = Join-Path $PSScriptRoot "measure-response-list-hot-path.exs"
 $profileCaps = [ordered]@{
   full = @{ tools = 80; bytes = 55000 }; worker = @{ tools = 35; bytes = 25000 }
   architect = @{ tools = 65; bytes = 45000 }; coordinator = @{ tools = 30; bytes = 20000 }
   solo = @{ tools = 30; bytes = 20000 }
 }
 $resultCaps = [ordered]@{ claim = 600; read = 1200; progress = 500 }
+$responseListCaps = [ordered]@{
+  list_queries = 25; list_bytes = 30000; list_p95_ms = 400
+  read_plan_p50_ratio = 0.8; read_plan_reductions_ratio = 0.9
+}
 $exactP95Caps = @{ 1 = $MaxWarmP95Ms; 10 = $MaxWarmP95Ms }
 $thresholds = @{
   cold_ms = $MaxColdMs; warm_p95_ms = $MaxWarmP95Ms; exact_warm_p95_ms = $exactP95Caps
   exact_warm_bytes = $MaxExactWarmBytes; direct_ms = $MaxDirectMs
   clients = $Clients; backend_bytes = $MaxBackendBytes; profile_caps = $profileCaps; result_caps = $resultCaps
+  response_list_caps = $responseListCaps
 }
 
 function Quote-Toon([string]$Value) {
@@ -60,6 +66,13 @@ function Get-GateFailures($Metrics, $Limits) {
   if ($Metrics.state_hot_path.operations.recovery_steady.write_statements -ne 0) { $failures.Add("state_hot_path.recovery_writes") }
   if ($Metrics.state_hot_path.ready_guard.package_reads_after_lock -ne 1 -or $Metrics.state_hot_path.ready_guard.history_reads_after_lock -ne 0) { $failures.Add("state_hot_path.ready_guard") }
   if (@($Metrics.state_hot_path.operations.PSObject.Properties.Value | Where-Object { $_.busy_retries -ne 0 }).Count -gt 0) { $failures.Add("state_hot_path.busy_retries") }
+  if ($Metrics.response_list.read_plan.http.text_encodes.canonical -ne 1 -or $Metrics.response_list.read_plan.http.text_encodes.full -ne 0 -or $Metrics.response_list.read_plan.legacy_full_stdio.text_encodes.canonical -ne 0 -or $Metrics.response_list.read_plan.legacy_full_stdio.text_encodes.full -ne 1) { $failures.Add("response_list.read_plan_encoding") }
+  if ($Metrics.response_list.read_plan.http.structured_nodes -ne 1000 -or $Metrics.response_list.read_plan.legacy_full_stdio.structured_nodes -ne 1000) { $failures.Add("response_list.read_plan_structured") }
+  if ($Metrics.response_list.read_plan.http.p50_ms -gt ($Metrics.response_list.read_plan.legacy_full_stdio.p50_ms * $Limits.response_list_caps.read_plan_p50_ratio)) { $failures.Add("response_list.read_plan_p50") }
+  if ($Metrics.response_list.read_plan.http.reductions_p50 -gt ($Metrics.response_list.read_plan.legacy_full_stdio.reductions_p50 * $Limits.response_list_caps.read_plan_reductions_ratio)) { $failures.Add("response_list.read_plan_reductions") }
+  if ($Metrics.response_list.list_work_requests.query_count -gt $Limits.response_list_caps.list_queries -or $Metrics.response_list.list_work_requests.work_request_queries -ne 1 -or $Metrics.response_list.list_work_requests.repo_scope_queries -ne 1) { $failures.Add("response_list.list_queries") }
+  if ($Metrics.response_list.list_work_requests.bytes -gt $Limits.response_list_caps.list_bytes -or $Metrics.response_list.list_work_requests.returned -ne 50 -or -not $Metrics.response_list.list_work_requests.has_next_cursor) { $failures.Add("response_list.list_bound") }
+  if ($Metrics.response_list.list_work_requests.p95_ms -gt $Limits.response_list_caps.list_p95_ms) { $failures.Add("response_list.list_p95") }
   $nodeCohorts = @($Metrics.exact.node.warm | Where-Object { $_.clients -ge 10 })
   $missingSloCohorts = @($Limits.exact_warm_p95_ms.Keys | Where-Object { $clients = [int]$_; @($Metrics.exact.node.warm | Where-Object { [int]$_.clients -eq $clients }).Count -eq 0 })
   if ($missingSloCohorts.Count -gt 0 -or @($Metrics.exact.node.warm | Where-Object { $Limits.exact_warm_p95_ms.ContainsKey([int]$_.clients) -and $_.p95_initialize_ms -gt $Limits.exact_warm_p95_ms[[int]$_.clients] }).Count -gt 0) { $failures.Add("exact.node.p95_ms") }
@@ -109,6 +122,7 @@ function Write-Result($Metrics, [string[]]$Failures, $Cleanup) {
   [Console]::Out.WriteLine("  direct_elapsed_ms: $MaxDirectMs")
   [Console]::Out.WriteLine("  backend_private_bytes: $MaxBackendBytes")
   [Console]::Out.WriteLine("  backend_processes: 1")
+  [Console]::Out.WriteLine("  response_list: list_queries=$($responseListCaps.list_queries),list_bytes=$($responseListCaps.list_bytes),list_p95_ms=$($responseListCaps.list_p95_ms),read_plan_p50_ratio=$($responseListCaps.read_plan_p50_ratio),read_plan_reductions_ratio=$($responseListCaps.read_plan_reductions_ratio)")
   [Console]::Out.WriteLine("  warm_leases_peak: $Clients")
   [Console]::Out.WriteLine("  zero_limits[5]: warm_leases_after,warm_network_attempts,wrapper_processes,wrapper_private_bytes,cold_leases_after_close")
   [Console]::Out.WriteLine("cold:")
@@ -149,6 +163,10 @@ function Write-Result($Metrics, [string[]]$Failures, $Cleanup) {
     $row = $property.Value
     [Console]::Out.WriteLine("    $($property.Name),$($row.samples),$($row.p50_ms),$($row.p95_ms),$($row.max_ms),$($row.sql_statements),$($row.write_statements),$($row.busy_retries)")
   }
+  [Console]::Out.WriteLine("response_list_hot_path:")
+  [Console]::Out.WriteLine("  read_plan_http: p50_ms=$($Metrics.response_list.read_plan.http.p50_ms),p95_ms=$($Metrics.response_list.read_plan.http.p95_ms),allocation_bytes_p50=$($Metrics.response_list.read_plan.http.allocation_bytes_p50),bytes=$($Metrics.response_list.read_plan.http.bytes),reductions_p50=$($Metrics.response_list.read_plan.http.reductions_p50),full_encodes=$($Metrics.response_list.read_plan.http.text_encodes.full),canonical_encodes=$($Metrics.response_list.read_plan.http.text_encodes.canonical)")
+  [Console]::Out.WriteLine("  read_plan_legacy_full_stdio: p50_ms=$($Metrics.response_list.read_plan.legacy_full_stdio.p50_ms),p95_ms=$($Metrics.response_list.read_plan.legacy_full_stdio.p95_ms),allocation_bytes_p50=$($Metrics.response_list.read_plan.legacy_full_stdio.allocation_bytes_p50),bytes=$($Metrics.response_list.read_plan.legacy_full_stdio.bytes),reductions_p50=$($Metrics.response_list.read_plan.legacy_full_stdio.reductions_p50),full_encodes=$($Metrics.response_list.read_plan.legacy_full_stdio.text_encodes.full),canonical_encodes=$($Metrics.response_list.read_plan.legacy_full_stdio.text_encodes.canonical)")
+  [Console]::Out.WriteLine("  list_work_requests: p50_ms=$($Metrics.response_list.list_work_requests.p50_ms),p95_ms=$($Metrics.response_list.list_work_requests.p95_ms),allocation_bytes_p50=$($Metrics.response_list.list_work_requests.allocation_bytes_p50),bytes=$($Metrics.response_list.list_work_requests.bytes),queries=$($Metrics.response_list.list_work_requests.query_count),repo_scope_queries=$($Metrics.response_list.list_work_requests.repo_scope_queries),returned=$($Metrics.response_list.list_work_requests.returned),has_next_cursor=$($Metrics.response_list.list_work_requests.has_next_cursor.ToString().ToLowerInvariant())")
   [Console]::Out.WriteLine("profiles[5]{name,tools,bytes,tokens_estimate,max_tools,max_bytes}:")
   foreach ($name in $profileCaps.Keys) {
     $row = $Metrics.profiles.$name; $cap = $profileCaps[$name]
@@ -282,6 +300,13 @@ function Invoke-SelfTest {
         architect_read = @{ busy_retries = 0 }; architect_write = @{ busy_retries = 0 }; ready_guard_1000 = @{ busy_retries = 0 }
       }
     }
+    response_list = [pscustomobject]@{
+      read_plan = [pscustomobject]@{
+        http = [pscustomobject]@{ p50_ms = 1; reductions_p50 = 1; structured_nodes = 1000; text_encodes = [pscustomobject]@{ canonical = 1; full = 0 } }
+        legacy_full_stdio = [pscustomobject]@{ p50_ms = 2; reductions_p50 = 2; structured_nodes = 1000; text_encodes = [pscustomobject]@{ canonical = 0; full = 1 } }
+      }
+      list_work_requests = [pscustomobject]@{ query_count = 2; work_request_queries = 1; repo_scope_queries = 1; bytes = 1; returned = 50; has_next_cursor = $true; p95_ms = 1 }
+    }
   }
   $cases = [ordered]@{
     "cold.isolated_bootstrap_ms" = { param($m) $m.cold.isolated_bootstrap_ms = $MaxColdMs + 1 }
@@ -308,6 +333,13 @@ function Invoke-SelfTest {
     "state_hot_path.recovery_writes" = { param($m) $m.state_hot_path.operations.recovery_steady.write_statements = 1 }
     "state_hot_path.ready_guard" = { param($m) $m.state_hot_path.ready_guard.history_reads_after_lock = 1 }
     "state_hot_path.busy_retries" = { param($m) $m.state_hot_path.operations.worker_read.busy_retries = 1 }
+    "response_list.read_plan_encoding" = { param($m) $m.response_list.read_plan.http.text_encodes.full = 1 }
+    "response_list.read_plan_structured" = { param($m) $m.response_list.read_plan.http.structured_nodes = 999 }
+    "response_list.read_plan_p50" = { param($m) $m.response_list.read_plan.http.p50_ms = 2 }
+    "response_list.read_plan_reductions" = { param($m) $m.response_list.read_plan.http.reductions_p50 = 2 }
+    "response_list.list_queries" = { param($m) $m.response_list.list_work_requests.repo_scope_queries = 2 }
+    "response_list.list_bound" = { param($m) $m.response_list.list_work_requests.returned = 51 }
+    "response_list.list_p95" = { param($m) $m.response_list.list_work_requests.p95_ms = $responseListCaps.list_p95_ms + 1 }
   }
   $baseFailures = @(Get-GateFailures $base $thresholds)
   if ($baseFailures.Count -ne 0) { throw "valid baseline unexpectedly failed: $($baseFailures -join ',')" }
@@ -408,7 +440,12 @@ try {
   $stateJson = @($stateOutput -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1)
   if ($stateJson.Count -ne 1) { throw "state hot-path probe omitted JSON output" }
   $stateHotPath = $stateJson[0] | ConvertFrom-Json
-  $revision = [string](& git -C $repoRoot rev-parse HEAD); $metrics = [pscustomobject]@{ revision = $revision.Trim(); cold = $cold; warm = $warm; direct = $direct; exact = [pscustomobject]@{ node = $exactNode; fallback = $exactFallback }; profiles = $payloads.profiles; results = $payloads.results; state_hot_path = $stateHotPath }
+  [Console]::Error.WriteLine("Measuring MCP response construction and WorkRequest list hot paths...")
+  $responseListOutput = Invoke-IsolatedMix @("run", "--no-start", $responseListProbe) $environment
+  $responseListJson = @($responseListOutput -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1)
+  if ($responseListJson.Count -ne 1) { throw "response/list hot-path probe omitted JSON output" }
+  $responseList = $responseListJson[0] | ConvertFrom-Json
+  $revision = [string](& git -C $repoRoot rev-parse HEAD); $metrics = [pscustomobject]@{ revision = $revision.Trim(); cold = $cold; warm = $warm; direct = $direct; exact = [pscustomobject]@{ node = $exactNode; fallback = $exactFallback }; profiles = $payloads.profiles; results = $payloads.results; state_hot_path = $stateHotPath; response_list = $responseList }
 } catch {
   $failure = $_.Exception.Message
   $backendLog = @(Get-ChildItem (Join-Path $tempRoot "logs") -Filter "backend-*.err.log" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -Last 1); if ($backendLog) { $detail = ([string](Get-Content $backendLog.FullName -Raw)).Trim(); if ($detail.Length -gt 2000) { $detail = $detail.Substring($detail.Length - 2000) }; $failure += "`nbackend stderr: $detail" }

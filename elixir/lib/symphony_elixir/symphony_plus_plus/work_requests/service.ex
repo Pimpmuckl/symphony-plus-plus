@@ -24,6 +24,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   @spec list(Repository.repo(), map()) :: {:ok, [WorkRequest.t()]} | {:error, error()}
   def list(repo, filters \\ %{}), do: Repository.list(repo, filters)
 
+  @spec list_page(Repository.repo(), map() | keyword(), pos_integer(), nil | {DateTime.t(), String.t()}) ::
+          {:ok, [WorkRequest.t()]} | {:error, error()}
+  def list_page(repo, filters, limit, cursor), do: Repository.list_page(repo, filters, limit, cursor)
+
   @spec update(Repository.repo(), String.t(), map()) :: {:ok, WorkRequest.t()} | {:error, error()}
   def update(repo, id, attrs), do: notify_dashboard(Repository.update(repo, id, attrs))
 

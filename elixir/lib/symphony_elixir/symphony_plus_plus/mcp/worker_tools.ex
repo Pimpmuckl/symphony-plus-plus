@@ -269,9 +269,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
          work_package_id = Session.work_package_id(session),
          uri = "sympp://work-packages/#{work_package_id}/#{file_name}",
          {:ok, state} <- PlanningRepository.get_render_state(repo, work_package_id),
-         {:ok, markdown} <- PlanningRenderer.render_state(state, file_name),
-         {:ok, toon} <- WorkerContext.encode_virtual_file(state, file_name, uri: uri) do
-      {:ok, ToolResult.agent_tool_result(%{"uri" => uri, "text" => markdown}, toon)}
+         {:ok, markdown} <- PlanningRenderer.render_state(state, file_name) do
+      {:ok,
+       ToolResult.agent_tool_result(%{"uri" => uri, "text" => markdown}, fn ->
+         {:ok, toon} = WorkerContext.encode_virtual_file(state, file_name, uri: uri)
+         toon
+       end)}
     else
       {:error, reason} -> worker_error(reason, "read_#{file_name}")
     end
