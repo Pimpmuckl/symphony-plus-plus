@@ -74,9 +74,9 @@ $cmdPath = Join-Path $pluginRoot "scripts/start-sympp-mcp.cmd"
 $nodePath = Join-Path $pluginRoot "scripts/start-sympp-mcp-bridge.js"
 $cmd = Get-Content -LiteralPath $cmdPath -Raw
 $node = Get-Content -LiteralPath $nodePath -Raw
-Assert-True ($cmd.Contains('where node.exe') -and $cmd.Contains('-PrepareRuntimeOnly') -and $cmd.Contains('goto :run_pwsh')) "Bootstrap must select Node opportunistically and preserve PowerShell fallback"
+Assert-True ($cmd.Contains('where node.exe') -and $cmd.Contains('-PrepareRuntimeOnly') -and $cmd.Contains('if "%bridge_exit%"=="42" goto :run_pwsh')) "Bootstrap must select Node opportunistically and preserve PowerShell fallback after preparation"
 Assert-True ($source.Contains('if ($PrepareRuntimeOnly)') -and $source.IndexOf('if ($PrepareRuntimeOnly)') -lt $source.LastIndexOf('Invoke-HttpMcpBridge')) "Prepared cold runtime must exit before any PowerShell stdio bridge"
-Assert-True ((@([regex]::Matches($node, 'require\("([^./][^"]*)"\)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique) -join ",") -eq "child_process,crypto,fs,http,os,path,readline") "Node bridge must use standard-library modules only"
+Assert-True ((@([regex]::Matches($node, 'require\("([^./][^"]*)"\)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique) -join ",") -eq "child_process,crypto,fs,http,net,os,path,readline") "Node bridge must use standard-library modules only"
 & (Get-Command node.exe -ErrorAction Stop).Source --check $nodePath
 Assert-True ($LASTEXITCODE -eq 0) "Node bridge must parse"
 & (Get-Command node.exe -ErrorAction Stop).Source $nodePath --runtime-supported
@@ -88,6 +88,16 @@ $liveLease = [pscustomobject]@{ pid = $PID; process_start_time_utc_ticks = $star
 $reusedPidLease = [pscustomobject]@{ pid = $PID; process_start_time_utc_ticks = "1"; created_at = [DateTimeOffset]::UtcNow.ToString("o") }
 Assert-True (Test-BridgeLeaseActive $liveLease $processMap) "Matching PID/start identity must stay live"
 Assert-True (-not (Test-BridgeLeaseActive $reusedPidLease $processMap)) "Reused PID identity must be stale"
+$livenessPath = [System.IO.Path]::GetTempFileName()
+try {
+  [System.IO.File]::WriteAllText($livenessPath, "node-lease-token")
+  $nodeLease = [pscustomobject]@{ pid = $PID; process_liveness_pipe = $livenessPath; process_liveness_token = "node-lease-token" }
+  Assert-True (Test-BridgeLeaseActive $nodeLease $processMap) "Matching Node liveness token must stay live"
+  $nodeLease.process_liveness_token = "reused-process-token"
+  Assert-True (-not (Test-BridgeLeaseActive $nodeLease $processMap)) "Mismatched Node liveness token must be stale"
+} finally {
+  Remove-Item -LiteralPath $livenessPath -Force -ErrorAction SilentlyContinue
+}
 Assert-True (-not (Test-BridgeLeaseActive $liveLease @{})) "Missing process must be stale"
 Assert-True ((Get-Content -LiteralPath $helperPath -Raw) -notmatch 'Get-CimInstance|Get-WmiObject') "Lease validation must not use CIM/WMI"
 

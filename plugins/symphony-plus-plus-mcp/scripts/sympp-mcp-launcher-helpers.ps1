@@ -520,6 +520,17 @@ function Test-BridgeLeaseActive($Lease, $ProcessIdentities) {
 
   $processIdentity = $ProcessIdentities[[string]$leasePid]
   $actualStart = [string]$processIdentity.start_time_utc_ticks
+  if ($Lease.PSObject.Properties["process_liveness_pipe"] -and
+      $Lease.PSObject.Properties["process_liveness_token"] -and
+      -not [string]::IsNullOrWhiteSpace([string]$Lease.process_liveness_pipe) -and
+      -not [string]::IsNullOrWhiteSpace([string]$Lease.process_liveness_token)) {
+    try {
+      $token = [System.IO.File]::ReadAllText([string]$Lease.process_liveness_pipe)
+      return [System.StringComparer]::Ordinal.Equals($token, [string]$Lease.process_liveness_token)
+    } catch {
+      return $false
+    }
+  }
   if ($Lease.PSObject.Properties["process_start_time_utc_ticks"] -and
       -not [string]::IsNullOrWhiteSpace([string]$Lease.process_start_time_utc_ticks)) {
     return [string]::IsNullOrWhiteSpace($actualStart) -or

@@ -3,6 +3,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
+const net = require("net");
 const path = require("path");
 const readline = require("readline");
 const { spawnSync } = require("child_process");
@@ -15,6 +16,9 @@ const agent = new http.Agent({ keepAlive: true });
 const generationWatchers = [];
 let ownedGenerationMarker = null;
 let generationWatchReady = false;
+let livenessServer = null;
+let livenessPipe = null;
+let livenessToken = null;
 
 function trace(event) {
   const dir = process.env.SYMPP_LAUNCHER_TRACE_DIR;
@@ -102,13 +106,42 @@ function processAlive(pid) {
   try { process.kill(Number(pid), 0); return true; } catch (_) { return false; }
 }
 
+function ensureLivenessProbe() {
+  if (livenessServer) return Promise.resolve();
+  livenessPipe = `\\\\.\\pipe\\sympp-mcp-${process.pid}-${crypto.randomUUID().replace(/-/g, "")}`;
+  livenessToken = crypto.randomBytes(32).toString("hex");
+  return new Promise((resolve, reject) => {
+    const server = net.createServer((socket) => socket.end(livenessToken));
+    const failed = (error) => { try { server.close(); } catch (_) { } reject(error); };
+    server.once("error", failed);
+    server.listen(livenessPipe, () => {
+      server.removeListener("error", failed);
+      livenessServer = server;
+      resolve();
+    });
+  });
+}
+
+function livenessMatches(pid, pipe, token) {
+  if (!pipe || !token || !processAlive(pid)) return false;
+  if (Number(pid) === process.pid) return pipe === livenessPipe && token === livenessToken;
+  try { return fs.readFileSync(pipe, "utf8") === token; } catch (_) { return false; }
+}
+
+function closeLivenessProbe() {
+  if (livenessServer) { try { livenessServer.close(); } catch (_) { } }
+  livenessServer = null;
+  livenessPipe = null;
+  livenessToken = null;
+}
+
 function closeGenerationWatchers() {
   for (const watcher of generationWatchers.splice(0)) {
     try { watcher.close(); } catch (_) { }
   }
   if (ownedGenerationMarker) {
     const marker = readJson(ownedGenerationMarker);
-    if (marker && Number(marker.validator_pid) === process.pid) {
+    if (marker && Number(marker.validator_pid) === process.pid && marker.validator_token === livenessToken) {
       try { fs.unlinkSync(ownedGenerationMarker); } catch (_) { }
     }
     ownedGenerationMarker = null;
@@ -116,6 +149,7 @@ function closeGenerationWatchers() {
   generationWatchReady = false;
 }
 process.on("exit", closeGenerationWatchers);
+process.on("exit", closeLivenessProbe);
 
 function watchGeneration(paths, markerFile) {
   if (generationWatchers.length) return generationWatchReady;
@@ -131,7 +165,8 @@ function watchGeneration(paths, markerFile) {
 
 function liveGeneration(markerFile) {
   const marker = readJson(markerFile);
-  return marker && /^[0-9a-f]{64}$/i.test(String(marker.generation_key || "")) && processAlive(marker.validator_pid) ? marker.generation_key : null;
+  return marker && /^[0-9a-f]{64}$/i.test(String(marker.generation_key || "")) &&
+    livenessMatches(marker.validator_pid, marker.validator_pipe, marker.validator_token) ? marker.generation_key : null;
 }
 
 function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, markerFile) {
@@ -157,7 +192,7 @@ function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, marker
         if (!generation) return null;
         if (!watched) return generation;
         const temporary = `${markerFile}.${process.pid}.tmp`;
-        fs.writeFileSync(temporary, `${JSON.stringify({ generation_key: generation, validator_pid: process.pid })}\n`);
+        fs.writeFileSync(temporary, `${JSON.stringify({ generation_key: generation, validator_pid: process.pid, validator_pipe: livenessPipe, validator_token: livenessToken })}\n`);
         try { fs.unlinkSync(markerFile); } catch (_) { }
         fs.renameSync(temporary, markerFile);
         ownedGenerationMarker = markerFile;
@@ -405,6 +440,8 @@ function createLocalLease(runtimeFile, state, identity) {
   const temporary = `${file}.tmp`;
   const lease = {
     pid: process.pid,
+    process_liveness_pipe: livenessPipe,
+    process_liveness_token: livenessToken,
     created_at: new Date().toISOString(),
     runtime_key: identity.runtimeKey,
     runtime_kind: state.backend.managed === true ? "managed" : String(state.backend.status || ""),
@@ -417,17 +454,15 @@ function createLocalLease(runtimeFile, state, identity) {
   return file;
 }
 
-function sameRuntimeLeaseExists(runtimeFile, key) {
+function sameRuntimeNodeLeaseExists(runtimeFile, key) {
   const directory = leaseDirectory(runtimeFile);
   let files;
   try { files = fs.readdirSync(directory).filter((name) => /^bridge-.*\.json$/.test(name)); } catch (_) { return false; }
   for (const name of files) {
     const file = path.join(directory, name);
     const lease = readJson(file);
-    let active = false;
-    if (lease && Number.isInteger(Number(lease.pid)) && Number(lease.pid) > 0) {
-      active = processAlive(lease.pid);
-    }
+    if (!lease || !lease.process_liveness_pipe || !lease.process_liveness_token) continue;
+    const active = livenessMatches(lease.pid, lease.process_liveness_pipe, lease.process_liveness_token);
     if (!active) {
       try { fs.unlinkSync(file); } catch (_) { }
     } else if (String(lease.runtime_key || "").toLowerCase() === key.toLowerCase()) return true;
@@ -436,7 +471,7 @@ function sameRuntimeLeaseExists(runtimeFile, key) {
 }
 
 function cleanupLastDetach(runtimeFile, key) {
-  if (sameRuntimeLeaseExists(runtimeFile, key)) return;
+  if (sameRuntimeNodeLeaseExists(runtimeFile, key)) return;
   const script = path.join(__dirname, "start-sympp-mcp.ps1");
   const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-CleanupRuntimeKey", key];
   let result = spawnSync("pwsh.exe", args, { stdio: ["ignore", "ignore", "inherit"] });
@@ -447,22 +482,25 @@ function cleanupLastDetach(runtimeFile, key) {
 async function bridge(identity, state, runtimeFile) {
   const mcpUrl = `${identity.backend}/mcp`;
   const clientId = `bridge-${process.pid}-${crypto.randomUUID().replace(/-/g, "")}`;
-  let attached;
-  try {
-    attached = await clientLease(mcpUrl, clientId, "attach", true);
-  } catch (_) {
-    trace("warm_miss_backend");
-    process.exit(WARM_MISS);
-  }
-  const requestedHeartbeat = Math.max(5, Math.min(540, Number(process.env.SYMPP_MCP_CLIENT_HEARTBEAT_SEC || 300))) * 1000;
-  const stale = Number(attached && attached.stale_after_ms) || 0;
-  const heartbeatMs = stale > 1000 ? Math.min(requestedHeartbeat, Math.max(1000, stale - Math.min(60000, Math.max(1000, Math.floor(stale / 10))))) : requestedHeartbeat;
   const localLease = createLocalLease(runtimeFile, state, identity);
-  const heartbeat = setInterval(() => { clientLease(mcpUrl, clientId, "heartbeat", false); }, heartbeatMs);
+  let attached = false;
+  let heartbeat = null;
   let sessionId = null;
   let protocol = null;
   const timeoutMs = Math.max(1, Math.min(3600, Number(process.env.SYMPP_MCP_HTTP_TIMEOUT_SEC || 300))) * 1000;
   try {
+    let attachedResponse;
+    try {
+      attachedResponse = await clientLease(mcpUrl, clientId, "attach", true);
+      attached = true;
+    } catch (_) {
+      trace("warm_miss_backend");
+      return false;
+    }
+    const requestedHeartbeat = Math.max(5, Math.min(540, Number(process.env.SYMPP_MCP_CLIENT_HEARTBEAT_SEC || 300))) * 1000;
+    const stale = Number(attachedResponse && attachedResponse.stale_after_ms) || 0;
+    const heartbeatMs = stale > 1000 ? Math.min(requestedHeartbeat, Math.max(1000, stale - Math.min(60000, Math.max(1000, Math.floor(stale / 10))))) : requestedHeartbeat;
+    heartbeat = setInterval(() => { clientLease(mcpUrl, clientId, "heartbeat", false); }, heartbeatMs);
     const confirmedState = readJson(runtimeFile);
     const confirmed = resolveStateIdentity(confirmedState, path.resolve(__dirname, ".."));
     if (!confirmed || confirmed.runtimeKey.toLowerCase() !== identity.runtimeKey.toLowerCase()) throw new Error("runtime changed before bridge attach");
@@ -501,12 +539,14 @@ async function bridge(identity, state, runtimeFile) {
       }
       for (const content of response.lines) process.stdout.write(`${content.replace(/\r?\n/g, "")}\n`);
     }
+    return true;
   } finally {
-    clearInterval(heartbeat);
+    if (heartbeat) clearInterval(heartbeat);
     try { fs.unlinkSync(localLease); } catch (_) { }
-    await clientLease(mcpUrl, clientId, "detach", false);
+    if (attached) await clientLease(mcpUrl, clientId, "detach", false);
     closeGenerationWatchers();
     cleanupLastDetach(runtimeFile, identity.runtimeKey);
+    closeLivenessProbe();
   }
 }
 
@@ -517,6 +557,7 @@ async function main() {
   }
   if (process.argv.some((arg) => /^-(Help|ValidateOnly)$/i.test(arg)) || process.env.SYMPP_REPO_ROOT || String(process.env.SYMPP_MCP_BRIDGE_MODE || "http").toLowerCase() !== "http") process.exit(POWERSHELL_FALLBACK);
 
+  await ensureLivenessProbe();
   const runtimeFile = resolveRuntimeFile();
   const state = readJson(runtimeFile);
   if (!state) { trace("warm_miss_state"); process.exit(WARM_MISS); }
@@ -524,7 +565,7 @@ async function main() {
   const identity = resolveStateIdentity(state, pluginRoot);
   if (!identity) { trace("warm_miss_state"); process.exit(WARM_MISS); }
   if (!await dashboardHealthy(identity)) { trace("warm_miss_dashboard"); process.exit(WARM_MISS); }
-  await bridge(identity, state, runtimeFile);
+  if (!await bridge(identity, state, runtimeFile)) process.exit(WARM_MISS);
 }
 
 main().catch((error) => {

@@ -16,6 +16,8 @@ if errorlevel 1 exit /b %ERRORLEVEL%
 node.exe "%~dp0start-sympp-mcp-bridge.js" %*
 set "bridge_exit=%ERRORLEVEL%"
 if "%bridge_exit%"=="0" exit /b 0
+if "%bridge_exit%"=="42" goto :run_pwsh
+if "%bridge_exit%"=="43" goto :run_pwsh
 >&2 echo Symphony++ Node bridge could not attach after PowerShell prepared the runtime.
 exit /b %bridge_exit%
 
