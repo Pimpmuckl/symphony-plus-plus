@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { dashboardEventsUrl, dashboardMutationWorkRequest, mergeDashboardPayload, mutationShouldRefreshDashboard, patchDashboardWorkRequest, removeDashboardWorkRequest, shouldSkipDashboardLoad } from "./runtime";
+import { createLatestTaskQueue, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, enqueueLatestTask, mergeDashboardPayload, mutationShouldRefreshDashboard, patchDashboardWorkRequest, removeDashboardWorkRequest } from "./runtime";
 import type { DashboardPayload, WorkRequestCard } from "@/types/dashboard";
 
 describe("dashboard runtime mutation helpers", () => {
@@ -13,10 +13,71 @@ describe("dashboard runtime mutation helpers", () => {
     expect(mutationShouldRefreshDashboard({ ok: true, refresh: { dashboard: false } })).toBe(false);
   });
 
-  it("only skips overlapping unforced silent dashboard loads", () => {
-    expect(shouldSkipDashboardLoad(true, "silent", false)).toBe(true);
-    expect(shouldSkipDashboardLoad(true, "silent", true)).toBe(false);
-    expect(shouldSkipDashboardLoad(true, "refresh", false)).toBe(false);
+  it("runs one active and one latest trailing task for a burst", async () => {
+    const queue = createLatestTaskQueue<string>();
+    const runs: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const run = async (task: string) => {
+      runs.push(task);
+      if (task === "first") await firstGate;
+    };
+
+    const settled = enqueueLatestTask(queue, "first", run);
+    for (let index = 0; index < 20; index += 1) void enqueueLatestTask(queue, `burst-${index}`, run);
+
+    expect(runs).toEqual(["first"]);
+    releaseFirst();
+    await settled;
+    expect(runs).toEqual(["first", "burst-19"]);
+  });
+
+  it("does not let an ordinary invalidation replace a queued reconnect", async () => {
+    const queue = createLatestTaskQueue<string>();
+    const runs: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const run = async (task: string) => {
+      runs.push(task);
+      if (task === "first") await firstGate;
+    };
+    const mergePending = (pending: string, next: string) =>
+      pending === "reconnect" || next === "reconnect" ? "reconnect" : next;
+
+    const settled = enqueueLatestTask(queue, "first", run, mergePending);
+    void enqueueLatestTask(queue, "reconnect", run, mergePending);
+    void enqueueLatestTask(queue, "silent", run, mergePending);
+
+    releaseFirst();
+    await settled;
+    expect(runs).toEqual(["first", "reconnect"]);
+  });
+
+  it("drains work enqueued during queue finalization", async () => {
+    const queue = createLatestTaskQueue<string>();
+    const runs: string[] = [];
+    const run = async (task: string) => {
+      runs.push(task);
+      if (task === "first") {
+        void Promise.resolve().then(() => {
+          queueMicrotask(() => void enqueueLatestTask(queue, "late", run));
+        });
+      }
+    };
+
+    await enqueueLatestTask(queue, "first", run);
+    expect(runs).toEqual(["first", "late"]);
+    expect(queue).toEqual({ active: null, pending: null });
+  });
+
+  it("keeps cold loading split and uses one endpoint after hydration", () => {
+    expect(dashboardRefreshPath(null)).toBe("/dashboard");
+    expect(dashboardRefreshPath({ deferred: { dashboard_sections: true } })).toBe("/dashboard");
+    expect(dashboardRefreshPath({ deferred: { dashboard_sections: false } })).toBe("/dashboard/hydrated");
   });
 
   it("patches completed WorkRequests in-place", () => {
