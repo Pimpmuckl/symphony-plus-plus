@@ -103,6 +103,7 @@ function Get-SymppArtifactManifestPath([string]$PluginRoot) {
 }
 
 function Read-SymppArtifactManifest([string]$PluginRoot) {
+  Write-SymppLauncherTrace "artifact_manifest_resolution"
   $path = Get-SymppArtifactManifestPath $PluginRoot
   if (-not $path) {
     return $null

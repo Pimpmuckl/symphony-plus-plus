@@ -22,7 +22,9 @@ Assert-True ($selfTest -contains "status: pass") "threshold self-test must emit 
 $expectedFailures = @(
   "cold.isolated_bootstrap_ms", "warm.p95_ms", "direct.elapsed_ms", "cohort.clients", "backend.singleton", "backend.identity",
   "warm.lease_lifecycle", "warm.network_attempts", "direct.wrapper_processes",
-  "direct.wrapper_private_bytes", "direct.backend_private_bytes", "cleanup"
+  "direct.wrapper_private_bytes", "direct.backend_private_bytes",
+  "exact.node.p95_ms", "exact.node.private_bytes", "exact.node.warm_resolution",
+  "exact.node.cold_resolution", "exact.node.recovery_integrity", "exact.fallback.functional", "cleanup"
 ) + @("full", "worker", "architect", "coordinator", "solo" | ForEach-Object { "profiles.$_.tools"; "profiles.$_.bytes" }) +
   @("claim", "read", "progress" | ForEach-Object { "results.$_.bytes" })
 $failureLine = [string]($selfTest | Where-Object { $_ -like "intentional_failures*" } | Select-Object -First 1)

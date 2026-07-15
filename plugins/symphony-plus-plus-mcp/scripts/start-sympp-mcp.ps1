@@ -1,6 +1,8 @@
 param(
   [switch]$Help,
-  [switch]$ValidateOnly
+  [switch]$ValidateOnly,
+  [switch]$PrepareRuntimeOnly,
+  [string]$CleanupRuntimeKey
 )
 
 $ErrorActionPreference = "Stop"
@@ -503,6 +505,7 @@ function Get-McpContractFingerprintFromMarketplaceSource([string]$PluginRoot) {
 }
 
 function Resolve-LocalMcpContractFingerprint([string]$PluginRoot) {
+  Write-SymppLauncherTrace "contract_fingerprint_resolution"
   $sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $PluginRoot "../.."))
   if (Test-SymphonySourceRoot $sourceRoot) {
     $fingerprint = Get-McpContractFingerprintFromContractFile (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
@@ -1955,11 +1958,15 @@ if ($Help) {
   exit 0
 }
 
+if (-not [string]::IsNullOrWhiteSpace($CleanupRuntimeKey)) {
+  Stop-ManagedServersIfUnused (Resolve-RuntimeFile) $CleanupRuntimeKey
+  exit 0
+}
 
 $pluginRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $runtimeFile = Resolve-RuntimeFile
 $bridgeMode = Get-EnvMode "SYMPP_MCP_BRIDGE_MODE" "http" @("http", "direct_stdio")
-if (-not $ValidateOnly -and $bridgeMode -eq "http" -and [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT)) {
+if (-not $ValidateOnly -and -not $PrepareRuntimeOnly -and $bridgeMode -eq "http" -and [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT)) {
   $warmBackendPortExplicit = -not [string]::IsNullOrWhiteSpace($env:SYMPP_BACKEND_PORT)
   $warmDashboardPortExplicit = -not [string]::IsNullOrWhiteSpace($env:SYMPP_DASHBOARD_PORT)
   $warmBackendPort = Get-EnvInteger "SYMPP_BACKEND_PORT" $DefaultBackendPort 0 65535
@@ -1995,7 +2002,7 @@ try {
 $artifactProbe = $null
 $artifactProbeError = $null
 try {
-  $artifactProbe = Resolve-SymppArtifactProbe $pluginRoot $expectedSourceRevision $expectedContractFingerprint $artifactRuntimeAllowed $sourceFallbackAllowed -ValidateOnly -PrepareArtifact:$ValidateOnly
+  $artifactProbe = Resolve-SymppArtifactProbe $pluginRoot $expectedSourceRevision $expectedContractFingerprint $artifactRuntimeAllowed $sourceFallbackAllowed -ValidateOnly:$ValidateOnly -PrepareArtifact:$ValidateOnly
 } catch {
   $artifactProbeError = $_
 }
@@ -2005,7 +2012,7 @@ if ($null -ne $artifactProbeError -or $null -eq $artifactProbe -or @("ready", "a
     $repoRoot = Resolve-RepoRoot
     $sourceFallbackAllowed = $sourceFallbackAllowed -or ($explicitRepoRoot -and (Test-SymphonySourceRoot $repoRoot))
     if ($null -ne $artifactProbeError -and $sourceFallbackAllowed) {
-      $artifactProbe = Resolve-SymppArtifactProbe $pluginRoot $expectedSourceRevision $expectedContractFingerprint $artifactRuntimeAllowed $sourceFallbackAllowed -ValidateOnly -PrepareArtifact:$ValidateOnly
+      $artifactProbe = Resolve-SymppArtifactProbe $pluginRoot $expectedSourceRevision $expectedContractFingerprint $artifactRuntimeAllowed $sourceFallbackAllowed -ValidateOnly:$ValidateOnly -PrepareArtifact:$ValidateOnly
       $artifactProbeError = $null
     }
   } catch {
@@ -2327,12 +2334,18 @@ try {
     superseded_runtimes = $supersededStates
   }
   Write-RuntimeState $runtimeFile $state
-  $bridgeLeasePath = New-BridgeLease $runtimeFile $backendPlan $dashboardPlan $runtimeKey
+  if (-not $PrepareRuntimeOnly) {
+    $bridgeLeasePath = New-BridgeLease $runtimeFile $backendPlan $dashboardPlan $runtimeKey
+  }
 
   $dashboardSummary = if ($dashboardPlan.url) { "$($dashboardPlan.url) [$($dashboardPlan.status)]" } else { $dashboardPlan.status }
-  Write-Diagnostic "Symphony++ MCP bridge ready: backend=$($backendPlan.url) dashboard=$dashboardSummary runtime=$runtimeFile"
+  $readyKind = if ($PrepareRuntimeOnly) { "runtime" } else { "MCP bridge" }
+  Write-Diagnostic "Symphony++ $readyKind ready: backend=$($backendPlan.url) dashboard=$dashboardSummary runtime=$runtimeFile"
 } finally {
   Exit-FileLock $startupLock
+}
+if ($PrepareRuntimeOnly) {
+  exit 0
 }
 try {
   Invoke-HttpMcpBridge $backendPlan.mcp_url $bridgeTimeout (New-McpClientLeaseId) $clientHeartbeatInterval

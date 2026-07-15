@@ -383,7 +383,11 @@ function Resolve-LaunchArtifactSelection(
 
   if ($ArtifactProbe.status -eq "ready" -or $ArtifactProbe.status -eq "artifact_selected") {
     try {
-      $preparedArtifact = Resolve-SymppArtifactProbe $PluginRoot $sourceRevision $ExpectedContractFingerprint $ArtifactRuntimeAllowed $SourceFallbackAllowed
+      $preparedArtifact = if ($ArtifactProbe.status -eq "ready" -and $ArtifactProbe.runtime) {
+        $ArtifactProbe
+      } else {
+        Resolve-SymppArtifactProbe $PluginRoot $sourceRevision $ExpectedContractFingerprint $ArtifactRuntimeAllowed $SourceFallbackAllowed
+      }
       if ($preparedArtifact.status -eq "ready" -and $preparedArtifact.runtime) {
         $artifactRuntime = $preparedArtifact.runtime
         $runtimeMode = "artifact"
