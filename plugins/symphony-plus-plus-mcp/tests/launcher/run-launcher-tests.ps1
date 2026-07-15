@@ -75,10 +75,13 @@ $cmdPath = Join-Path $pluginRoot "scripts/start-sympp-mcp.cmd"
 $nodePath = Join-Path $pluginRoot "scripts/start-sympp-mcp-bridge.js"
 $cmd = Get-Content -LiteralPath $cmdPath -Raw
 $node = Get-Content -LiteralPath $nodePath -Raw
+$preflightCall = $node.IndexOf('if (!await preflightRuntimeHealth')
+$stdinRead = $node.IndexOf('readline.createInterface')
 Assert-True ($cmd.Contains('where node.exe') -and $cmd.Contains('-PrepareRuntimeOnly') -and $cmd.Contains('if "%bridge_exit%"=="42" goto :run_pwsh')) "Bootstrap must select Node opportunistically and preserve PowerShell fallback after preparation"
 Assert-True ($cmd.Contains('-CleanupPreparedRuntime') -and $source.Contains('if ($CleanupPreparedRuntime)')) "Unexpected post-prepare Node failures must clean an unleased managed runtime"
 Assert-True ($source.Contains('if ($PrepareRuntimeOnly)') -and $source.IndexOf('if ($PrepareRuntimeOnly)') -lt $source.LastIndexOf('Invoke-HttpMcpBridge')) "Prepared cold runtime must exit before any PowerShell stdio bridge"
-Assert-True ($node.Contains('trace("warm_miss_health");') -and $node.Contains('if (!await bridge(identity, state, runtimeFile)) process.exit(WARM_MISS);')) "Node health mismatches must route through cold recovery"
+Assert-True ($preflightCall -ge 0 -and $preflightCall -lt $stdinRead -and $node.Contains('trace("warm_miss_health");')) "Node health mismatches must route through cold recovery before consuming stdin"
+Assert-True ($node.Contains('confirmed.runtimeKey.toLowerCase()') -and $node.Contains('trace("warm_miss_state");')) "Concurrent runtime rotation must route through cold recovery"
 Assert-True ((@([regex]::Matches($node, 'require\("([^./][^"]*)"\)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique) -join ",") -eq "child_process,crypto,fs,http,net,os,path,readline") "Node bridge must use standard-library modules only"
 & (Get-Command node.exe -ErrorAction Stop).Source --check $nodePath
 Assert-True ($LASTEXITCODE -eq 0) "Node bridge must parse"

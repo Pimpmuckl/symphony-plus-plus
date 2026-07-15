@@ -442,6 +442,16 @@ async function ensureRuntimeHealth(mcpUrl, session, protocol, runtimeFile, state
   return false;
 }
 
+async function preflightRuntimeHealth(mcpUrl, runtimeFile, state, identity) {
+  const cacheFile = path.join(path.dirname(runtimeFile), "codex-plugin-health.json");
+  if (healthCacheMatches(readJson(cacheFile), state, identity)) return true;
+  const initialized = await mcpPost(mcpUrl, initializeBody(), null, null, 10000);
+  const session = initialized.headers["mcp-session-id"];
+  if (!initialized.ok || !session) return false;
+  const protocol = protocolFrom(initialized.lines) || "2025-03-26";
+  return ensureRuntimeHealth(mcpUrl, String(session), protocol, runtimeFile, state, identity);
+}
+
 async function dashboardHealthy(identity) {
   if (identity.headless) return true;
   try {
@@ -539,7 +549,14 @@ async function bridge(identity, state, runtimeFile) {
     }
     const confirmedState = readJson(runtimeFile);
     const confirmed = resolveStateIdentity(confirmedState, path.resolve(__dirname, ".."));
-    if (!confirmed || confirmed.runtimeKey.toLowerCase() !== identity.runtimeKey.toLowerCase()) throw new Error("runtime changed before bridge attach");
+    if (!confirmed || confirmed.runtimeKey.toLowerCase() !== identity.runtimeKey.toLowerCase()) {
+      trace("warm_miss_state");
+      return false;
+    }
+    if (!await preflightRuntimeHealth(mcpUrl, runtimeFile, confirmedState, confirmed)) {
+      trace("warm_miss_health");
+      return false;
+    }
     fs.closeSync(startupLock);
     startupLock = null;
     const requestedHeartbeat = Math.max(5, Math.min(540, Number(process.env.SYMPP_MCP_CLIENT_HEARTBEAT_SEC || 300))) * 1000;
@@ -577,10 +594,6 @@ async function bridge(identity, state, runtimeFile) {
       }
       if (requestProtocol) {
         protocol = protocolFrom(response.lines) || requestProtocol;
-        if (!sessionId || !await ensureRuntimeHealth(mcpUrl, sessionId, protocol, runtimeFile, state, identity)) {
-          trace("warm_miss_health");
-          return false;
-        }
       }
       for (const content of response.lines) process.stdout.write(`${content.replace(/\r?\n/g, "")}\n`);
     }
