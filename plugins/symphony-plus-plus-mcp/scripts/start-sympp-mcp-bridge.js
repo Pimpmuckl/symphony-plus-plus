@@ -12,6 +12,7 @@ const WARM_MISS = 42;
 const POWERSHELL_FALLBACK = 43;
 const BOARD_PATH = "/sympp/board";
 const DOTNET_EPOCH_TICKS = 621355968000000000n;
+const GENERATION_SETTLE_MS = 100;
 const agent = new http.Agent({ keepAlive: true });
 const generationWatchers = [];
 let ownedGenerationMarker = null;
@@ -216,8 +217,21 @@ function liveGeneration(markerFile) {
 }
 
 async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, markerFile) {
+  const watched = watchGeneration([
+    { path: pluginRoot, recursive: true },
+    { path: sourcePluginRoot, recursive: true },
+    { path: path.join(sourceRoot, ".codex-marketplace-install.json"), recursive: false },
+    { path: path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp", "mcp_tools_contract.json"), recursive: false },
+  ], markerFile);
+  if (!watched) return null;
+
+  let watchVersion = generationWatchVersion;
+  await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
   let generation = liveGeneration(markerFile);
-  if (generation) { trace("generation_cache_hit"); return generation; }
+  if (generation && generationWatchVersion === watchVersion) {
+    trace("generation_cache_hit");
+    return { key: generation, watchVersion };
+  }
 
   const lockFile = `${markerFile}.lock`;
   const deadline = Date.now() + 15000;
@@ -225,23 +239,18 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
     const lock = tryAcquireProcessLock(lockFile);
     if (lock !== null) {
       try {
+        watchVersion = generationWatchVersion;
+        await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
         generation = liveGeneration(markerFile);
-        if (generation) return generation;
-        const watched = watchGeneration([
-          { path: pluginRoot, recursive: true },
-          { path: sourcePluginRoot, recursive: true },
-          { path: path.join(sourceRoot, ".codex-marketplace-install.json"), recursive: false },
-          { path: path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp", "mcp_tools_contract.json"), recursive: false },
-        ], markerFile);
-        if (!watched) return null;
+        if (generation && generationWatchVersion === watchVersion) return { key: generation, watchVersion };
         for (let attempt = 0; attempt < 3; attempt += 1) {
-          const watchVersion = generationWatchVersion;
+          watchVersion = generationWatchVersion;
           generation = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
           if (!generation) return null;
           trace("generation_scan_complete");
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
           const confirmed = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
           if (!confirmed || confirmed !== generation || generationWatchVersion !== watchVersion) {
             trace("generation_scan_retry");
             continue;
@@ -251,22 +260,27 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
           try { fs.unlinkSync(markerFile); } catch (_) { }
           fs.renameSync(temporary, markerFile);
           ownedGenerationMarker = markerFile;
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
           if (generationWatchVersion !== watchVersion || liveGeneration(markerFile) !== generation) {
             trace("generation_scan_retry");
             continue;
           }
           trace("generation_full_scan");
-          return generation;
+          return { key: generation, watchVersion };
         }
         return null;
       } finally {
         releaseProcessLock(lockFile, lock);
       }
     }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    watchVersion = generationWatchVersion;
+    await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
     generation = liveGeneration(markerFile);
-    if (generation) { trace("generation_cache_hit"); return generation; }
+    if (generation && generationWatchVersion === watchVersion) {
+      trace("generation_cache_hit");
+      return { key: generation, watchVersion };
+    }
   }
   return null;
 }
@@ -285,19 +299,25 @@ async function resolveCachedIdentity(pluginRoot) {
   const sourcePluginRoot = path.join(sourceRoot, "plugins", path.basename(packageRoot));
   const cacheName = sha256(versionRoot.toLowerCase()).slice(0, 12) + ".json";
   const cacheFile = path.join(resolveHome(), "runtime", "launcher-validation", cacheName);
-  const generation = await coalescedGenerationKey(versionRoot, sourcePluginRoot, sourceRoot, `${cacheFile}.generation`);
+  const generationMarker = `${cacheFile}.generation`;
+  const generation = await coalescedGenerationKey(versionRoot, sourcePluginRoot, sourceRoot, generationMarker);
   if (!generation) return null;
   const cache = readJson(cacheFile);
   if (!cache || cache.schema_version !== 1 ||
       path.resolve(String(cache.plugin_root || "")).toLowerCase() !== versionRoot.toLowerCase() ||
       path.resolve(String(cache.source_root || "")).toLowerCase() !== sourceRoot.toLowerCase() ||
-      cache.generation_key !== generation ||
+      cache.generation_key !== generation.key ||
       !/^[0-9a-f]{40}$/i.test(String(cache.revision || "")) ||
       !/^[0-9a-f]{64}$/i.test(String(cache.contract_fingerprint || "")) ||
       !/^[0-9a-f]{64}$/i.test(String(cache.payload_identity || ""))) return null;
 
   trace("installed_identity_cache_hit");
-  return cache;
+  return { ...cache, generation_marker: generationMarker, generation_watch_version: generation.watchVersion };
+}
+
+function generationStillValid(identity) {
+  return identity && generationWatchReady && generationWatchVersion === identity.generationWatchVersion &&
+    liveGeneration(identity.generationMarker) === identity.generationKey;
 }
 
 function trimOrigin(value) {
@@ -348,7 +368,12 @@ function resolveStateIdentity(state, pluginRoot, cachedIdentity) {
   if (!artifactStatic && !managed && !headless && !external) return null;
   const key = runtimeKey(backend, dashboard, contract);
   if (String(state.runtime_key || "").toLowerCase() !== key.toLowerCase()) return null;
-  return { backend, dashboard, contract, runtimeKey: key, revision: identity.revision, headless };
+  return {
+    backend, dashboard, contract, runtimeKey: key, revision: identity.revision, headless,
+    generationKey: identity.generation_key || identity.generationKey,
+    generationMarker: identity.generation_marker || identity.generationMarker,
+    generationWatchVersion: Number(identity.generation_watch_version ?? identity.generationWatchVersion),
+  };
 }
 
 function request(urlString, method, body, headers, timeoutMs) {
@@ -565,6 +590,12 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_lock");
       return false;
     }
+    trace("generation_attach_preflight");
+    await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
+    if (!generationStillValid(identity)) {
+      trace("warm_miss_generation");
+      return false;
+    }
     localLease = createLocalLease(runtimeFile, state, identity);
     let attachedResponse;
     try {
@@ -572,6 +603,10 @@ async function bridge(identity, state, runtimeFile) {
       attached = true;
     } catch (_) {
       trace("warm_miss_backend");
+      return false;
+    }
+    if (!generationStillValid(identity)) {
+      trace("warm_miss_generation");
       return false;
     }
     const confirmedState = readJson(runtimeFile);
@@ -582,6 +617,10 @@ async function bridge(identity, state, runtimeFile) {
     }
     if (!await preflightRuntimeHealth(mcpUrl, runtimeFile, confirmedState, confirmed)) {
       trace("warm_miss_health");
+      return false;
+    }
+    if (!generationStillValid(identity)) {
+      trace("warm_miss_generation");
       return false;
     }
     fs.closeSync(startupLock);
