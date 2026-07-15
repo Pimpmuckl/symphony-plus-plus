@@ -2,7 +2,7 @@ import type { ArchitectHandoffPayload, ContextComment, CopyArchitectHandoff, Cre
 import type { NewRequestForm } from "@/components/dashboard/new-request-dialog";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, DashboardRuntimeConfig, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRuntimeConfig, ensureDashboardRuntimeConfig, isReconnectableLocalOperatorError, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, reconnectLocalOperatorSession, removeDashboardWorkRequest, shouldSkipDashboardLoad, withLocalOperatorReconnect } from "./runtime";
+import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, DashboardRuntimeConfig, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, createLatestTaskQueue, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, dashboardRuntimeConfig, enqueueLatestTask, ensureDashboardRuntimeConfig, isReconnectableLocalOperatorError, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, reconnectLocalOperatorSession, removeDashboardWorkRequest, withLocalOperatorReconnect } from "./runtime";
 import { DashboardShell } from "./dashboard-shell";
 import { SoloSessions } from "./solo-sessions";
 import { WorkstreamsPane } from "./workspace-tabs";
@@ -24,6 +24,10 @@ import { useDashboardUpdateAnimations } from "./update-animations";
 
 type DashboardLoadMode = "initial" | "refresh" | "silent" | "reconnect";
 
+function mergeDashboardLoadMode(pending: DashboardLoadMode, next: DashboardLoadMode) {
+  return pending === "reconnect" || next === "reconnect" ? "reconnect" : next;
+}
+
 export function DashboardApp() {
   const shellProps = useDashboardController();
   return <DashboardShell {...shellProps} />;
@@ -41,7 +45,7 @@ function useDashboardController() {
   const initialDashboardFingerprint = useMemo(() => dashboardContentFingerprint(dashboard), [dashboard]);
   const dashboardFingerprintRef = useRef(initialDashboardFingerprint);
   const connectionIssueRef = useRef<DashboardConnectionIssue | null>(null);
-  const loadInFlightRef = useRef(false);
+  const refreshQueueRef = useRef(createLatestTaskQueue<DashboardLoadMode>());
   const loadSequenceRef = useRef(0);
   const refreshingSequenceRef = useRef(0);
   const mutationVersionRef = useRef(0);
@@ -135,13 +139,11 @@ function useDashboardController() {
     recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard API unavailable"), mode === "initial" || mode === "reconnect", isReconnectableLocalOperatorError(caught));
   }, [recordConnectionFailure]);
 
-  const loadDashboard = useCallback(async (mode: DashboardLoadMode = "refresh", force = false) => {
-    if (shouldSkipDashboardLoad(loadInFlightRef.current, mode, force)) return;
+  const runDashboardLoad = useCallback(async (mode: DashboardLoadMode) => {
     const loadMutationVersion = mutationVersionRef.current;
     const loadSequence = loadSequenceRef.current + 1;
     const showsRefreshing = mode === "refresh" || mode === "reconnect";
     loadSequenceRef.current = loadSequence;
-    loadInFlightRef.current = true;
     if (mode === "initial") {
       setLoading(true);
     } else if (showsRefreshing) {
@@ -153,7 +155,7 @@ function useDashboardController() {
       await withLocalOperatorReconnect(async () => {
         const config = mode === "reconnect" ? await reconnectLocalOperatorSession() : await ensureDashboardRuntimeConfig();
         setRuntimeConfig(config);
-        const response = await operatorFetch(operatorApiUrl("/dashboard"), { headers: jsonHeaders() });
+        const response = await operatorFetch(operatorApiUrl(dashboardRefreshPath(dashboardRef.current)), { headers: jsonHeaders() });
         if (loadSequence !== loadSequenceRef.current) return;
         await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current);
       });
@@ -161,7 +163,6 @@ function useDashboardController() {
       recordDashboardLoadFailure(loadSequence, caught, mode);
     } finally {
       if (loadSequence === loadSequenceRef.current) {
-        loadInFlightRef.current = false;
         setLoading(false);
       }
       if (showsRefreshing && refreshingSequenceRef.current === loadSequence) {
@@ -170,6 +171,12 @@ function useDashboardController() {
       }
     }
   }, [applyDashboardResponse, recordDashboardLoadFailure, setLoading, setRefreshing]);
+
+  const loadDashboard = useCallback(
+    (mode: DashboardLoadMode = "refresh") =>
+      enqueueLatestTask(refreshQueueRef.current, mode, runDashboardLoad, mergeDashboardLoadMode),
+    [runDashboardLoad],
+  );
 
   const loadDashboardDeferred = useCallback(async () => {
     const baseDashboard = dashboardRef.current;
@@ -223,7 +230,7 @@ function useDashboardController() {
       setConnectionIssue(null);
       setError(null);
       setSelectedCardDetail(null);
-      if (mutationShouldRefreshDashboard(payload)) void loadDashboard("silent", true);
+      if (mutationShouldRefreshDashboard(payload)) void loadDashboard("silent");
     },
     [loadDashboard, setDashboard, setError, setSelectedCardDetail],
   );
@@ -421,7 +428,7 @@ function useDashboardController() {
     if (!dashboardReady || typeof EventSource === "undefined") return;
 
     const events = new EventSource(dashboardEventsUrl(), { withCredentials: true });
-    events.addEventListener("dashboard_changed", () => void loadDashboard("silent", true));
+    events.addEventListener("dashboard_changed", () => void loadDashboard("silent"));
     return () => events.close();
   }, [dashboardReady, loadDashboard]);
 

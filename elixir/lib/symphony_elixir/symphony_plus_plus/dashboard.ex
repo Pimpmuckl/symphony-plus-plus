@@ -168,6 +168,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     archived_work_requests(repo, [])
   end
 
+  @doc false
+  @spec work_request_sections(repo(), keyword()) ::
+          {:ok, %{active: map(), archived: map()}} | {:error, dashboard_error()}
+  def work_request_sections(repo, opts) when is_atom(repo) and is_list(opts) do
+    safe_read(fn ->
+      with {:ok, work_requests} <- WorkRequestRepository.list(repo, %{include_archived: true}),
+           {:ok, repo_identity_catalog} <- repo_identity_catalog_from_repo(repo, opts, Enum.map(work_requests, & &1.repo)),
+           {:ok, cards} <- work_request_cards(repo, ordered_work_requests(work_requests), Keyword.put(opts, :repo_identity_catalog, repo_identity_catalog)) do
+        active_cards = visible_work_request_cards(cards)
+        archived_cards = Enum.filter(cards, &(not is_nil(&1.archived_at)))
+
+        {:ok,
+         %{
+           active: %{work_requests: active_cards, total_count: length(active_cards)},
+           archived: %{work_requests: archived_cards, total_count: length(archived_cards)}
+         }}
+      end
+    end)
+  end
+
   @spec archived_work_requests(repo(), keyword()) :: {:ok, map()} | {:error, dashboard_error()}
   def archived_work_requests(repo, opts) when is_atom(repo) and is_list(opts) do
     safe_read(fn ->

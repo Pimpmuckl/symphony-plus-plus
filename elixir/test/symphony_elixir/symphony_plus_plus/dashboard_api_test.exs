@@ -54,6 +54,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.TestSupport
   alias SymphonyElixir.WorkPackageFactory
   alias SymphonyElixirWeb.ReactDashboardController
+  alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
   alias SymphonyElixirWeb.SymppDashboardApiController
 
   @endpoint SymphonyElixirWeb.Endpoint
@@ -149,6 +150,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end
 
     defp count_query(_query), do: :ok
+  end
+
+  defmodule DashboardQueryCountingRepo do
+    @moduledoc false
+
+    alias SymphonyElixir.SymphonyPlusPlus.Repo
+
+    @counter_key {__MODULE__, :query_count}
+
+    def reset, do: Process.put(@counter_key, 0)
+    def count, do: Process.get(@counter_key, 0)
+
+    def all(query), do: counted(fn -> Repo.all(query) end)
+    def one(query), do: counted(fn -> Repo.one(query) end)
+    def get(queryable, id), do: counted(fn -> Repo.get(queryable, id) end)
+    def get!(queryable, id), do: counted(fn -> Repo.get!(queryable, id) end)
+    def query(sql, params), do: counted(fn -> Repo.query(sql, params) end)
+    def update_all(query, updates), do: counted(fn -> Repo.update_all(query, updates) end)
+    def transaction(fun), do: Repo.transaction(fun)
+
+    defp counted(fun) do
+      Process.put(@counter_key, count() + 1)
+      fun.()
+    end
   end
 
   defmodule PhaseBoardMaterializationRepo do
@@ -4197,15 +4222,86 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       |> repo.update!()
 
       payload = local_operator_dashboard_payload()
+      hydrated_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/hydrated"), 200)
 
       assert payload["work_requests"]["total_count"] == 1
       assert [%{"work_request" => %{"id" => work_request_id}}] = payload["work_request_details"]
       assert work_request_id == work_request.id
       refute Enum.any?(payload["work_requests"]["work_requests"], &(&1["id"] == archived_request.id))
+      assert hydrated_payload["deferred"] == %{"dashboard_sections" => false}
+      assert hydrated_payload["work_requests"] == payload["work_requests"]
+      assert hydrated_payload["work_request_details"] == payload["work_request_details"]
 
       assert {:ok, archived} = WorkRequestRepository.get(repo, archived_request.id)
       assert %DateTime{} = archived.archived_at
     end)
+  end
+
+  test "hydrated dashboard refresh reuses one context for a deterministic workload", %{repo: repo} do
+    for index <- 1..20 do
+      work_request =
+        create_work_request!(repo,
+          id: "WR-PERF-#{String.pad_leading(to_string(index), 2, "0")}",
+          title: "Perf request #{String.pad_leading(to_string(index), 2, "0")}",
+          repo: "symphony-plus-plus",
+          base_branch: "main",
+          status: "ready_for_clarification"
+        )
+
+      if index == 1 do
+        work_request
+        |> Ecto.Changeset.change(completed_at: DateTime.utc_now(:microsecond), completion_source: "operator")
+        |> repo.update!()
+      end
+    end
+
+    for index <- 1..50 do
+      create_work_package!(repo,
+        id: "SYMPP-PERF-#{String.pad_leading(to_string(index), 2, "0")}",
+        status: "created"
+      )
+    end
+
+    RetentionThrottle.reset(DashboardQueryCountingRepo)
+    assert {:ok, _payload} = LocalOperatorDashboard.operator_dashboard_hydrated_payload(DashboardQueryCountingRepo)
+
+    {split_payloads, split_metrics} =
+      dashboard_benchmark(2, fn ->
+        with {:ok, base} <- LocalOperatorDashboard.operator_dashboard_payload(DashboardQueryCountingRepo),
+             {:ok, deferred} <-
+               LocalOperatorDashboard.operator_dashboard_deferred_payload(DashboardQueryCountingRepo) do
+          {:ok, [base, deferred]}
+        end
+      end)
+
+    {hydrated_payload, hydrated_metrics} =
+      dashboard_benchmark(1, fn ->
+        LocalOperatorDashboard.operator_dashboard_hydrated_payload(DashboardQueryCountingRepo)
+      end)
+
+    [base_payload, deferred_payload] = split_payloads
+    split_bytes = byte_size(Jason.encode!(base_payload)) + byte_size(Jason.encode!(deferred_payload))
+    hydrated_metrics = Map.put(hydrated_metrics, :bytes, byte_size(Jason.encode!(hydrated_payload)))
+    split_metrics = Map.put(split_metrics, :bytes, split_bytes)
+
+    assert base_payload.deferred == %{dashboard_sections: true}
+    assert deferred_payload.deferred == %{dashboard_sections: false}
+    assert hydrated_payload.deferred == %{dashboard_sections: false}
+    assert hydrated_payload.work_requests.total_count == 20
+    assert hydrated_payload.board.visible_count == 50
+    assert hydrated_metrics.queries < split_metrics.queries
+    assert hydrated_metrics.bytes < split_metrics.bytes
+
+    maybe_export_dashboard_fixture(repo)
+
+    if System.get_env("SYMPP_DASHBOARD_BENCHMARK") == "1" do
+      IO.puts("DASHBOARD_BENCHMARK " <> Jason.encode!(%{split: split_metrics, hydrated: hydrated_metrics}))
+    end
+  end
+
+  test "hydrated dashboard rejects unsupported methods" do
+    assert json_response(post(build_conn(), "/api/v1/sympp/operator/dashboard/hydrated", %{}), 405) ==
+             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
   end
 
   test "local operator dashboard returns compact WorkRequest board details and lazy full detail", %{repo: repo} do
@@ -4499,6 +4595,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              )
 
     assert_receive :operator_dashboard_changed
+    refute_receive :operator_dashboard_changed, 50
+  end
+
+  test "local operator WorkRequest mutations invalidate exactly once", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      work_request =
+        create_work_request!(repo,
+          id: "WR-DASHBOARD-LOCAL-INVALIDATE",
+          repo: "symphony-plus-plus",
+          base_branch: "main",
+          status: "ready_for_slicing"
+        )
+
+      work_request
+      |> Ecto.Changeset.change(completed_at: DateTime.utc_now(:microsecond), completion_source: "operator")
+      |> repo.update!()
+
+      assert :ok = DashboardPubSub.subscribe()
+
+      local_operator_csrf_conn()
+      |> post("/api/v1/sympp/operator/work-requests/#{work_request.id}/archive", %{})
+      |> json_response(200)
+
+      assert_receive :operator_dashboard_changed
+      refute_receive :operator_dashboard_changed, 50
+    end)
+  end
+
+  test "coalesced mutation invalidation survives later response failure" do
+    assert :ok = DashboardPubSub.subscribe()
+
+    assert {{:error, :response_failed}, true} =
+             DashboardPubSub.coalesce_changed(fn ->
+               assert :ok = DashboardPubSub.broadcast_changed()
+               assert :ok = DashboardPubSub.broadcast_changed()
+               {:error, :response_failed}
+             end)
+
+    assert_receive :operator_dashboard_changed
+    refute_receive :operator_dashboard_changed, 50
   end
 
   test "local operator dashboard invalidates after local operator comment writes", %{repo: repo} do
@@ -4522,6 +4658,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       |> json_response(201)
 
       assert_receive :operator_dashboard_changed
+      refute_receive :operator_dashboard_changed, 50
     end)
   end
 
@@ -4535,6 +4672,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert :ok = DashboardPubSub.subscribe()
     assert {:ok, _work_package} = WorkPackageRepository.update_status(repo, work_package.id, "claimed", "planning")
     assert_receive :operator_dashboard_changed
+    refute_receive :operator_dashboard_changed, 50
   end
 
   test "local operator dashboard projects persisted local path repos through their git origin", %{repo: repo} do
@@ -7661,6 +7799,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     deferred = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/deferred"), 200)
 
     Map.merge(initial, deferred)
+  end
+
+  defp dashboard_benchmark(requests, fun) do
+    DashboardQueryCountingRepo.reset()
+    started_at = System.monotonic_time()
+    assert {:ok, payload} = fun.()
+
+    elapsed_ms =
+      System.monotonic_time()
+      |> Kernel.-(started_at)
+      |> System.convert_time_unit(:native, :microsecond)
+      |> Kernel./(1000)
+
+    {payload, %{requests: requests, queries: DashboardQueryCountingRepo.count(), settle_ms: elapsed_ms}}
+  end
+
+  defp maybe_export_dashboard_fixture(repo) do
+    case System.get_env("SYMPP_DASHBOARD_FIXTURE_DATABASE") do
+      path when is_binary(path) and path != "" ->
+        path = Path.expand(path)
+        File.mkdir_p!(Path.dirname(path))
+        if File.exists?(path), do: File.rm!(path)
+        repo.query!("VACUUM INTO ?", [path])
+        :ok
+
+      _path ->
+        :ok
+    end
   end
 
   defp work_request_detail(dashboard, work_request_id) do
