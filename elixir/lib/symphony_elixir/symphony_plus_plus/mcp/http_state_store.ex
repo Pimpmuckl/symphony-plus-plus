@@ -93,6 +93,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
     end)
   end
 
+  @spec recovery_persistence_due?(Config.t(), String.t(), pos_integer()) :: boolean()
+  def recovery_persistence_due?(%Config{} = config, binding_id, interval_ms)
+      when is_binary(binding_id) and is_integer(interval_ms) and interval_ms > 0 do
+    deadline_due?({:recovery_persistence, LedgerNamespace.key(config), binding_id}, interval_ms)
+  end
+
+  @spec defer_recovery_persistence(Config.t(), String.t(), pos_integer()) :: :ok
+  def defer_recovery_persistence(%Config{} = config, binding_id, interval_ms)
+      when is_binary(binding_id) and is_integer(interval_ms) and interval_ms > 0 do
+    GenServer.call(__MODULE__, {:defer_deadline, {:recovery_persistence, LedgerNamespace.key(config), binding_id}, interval_ms})
+  end
+
+  @spec recovery_cleanup_due?(Config.t(), pos_integer()) :: boolean()
+  def recovery_cleanup_due?(%Config{} = config, interval_ms) when is_integer(interval_ms) and interval_ms > 0 do
+    deadline_due?({:recovery_cleanup, LedgerNamespace.key(config)}, interval_ms)
+  end
+
   @spec reset!() :: :ok
   def reset!, do: GenServer.call(__MODULE__, :reset)
 
@@ -106,6 +123,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
        key_version_touched_at: %{},
        next_write_tokens: %{},
        successful_write_tokens: %{},
+       deadlines: %{},
        locks: %{},
        lock_refs: %{},
        ttl_ms: Keyword.get(opts, :ttl_ms, @ttl_ms)
@@ -216,6 +234,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
     {:reply, {Map.get(state.key_versions, key, 0), token}, state}
   end
 
+  def handle_call({:deadline_due, key, interval_ms}, _from, state) do
+    state = cleanup(state)
+    now = now_ms()
+
+    case Map.fetch(state.deadlines, key) do
+      :error ->
+        {:reply, true, %{state | deadlines: Map.put(state.deadlines, key, now + interval_ms)}}
+
+      {:ok, deadline} when deadline <= now ->
+        {:reply, true, %{state | deadlines: Map.put(state.deadlines, key, now + interval_ms)}}
+
+      {:ok, _deadline} ->
+        {:reply, false, state}
+    end
+  end
+
+  def handle_call({:defer_deadline, key, interval_ms}, _from, state) do
+    state = cleanup(state)
+    {:reply, :ok, %{state | deadlines: Map.put(state.deadlines, key, now_ms() + interval_ms)}}
+  end
+
   def handle_call({:acquire_lock, key}, from, state) do
     case Map.fetch(state.locks, key) do
       {:ok, lock} ->
@@ -243,6 +282,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
          key_version_touched_at: %{},
          next_write_tokens: %{},
          successful_write_tokens: %{},
+         deadlines: %{},
          locks: %{},
          lock_refs: %{},
          ttl_ms: @ttl_ms
@@ -250,6 +290,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
   end
 
   @impl true
+  def handle_info({:"ETS-TRANSFER", _table, _from, :mcp_repository_cache}, state), do: {:noreply, state}
+
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     {:noreply, release_lock_ref(state, ref)}
   end
@@ -298,6 +340,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
   end
 
   defp begin_write(key), do: GenServer.call(__MODULE__, {:begin_write, key})
+  defp deadline_due?(key, interval_ms), do: GenServer.call(__MODULE__, {:deadline_due, key, interval_ms})
   defp acquire_lock(key), do: GenServer.call(__MODULE__, {:acquire_lock, key}, :infinity)
   defp release_lock_call(key), do: GenServer.call(__MODULE__, {:release_lock, key}, :infinity)
 
@@ -467,9 +510,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
   defp cleanup(%{entries: entries, ttl_ms: ttl_ms} = state) do
     cutoff = now_ms() - ttl_ms
     expired_keys = for {key, {_server, touched_at}} <- entries, touched_at < cutoff, do: key
+    deadlines = Map.filter(state.deadlines, fn {_key, deadline} -> deadline >= cutoff end)
 
     {state, orphan_alias_keys} =
-      %{state | entries: Map.drop(entries, expired_keys)}
+      %{state | entries: Map.drop(entries, expired_keys), deadlines: deadlines}
       |> prune_aliases()
 
     state

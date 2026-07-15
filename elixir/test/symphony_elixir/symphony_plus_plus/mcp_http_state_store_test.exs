@@ -58,6 +58,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
     end
   end
 
+  test "recovery deadlines are throttled and scoped by ledger" do
+    config = config("deadline-ledger-a")
+    other_config = config("deadline-ledger-b")
+
+    assert HTTPStateStore.recovery_persistence_due?(config, "binding", 60_000)
+    refute HTTPStateStore.recovery_persistence_due?(config, "binding", 60_000)
+    assert HTTPStateStore.recovery_persistence_due?(other_config, "binding", 60_000)
+
+    assert HTTPStateStore.recovery_cleanup_due?(config, 60_000)
+    refute HTTPStateStore.recovery_cleanup_due?(config, 60_000)
+    assert HTTPStateStore.recovery_cleanup_due?(other_config, 60_000)
+
+    assert :ok = HTTPStateStore.defer_recovery_persistence(config, "deferred-binding", 60_000)
+    refute HTTPStateStore.recovery_persistence_due?(config, "deferred-binding", 60_000)
+  end
+
   test "unconfigured ledger fallback preserves dynamic repo isolation" do
     config = Config.default(mode: :http, repo: FailingDynamicRepo)
 

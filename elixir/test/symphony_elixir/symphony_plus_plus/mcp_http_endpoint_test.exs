@@ -135,6 +135,57 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert get_resp_header(conn, "access-control-allow-origin") == []
   end
 
+  test "GET /mcp/readiness is loopback-only and creates no MCP state" do
+    before_state = :sys.get_state(HTTPStateStore)
+
+    for _probe <- 1..100 do
+      conn = get_local("/mcp/readiness")
+
+      assert %{
+               "status" => "ok",
+               "source" => %{"revision" => revision, "mcp_contract" => %{"fingerprint" => fingerprint}},
+               "mode" => "http",
+               "ledger" => %{"reachable" => true, "mode" => ledger_mode},
+               "dashboard" => %{"ready" => dashboard_ready?}
+             } = json_response(conn, 200)
+
+      assert is_binary(revision) or is_nil(revision)
+      assert fingerprint =~ ~r/^[0-9a-f]{64}$/
+      assert ledger_mode in ["live", "configured_identity"]
+      assert is_boolean(dashboard_ready?)
+      assert get_resp_header(conn, "mcp-session-id") == []
+    end
+
+    assert :sys.get_state(HTTPStateStore) == before_state
+
+    assert get_in(get_local("/mcp/readiness", [], remote_ip: {10, 0, 0, 2}) |> json_response(403), ["error", "data", "reason"]) ==
+             "local_only"
+
+    assert get_in(get_local("/mcp/readiness", [{"x-forwarded-for", "10.0.0.2"}]) |> json_response(403), ["error", "data", "reason"]) ==
+             "local_only"
+
+    assert get_in(get_local("/mcp/readiness", [{"origin", "http://localhost:9999"}]) |> json_response(403), ["error", "data", "reason"]) ==
+             "origin_not_allowed"
+  end
+
+  test "steady HTTP health requests perform no SQLite work inside the recovery heartbeat" do
+    init = post_json(initialize_request("steady-health-init"))
+    [session_id] = get_resp_header(init, "mcp-session-id")
+
+    {responses, queries} =
+      capture_queries(fn ->
+        for index <- 1..25 do
+          post_json(tool_call_request("steady-health-#{index}", "sympp.health", %{}), [{"mcp-session-id", session_id}])
+        end
+      end)
+
+    assert Enum.all?(responses, fn response ->
+             get_in(json_response(response, 200), ["result", "structuredContent", "status"]) == "ok"
+           end)
+
+    assert queries == []
+  end
+
   test "POST /mcp/client-lease attaches and detaches launcher clients" do
     on_exit(fn -> ClientLeases.detach("endpoint-client") end)
 
@@ -404,12 +455,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     refute inspect(binding) =~ minted.work_key.secret
     refute inspect(binding) =~ minted.grant.secret_hash
 
+    near_expiry_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -82_800_000, :millisecond)
+
+    assert {1, nil} =
+             Repo.update_all(
+               from(stored_binding in SessionBinding, where: stored_binding.id == ^binding.id),
+               set: [last_seen_at: near_expiry_seen_at]
+             )
+
     reset_mcp_runtime_state()
 
     assignment =
       post_json(tool_call_request("local-worker-assignment", "get_current_assignment", %{}), [{"mcp-session-id", session_id}])
 
     assert get_in(json_response(assignment, 200), ["result", "structuredContent", "assignment", "work_package_id"]) == work_package.id
+    assert DateTime.compare(Repo.get!(SessionBinding, binding.id).last_seen_at, near_expiry_seen_at) == :gt
 
     context = post_json(tool_call_request("local-worker-context", "read_context", %{}), [{"mcp-session-id", session_id}])
 
@@ -560,6 +620,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
                from(binding in SessionBinding, where: binding.id == ^binding_id),
                set: [last_seen_at: stale_seen_at]
              )
+
+    :sys.replace_state(HTTPStateStore, fn state ->
+      due = System.monotonic_time(:millisecond) - 1
+      %{state | deadlines: Map.new(state.deadlines, fn {key, _deadline} -> {key, due} end)}
+    end)
 
     touch =
       post_json(tool_call_request("stale-touch-assignment", "get_current_assignment", %{}), [{"mcp-session-id", session_id}])
@@ -1082,6 +1147,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     payload
     |> Jason.encode!()
     |> post_raw(headers, opts)
+  end
+
+  defp get_local(path, headers \\ [], opts \\ []) do
+    opts
+    |> local_conn()
+    |> put_headers(headers)
+    |> get(path)
+  end
+
+  defp capture_queries(fun) do
+    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
+    event = Repo.config()[:telemetry_prefix] ++ [:query]
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn _event, _measurements, metadata, test_pid -> send(test_pid, {handler_id, metadata.query}) end,
+        self()
+      )
+
+    try do
+      result = fun.()
+      {result, drain_queries(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_queries(handler_id, queries) do
+    receive do
+      {^handler_id, query} -> drain_queries(handler_id, [query | queries])
+    after
+      0 -> Enum.reverse(queries)
+    end
   end
 
   defp post_raw(body, headers \\ [], opts \\ []) do

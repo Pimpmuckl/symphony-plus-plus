@@ -8,9 +8,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Auth, Config, Repository, Server, Session, SessionBinding}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Auth, Config, HTTPStateStore, Repository, Server, Session, SessionBinding}
 
   @ttl_ms 86_400_000
+  @heartbeat_ms :timer.hours(1)
+  @cleanup_interval_ms :timer.hours(1)
   @lease_stale_after_ms :timer.minutes(5)
   @release_current_assignment_tool "release_current_assignment"
   @local_claim_tools ["claim_local_assignment", "claim_local_architect_assignment"]
@@ -21,14 +23,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
       when is_atom(repo) and is_binary(client_key) and is_binary(state_key) do
     case Repository.ensure_migrated(repo) do
       :ok ->
-        result =
-          case remember_action(config, client_key, state_key, payload, server, response) do
-            {:upsert, attrs} -> upsert(repo, attrs)
-            {:touch, id, now} -> touch(repo, id, now)
-            :skip -> :ok
-          end
+        result = persist_action(config, repo, remember_action(config, client_key, state_key, payload, server, response))
 
-        cleanup_stale(repo)
+        maybe_cleanup_stale(config, repo)
         result
 
       _error ->
@@ -40,13 +37,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
 
   def remember(%Config{}, _client_key, _state_key, _payload, %Server{}, _response), do: :ok
 
+  defp persist_action(config, repo, {:upsert, attrs}) do
+    :ok = upsert(repo, attrs)
+    HTTPStateStore.defer_recovery_persistence(config, Map.fetch!(attrs, :id), @heartbeat_ms)
+  end
+
+  defp persist_action(config, repo, {:touch, id, now}) do
+    if HTTPStateStore.recovery_persistence_due?(config, id, @heartbeat_ms), do: touch(repo, id, now), else: :ok
+  end
+
+  defp persist_action(_config, _repo, :skip), do: :ok
+
   @spec rehydrate(Config.t(), String.t(), String.t()) :: {:ok, Server.t()} | :not_found
   def rehydrate(%Config{mode: :http, repo: repo} = config, client_key, state_key)
       when is_atom(repo) and is_binary(client_key) and is_binary(state_key) do
     with :ok <- Repository.ensure_migrated(repo),
-         :ok <- cleanup_stale(repo),
+         :ok <- maybe_cleanup_stale(config, repo),
          {:ok, %SessionBinding{} = binding} <- get_binding(repo, client_key, state_key),
-         :ok <- require_fresh(binding) do
+         :ok <- require_fresh(binding),
+         :ok <- persist_action(config, repo, {:touch, binding.id, now()}) do
       case recover_session(repo, binding) do
         {:ok, %Session{} = session} ->
           {:ok, Server.new(config, initialized: true, local_daemon_trusted: config.local_daemon_trusted, session: session, state_key: state_key)}
@@ -378,6 +387,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
     :ok
   rescue
     _error -> :ok
+  end
+
+  defp maybe_cleanup_stale(config, repo) do
+    if HTTPStateStore.recovery_cleanup_due?(config, @cleanup_interval_ms), do: cleanup_stale(repo), else: :ok
   end
 
   defp require_fresh(%SessionBinding{last_seen_at: %DateTime{} = last_seen_at}) do

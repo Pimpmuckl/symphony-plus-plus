@@ -6,23 +6,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.TrackerAdapter
 
   @cache_table __MODULE__
+  @cache_owner SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore
 
   @type error :: :database_busy | {:migration_failed, term()}
 
   @spec ensure_migrated(module()) :: :ok | {:error, error()}
   def ensure_migrated(repo) when is_atom(repo) do
     if ecto_repo?(repo) do
-      database_path = main_database_path(repo)
-      cache_key = migration_cache_key(repo, database_path)
+      target_cache_key = migration_target_cache_key(repo)
 
-      if migrated?(cache_key) do
+      if migrated?(target_cache_key) do
         :ok
       else
-        migrate_once(repo, database_path, cache_key)
+        ensure_migrated_for_target(repo, target_cache_key)
       end
     else
       :ok
     end
+  end
+
+  defp ensure_migrated_for_target(repo, target_cache_key) do
+    database_path = main_database_path(repo)
+    cache_key = migration_cache_key(repo, database_path)
+
+    result = if migrated?(cache_key), do: :ok, else: migrate_once(repo, database_path, cache_key)
+
+    if result == :ok, do: mark_migrated(target_cache_key)
+    result
   end
 
   defp ecto_repo?(repo), do: function_exported?(repo, :__adapter__, 0)
@@ -53,6 +63,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Repository do
 
   defp normalize_lock_result(result), do: result
 
+  defp migrated?(nil), do: false
+
   defp migrated?(cache_key) do
     ensure_cache_table()
 
@@ -61,6 +73,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Repository do
       _entries -> false
     end
   end
+
+  defp mark_migrated(nil), do: :ok
 
   defp mark_migrated(cache_key) do
     ensure_cache_table()
@@ -71,7 +85,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Repository do
     case :ets.whereis(@cache_table) do
       :undefined ->
         try do
-          :ets.new(@cache_table, [:named_table, :public, :set, read_concurrency: true])
+          table = :ets.new(@cache_table, [:named_table, :public, :set, read_concurrency: true])
+          give_cache_to_owner(table)
         rescue
           ArgumentError -> :ok
         else
@@ -81,6 +96,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Repository do
       _table ->
         :ok
     end
+  end
+
+  defp give_cache_to_owner(table) do
+    case Process.whereis(@cache_owner) do
+      owner when is_pid(owner) and owner != self() -> :ets.give_away(table, owner, :mcp_repository_cache)
+      _owner -> :ok
+    end
+  rescue
+    ArgumentError -> :ok
   end
 
   defp migrate(repo) do
@@ -118,6 +142,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Repository do
   defp migration_cache_key(repo, database_path) do
     {repo, database_identity(repo, database_path), migration_signature()}
   end
+
+  defp migration_target_cache_key(repo) do
+    case target_pid(query_target(repo)) do
+      pid when is_pid(pid) -> {:target, repo, pid, migration_signature()}
+      _missing -> nil
+    end
+  end
+
+  defp target_pid(pid) when is_pid(pid), do: pid
+  defp target_pid(name) when is_atom(name), do: Process.whereis(name)
+  defp target_pid({:global, name}), do: :global.whereis_name(name) |> normalize_target_pid()
+  defp target_pid({:via, module, name}), do: module.whereis_name(name) |> normalize_target_pid()
+  defp target_pid(_target), do: nil
+
+  defp normalize_target_pid(pid) when is_pid(pid), do: pid
+  defp normalize_target_pid(_missing), do: nil
 
   defp database_identity(_repo, path) when is_binary(path) and path != "", do: {:file, path}
   defp database_identity(repo, _path), do: {:dynamic_repo, dynamic_repo(repo) || repo}

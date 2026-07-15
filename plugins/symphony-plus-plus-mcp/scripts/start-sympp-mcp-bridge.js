@@ -436,31 +436,31 @@ function protocolFrom(lines) {
 async function backendHealth(origin) {
   try {
     const mcpUrl = `${trimOrigin(origin)}/mcp`;
-    const initialized = await mcpPost(mcpUrl, initializeBody(), null, null, 2000);
-    const session = initialized.headers["mcp-session-id"];
-    if (!initialized.ok || !session) return null;
-    const protocol = protocolFrom(initialized.lines) || "2025-03-26";
-    const body = JSON.stringify({ jsonrpc: "2.0", id: "sympp-plugin-launcher-health", method: "tools/call", params: { name: "sympp.health", arguments: {} } });
-    const health = await mcpPost(mcpUrl, body, session, protocol, 2000);
-    if (!health.ok || !health.lines.length) return null;
-    const payload = JSON.parse(health.lines[0]);
-    const structured = payload.result && payload.result.structuredContent;
-    if (!structured) return null;
-    const contract = String((structured.source && structured.source.mcp_contract && structured.source.mcp_contract.fingerprint) || (structured.mcp_contract && structured.mcp_contract.fingerprint) || "").toLowerCase();
-    return { healthy: structured.status === "ok" && structured.ledger && structured.ledger.reachable === true, contract };
+    const response = await request(`${trimOrigin(origin)}/mcp/readiness`, "GET", null, { Accept: "application/json" }, 2000);
+    if (response.status === 404) return legacyBackendHealth(mcpUrl);
+    if (response.status < 200 || response.status >= 300 || !response.body) return null;
+    const readiness = JSON.parse(response.body);
+    const contract = String((readiness.source && readiness.source.mcp_contract && readiness.source.mcp_contract.fingerprint) || "").toLowerCase();
+    const healthy = readiness.status === "ok" && readiness.ledger && readiness.ledger.reachable === true && readiness.dashboard && readiness.dashboard.ready === true;
+    return { healthy, contract };
   } catch (_) {
     return null;
   }
 }
 
-async function sessionHealth(mcpUrl, session, protocol, contract) {
+async function legacyBackendHealth(mcpUrl) {
+  const initialized = await mcpPost(mcpUrl, initializeBody(), null, null, 2000);
+  const session = initialized.headers["mcp-session-id"];
+  if (!initialized.ok || !session) return null;
+  const protocol = protocolFrom(initialized.lines) || "2025-03-26";
   const body = JSON.stringify({ jsonrpc: "2.0", id: "sympp-plugin-launcher-health", method: "tools/call", params: { name: "sympp.health", arguments: {} } });
-  const health = await mcpPost(mcpUrl, body, session, protocol, 10000);
-  if (!health.ok || !health.lines.length) return false;
+  const health = await mcpPost(mcpUrl, body, session, protocol, 2000);
+  if (!health.ok || !health.lines.length) return null;
   const payload = JSON.parse(health.lines[0]);
   const structured = payload.result && payload.result.structuredContent;
-  const actualContract = String((structured && structured.source && structured.source.mcp_contract && structured.source.mcp_contract.fingerprint) || (structured && structured.mcp_contract && structured.mcp_contract.fingerprint) || "").toLowerCase();
-  return !!structured && structured.status === "ok" && structured.ledger && structured.ledger.reachable === true && actualContract === contract;
+  if (!structured) return null;
+  const contract = String((structured.source && structured.source.mcp_contract && structured.source.mcp_contract.fingerprint) || (structured.mcp_contract && structured.mcp_contract.fingerprint) || "").toLowerCase();
+  return { healthy: structured.status === "ok" && structured.ledger && structured.ledger.reachable === true, contract };
 }
 
 function healthCacheMatches(cache, state, identity) {
@@ -469,7 +469,7 @@ function healthCacheMatches(cache, state, identity) {
     Date.now() - Number(cache.validated_at_ms) <= 2000;
 }
 
-async function ensureRuntimeHealth(mcpUrl, session, protocol, runtimeFile, state, identity) {
+async function ensureRuntimeHealth(runtimeFile, state, identity) {
   const cacheFile = path.join(path.dirname(runtimeFile), "codex-plugin-health.json");
   const lockFile = `${cacheFile}.lock`;
   if (healthCacheMatches(readJson(cacheFile), state, identity)) return true;
@@ -479,7 +479,8 @@ async function ensureRuntimeHealth(mcpUrl, session, protocol, runtimeFile, state
     if (lock !== null) {
       try {
         if (healthCacheMatches(readJson(cacheFile), state, identity)) return true;
-        if (!await sessionHealth(mcpUrl, session, protocol, identity.contract)) return false;
+        const health = await backendHealth(identity.backend);
+        if (!health || !health.healthy || health.contract !== identity.contract) return false;
         const temporary = `${cacheFile}.${process.pid}.tmp`;
         fs.writeFileSync(temporary, `${JSON.stringify({ runtime_key: identity.runtimeKey, backend_pid: Number(state.backend.pid), contract: identity.contract, validated_at_ms: Date.now() })}\n`);
         try { fs.unlinkSync(cacheFile); } catch (_) { }
@@ -495,14 +496,10 @@ async function ensureRuntimeHealth(mcpUrl, session, protocol, runtimeFile, state
   return false;
 }
 
-async function preflightRuntimeHealth(mcpUrl, runtimeFile, state, identity) {
+async function preflightRuntimeHealth(runtimeFile, state, identity) {
   const cacheFile = path.join(path.dirname(runtimeFile), "codex-plugin-health.json");
   if (healthCacheMatches(readJson(cacheFile), state, identity)) return true;
-  const initialized = await mcpPost(mcpUrl, initializeBody(), null, null, 10000);
-  const session = initialized.headers["mcp-session-id"];
-  if (!initialized.ok || !session) return false;
-  const protocol = protocolFrom(initialized.lines) || "2025-03-26";
-  return ensureRuntimeHealth(mcpUrl, String(session), protocol, runtimeFile, state, identity);
+  return ensureRuntimeHealth(runtimeFile, state, identity);
 }
 
 async function dashboardHealthy(identity) {
@@ -621,7 +618,7 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_state");
       return false;
     }
-    if (!await preflightRuntimeHealth(mcpUrl, runtimeFile, confirmedState, confirmed)) {
+    if (!await preflightRuntimeHealth(runtimeFile, confirmedState, confirmed)) {
       trace("warm_miss_health");
       return false;
     }

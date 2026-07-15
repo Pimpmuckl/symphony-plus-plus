@@ -2,7 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
   @moduledoc false
 
   alias Ecto.Adapters.SQL
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Server, Session}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{LedgerNamespace, Server, Session}
 
   @server Server
   @agent Module.concat(Server, HandleState)
@@ -217,31 +217,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
     end
   end
 
-  defp key(%{__struct__: @server} = server), do: {{server.config.mode, ledger_namespace(server.config)}, server.state_key}
-
-  defp ledger_namespace(%Config{repo: repo, database: database}) do
-    case current_ledger_identity(repo, database) do
-      {:ok, identity} -> identity
-      :error -> {:configured_database, repo_database_key(repo, database)}
-    end
-  end
-
-  defp current_ledger_identity(repo, database) do
-    case repo_query(repo, "PRAGMA database_list", [], log: false) do
-      {:ok, %{rows: rows}} ->
-        case Enum.find(rows, &main_database_row?/1) do
-          [_seq, "main", path] -> {:ok, main_database_identity(repo, path, database)}
-          _row -> :error
-        end
-
-      _result ->
-        :error
-    end
-  rescue
-    _error -> :error
-  catch
-    _kind, _reason -> :error
-  end
+  defp key(%{__struct__: @server} = server), do: {{server.config.mode, LedgerNamespace.key(server.config)}, server.state_key}
 
   defp repo_module_query?(repo) do
     case Code.ensure_loaded(repo) do
@@ -250,28 +226,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
     end
   end
 
-  defp main_database_row?([_seq, "main", _path]), do: true
-  defp main_database_row?(_row), do: false
-
-  defp main_database_identity(repo, path, _database) when is_binary(path) and path != "" do
-    {:main_database, repo_database_key(repo, path)}
-  end
-
-  defp main_database_identity(repo, _path, nil), do: blank_database_identity(repo)
-  defp main_database_identity(repo, _path, database), do: {:configured_database, repo_database_key(repo, database)}
-  defp blank_database_identity(repo) when is_pid(repo), do: {:repo_process, repo}
-
-  defp blank_database_identity(repo) when is_atom(repo) do
-    case dynamic_repo_identity(repo) do
-      nil -> {:repo, repo}
-      dynamic_repo -> {:dynamic_repo, dynamic_repo}
-    end
-  end
-
-  defp blank_database_identity(repo), do: {:repo, repo}
   defp dynamic_repo_identity(repo) when is_atom(repo), do: if(function_exported?(repo, :get_dynamic_repo, 0), do: repo.get_dynamic_repo())
-  defp repo_database_key(repo, database) when is_atom(repo), do: if(function_exported?(repo, :database_key, 1), do: repo.database_key(database), else: database)
-  defp repo_database_key(_repo, database), do: database
   defp monotonic_ms, do: System.monotonic_time(:millisecond)
   defp initialize_request?(%{"jsonrpc" => "2.0", "method" => "initialize"}), do: true
   defp initialize_request?(_payload), do: false

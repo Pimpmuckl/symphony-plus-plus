@@ -664,6 +664,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
       Repo.put_dynamic_repo(pid)
       assert :ok = MCPRepository.ensure_migrated(Repo)
 
+      assert :ets.info(MCPRepository, :owner) ==
+               Process.whereis(SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore)
+
+      handler_id = {__MODULE__, self(), :migration_query_probe}
+      event = Repo.config()[:telemetry_prefix] ++ [:query]
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          event,
+          fn _event, _measurements, metadata, test_pid -> send(test_pid, {:migration_query, metadata.query}) end,
+          self()
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
       parent = self()
 
       lock_task =
@@ -696,10 +712,45 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
       send(lock_task.pid, :release_migration_file_lock)
       assert :ok = Task.await(lock_task)
       assert {:ok, :ok} = ensure_result
+      refute_receive {:migration_query, _query}
     after
       Repo.put_dynamic_repo(original_repo)
       GenServer.stop(pid)
       File.rm(database_path)
+    end
+  end
+
+  test "MCP repository preparation cache does not cross live repo processes" do
+    first_database = WorkPackageFactory.database_path()
+    second_database = WorkPackageFactory.database_path()
+    original_repo = Repo.get_dynamic_repo()
+
+    try do
+      {:ok, first_pid} =
+        Repo.start_link(database: first_database, name: Repo.process_name(first_database), pool_size: 1, log: false)
+
+      Repo.put_dynamic_repo(first_pid)
+      assert :ok = MCPRepository.ensure_migrated(Repo)
+      GenServer.stop(first_pid)
+
+      {:ok, second_pid} =
+        Repo.start_link(database: second_database, name: Repo.process_name(second_database), pool_size: 1, log: false)
+
+      Repo.put_dynamic_repo(second_pid)
+      assert :ok = MCPRepository.ensure_migrated(Repo)
+
+      assert {:ok, %{rows: [[1]]}} =
+               Repo.query(
+                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sympp_mcp_session_bindings'",
+                 [],
+                 log: false
+               )
+
+      GenServer.stop(second_pid)
+    after
+      Repo.put_dynamic_repo(original_repo)
+      File.rm(first_database)
+      File.rm(second_database)
     end
   end
 

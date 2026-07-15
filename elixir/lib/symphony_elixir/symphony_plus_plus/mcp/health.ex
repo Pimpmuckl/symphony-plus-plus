@@ -44,6 +44,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
     }
   end
 
+  @spec readiness(Config.t(), boolean()) :: map()
+  def readiness(%Config{} = config, dashboard_ready?) when is_boolean(dashboard_ready?) do
+    health = health(%{config: config})
+
+    %{
+      "status" => health["status"],
+      "source" => %{
+        "revision" => get_in(health, ["source", "revision"]),
+        "mcp_contract" => %{"fingerprint" => get_in(health, ["source", "mcp_contract", "fingerprint"])}
+      },
+      "mode" => health["mode"],
+      "ledger" => %{
+        "reachable" => get_in(health, ["ledger", "reachable"]),
+        "mode" => Atom.to_string(config.health_ledger_mode)
+      },
+      "dashboard" => %{"ready" => dashboard_ready?}
+    }
+  end
+
   @spec source_identity(Config.t()) :: map()
   def source_identity(%Config{source_revision: revision}) when is_binary(revision) and revision != "" do
     %{"revision" => String.downcase(revision), "mcp_contract" => mcp_contract_identity()}
