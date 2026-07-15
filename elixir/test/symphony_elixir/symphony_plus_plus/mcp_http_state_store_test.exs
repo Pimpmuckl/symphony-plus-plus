@@ -75,6 +75,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
     assert :ok = HTTPStateStore.persist_recovery_if_due(config, "retry-binding", 60_000, fn -> {:error, :busy} end)
     assert HTTPStateStore.recovery_persistence_due?(config, "retry-binding", 60_000)
 
+    assert_raise RuntimeError, fn ->
+      HTTPStateStore.persist_recovery_if_due(config, "raised-binding", 60_000, fn -> raise "busy" end)
+    end
+
+    assert HTTPStateStore.recovery_persistence_due?(config, "raised-binding", 60_000)
+
     assert :ok = HTTPStateStore.defer_recovery_persistence(config, "deferred-binding", 60_000)
     refute HTTPStateStore.recovery_persistence_due?(config, "deferred-binding", 60_000)
   end

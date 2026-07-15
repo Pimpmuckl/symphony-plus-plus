@@ -54,15 +54,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
     with :ok <- Repository.ensure_migrated(repo),
          :ok <- maybe_cleanup_stale(config, repo),
          {:ok, %SessionBinding{} = binding} <- get_binding(repo, client_key, state_key),
-         :ok <- require_fresh(binding),
-         :ok <- persist_action(config, repo, {:touch, binding.id, now()}) do
-      case recover_session(repo, binding) do
-        {:ok, %Session{} = session} ->
-          {:ok, Server.new(config, initialized: true, local_daemon_trusted: config.local_daemon_trusted, session: session, state_key: state_key)}
-
-        {:error, _reason} ->
-          {:ok, Server.new(config, initialized: true, local_daemon_trusted: config.local_daemon_trusted, state_key: state_key)}
-      end
+         :ok <- require_fresh(binding) do
+      result = recovered_server(config, repo, binding, state_key)
+      best_effort_touch(config, repo, binding)
+      result
     else
       _error -> :not_found
     end
@@ -71,6 +66,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
   end
 
   def rehydrate(%Config{}, _client_key, _state_key), do: :not_found
+
+  defp recovered_server(config, repo, binding, state_key) do
+    case recover_session(repo, binding) do
+      {:ok, %Session{} = session} ->
+        {:ok, Server.new(config, initialized: true, local_daemon_trusted: config.local_daemon_trusted, session: session, state_key: state_key)}
+
+      {:error, _reason} ->
+        {:ok, Server.new(config, initialized: true, local_daemon_trusted: config.local_daemon_trusted, state_key: state_key)}
+    end
+  end
+
+  defp best_effort_touch(config, repo, binding) do
+    persist_action(config, repo, {:touch, binding.id, now()})
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
 
   defp remember_action(_config, client_key, state_key, payload, %Server{initialized: true, session: nil} = server, response) do
     cond do
@@ -393,6 +406,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
 
   defp maybe_cleanup_stale(config, repo) do
     HTTPStateStore.cleanup_recovery_if_due(config, @cleanup_interval_ms, fn -> cleanup_stale(repo) end)
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
   end
 
   defp require_fresh(%SessionBinding{last_seen_at: %DateTime{} = last_seen_at}) do
