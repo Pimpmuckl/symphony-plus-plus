@@ -377,8 +377,13 @@ export function createLatestTaskQueue<T>(): LatestTaskQueue<T> {
   return { active: null, pending: null };
 }
 
-export function enqueueLatestTask<T>(queue: LatestTaskQueue<T>, task: T, run: (task: T) => Promise<void>) {
-  queue.pending = task;
+export function enqueueLatestTask<T>(
+  queue: LatestTaskQueue<T>,
+  task: T,
+  run: (task: T) => Promise<void>,
+  mergePending: (pending: T, next: T) => T = (_pending, next) => next,
+) {
+  queue.pending = queue.pending === null ? task : mergePending(queue.pending, task);
   if (queue.active) return queue.active;
 
   queue.active = (async () => {

@@ -34,6 +34,29 @@ describe("dashboard runtime mutation helpers", () => {
     expect(runs).toEqual(["first", "burst-19"]);
   });
 
+  it("does not let an ordinary invalidation replace a queued reconnect", async () => {
+    const queue = createLatestTaskQueue<string>();
+    const runs: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const run = async (task: string) => {
+      runs.push(task);
+      if (task === "first") await firstGate;
+    };
+    const mergePending = (pending: string, next: string) =>
+      pending === "reconnect" || next === "reconnect" ? "reconnect" : next;
+
+    const settled = enqueueLatestTask(queue, "first", run, mergePending);
+    void enqueueLatestTask(queue, "reconnect", run, mergePending);
+    void enqueueLatestTask(queue, "silent", run, mergePending);
+
+    releaseFirst();
+    await settled;
+    expect(runs).toEqual(["first", "reconnect"]);
+  });
+
   it("keeps cold loading split and uses one endpoint after hydration", () => {
     expect(dashboardRefreshPath(null)).toBe("/dashboard");
     expect(dashboardRefreshPath({ deferred: { dashboard_sections: true } })).toBe("/dashboard");

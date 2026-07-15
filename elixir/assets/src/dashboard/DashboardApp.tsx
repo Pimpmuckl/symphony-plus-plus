@@ -24,6 +24,10 @@ import { useDashboardUpdateAnimations } from "./update-animations";
 
 type DashboardLoadMode = "initial" | "refresh" | "silent" | "reconnect";
 
+function mergeDashboardLoadMode(pending: DashboardLoadMode, next: DashboardLoadMode) {
+  return pending === "reconnect" || next === "reconnect" ? "reconnect" : next;
+}
+
 export function DashboardApp() {
   const shellProps = useDashboardController();
   return <DashboardShell {...shellProps} />;
@@ -169,7 +173,8 @@ function useDashboardController() {
   }, [applyDashboardResponse, recordDashboardLoadFailure, setLoading, setRefreshing]);
 
   const loadDashboard = useCallback(
-    (mode: DashboardLoadMode = "refresh") => enqueueLatestTask(refreshQueueRef.current, mode, runDashboardLoad),
+    (mode: DashboardLoadMode = "refresh") =>
+      enqueueLatestTask(refreshQueueRef.current, mode, runDashboardLoad, mergeDashboardLoadMode),
     [runDashboardLoad],
   );
 
@@ -225,7 +230,7 @@ function useDashboardController() {
       setConnectionIssue(null);
       setError(null);
       setSelectedCardDetail(null);
-      if (!options.remove && !workRequest && mutationShouldRefreshDashboard(payload)) void loadDashboard("silent");
+      if (mutationShouldRefreshDashboard(payload)) void loadDashboard("silent");
     },
     [loadDashboard, setDashboard, setError, setSelectedCardDetail],
   );
