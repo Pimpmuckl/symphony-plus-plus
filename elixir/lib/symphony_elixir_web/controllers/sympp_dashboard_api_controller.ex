@@ -1047,22 +1047,24 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
     with :ok <- maybe_append_operator_audit(repo, conn, decision, tool_name),
          :ok <- require_allowed_local_operator_decision(decision) do
-      case run_local_operator_action(repo, action, fun) do
-        %Conn{} = conn ->
-          maybe_broadcast_dashboard_change(action)
-          conn
-
-        other ->
-          other
-      end
+      {result, invalidated?} = run_local_operator_action(repo, action, fun)
+      finalize_local_operator_result(result, action, invalidated?)
     end
   end
 
   defp run_local_operator_action(repo, action, fun) when action in [:dashboard_read, :work_package_read],
-    do: fun.(repo)
+    do: {fun.(repo), false}
 
   defp run_local_operator_action(repo, _action, fun),
-    do: DashboardPubSub.without_broadcast(fn -> fun.(repo) end)
+    do: DashboardPubSub.coalesce_changed(fn -> fun.(repo) end)
+
+  defp finalize_local_operator_result(%Conn{} = conn, action, false) do
+    maybe_broadcast_dashboard_change(action)
+    conn
+  end
+
+  defp finalize_local_operator_result(%Conn{} = conn, _action, true), do: conn
+  defp finalize_local_operator_result(other, _action, _invalidated?), do: other
 
   defp maybe_broadcast_dashboard_change(:dashboard_read), do: :ok
   defp maybe_broadcast_dashboard_change(:work_package_read), do: :ok

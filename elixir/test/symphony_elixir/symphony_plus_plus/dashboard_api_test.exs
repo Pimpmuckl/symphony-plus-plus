@@ -4618,6 +4618,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
+  test "coalesced mutation invalidation survives later response failure" do
+    assert :ok = DashboardPubSub.subscribe()
+
+    assert {{:error, :response_failed}, true} =
+             DashboardPubSub.coalesce_changed(fn ->
+               assert :ok = DashboardPubSub.broadcast_changed()
+               assert :ok = DashboardPubSub.broadcast_changed()
+               {:error, :response_failed}
+             end)
+
+    assert_receive :operator_dashboard_changed
+    refute_receive :operator_dashboard_changed, 50
+  end
+
   test "local operator dashboard invalidates after local operator comment writes", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request =
