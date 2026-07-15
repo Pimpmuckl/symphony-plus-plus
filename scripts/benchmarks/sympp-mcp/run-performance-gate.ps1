@@ -31,7 +31,7 @@ $profileCaps = [ordered]@{
   solo = @{ tools = 30; bytes = 20000 }
 }
 $resultCaps = [ordered]@{ claim = 600; read = 1200; progress = 500 }
-$exactP95Caps = @{ 1 = 1529; 10 = 1391; 100 = 109674 }
+$exactP95Caps = @{ 1 = $MaxWarmP95Ms; 10 = $MaxWarmP95Ms; 100 = $MaxWarmP95Ms }
 $thresholds = @{
   cold_ms = $MaxColdMs; warm_p95_ms = $MaxWarmP95Ms; exact_warm_p95_ms = $exactP95Caps
   exact_warm_bytes = $MaxExactWarmBytes; direct_ms = $MaxDirectMs

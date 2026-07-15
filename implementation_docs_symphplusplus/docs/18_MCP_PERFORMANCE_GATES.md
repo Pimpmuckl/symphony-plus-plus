@@ -22,6 +22,8 @@ arguments. Serialized token estimates are `ceil(bytes / 4)`.
 |---|---:|
 | Isolated dependency compile plus cold bootstrap | over 600,000 ms |
 | 100-client production warm attach p95 | over 2,000 ms |
+| Exact shipped-command warm attach p95 at 1, 10, or 100 clients | over 2,000 ms |
+| Exact shipped-command median private bytes per client | over 66,864,537 bytes |
 | 100-client direct HTTP cohort | over 30,000 ms |
 | Backend listeners in cold, warm, or direct stage | not exactly 1 |
 | Cold/direct backend identity | PID or start timestamp changes |
@@ -47,6 +49,11 @@ stage executes the production launcher warm path against a stubbed healthy
 endpoint so remote lookup attempts are observable. The direct stage uses the
 real isolated backend through the merged HTTP transport probe and confirms
 that 100 clients keep the same backend identity without agent wrappers.
+The exact-command stage executes the command shipped in `.mcp.json` with Node
+present at 1, 10, and 100 clients, then with Node absent to prove the
+PowerShell compatibility path. Node cohorts must also perform zero warm Git,
+payload, contract, or artifact-manifest resolution and recover after runtime
+failure, installed-payload mutation, abandoned locks, and lifecycle races.
 
 Run `-SelfTest` to prove every documented threshold branch without starting a
 backend.

@@ -166,7 +166,9 @@ function releaseProcessLock(lockFile, lock) {
 async function enterStartupLock(runtimeFile) {
   const lockFile = path.join(path.dirname(runtimeFile), "codex-plugin.lock");
   fs.mkdirSync(path.dirname(lockFile), { recursive: true });
-  const deadline = Date.now() + 30000;
+  const configuredSeconds = Number(process.env.SYMPP_STARTUP_LOCK_TIMEOUT_SEC || 1800);
+  const timeoutSeconds = Number.isFinite(configuredSeconds) && configuredSeconds >= 1 ? Math.min(1800, configuredSeconds) : 1800;
+  const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
     try { return fs.openSync(lockFile, "a+"); } catch (error) {
       if (!["EACCES", "EBUSY", "EPERM"].includes(error.code)) throw error;
@@ -302,13 +304,13 @@ function runtimeKey(backend, dashboard, contract) {
   return `contract=${contract.toLowerCase()};backend=${trimOrigin(backend).toLowerCase()};dashboard=${dashboard ? trimOrigin(dashboard).toLowerCase() : "none"}`;
 }
 
-function resolveStateIdentity(state, pluginRoot) {
+function resolveStateIdentity(state, pluginRoot, cachedIdentity) {
   if (!state || !state.backend || !state.frontend || !state.plugin_root) return null;
   if (path.resolve(String(state.plugin_root)).toLowerCase() !== path.resolve(pluginRoot).toLowerCase()) return null;
-  const identity = resolveCachedIdentity(pluginRoot);
+  const identity = cachedIdentity || resolveCachedIdentity(pluginRoot);
   if (!identity) return null;
 
-  const contract = String(identity.contract_fingerprint).toLowerCase();
+  const contract = String(identity.contract_fingerprint || identity.contract).toLowerCase();
   if (String(state.backend.expected_contract_fingerprint || "").toLowerCase() !== contract ||
       String(state.backend.contract_fingerprint || "").toLowerCase() !== contract) return null;
   const backend = trimOrigin(state.backend.url);
@@ -537,7 +539,12 @@ async function bridge(identity, state, runtimeFile) {
   let protocol = null;
   const timeoutMs = Math.max(1, Math.min(3600, Number(process.env.SYMPP_MCP_HTTP_TIMEOUT_SEC || 300))) * 1000;
   try {
-    startupLock = await enterStartupLock(runtimeFile);
+    try {
+      startupLock = await enterStartupLock(runtimeFile);
+    } catch (_) {
+      trace("warm_miss_lock");
+      return false;
+    }
     localLease = createLocalLease(runtimeFile, state, identity);
     let attachedResponse;
     try {
@@ -548,7 +555,7 @@ async function bridge(identity, state, runtimeFile) {
       return false;
     }
     const confirmedState = readJson(runtimeFile);
-    const confirmed = resolveStateIdentity(confirmedState, path.resolve(__dirname, ".."));
+    const confirmed = resolveStateIdentity(confirmedState, path.resolve(__dirname, ".."), identity);
     if (!confirmed || confirmed.runtimeKey.toLowerCase() !== identity.runtimeKey.toLowerCase()) {
       trace("warm_miss_state");
       return false;

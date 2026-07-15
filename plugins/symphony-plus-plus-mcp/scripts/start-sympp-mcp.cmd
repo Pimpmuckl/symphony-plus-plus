@@ -2,10 +2,11 @@
 setlocal
 
 if /I "%SYMPP_NODE_BRIDGE%"=="0" goto :run_pwsh
-where node.exe >nul 2>nul
-if errorlevel 1 goto :run_pwsh
+set "SYMPP_NODE="
+for %%I in (node.exe) do set "SYMPP_NODE=%%~$PATH:I"
+if not defined SYMPP_NODE goto :run_pwsh
 
-node.exe "%~dp0start-sympp-mcp-bridge.js" %*
+"%SYMPP_NODE%" "%~dp0start-sympp-mcp-bridge.js" %*
 set "bridge_exit=%ERRORLEVEL%"
 if "%bridge_exit%"=="43" goto :run_pwsh
 if not "%bridge_exit%"=="42" exit /b %bridge_exit%
@@ -13,7 +14,7 @@ if not "%bridge_exit%"=="42" exit /b %bridge_exit%
 call :find_powershell
 %SYMPP_POWERSHELL% -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0start-sympp-mcp.ps1" -PrepareRuntimeOnly %*
 if errorlevel 1 exit /b %ERRORLEVEL%
-node.exe "%~dp0start-sympp-mcp-bridge.js" %*
+"%SYMPP_NODE%" "%~dp0start-sympp-mcp-bridge.js" %*
 set "bridge_exit=%ERRORLEVEL%"
 if "%bridge_exit%"=="0" exit /b 0
 if "%bridge_exit%"=="42" goto :run_pwsh
