@@ -14,7 +14,8 @@ describe("status badge motion", () => {
     const active = renderToStaticMarkup(<AnimatedBadge active label="Active" variant="info" />);
     const ready = renderToStaticMarkup(<AnimatedBadge label="Ready for worker" variant="ready" />);
 
-    expect(active).toContain('aria-label="Active"');
+    expect(active).toContain('<span class="sr-only">Active</span>');
+    expect(active).toContain('<span class="status-badge-text-layout">Active</span>');
     expect(active).toContain('data-running="true"');
     expect(active).toContain("status-badge-text-running");
     expect(ready).not.toContain("status-badge-text-running");

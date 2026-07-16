@@ -2686,6 +2686,22 @@
     white-space: nowrap;
   }
 
+  .status-badge-text-frame {
+    position: relative;
+    display: inline-block;
+  }
+
+  .status-badge-text-layout {
+    visibility: hidden;
+  }
+
+  .status-badge-text {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    text-align: center;
+  }
+
   .status-badge-text-running {
     --status-shimmer-accent: color-mix(in srgb, currentColor 48%, black);
     background-image: linear-gradient(

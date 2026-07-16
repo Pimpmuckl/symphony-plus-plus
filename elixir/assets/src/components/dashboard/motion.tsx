@@ -126,16 +126,18 @@ export function AnimatedBadge({
       ref={badgeRef}
       variant={variant}
       className={cn("status-text-badge", className)}
-      aria-label={label}
       data-running={active ? "true" : undefined}
     >
-      <span
-        key={`${label}:${testToken}`}
-        className={cn("status-badge-text", active && "status-badge-text-running")}
-        aria-hidden="true"
-        style={textStyle}
-      >
-        {displayLabel}
+      <span className="sr-only">{label}</span>
+      <span className="status-badge-text-frame" aria-hidden="true">
+        <span className="status-badge-text-layout">{label}</span>
+        <span
+          key={`${label}:${testToken}`}
+          className={cn("status-badge-text", active && "status-badge-text-running")}
+          style={textStyle}
+        >
+          {displayLabel}
+        </span>
       </span>
     </Badge>
   );
@@ -183,7 +185,8 @@ function useScrambledStatus(label: string, badgeRef: RefObject<HTMLDivElement | 
 
     if (reducedMotion) {
       displayRef.current = label;
-      return;
+      const frame = window.requestAnimationFrame(() => setDisplayLabel(label));
+      return () => window.cancelAnimationFrame(frame);
     }
 
     const duration = from === label && testToken > 0
