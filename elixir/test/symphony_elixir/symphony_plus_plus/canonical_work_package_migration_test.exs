@@ -67,6 +67,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
       assert %{
                "work_package_id" => "WP-LINKED",
                "kind" => "work_package",
+               "exact_note" => "WRS-LINKED",
                "note" => "planned slice WRS-LINKED remains prose"
              } = Jason.decode!(encoded_payload)
 
@@ -237,6 +238,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
         Jason.encode!(%{
           "planned_slice_id" => "WRS-LINKED",
           "kind" => "planned_slice",
+          "exact_note" => "WRS-LINKED",
           "note" => "planned slice WRS-LINKED remains prose"
         })
       ]

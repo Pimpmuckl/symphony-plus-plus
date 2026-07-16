@@ -11,6 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
     "successor_planned_slice_ids" => "successor_work_package_ids"
   }
   @kind_keys ["entity_type", "kind", "scope_type", "source_kind", "target_kind", "target_type"]
+  @identifier_keys ["successor_work_package_id", "successor_work_package_ids", "work_package_id", "work_package_ids"]
 
   def up do
     repo().checkout(&cut_over/0)
@@ -359,7 +360,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
 
   defp rewrite_payload_value(value, id_map, parent_key) when is_binary(value) do
     cond do
-      Map.has_key?(id_map, value) -> Map.fetch!(id_map, value)
+      parent_key in @identifier_keys and Map.has_key?(id_map, value) -> Map.fetch!(id_map, value)
       parent_key in @kind_keys and value == "planned_slice" -> "work_package"
       true -> value
     end
