@@ -484,11 +484,6 @@ function Get-MarketplaceSourceRootFromCachePackage($Package) {
     return $null
   }
 
-  if ((Get-Command Import-DiagnosticMcpArtifactHelpers -ErrorAction SilentlyContinue) -and
-      (Import-DiagnosticMcpArtifactHelpers $versionRoot)) {
-    return Resolve-RepoRootFromMarketplaceCache $versionRoot
-  }
-
   $packageRoot = Split-Path -Parent $versionRoot
   $marketplaceRoot = Split-Path -Parent $packageRoot
   $cacheRoot = Split-Path -Parent $marketplaceRoot
@@ -496,6 +491,16 @@ function Get-MarketplaceSourceRootFromCachePackage($Package) {
 
   if ((Split-Path -Leaf $cacheRoot) -ne "cache" -or (Split-Path -Leaf $pluginsRoot) -ne "plugins") {
     return $null
+  }
+
+  $codexHome = Split-Path -Parent $pluginsRoot
+  $marketplaceName = Split-Path -Leaf $marketplaceRoot
+  $candidate = Resolve-OptionalFullPath (Join-Path $codexHome ".tmp/marketplaces/$marketplaceName")
+  $sourcePackageRoot = Join-Path $candidate "plugins/$($Package.package_name)"
+  if ((Test-SourceCheckoutRoot $candidate) -and
+      (Test-Path -LiteralPath (Join-Path $candidate ".codex-marketplace-install.json") -PathType Leaf) -and
+      (Test-Path -LiteralPath (Join-Path $sourcePackageRoot ".codex-plugin/plugin.json") -PathType Leaf)) {
+    return $candidate
   }
 
   return $null
@@ -554,11 +559,6 @@ function Resolve-ReadinessSourceCheckout([string]$PluginRoot, [string]$ProvidedR
     return New-SourceCheckoutStatus "source_plugin_root" $sourceCheckoutRoot
   }
 
-  $sourceCheckoutRoot = Get-SourceCheckoutFromCurrentDirectory
-  if ($sourceCheckoutRoot) {
-    return New-SourceCheckoutStatus "current_working_directory" $sourceCheckoutRoot
-  }
-
   $marketplaceSourceRoots = Get-UsableMarketplaceSourceRoots $PreferredPackages
   if ($marketplaceSourceRoots.Count -eq 1) {
     return New-SourceCheckoutStatus "codex_marketplace_source_clone" (@($marketplaceSourceRoots)[0])
@@ -566,6 +566,11 @@ function Resolve-ReadinessSourceCheckout([string]$PluginRoot, [string]$ProvidedR
 
   if ($marketplaceSourceRoots.Count -gt 1) {
     return New-SourceCheckoutStatus "ambiguous_codex_marketplace_source_clones" $null "Selected installed caches resolve to multiple Codex marketplace source clones; rerun with -MarketplaceName <marketplace> or pass -RepoRoot only for explicit developer validation."
+  }
+
+  $sourceCheckoutRoot = Get-SourceCheckoutFromCurrentDirectory
+  if ($sourceCheckoutRoot) {
+    return New-SourceCheckoutStatus "current_working_directory" $sourceCheckoutRoot
   }
 
   return New-SourceCheckoutStatus "not_found" $null "No Codex marketplace source clone could be inferred. Run codex plugin marketplace upgrade, or pass -RepoRoot only for explicit developer validation."

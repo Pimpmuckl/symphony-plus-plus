@@ -64,7 +64,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionTest do
     end
   end
 
-  test "installed MCP launcher rejects dirty marketplace contract source" do
+  test "installed MCP launcher trusts Codex marketplace metadata without rechecking the git worktree" do
     powershell = System.find_executable("pwsh")
     git = System.find_executable("git")
     temp_codex_home = unique_temp_path("sympp-plugin-dirty-marketplace-contract")
@@ -97,8 +97,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionTest do
             ]
           )
 
-        assert status != 0
-        assert normalize_prose(output) =~ "expected MCP contract fingerprint could not be resolved"
+        assert status == 0, output
+        assert output =~ "Symphony++ MCP launcher validation passed."
+        assert normalize_path_fragment(output) =~ "reporoot: #{normalize_path_fragment(marketplace_root)}"
+        assert output =~ "runtimeMode: source"
       after
         File.rm_rf!(temp_codex_home)
       end

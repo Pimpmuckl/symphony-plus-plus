@@ -4,7 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLifecycleDiagnosticTest do
   use SymphonyElixir.SymphonyPlusPlus.PluginLifecycleDiagnosticCase
   @moduletag :ci_slow
 
-  test "lifecycle doctor ignores stale cache hints when marketplace source is not verified" do
+  test "lifecycle doctor prefers the installed marketplace source over cache hints and the current directory" do
     powershell = System.find_executable("powershell.exe") || System.find_executable("pwsh") || System.find_executable("powershell")
     temp_codex_home = unique_temp_path("sympp-plugin-marketplace-source-doctor")
 
@@ -43,7 +43,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLifecycleDiagnosticTest do
               "-SkipProcessScan",
               "-Json"
             ],
-            cd: temp_codex_home,
+            cd: @repo_root,
             stderr_to_stdout: true,
             env: [{"SYMPP_REPO_ROOT", ""}]
           )

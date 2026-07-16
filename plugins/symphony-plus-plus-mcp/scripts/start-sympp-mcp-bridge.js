@@ -12,7 +12,6 @@ const WARM_MISS = 42;
 const POWERSHELL_FALLBACK = 43;
 const BOARD_PATH = "/sympp/board";
 const MAX_DASHBOARD_REDIRECTS = 3;
-const DOTNET_EPOCH_TICKS = 621355968000000000n;
 const GENERATION_SETTLE_MS = 100;
 const synchronousWait = new Int32Array(new SharedArrayBuffer(4));
 const agent = new http.Agent({ keepAlive: true });
@@ -61,46 +60,15 @@ function readJson(file) {
   }
 }
 
-function listPayloadFiles(root) {
-  const files = [];
-  function visit(directory) {
-    const entries = fs.readdirSync(directory, { withFileTypes: true });
-    for (const entry of entries) {
-      const full = path.join(directory, entry.name);
-      if (entry.isDirectory()) visit(full);
-      else if (entry.isFile()) {
-        const relative = path.relative(root, full).split(path.sep).join("/");
-        if (relative !== ".sympp-source-revision") files.push(relative);
-      }
-    }
-  }
-  visit(root);
-  files.sort();
-  return files;
-}
-
-function fileGenerationPart(file, label) {
-  const stat = fs.statSync(file, { bigint: true });
-  const ticks = stat.mtimeNs / 100n + DOTNET_EPOCH_TICKS;
-  return `${label}|${stat.size}|${ticks}|${sha256(fs.readFileSync(file))}`;
-}
-
 function generationKey(pluginRoot, sourcePluginRoot, sourceRoot) {
   try {
-    const parts = [];
-    for (const root of [pluginRoot, sourcePluginRoot]) {
-      for (const relative of listPayloadFiles(root)) {
-        parts.push(fileGenerationPart(path.join(root, relative), relative));
-      }
-    }
-    for (const file of [
-      path.join(pluginRoot, ".sympp-source-revision"),
-      path.join(sourceRoot, ".codex-marketplace-install.json"),
-      path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp", "mcp_tools_contract.json"),
-    ]) {
-      parts.push(fileGenerationPart(file, path.resolve(file)));
-    }
-    return sha256(parts.join("\n"));
+    if (!fs.statSync(pluginRoot).isDirectory() || !fs.statSync(sourcePluginRoot).isDirectory()) return null;
+    const install = readJson(path.join(sourceRoot, ".codex-marketplace-install.json"));
+    const contract = readJson(path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp", "mcp_tools_contract.json"));
+    const revision = String(install && (install.revision || install.source_revision || install.sourceRevision) || "").toLowerCase();
+    const fingerprint = String(contract && contract.mcp_contract_fingerprint || "").toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(revision) || !/^[0-9a-f]{64}$/.test(fingerprint)) return null;
+    return sha256(`${path.resolve(pluginRoot).toLowerCase()}\n${revision}\n${fingerprint}`);
   } catch (_) {
     return null;
   }
@@ -315,8 +283,7 @@ async function resolveCachedIdentity(pluginRoot) {
       path.resolve(String(cache.source_root || "")).toLowerCase() !== sourceRoot.toLowerCase() ||
       cache.generation_key !== generation.key ||
       !/^[0-9a-f]{40}$/i.test(String(cache.revision || "")) ||
-      !/^[0-9a-f]{64}$/i.test(String(cache.contract_fingerprint || "")) ||
-      !/^[0-9a-f]{64}$/i.test(String(cache.payload_identity || ""))) return null;
+      !/^[0-9a-f]{64}$/i.test(String(cache.contract_fingerprint || ""))) return null;
 
   trace("installed_identity_cache_hit");
   return { ...cache, generation_marker: generationMarker, generation_watch_version: generation.watchVersion };
@@ -767,5 +734,5 @@ if (require.main === module) {
     process.exit(1);
   });
 } else {
-  module.exports = { dashboardHealthy, generationFromMarker, resolveStateIdentity };
+  module.exports = { dashboardHealthy, generationFromMarker, generationKey, resolveStateIdentity };
 }

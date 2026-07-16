@@ -18,6 +18,8 @@ function Import-ScriptFunction([string]$Path, [string]$Name) {
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../.."))
 $scriptPath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/start-sympp-mcp.ps1"
 $helperPath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-mcp-launcher-helpers.ps1"
+$runtimePath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-launcher-runtime.ps1"
+. $runtimePath
 . $helperPath
 foreach ($name in @(
     "Normalize-McpContractFingerprint", "Get-McpContractFingerprintFromContractFile",
@@ -134,18 +136,50 @@ try {
   }
   Set-Content -LiteralPath (Join-Path $installedRoot "payload.txt") -Value "first" -NoNewline
   Set-Content -LiteralPath (Join-Path $sourcePluginRoot "payload.txt") -Value "first" -NoNewline
-  Set-Content -LiteralPath (Join-Path $installedRoot ".sympp-source-revision") -Value ("a" * 40) -NoNewline
-  Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json") -Value "{}" -NoNewline
-  Set-Content -LiteralPath (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json") -Value "{}" -NoNewline
-  $payloadPath = Join-Path $installedRoot "payload.txt"
-  $originalWriteTime = [System.IO.File]::GetLastWriteTimeUtc($payloadPath)
+  Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json") -Value (@{ revision = "a" * 40 } | ConvertTo-Json -Compress) -NoNewline
+  Set-Content -LiteralPath (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json") -Value (@{ mcp_contract_fingerprint = "c" * 64 } | ConvertTo-Json -Compress) -NoNewline
   $beforeGeneration = Get-SymppPluginGenerationKey $installedRoot $sourcePluginRoot $sourceRoot
-  Set-Content -LiteralPath $payloadPath -Value "other" -NoNewline
-  [System.IO.File]::SetLastWriteTimeUtc($payloadPath, $originalWriteTime)
+  Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json") -Value (@{ revision = "b" * 40 } | ConvertTo-Json -Compress) -NoNewline
   $afterGeneration = Get-SymppPluginGenerationKey $installedRoot $sourcePluginRoot $sourceRoot
-  Assert-True ($beforeGeneration -ne $afterGeneration) "Generation identity must detect same-length payload replacement with restored mtime"
+  Assert-True ($beforeGeneration -ne $afterGeneration) "Generation identity must follow Codex marketplace revision metadata"
 } finally {
   Remove-Item -LiteralPath $generationRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+$marketplaceRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("sympp-marketplace-" + [guid]::NewGuid().ToString("N"))
+$previousSymppHome = $env:SYMPP_HOME
+try {
+  $codexHome = Join-Path $marketplaceRoot "codex"
+  $sourceRoot = Join-Path $codexHome ".tmp/marketplaces/test-market"
+  $sourcePluginRoot = Join-Path $sourceRoot "plugins/symphony-plus-plus-mcp"
+  $installedRoot = Join-Path $codexHome "plugins/cache/test-market/symphony-plus-plus-mcp/0.1.9"
+  $contractRoot = Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp"
+  foreach ($directory in @($sourcePluginRoot, $installedRoot, $contractRoot, (Join-Path $sourceRoot "elixir"))) {
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  }
+  $revision = "b" * 40
+  $fingerprint = "c" * 64
+  Set-Content -LiteralPath (Join-Path $sourceRoot "elixir/mix.exs") -Value "[]" -NoNewline
+  Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json") -Value (@{ revision = $revision } | ConvertTo-Json -Compress) -NoNewline
+  Set-Content -LiteralPath (Join-Path $contractRoot "mcp_tools_contract.json") -Value (@{ mcp_contract_fingerprint = $fingerprint } | ConvertTo-Json -Compress) -NoNewline
+  Set-Content -LiteralPath (Join-Path $sourcePluginRoot "payload.txt") -Value "matching" -NoNewline
+  Set-Content -LiteralPath (Join-Path $installedRoot "payload.txt") -Value "matching" -NoNewline
+  $env:SYMPP_HOME = Join-Path $marketplaceRoot "sympp"
+
+  $installedIdentity = Resolve-SymppInstalledMarketplaceIdentity $installedRoot
+  Assert-True ($installedIdentity.revision -eq $revision) "Stock marketplace install must resolve without an S++ source revision marker"
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $installedRoot ".sympp-source-revision"))) "Marketplace identity test must not synthesize a source revision marker"
+
+  Set-Content -LiteralPath (Join-Path $installedRoot "payload.txt") -Value "modified" -NoNewline
+  $modifiedIdentity = Resolve-SymppInstalledMarketplaceIdentity $installedRoot
+  Assert-True ($modifiedIdentity.revision -eq $revision) "S++ must trust Codex-owned plugin cache installation instead of re-hashing the payload"
+
+  Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json") -Value "{}" -NoNewline
+  Set-Content -LiteralPath (Join-Path $sourceRoot ".sympp-source-revision") -Value $revision -NoNewline
+  Assert-True (-not (Get-SymppMarketplaceSourceRevision $sourceRoot)) "Private S++ markers must not substitute for missing Codex marketplace metadata"
+} finally {
+  $env:SYMPP_HOME = $previousSymppHome
+  Remove-Item -LiteralPath $marketplaceRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 $benchmark = & (Join-Path $PSScriptRoot "warm-attach-benchmark.ps1") | ConvertFrom-Json

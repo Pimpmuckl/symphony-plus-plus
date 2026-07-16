@@ -1,8 +1,10 @@
 "use strict";
 
 const assert = require("assert/strict");
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
-const { generationFromMarker, resolveStateIdentity } = require("../../scripts/start-sympp-mcp-bridge.js");
+const { generationFromMarker, generationKey, resolveStateIdentity } = require("../../scripts/start-sympp-mcp-bridge.js");
 
 const pluginRoot = path.resolve("test-installed/codex/plugins/cache/marketplace/symphony-plus-plus-mcp/0.1.9");
 const contract = "a".repeat(64);
@@ -61,5 +63,30 @@ assert.equal(resolveStateIdentity(changed((value) => { value.frontend.origin = "
 assert.equal(resolveStateIdentity(changed((value) => { value.runtime_key = "wrong"; }), pluginRoot, identity), null);
 assert.equal(resolveStateIdentity(state, path.join(pluginRoot, "other"), identity), null);
 assert.equal(resolveStateIdentity(state, pluginRoot, null), null);
+
+const marketplaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sympp-node-marketplace-"));
+try {
+  const installedRoot = path.join(marketplaceRoot, "installed");
+  const sourceRoot = path.join(marketplaceRoot, "source");
+  const sourcePluginRoot = path.join(sourceRoot, "plugins", "symphony-plus-plus-mcp");
+  fs.mkdirSync(installedRoot, { recursive: true });
+  fs.mkdirSync(sourcePluginRoot, { recursive: true });
+  fs.mkdirSync(path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp"), { recursive: true });
+  fs.writeFileSync(path.join(sourceRoot, ".codex-marketplace-install.json"), JSON.stringify({ revision }));
+  fs.writeFileSync(
+    path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp", "mcp_tools_contract.json"),
+    JSON.stringify({ mcp_contract_fingerprint: contract }),
+  );
+  const first = generationKey(installedRoot, sourcePluginRoot, sourceRoot);
+  assert.match(first, /^[0-9a-f]{64}$/, "Codex marketplace metadata must identify a marker-free install");
+  fs.writeFileSync(path.join(installedRoot, "payload.txt"), "locally changed");
+  assert.equal(
+    generationKey(installedRoot, sourcePluginRoot, sourceRoot),
+    first,
+    "Node warm attach must trust the Codex-owned installed cache instead of hashing every file",
+  );
+} finally {
+  fs.rmSync(marketplaceRoot, { recursive: true, force: true });
+}
 
 process.stdout.write("Node cutover state identity tests passed.\n");

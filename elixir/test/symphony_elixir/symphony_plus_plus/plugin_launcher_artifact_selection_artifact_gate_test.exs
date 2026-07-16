@@ -159,7 +159,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionArtifac
         assert status == 0, output
         assert output =~ "runtimeMode: artifact"
         assert output =~ "artifactStatus: artifact_selected"
-        assert normalize_path_fragment(output) =~ "reporoot: artifact-only"
+        assert normalize_path_fragment(output) =~ "reporoot: #{normalize_path_fragment(marketplace_root)}"
         assert normalize_path_fragment(output) =~ "/#{String.slice(current_revision, 0, 12)}/"
         refute normalize_path_fragment(output) =~ "/#{String.slice(stale_revision, 0, 12)}/"
       after

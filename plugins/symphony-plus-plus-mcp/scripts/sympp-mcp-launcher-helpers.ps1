@@ -72,47 +72,7 @@ function Get-SymppMarketplaceSourceRevision([string]$SourceRoot) {
     }
   }
 
-  $revisionPath = Join-Path $SourceRoot ".sympp-source-revision"
-  if (Test-Path -LiteralPath $revisionPath -PathType Leaf) {
-    return Normalize-SymppMarketplaceSourceRevision (Get-Content -LiteralPath $revisionPath -Raw)
-  }
-
   return $null
-}
-
-function Test-SymppMarketplaceContractMatchesRevision([string]$SourceRoot, [string]$ExpectedRevision) {
-  Write-SymppLauncherTrace "marketplace_git_validation"
-  $contractRelativePath = "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json"
-  $contractPath = Join-Path $SourceRoot $contractRelativePath
-  if (-not (Test-Path -LiteralPath $contractPath -PathType Leaf)) {
-    return $false
-  }
-
-  $git = Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $git) {
-    return $true
-  }
-
-  try {
-    $insideWorkTree = @(& $git.Source @("-C", $SourceRoot, "rev-parse", "--is-inside-work-tree") 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $insideWorkTree.Count -eq 0 -or ([string]$insideWorkTree[0]).Trim().ToLowerInvariant() -ne "true") {
-      return $true
-    }
-
-    $committedObject = @(& $git.Source @("-C", $SourceRoot, "rev-parse", "$($ExpectedRevision):$contractRelativePath") 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $committedObject.Count -eq 0) {
-      return $false
-    }
-
-    $workingObject = @(& $git.Source @("-C", $SourceRoot, "hash-object", "--", $contractRelativePath) 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $workingObject.Count -eq 0) {
-      return $false
-    }
-
-    return [System.StringComparer]::OrdinalIgnoreCase.Equals(([string]$committedObject[0]).Trim(), ([string]$workingObject[0]).Trim())
-  } catch {
-    return $false
-  }
 }
 
 function Get-SymppStringSha256([string]$Value) {
@@ -125,52 +85,17 @@ function Get-SymppStringSha256([string]$Value) {
   }
 }
 
-function Get-SymppPluginPayloadFiles([string]$PluginRoot) {
-  $root = [System.IO.Path]::GetFullPath($PluginRoot).TrimEnd("\", "/")
-  [string[]]$relativePaths = @(
-    Get-ChildItem -LiteralPath $root -File -Recurse -Force | ForEach-Object {
-      $relative = $_.FullName.Substring($root.Length).TrimStart("\", "/").Replace("\", "/")
-      if ($relative -ne ".sympp-source-revision") { $relative }
-    }
-  )
-  [System.Array]::Sort($relativePaths, [System.StringComparer]::Ordinal)
-  return @($relativePaths | ForEach-Object { [pscustomobject]@{ relative_path = $_; file = Get-Item -LiteralPath (Join-Path $root $_) } })
-}
-
 function Get-SymppPluginGenerationKey([string]$PluginRoot, [string]$SourcePluginRoot, [string]$SourceRoot) {
-  $parts = [System.Collections.Generic.List[string]]::new()
-  foreach ($entry in @(Get-SymppPluginPayloadFiles $PluginRoot) + @(Get-SymppPluginPayloadFiles $SourcePluginRoot)) {
-    $parts.Add("$($entry.relative_path)|$($entry.file.Length)|$($entry.file.LastWriteTimeUtc.Ticks)|$(Get-FileSha256 $entry.file.FullName)")
+  $revision = Get-SymppMarketplaceSourceRevision $SourceRoot
+  try {
+    $contractFingerprint = [string]((Get-Content -LiteralPath (Join-Path $SourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json") -Raw | ConvertFrom-Json).mcp_contract_fingerprint)
+  } catch {
+    return $null
   }
-  foreach ($path in @(
-      (Join-Path $PluginRoot ".sympp-source-revision"),
-      (Join-Path $SourceRoot ".codex-marketplace-install.json"),
-      (Join-Path $SourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
-    )) {
-    $file = Get-Item -LiteralPath $path -ErrorAction SilentlyContinue
-    if (-not $file) { return $null }
-    $parts.Add("$([System.IO.Path]::GetFullPath($path))|$($file.Length)|$($file.LastWriteTimeUtc.Ticks)|$(Get-FileSha256 $file.FullName)")
+  if ($revision -notmatch "^[0-9a-f]{40}$" -or $contractFingerprint -notmatch "^[0-9a-fA-F]{64}$") {
+    return $null
   }
-  return Get-SymppStringSha256 ($parts -join "`n")
-}
-
-function Get-InstalledPluginPayloadIdentity([string]$PluginRoot, [string]$SourceRoot) {
-  Write-SymppLauncherTrace "payload_hash_validation"
-  $packageRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($PluginRoot))
-  $sourcePluginRoot = Join-Path $SourceRoot ("plugins/" + (Split-Path -Leaf $packageRoot))
-  $installedFiles = @(Get-SymppPluginPayloadFiles $PluginRoot)
-  $sourceFiles = @(Get-SymppPluginPayloadFiles $sourcePluginRoot)
-  if ($installedFiles.Count -eq 0 -or $installedFiles.Count -ne $sourceFiles.Count) { return $null }
-
-  $identity = [System.Collections.Generic.List[string]]::new()
-  for ($index = 0; $index -lt $installedFiles.Count; $index++) {
-    if ($installedFiles[$index].relative_path -cne $sourceFiles[$index].relative_path) { return $null }
-    $installedHash = Get-FileSha256 $installedFiles[$index].file.FullName
-    $sourceHash = Get-FileSha256 $sourceFiles[$index].file.FullName
-    if (-not $installedHash -or -not [System.StringComparer]::OrdinalIgnoreCase.Equals($installedHash, $sourceHash)) { return $null }
-    $identity.Add("$($installedFiles[$index].relative_path):$installedHash")
-  }
-  return Get-SymppStringSha256 ($identity -join "`n")
+  return Get-SymppStringSha256 "$([System.IO.Path]::GetFullPath($PluginRoot).ToLowerInvariant())`n$($revision.ToLowerInvariant())`n$($contractFingerprint.ToLowerInvariant())"
 }
 
 function Test-InstalledPluginPayloadMatchesMarketplaceSource([string]$PluginRoot, [string]$SourceRoot) {
@@ -211,8 +136,7 @@ function Read-SymppInstalledIdentityCache([string]$CachePath, [string]$PluginRoo
         -not [System.StringComparer]::OrdinalIgnoreCase.Equals([string]$cache.source_root, [System.IO.Path]::GetFullPath($SourceRoot)) -or
         -not [System.StringComparer]::Ordinal.Equals([string]$cache.generation_key, $GenerationKey) -or
         [string]$cache.revision -notmatch "^[0-9a-f]{40}$" -or
-        [string]$cache.contract_fingerprint -notmatch "^[0-9a-f]{64}$" -or
-        [string]$cache.payload_identity -notmatch "^[0-9a-f]{64}$") {
+        [string]$cache.contract_fingerprint -notmatch "^[0-9a-f]{64}$") {
       return $null
     }
     Write-SymppLauncherTrace "installed_identity_cache_hit"
@@ -259,18 +183,9 @@ function Resolve-SymppInstalledMarketplaceIdentity([string]$PluginRoot) {
   }
 
   Write-SymppLauncherTrace "installed_identity_full_validation"
-  $installedRevision = Get-SymppPinnedSourceRevision $versionRoot
   $marketplaceRevision = Get-SymppMarketplaceSourceRevision $sourceRoot
-  if (-not $installedRevision -or -not $marketplaceRevision -or
-      -not [System.StringComparer]::OrdinalIgnoreCase.Equals($installedRevision, $marketplaceRevision)) {
-    throw "installed_marketplace_identity_invalid: installed and marketplace revisions do not match. Run codex plugin marketplace upgrade."
-  }
-  if (-not (Test-SymppMarketplaceContractMatchesRevision $sourceRoot $marketplaceRevision)) {
-    throw "installed_marketplace_identity_invalid: marketplace contract does not match revision $marketplaceRevision."
-  }
-  $payloadIdentity = Get-InstalledPluginPayloadIdentity $versionRoot $sourceRoot
-  if (-not $payloadIdentity) {
-    throw "installed_marketplace_identity_invalid: installed plugin payload differs from the marketplace source. Run codex plugin marketplace upgrade."
+  if (-not $marketplaceRevision) {
+    throw "installed_marketplace_identity_invalid: marketplace revision is missing. Run codex plugin marketplace upgrade."
   }
   try {
     $contractFingerprint = [string]((Get-Content -LiteralPath (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json") -Raw | ConvertFrom-Json).mcp_contract_fingerprint)
@@ -288,7 +203,6 @@ function Resolve-SymppInstalledMarketplaceIdentity([string]$PluginRoot) {
     generation_key = $generationKey
     revision = $marketplaceRevision.ToLowerInvariant()
     contract_fingerprint = $contractFingerprint.ToLowerInvariant()
-    payload_identity = $payloadIdentity.ToLowerInvariant()
   }
   Write-SymppInstalledIdentityCache $cachePath $identity
   $script:SymppPreparedInstalledIdentity = $identity
@@ -305,27 +219,7 @@ function Resolve-RepoRootFromMarketplaceCache([string]$PluginRoot) {
     $identity = Resolve-SymppInstalledMarketplaceIdentity $versionRoot
     if ($identity) { return [string]$identity.source_root }
   } catch {
-    # The PowerShell fallback retains the legacy artifact/source selection contract.
-  }
-  $packageRoot = Split-Path -Parent $versionRoot
-  $marketplaceRoot = Split-Path -Parent $packageRoot
-  $cacheRoot = Split-Path -Parent $marketplaceRoot
-  $pluginsRoot = Split-Path -Parent $cacheRoot
-  if ((Split-Path -Leaf $cacheRoot) -ne "cache" -or (Split-Path -Leaf $pluginsRoot) -ne "plugins") { return $null }
-
-  $codexHome = Split-Path -Parent $pluginsRoot
-  $marketplaceName = Split-Path -Leaf $marketplaceRoot
-  $candidate = [System.IO.Path]::GetFullPath((Join-Path $codexHome ".tmp/marketplaces/$marketplaceName"))
-  if ((Test-SymphonySourceRoot $candidate) -and
-      (Test-Path -LiteralPath (Join-Path $candidate "plugins/symphony-plus-plus/.codex-plugin/plugin.json")) -and
-      (Test-Path -LiteralPath (Join-Path $candidate "plugins/symphony-plus-plus-mcp/.codex-plugin/plugin.json"))) {
-    $installedRevision = Get-SymppPinnedSourceRevision $versionRoot
-    $marketplaceRevision = Get-SymppMarketplaceSourceRevision $candidate
-    if (-not $installedRevision -or -not $marketplaceRevision -or
-        -not [System.StringComparer]::OrdinalIgnoreCase.Equals($installedRevision, $marketplaceRevision) -or
-        -not (Test-SymppMarketplaceContractMatchesRevision $candidate $marketplaceRevision) -or
-        -not (Test-InstalledPluginPayloadMatchesMarketplaceSource $versionRoot $candidate)) { return $null }
-    return $candidate
+    return $null
   }
   return $null
 }
