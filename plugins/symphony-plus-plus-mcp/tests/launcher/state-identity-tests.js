@@ -2,7 +2,7 @@
 
 const assert = require("assert/strict");
 const path = require("path");
-const { resolveStateIdentity } = require("../../scripts/start-sympp-mcp-bridge.js");
+const { generationFromMarker, resolveStateIdentity } = require("../../scripts/start-sympp-mcp-bridge.js");
 
 const pluginRoot = path.resolve("test-installed/codex/plugins/cache/marketplace/symphony-plus-plus-mcp/0.1.9");
 const contract = "a".repeat(64);
@@ -12,10 +12,16 @@ const runtimeKey = `contract=${contract};backend=${backend};dashboard=${backend}
 const identity = {
   contract_fingerprint: contract,
   revision,
+  source_root: path.resolve("test-marketplace-source"),
   generation_key: "c".repeat(64),
   generation_marker: "marker",
   generation_watch_version: 1,
 };
+
+assert.equal(generationFromMarker({ generation_key: identity.generation_key, validated_at_ms: 200 }, 100), identity.generation_key);
+assert.equal(generationFromMarker({ generation_key: identity.generation_key, validated_at_ms: 99 }, 100), null,
+  "a new attach must not trust generation validation from before its watcher boundary");
+assert.equal(generationFromMarker({ generation_key: "invalid", validated_at_ms: 200 }, 100), null);
 const state = {
   plugin_root: pluginRoot,
   runtime_key: runtimeKey,
@@ -43,6 +49,8 @@ const resolved = resolveStateIdentity(state, pluginRoot, identity);
 assert.ok(resolved, "cutover external backend with artifact frontend must use the Node bridge");
 assert.equal(resolved.revision, revision, "installed revision identity must be preserved");
 assert.equal(resolved.contract, contract, "installed contract identity must be preserved");
+assert.equal(resolved.pluginRoot, pluginRoot, "installed plugin root must remain available for final attachment validation");
+assert.equal(resolved.sourceRoot, identity.source_root, "marketplace root must remain available for final attachment validation");
 
 assert.equal(resolveStateIdentity(changed((value) => { value.backend.status = "started"; }), pluginRoot, identity), null);
 assert.equal(resolveStateIdentity(changed((value) => { value.frontend.managed = true; }), pluginRoot, identity), null);
