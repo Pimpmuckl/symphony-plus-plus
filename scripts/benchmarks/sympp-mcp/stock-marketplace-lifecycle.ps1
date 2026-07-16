@@ -202,7 +202,7 @@ try {
   if ($runtimeIdentity) {
     $backend = Get-Process -Id $runtimeIdentity.pid -ErrorAction SilentlyContinue
     if ($backend -and $backend.StartTime.ToUniversalTime().Ticks -eq $runtimeIdentity.start_ticks) {
-      Stop-Process -Id $backend.Id -Force -ErrorAction Stop
+      $backend.Kill($true)
       if (-not $backend.WaitForExit(60000)) { throw "Timed out waiting for isolated backend cleanup." }
     }
   }
