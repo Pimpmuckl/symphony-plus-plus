@@ -85,9 +85,9 @@ defmodule SymppV3Preview do
 
   defp maybe_seed_work_request(work_request_id) do
     with {:ok, work_request} <- WorkRequestRepository.get(Repo, work_request_id),
-         {:ok, planned_slices} <- WorkRequestRepository.list_planned_slices(Repo, work_request_id) do
+         {:ok, work_packages} <- WorkRequestRepository.list_work_packages(Repo, work_request_id) do
       seed_nodes!(work_request)
-      seed_slice_links!(work_request, planned_slices)
+      seed_work_package_ownership!(work_request, work_packages)
       seed_dependencies!(work_request)
       seed_revision!(work_request)
     else
@@ -117,26 +117,25 @@ defmodule SymppV3Preview do
     end)
   end
 
-  defp seed_slice_links!(work_request, planned_slices) do
-    planned_slices
+  defp seed_work_package_ownership!(work_request, work_packages) do
+    work_packages
     |> Enum.sort_by(&(&1.sequence || 0))
-    |> Enum.with_index(1)
-    |> Enum.each(fn {slice, position} ->
-      if node_id = node_id_for_slice(slice) do
-        {:ok, _link} =
-          ProductTree.create_slice_link(Repo, %{
-            work_request_id: work_request.id,
-            product_tree_node_id: node_id,
-            planned_slice_id: slice.id,
-            position: position,
-            created_by: "v3-preview-seed"
-          })
+    |> Enum.each(fn work_package ->
+      if node_id = node_id_for_work_package(work_package) do
+        {:ok, _work_package} =
+          WorkRequestRepository.update_work_package(
+            Repo,
+            work_request.id,
+            work_package.id,
+            work_package.contract_revision,
+            %{"product_tree_node_id" => node_id}
+          )
       end
     end)
   end
 
-  defp node_id_for_slice(slice) do
-    title = String.downcase(slice.title || "")
+  defp node_id_for_work_package(work_package) do
+    title = String.downcase(work_package.title || "")
 
     cond do
       String.contains?(title, "contract") -> @node_ids.docs

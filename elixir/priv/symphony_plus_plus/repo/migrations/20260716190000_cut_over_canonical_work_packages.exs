@@ -2,6 +2,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
   use Ecto.Migration
 
   @disable_ddl_transaction true
+  @legacy_payload_keys %{
+    "planned_slice" => "work_package",
+    "planned_slices" => "work_packages",
+    "planned_slice_id" => "work_package_id",
+    "planned_slice_ids" => "work_package_ids",
+    "successor_planned_slice_id" => "successor_work_package_id",
+    "successor_planned_slice_ids" => "successor_work_package_ids"
+  }
+  @kind_keys ["entity_type", "kind", "scope_type", "source_kind", "target_kind", "target_type"]
 
   def up do
     repo().checkout(&cut_over/0)
@@ -9,6 +18,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
 
   defp cut_over do
     query!("PRAGMA foreign_keys = OFF")
+
+    try do
+      transactional_cut_over()
+    after
+      query!("PRAGMA foreign_keys = ON")
+    end
+  end
+
+  defp transactional_cut_over do
+    query!("BEGIN IMMEDIATE")
 
     try do
       add_contract_columns()
@@ -20,9 +39,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
       query!("DROP TABLE sympp_work_request_planned_slices")
       recreate_work_package_indexes()
       assert_cutover!()
-    after
-      query!("DROP TABLE IF EXISTS sympp_canonical_work_package_map")
-      query!("PRAGMA foreign_keys = ON")
+      assert_foreign_keys!()
+      query!("DROP TABLE sympp_canonical_work_package_map")
+      query!("COMMIT")
+    rescue
+      exception ->
+        query!("ROLLBACK")
+        reraise exception, __STACKTRACE__
     end
   end
 
@@ -57,8 +80,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
 
     query!("""
     INSERT INTO sympp_canonical_work_package_map (old_id, work_package_id)
-    SELECT id, COALESCE(NULLIF(work_package_id, ''), 'wp_' || lower(hex(randomblob(12))))
-    FROM sympp_work_request_planned_slices
+    SELECT slice.id, COALESCE(NULLIF(trim(slice.work_package_id), ''), 'wp_' || lower(hex(randomblob(12))))
+    FROM sympp_work_request_planned_slices AS slice
     """)
   end
 
@@ -69,49 +92,58 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
       work_request_id = (
         SELECT slice.work_request_id
         FROM sympp_work_request_planned_slices AS slice
-        WHERE slice.work_package_id = sympp_work_packages.id
+        JOIN sympp_canonical_work_package_map AS identity ON identity.old_id = slice.id
+        WHERE identity.work_package_id = sympp_work_packages.id
       ),
       product_tree_node_id = (
         SELECT link.product_tree_node_id
         FROM sympp_product_tree_slice_links AS link
         JOIN sympp_work_request_planned_slices AS slice ON slice.id = link.planned_slice_id
-        WHERE slice.work_package_id = sympp_work_packages.id
+        JOIN sympp_canonical_work_package_map AS identity ON identity.old_id = slice.id
+        WHERE identity.work_package_id = sympp_work_packages.id
       ),
       sequence = (
         SELECT slice.sequence
         FROM sympp_work_request_planned_slices AS slice
-        WHERE slice.work_package_id = sympp_work_packages.id
+        JOIN sympp_canonical_work_package_map AS identity ON identity.old_id = slice.id
+        WHERE identity.work_package_id = sympp_work_packages.id
       ),
       goal = (
         SELECT slice.goal
         FROM sympp_work_request_planned_slices AS slice
-        WHERE slice.work_package_id = sympp_work_packages.id
+        JOIN sympp_canonical_work_package_map AS identity ON identity.old_id = slice.id
+        WHERE identity.work_package_id = sympp_work_packages.id
       ),
       forbidden_file_globs = COALESCE((
         SELECT slice.forbidden_file_globs
         FROM sympp_work_request_planned_slices AS slice
-        WHERE slice.work_package_id = sympp_work_packages.id
+        JOIN sympp_canonical_work_package_map AS identity ON identity.old_id = slice.id
+        WHERE identity.work_package_id = sympp_work_packages.id
       ), '[]'),
       validation_steps = COALESCE((
         SELECT slice.validation_steps
         FROM sympp_work_request_planned_slices AS slice
-        WHERE slice.work_package_id = sympp_work_packages.id
+        JOIN sympp_canonical_work_package_map AS identity ON identity.old_id = slice.id
+        WHERE identity.work_package_id = sympp_work_packages.id
       ), '[]'),
       stop_conditions = COALESCE((
         SELECT slice.stop_conditions
         FROM sympp_work_request_planned_slices AS slice
-        WHERE slice.work_package_id = sympp_work_packages.id
+        JOIN sympp_canonical_work_package_map AS identity ON identity.old_id = slice.id
+        WHERE identity.work_package_id = sympp_work_packages.id
       ), '[]'),
       contract_revision = 1,
       dispatched_at = (
         SELECT slice.dispatched_at
         FROM sympp_work_request_planned_slices AS slice
-        WHERE slice.work_package_id = sympp_work_packages.id
+        JOIN sympp_canonical_work_package_map AS identity ON identity.old_id = slice.id
+        WHERE identity.work_package_id = sympp_work_packages.id
       )
     WHERE EXISTS (
       SELECT 1
       FROM sympp_work_request_planned_slices AS slice
-      WHERE slice.work_package_id = sympp_work_packages.id
+      JOIN sympp_canonical_work_package_map AS identity ON identity.old_id = slice.id
+      WHERE identity.work_package_id = sympp_work_packages.id
     )
     """)
 
@@ -285,46 +317,55 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
       """)
     end
 
-    rewrite_payload_keys()
-    rewrite_mapped_ids()
+    rewrite_payload_references()
   end
 
-  defp rewrite_payload_keys do
+  defp rewrite_payload_references do
+    id_map =
+      query!("SELECT old_id, work_package_id FROM sympp_canonical_work_package_map").rows
+      |> Map.new(fn [old_id, work_package_id] -> {old_id, work_package_id} end)
+
     for {table, column} <- payload_columns() do
-      query!("""
-      UPDATE #{table}
-      SET #{column} = replace(
-        replace(
-          replace(
-            replace(#{column}, 'planned_slice_id', 'work_package_id'),
-            'planned_slice',
-            'work_package'
-          ),
-          'planned-slice',
-          'work-package'
-        ),
-        'planned slice',
-        'work package'
-      )
-      WHERE #{column} LIKE '%planned%slice%'
-         OR #{column} LIKE '%planned-slice%'
-         OR #{column} LIKE '%planned_slice%'
-      """)
+      rewrite_payload_column(table, column, id_map)
     end
   end
 
-  defp rewrite_mapped_ids do
-    %{rows: rows} = query!("SELECT old_id, work_package_id FROM sympp_canonical_work_package_map")
+  defp rewrite_payload_column(table, column, id_map) do
+    %{rows: rows} = query!("SELECT id, #{column} FROM #{table} WHERE #{column} IS NOT NULL")
 
-    for [old_id, work_package_id] <- rows,
-        {table, column} <- payload_columns() do
-      repo().query!("UPDATE #{table} SET #{column} = replace(#{column}, ?, ?) WHERE #{column} LIKE ?", [
-        old_id,
-        work_package_id,
-        "%#{old_id}%"
-      ])
+    for [id, encoded] <- rows,
+        {:ok, payload} <- [Jason.decode(encoded)],
+        rewritten = rewrite_payload_value(payload, id_map, nil),
+        rewritten != payload do
+      repo().query!("UPDATE #{table} SET #{column} = ? WHERE id = ?", [Jason.encode!(rewritten), id])
     end
   end
+
+  defp rewrite_payload_value(value, id_map, _parent_key) when is_map(value) do
+    Enum.reduce(value, %{}, fn {key, child}, rewritten ->
+      canonical_key = Map.get(@legacy_payload_keys, key, key)
+
+      if canonical_key != key and Map.has_key?(value, canonical_key) do
+        rewritten
+      else
+        Map.put(rewritten, canonical_key, rewrite_payload_value(child, id_map, canonical_key))
+      end
+    end)
+  end
+
+  defp rewrite_payload_value(value, id_map, parent_key) when is_list(value) do
+    Enum.map(value, &rewrite_payload_value(&1, id_map, parent_key))
+  end
+
+  defp rewrite_payload_value(value, id_map, parent_key) when is_binary(value) do
+    cond do
+      Map.has_key?(id_map, value) -> Map.fetch!(id_map, value)
+      parent_key in @kind_keys and value == "planned_slice" -> "work_package"
+      true -> value
+    end
+  end
+
+  defp rewrite_payload_value(value, _id_map, _parent_key), do: value
 
   defp payload_columns do
     [
@@ -356,6 +397,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
     case query!(sql) do
       %{rows: [[0]]} -> :ok
       %{rows: [[count]]} -> raise Ecto.MigrationError, message: "canonical WorkPackage cutover left #{count} stale identities"
+    end
+  end
+
+  defp assert_foreign_keys! do
+    case query!("PRAGMA foreign_key_check") do
+      %{rows: []} -> :ok
+      %{rows: rows} -> raise Ecto.MigrationError, message: "canonical WorkPackage cutover left foreign-key violations: #{inspect(rows)}"
     end
   end
 

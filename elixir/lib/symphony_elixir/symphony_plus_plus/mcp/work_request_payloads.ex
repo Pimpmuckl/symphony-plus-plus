@@ -279,7 +279,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   end
 
   defp product_tree_node_only_payload(node) when is_map(node) do
-    Map.drop(node, ["slice_ids", "attention_count", "guidance_count", "blocker_count"])
+    Map.drop(node, ["work_package_ids", "attention_count", "guidance_count", "blocker_count"])
   end
 
   defp product_tree_node_dependency?(%{"source_kind" => "product_node", "target_kind" => "product_node"}), do: true

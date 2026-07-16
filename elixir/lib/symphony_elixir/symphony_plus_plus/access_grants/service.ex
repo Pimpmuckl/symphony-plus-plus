@@ -9,12 +9,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
 
   @default_worker_capabilities ["worker:claim", "worker:lifecycle.transition"]
   @default_architect_capabilities ["read:phase"]
+  @pre_dispatch_work_package_statuses ["planned", "skipped"]
   @terminal_work_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
+  @non_claimable_work_package_statuses @pre_dispatch_work_package_statuses ++ @terminal_work_package_statuses
   @claim_database_busy_retries 5
   @claim_database_busy_retry_delay_ms 5
 
   @type minted_grant :: %{grant: AccessGrant.t(), work_key: WorkKey.t()}
-  @type error :: Repository.error() | WorkPackageRepository.error() | :missing_work_package_id | :outside_phase_scope | :work_package_terminal
+  @type error ::
+          Repository.error()
+          | WorkPackageRepository.error()
+          | :missing_work_package_id
+          | :outside_phase_scope
+          | :work_package_not_dispatched
+          | :work_package_terminal
 
   @spec mint_worker_grant(Repository.repo(), String.t(), keyword() | map()) ::
           {:ok, minted_grant()} | {:error, error()}
@@ -27,6 +35,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
     work_key = WorkKey.generate()
 
     with :ok <- Repository.validate_work_package(repo, work_package_id),
+         :ok <- require_claimable_worker_package(repo, work_package_id),
          {:ok, grant} <-
            Repository.create(repo, %{
              work_package_id: work_package_id,
@@ -100,7 +109,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
       with :ok <- reject_display_key_only(secret),
            {:ok, grant} <- Repository.find_by_secret_hash(repo, WorkKey.secret_hash(secret)),
            :ok <- require_live_package_authority(repo, grant) do
-        Repository.claim(repo, secret, %{claimed_by: option(opts, :claimed_by, nil)}, now, terminal_work_package_statuses: @terminal_work_package_statuses)
+        Repository.claim(repo, secret, %{claimed_by: option(opts, :claimed_by, nil)}, now, terminal_work_package_statuses: @non_claimable_work_package_statuses)
       end
 
     case result do
@@ -124,13 +133,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
     now = option(opts, :now, DateTime.utc_now(:microsecond))
 
     result =
-      Repository.claim_local_worker_grant(
-        repo,
-        work_package_id,
-        %{claimed_by: option(opts, :claimed_by, nil)},
-        now,
-        terminal_work_package_statuses: @terminal_work_package_statuses
-      )
+      with :ok <- require_claimable_worker_package(repo, work_package_id) do
+        Repository.claim_local_worker_grant(
+          repo,
+          work_package_id,
+          %{claimed_by: option(opts, :claimed_by, nil)},
+          now,
+          terminal_work_package_statuses: @non_claimable_work_package_statuses
+        )
+      end
 
     case result do
       {:error, :database_busy} when retries_remaining > 0 ->
@@ -187,14 +198,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
 
   @spec require_live_package_authority(Repository.repo(), AccessGrant.t()) :: :ok | {:error, error()}
   def require_live_package_authority(repo, %AccessGrant{work_package_id: work_package_id}) when is_atom(repo) and is_binary(work_package_id) do
-    case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, %{status: status}} when status in @terminal_work_package_statuses -> {:error, :work_package_terminal}
-      {:ok, _work_package} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
+    require_claimable_worker_package(repo, work_package_id)
   end
 
   def require_live_package_authority(_repo, %AccessGrant{}), do: {:error, :missing_work_package_id}
+
+  defp require_claimable_worker_package(repo, work_package_id) do
+    case WorkPackageRepository.get(repo, work_package_id) do
+      {:ok, %{status: status}} when status in @pre_dispatch_work_package_statuses ->
+        {:error, :work_package_not_dispatched}
+
+      {:ok, %{status: status}} when status in @terminal_work_package_statuses ->
+        {:error, :work_package_terminal}
+
+      {:ok, _work_package} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
   defp normalize_options(opts) when is_list(opts), do: Map.new(opts)
   defp normalize_options(opts) when is_map(opts), do: opts

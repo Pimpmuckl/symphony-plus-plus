@@ -327,7 +327,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
            product_tree:
              ProductTree.project(repo, work_request.id, work_package_payloads,
                visible_only?: true,
-               include_unlinked_nodes?: true
+               include_unowned_nodes?: true
              ),
            comments: CommentProjection.comments_for(comment_context, "work_request", work_request.id),
            summary: work_request_summary(questions, decisions, work_packages, comment_context)

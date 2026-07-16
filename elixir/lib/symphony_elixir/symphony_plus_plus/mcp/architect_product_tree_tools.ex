@@ -184,7 +184,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, expected_revision} <- optional_positive_integer_argument(arguments, "expected_contract_revision"),
          {:ok, patch} <- required_object(arguments, "patch"),
          :ok <- require_positive_revision(expected_revision),
-         :ok <- require_object(patch, "patch"),
          {:ok, _work_request, _work_package, _filters, scope} <-
            WorkRequestScope.authorized_work_package_scope(
              config.repo,
@@ -583,9 +582,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   defp require_positive_revision(revision) when is_integer(revision) and revision > 0, do: :ok
   defp require_positive_revision(_revision), do: {:tool_error, "invalid_contract_revision"}
-
-  defp require_object(value, _key) when is_map(value), do: :ok
-  defp require_object(_value, key), do: {:tool_error, "#{key} must be an object"}
 
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
   defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)

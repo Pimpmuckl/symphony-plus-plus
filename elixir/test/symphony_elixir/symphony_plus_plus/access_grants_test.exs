@@ -120,6 +120,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     refute inspect(work_key) =~ work_key.secret
   end
 
+  test "planned WorkPackages cannot mint or claim worker authority before dispatch", %{repo: repo} do
+    assert {:ok, work_package} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(id: "SYMPP-PLANNED-AUTHORITY", status: "planned")
+             )
+
+    assert {:error, :work_package_not_dispatched} =
+             Service.mint_worker_grant(repo, work_package.id)
+
+    work_key = WorkKey.generate()
+
+    assert {:ok, grant} =
+             Repository.create(repo, %{
+               work_package_id: work_package.id,
+               display_key: work_key.display_key,
+               secret_hash: WorkKey.secret_hash(work_key.secret),
+               grant_role: "worker",
+               capabilities: ["worker:claim"]
+             })
+
+    assert {:error, :work_package_not_dispatched} =
+             Service.claim_local_worker_grant(repo, work_package.id, claimed_by: "early-worker")
+
+    assert {:ok, persisted} = Repository.get(repo, grant.id)
+    assert persisted.claimed_at == nil
+    assert persisted.claimed_by == nil
+  end
+
   test "grant scope persistence supports all explicit scope row types", %{repo: repo} do
     assert {:ok, work_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-SCOPE-SCHEMA"))
     assert {:ok, %{grant: grant}} = Service.mint_worker_grant(repo, work_package.id)
@@ -731,9 +760,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
 
   test "terminal work package state rejects claims without mutating the grant", %{repo: repo} do
     assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(status: "merged"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(status: "ready_for_worker"))
 
     assert {:ok, minted} = Service.mint_worker_grant(repo, work_package.id)
+    assert {:ok, _work_package} = WorkPackageRepository.update_status(repo, work_package.id, "ready_for_worker", "merged")
 
     assert {:error, :work_package_terminal} =
              Service.claim(repo, minted.work_key.secret, claimed_by: "worker-1")

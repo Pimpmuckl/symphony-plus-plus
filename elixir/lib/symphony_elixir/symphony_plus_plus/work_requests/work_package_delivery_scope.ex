@@ -6,21 +6,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope 
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
-  @spec normalize_explicit(module(), String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def normalize_explicit(ecto_repo, work_request_id, attrs) when is_atom(ecto_repo) and is_binary(work_request_id) and is_map(attrs) do
-    case nonblank_or_nil(Map.get(attrs, "repo")) do
-      nil ->
-        {:ok, Map.delete(attrs, "repo")}
-
-      delivery_repo ->
-        with {:ok, work_request} <- Repository.get(ecto_repo, work_request_id),
-             attrs = Map.put(attrs, "repo", delivery_repo),
-             :ok <- validate(ecto_repo, work_request, attrs) do
-          {:ok, attrs}
-        end
-    end
-  end
-
   @spec validate(module(), WorkRequest.t(), WorkPackage.t() | map()) :: :ok | {:error, term()}
   def validate(ecto_repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package) do
     validate(ecto_repo, work_request, %{

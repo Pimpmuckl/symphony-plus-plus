@@ -62,6 +62,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
                WHERE id = 'DELIVERY-LEGACY-SLICE'
                """)
 
+      assert [[encoded_payload]] = rows!("SELECT payload FROM sympp_progress_events WHERE id = 'PROGRESS-LEGACY-PAYLOAD'")
+
+      assert %{
+               "work_package_id" => "WP-LINKED",
+               "kind" => "work_package",
+               "note" => "planned slice WRS-LINKED remains prose"
+             } = Jason.decode!(encoded_payload)
+
       assert [] == rows!("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%planned_slice%'")
     after
       Repo.put_dynamic_repo(original_repo)
@@ -208,6 +216,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
         "Use the dispatched package",
         now,
         now
+      ]
+    )
+
+    query!(
+      """
+      INSERT INTO sympp_progress_events
+        (id, work_package_id, summary, status, sequence, created_at, inserted_at, updated_at, payload)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      """,
+      [
+        "PROGRESS-LEGACY-PAYLOAD",
+        "WP-LINKED",
+        "Legacy payload",
+        "implementing",
+        1,
+        now,
+        now,
+        now,
+        Jason.encode!(%{
+          "planned_slice_id" => "WRS-LINKED",
+          "kind" => "planned_slice",
+          "note" => "planned slice WRS-LINKED remains prose"
+        })
       ]
     )
   end

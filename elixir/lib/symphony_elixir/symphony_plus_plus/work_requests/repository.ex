@@ -1118,9 +1118,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> maybe_sync_engineering_scope()
       |> maybe_invalidate_readiness(work_package)
 
+    effective_contract =
+      work_package
+      |> Map.from_struct()
+      |> normalize_keys()
+      |> Map.merge(attrs)
+
     with :ok <- validate_product_tree_node(repo, work_package.work_request_id, Map.get(attrs, "product_tree_node_id")),
          {:ok, %WorkRequest{} = work_request} <- get(repo, work_package.work_request_id),
-         :ok <- WorkPackageDeliveryScope.validate(repo, work_request, Map.merge(Map.from_struct(work_package), attrs)),
+         :ok <- WorkPackageDeliveryScope.validate(repo, work_request, effective_contract),
          :ok <- ScopeConstraints.validate_allowed_file_globs(work_request, Map.get(attrs, "allowed_file_globs", work_package.allowed_file_globs)),
          :ok <- validate_docs_work_package_scope(Map.put_new(attrs, "kind", work_package.kind)) do
       work_package
