@@ -23,6 +23,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
       add_contract_columns()
       build_identity_map()
       migrate_work_packages()
+      migrate_work_request_statuses()
       migrate_product_tree_links()
       migrate_deliveries()
       migrate_references()
@@ -206,6 +207,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
     JOIN sympp_work_requests AS request ON request.id = slice.work_request_id
     LEFT JOIN sympp_product_tree_slice_links AS link ON link.planned_slice_id = slice.id
     WHERE slice.work_package_id IS NULL OR trim(slice.work_package_id) = ''
+    """)
+  end
+
+  defp migrate_work_request_statuses do
+    query!("""
+    UPDATE sympp_work_requests
+    SET status = 'sliced'
+    WHERE status = 'ready_for_slicing'
+      AND EXISTS (
+        SELECT 1
+        FROM sympp_work_packages AS work_package
+        WHERE work_package.work_request_id = sympp_work_requests.id
+          AND work_package.status = 'planned'
+      )
     """)
   end
 

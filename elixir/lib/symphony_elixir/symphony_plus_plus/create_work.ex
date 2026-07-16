@@ -109,7 +109,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
 
   @spec activate(module(), WorkPackage.t()) :: {:ok, creation()} | {:error, error()}
   def activate(repo, %WorkPackage{status: "planned"} = work_package) when is_atom(repo) do
-    with {:ok, policy} <- Templates.expand(work_package.policy_template || work_package.kind) do
+    with {:ok, policy} <- Templates.expand(work_package.policy_template || work_package.kind),
+         policy = effective_policy(policy, work_package.review_requirement),
+         {:ok, acceptance_criteria} <- normalize_acceptance_criteria(work_package.acceptance_criteria),
+         {:ok, allowed_file_globs} <- normalize_allowed_file_globs(work_package.allowed_file_globs),
+         :ok <- require_acceptance_criteria(policy, acceptance_criteria),
+         :ok <- require_scope_guard_constraints(policy, allowed_file_globs),
+         :ok <- require_docs_scope(work_package.kind, allowed_file_globs) do
       repo.transaction(fn -> activate_transaction(repo, work_package, policy) end)
       |> case do
         {:ok, creation} -> {:ok, creation}

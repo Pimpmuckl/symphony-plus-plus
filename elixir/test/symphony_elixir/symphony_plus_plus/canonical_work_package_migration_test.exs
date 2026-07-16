@@ -29,7 +29,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
                WHERE id = 'WP-LINKED'
                """)
 
-      assert [[generated_id, "WR-CANONICAL-MIGRATION", nil, 2, "Undispatched legacy goal", "skipped"]] =
+      assert [[generated_id, "WR-CANONICAL-MIGRATION", nil, 2, "Undispatched legacy goal", "planned"]] =
                rows!("""
                SELECT id, work_request_id, product_tree_node_id, sequence, goal, status
                FROM sympp_work_packages
@@ -38,6 +38,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
 
       assert String.starts_with?(generated_id, "wp_")
       refute generated_id == "WRS-UNDISPATCHED"
+
+      assert [["sliced"]] = rows!("SELECT status FROM sympp_work_requests WHERE id = 'WR-CANONICAL-MIGRATION'")
 
       assert [["WP-DIRECT", nil, "phase_child", "PHASE-DIRECT"]] =
                rows!("SELECT id, work_request_id, kind, phase_id FROM sympp_work_packages WHERE id = 'WP-DIRECT'")
@@ -130,7 +132,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
         human_description: "Cut over legacy identities.",
         constraints: %{},
         desired_dispatch_shape: "single_package",
-        status: "sliced"
+        status: "ready_for_slicing"
       })
     )
 
@@ -170,7 +172,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
       2,
       "Undispatched legacy package",
       "Undispatched legacy goal",
-      "skipped",
+      "approved",
       nil,
       nil,
       now
