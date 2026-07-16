@@ -71,7 +71,15 @@ function Wait-McpInitialize($Client) {
   $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSec)
   while (-not $Client.line_task.IsCompleted) {
     if ($Client.process.HasExited) { throw "Installed launcher exited before initialize: $($Client.stderr_task.GetAwaiter().GetResult().Trim())" }
-    if ([DateTime]::UtcNow -ge $deadline) { throw "Timed out waiting for installed launcher initialize." }
+    if ([DateTime]::UtcNow -ge $deadline) {
+      $Client.process.Kill($true)
+      [void]$Client.process.WaitForExit(15000)
+      $stderr = $Client.stderr_task.GetAwaiter().GetResult().Trim()
+      $tails = @(Get-ChildItem -LiteralPath (Join-Path $tempRoot "logs") -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        "$($_.FullName):`n$((Get-Content -LiteralPath $_.FullName -Tail 40 -ErrorAction SilentlyContinue) -join "`n")"
+      }) -join "`n"
+      throw "Timed out waiting for installed launcher initialize. stderr=$stderr logs=$tails"
+    }
     Start-Sleep -Milliseconds 20
   }
   $line = $Client.line_task.GetAwaiter().GetResult()
@@ -147,6 +155,7 @@ if ([string]::IsNullOrWhiteSpace($MarketplaceSource) -or [string]::IsNullOrWhite
 
 try {
   New-Item -ItemType Directory -Path $codexHome -Force | Out-Null
+  New-Item -ItemType Directory -Path (Join-Path $tempRoot "logs/launcher-trace") -Force | Out-Null
   $backendPort = New-IsolatedPort
   $environment = @{
     CODEX_HOME = $codexHome
@@ -155,6 +164,7 @@ try {
     SYMPP_HOME = Join-Path $tempRoot "home"
     SYMPP_RUNTIME_FILE = $runtimeFile
     SYMPP_LOG_DIR = Join-Path $tempRoot "logs"
+    SYMPP_LAUNCHER_TRACE_DIR = Join-Path $tempRoot "logs/launcher-trace"
     SYMPP_BACKEND_PORT = [string]$backendPort
     SYMPP_DASHBOARD_PORT = [string]$backendPort
     SYMPP_OPEN_DASHBOARD = "0"
