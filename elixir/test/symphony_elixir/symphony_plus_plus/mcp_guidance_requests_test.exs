@@ -745,6 +745,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
 
   defp create_worker_session(repo, work_package_id, overrides \\ []) do
     phase_id = Keyword.get(overrides, :phase_id, @phase_id)
+    target_status = Keyword.get(overrides, :status, "planning")
 
     if phase_id != @phase_id do
       assert {:ok, _phase} = PhaseRepository.create(repo, %{id: phase_id, title: "Other guidance phase"})
@@ -754,7 +755,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
       overrides
       |> Keyword.put(:id, work_package_id)
       |> Keyword.put(:phase_id, phase_id)
-      |> Keyword.put_new(:status, "planning")
+      |> Keyword.put(:status, "planning")
       |> work_package_attrs()
 
     assert {:ok, package} = WorkPackageRepository.create(repo, package_attrs)
@@ -762,6 +763,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
 
     assert {:ok, assignment} =
              AccessGrantRepository.claim(repo, minted.work_key.secret, %{claimed_by: "worker-1"}, DateTime.utc_now(:microsecond))
+
+    package =
+      if target_status == package.status do
+        package
+      else
+        repo.update!(Ecto.Changeset.change(package, status: target_status))
+      end
 
     {package, MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)}
   end

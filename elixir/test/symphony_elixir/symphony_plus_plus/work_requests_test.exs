@@ -872,8 +872,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-RETENTION-GRANT-REVOKE"))
     assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
 
-    linked_package = set_work_package_status!(repo, approved_slice, "merged")
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
+    dispatched_package = set_work_package_status!(repo, approved_slice, "ready_for_worker")
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, dispatched_package.id)
+    set_work_package_status!(repo, dispatched_package, "merged")
 
     expired_at = utc_usec(~U[2026-05-01 00:00:00Z])
 
@@ -898,8 +899,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-COMPLETE-UNNAMED-GRANT"))
     assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
 
-    linked_package = set_work_package_status!(repo, approved_slice, "merged")
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
+    dispatched_package = set_work_package_status!(repo, approved_slice, "ready_for_worker")
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, dispatched_package.id)
+    set_work_package_status!(repo, dispatched_package, "merged")
 
     minted.grant
     |> Ecto.Changeset.change(claimed_at: DateTime.utc_now(:microsecond), claimed_by: nil)

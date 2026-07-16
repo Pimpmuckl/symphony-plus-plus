@@ -277,8 +277,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
   end
 
   test "claim_local_assignment rejects terminal work packages before claiming", %{repo: repo} do
-    package = create_local_claim_package!(repo, "SYMPP-LOCAL-TERMINAL", status: "closed")
+    package = create_local_claim_package!(repo, "SYMPP-LOCAL-TERMINAL")
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    package = repo.update!(Ecto.Changeset.change(package, status: "closed"))
 
     {response, _server} =
       Server.handle_state(
