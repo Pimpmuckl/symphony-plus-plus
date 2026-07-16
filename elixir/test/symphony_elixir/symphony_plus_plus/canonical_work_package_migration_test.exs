@@ -71,6 +71,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
                "note" => "planned slice WRS-LINKED remains prose"
              } = Jason.decode!(encoded_payload)
 
+      assert [[encoded_blocker]] = rows!("SELECT payload FROM sympp_progress_events WHERE id = 'PROGRESS-LEGACY-BLOCKER'")
+
+      assert %{
+               "type" => "blocker",
+               "source_tool" => "report_blocker",
+               "blocked_by" => %{"kind" => "work_package", "id" => "WP-LINKED"},
+               "blocked_item" => %{"kind" => "work_package", "id" => ^generated_id},
+               "details" => %{"kind" => "planned_slice", "id" => "WRS-LINKED"}
+             } = Jason.decode!(encoded_blocker)
+
       assert [[encoded_snapshot]] =
                rows!("SELECT tree_snapshot FROM sympp_product_tree_revisions WHERE id = 'REVISION-LEGACY-SNAPSHOT'")
 
@@ -81,6 +91,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
                  %{
                    "id" => "PTN-CANONICAL",
                    "work_package_ids" => ["WP-LINKED"],
+                   "work_package_count" => 1,
                    "metadata" => %{"planned_slice_id" => "WRS-LINKED", "kind" => "planned_slice"}
                  }
                ],
@@ -93,7 +104,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
                "summary" => %{
                  "root_work_package_count" => 1,
                  "work_package_count" => 2,
-                 "linked_work_package_count" => 1
+                 "node_work_package_count" => 1
                },
                "free_form" => %{"planned_slice_id" => "WRS-LINKED", "kind" => "planned_slice"}
              } = Jason.decode!(encoded_snapshot)
@@ -288,6 +299,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
             %{
               "id" => "PTN-CANONICAL",
               "slice_ids" => ["WRS-LINKED"],
+              "slice_count" => 1,
               "metadata" => %{"planned_slice_id" => "WRS-LINKED", "kind" => "planned_slice"}
             }
           ],
@@ -304,6 +316,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
         now,
         now,
         now
+      ]
+    )
+
+    query!(
+      """
+      INSERT INTO sympp_progress_events
+        (id, work_package_id, summary, status, sequence, created_at, inserted_at, updated_at, payload)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      """,
+      [
+        "PROGRESS-LEGACY-BLOCKER",
+        "WP-LINKED",
+        "Legacy blocker",
+        "blocked",
+        2,
+        now,
+        now,
+        now,
+        Jason.encode!(%{
+          "type" => "blocker",
+          "source_tool" => "report_blocker",
+          "blocked_by" => %{"kind" => "planned_slice", "id" => "WRS-LINKED"},
+          "blocked_item" => %{"kind" => "slice", "id" => "WRS-UNDISPATCHED"},
+          "details" => %{"kind" => "planned_slice", "id" => "WRS-LINKED"}
+        })
       ]
     )
   end

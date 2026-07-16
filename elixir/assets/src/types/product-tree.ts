@@ -51,7 +51,7 @@ export type ProductTreeProjection = {
     root_node_count?: number;
     root_work_package_count?: number;
     work_package_count?: number;
-    linked_work_package_count?: number;
+    node_work_package_count?: number;
     done_count?: number;
     partial_count?: number;
     not_done_count?: number;

@@ -318,6 +318,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
     if column_exists?("sympp_product_tree_revisions", "tree_snapshot") do
       rewrite_product_tree_snapshots(id_map)
     end
+
+    if column_exists?("sympp_progress_events", "payload") do
+      rewrite_blocker_progress_endpoints(id_map)
+    end
   end
 
   defp rewrite_product_tree_snapshots(id_map) do
@@ -343,7 +347,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
   defp rewrite_product_tree_snapshot(value, _id_map), do: value
 
   defp rewrite_product_tree_node(%{} = node, id_map) do
-    move_key(node, "slice_ids", "work_package_ids", &rewrite_ids(&1, id_map))
+    node
+    |> move_key("slice_ids", "work_package_ids", &rewrite_ids(&1, id_map))
+    |> move_key("slice_count", "work_package_count", & &1)
   end
 
   defp rewrite_product_tree_node(value, _id_map), do: value
@@ -368,10 +374,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
     summary
     |> move_key("root_slice_count", "root_work_package_count", & &1)
     |> move_key("slice_count", "work_package_count", & &1)
-    |> move_key("linked_slice_count", "linked_work_package_count", & &1)
+    |> move_key("linked_slice_count", "node_work_package_count", & &1)
   end
 
   defp rewrite_product_tree_summary(value), do: value
+
+  defp rewrite_blocker_progress_endpoints(id_map) do
+    %{rows: rows} = query!("SELECT id, payload FROM sympp_progress_events WHERE payload IS NOT NULL")
+
+    for [id, encoded] <- rows,
+        {:ok, payload} <- [Jason.decode(encoded)],
+        rewritten = rewrite_blocker_progress_payload(payload, id_map),
+        rewritten != payload do
+      repo().query!("UPDATE sympp_progress_events SET payload = ? WHERE id = ?", [Jason.encode!(rewritten), id])
+    end
+  end
+
+  defp rewrite_blocker_progress_payload(%{"type" => "blocker", "source_tool" => source_tool} = payload, id_map)
+       when source_tool in ["report_blocker", "resolve_blocker"] do
+    payload
+    |> update_known_value("blocked_by", &rewrite_blocker_endpoint(&1, id_map))
+    |> update_known_value("blocked_item", &rewrite_blocker_endpoint(&1, id_map))
+  end
+
+  defp rewrite_blocker_progress_payload(payload, _id_map), do: payload
+
+  defp rewrite_blocker_endpoint(%{"kind" => kind, "id" => id} = endpoint, id_map)
+       when kind in ["planned_slice", "slice"] and is_binary(id) do
+    case Map.fetch(id_map, id) do
+      {:ok, work_package_id} -> %{endpoint | "kind" => "work_package", "id" => work_package_id}
+      :error -> endpoint
+    end
+  end
+
+  defp rewrite_blocker_endpoint(endpoint, _id_map), do: endpoint
 
   defp rewrite_ids(values, id_map) when is_list(values), do: Enum.map(values, &Map.get(id_map, &1, &1))
   defp rewrite_ids(value, _id_map), do: value
