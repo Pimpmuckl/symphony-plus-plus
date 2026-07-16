@@ -1,4 +1,4 @@
-import type { PlannedSlice, SoloSession, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
+import type { WorkRequestPackage, SoloSession, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import { Badge } from "@/components/ui/badge";
 import { DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
@@ -68,7 +68,7 @@ function SliceDetailLoadingContent({
   stage,
 }: {
   detail: WorkRequestDetail;
-  slice: PlannedSlice;
+  slice: WorkRequestPackage;
   pkg?: WorkPackageCard;
   stage: CardDetailStage;
 }) {
@@ -78,7 +78,7 @@ function SliceDetailLoadingContent({
   return (
     <DetailLoadingHeader
       title={slice.title || slice.id}
-      eyebrow={`${repoDisplayName(request)} / ${request.base_branch || "main"} / planned slice`}
+      eyebrow={`${repoDisplayName(request)} / ${request.base_branch || "main"} / work package`}
       badge={<Badge variant={operationalBadgeVariant(operational, slice.status)}>{operationalLabel(operational, slice.status)}</Badge>}
       stage={stage}
     />

@@ -1034,7 +1034,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> put_new_value("kind", "standard_pr")
       |> then(&put_new_value(&1, "policy_template", Map.get(&1, "kind")))
       |> put_new_value("product_description", work_request.human_description)
-      |> put_new_value("engineering_scope", Map.get(attrs, "goal"))
+      |> then(&put_new_value(&1, "engineering_scope", Map.get(&1, "goal")))
       |> put_new_value("allowed_file_globs", [])
       |> put_new_value("forbidden_file_globs", [])
       |> put_new_value("acceptance_criteria", [])
@@ -1127,8 +1127,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     with :ok <- validate_product_tree_node(repo, work_package.work_request_id, Map.get(attrs, "product_tree_node_id")),
          {:ok, %WorkRequest{} = work_request} <- get(repo, work_package.work_request_id),
          :ok <- WorkPackageDeliveryScope.validate(repo, work_request, effective_contract),
-         :ok <- ScopeConstraints.validate_allowed_file_globs(work_request, Map.get(attrs, "allowed_file_globs", work_package.allowed_file_globs)),
-         :ok <- validate_docs_work_package_scope(Map.put_new(attrs, "kind", work_package.kind)) do
+         :ok <- ScopeConstraints.validate_allowed_file_globs(work_request, Map.get(effective_contract, "allowed_file_globs", [])),
+         :ok <- validate_docs_work_package_scope(effective_contract) do
       work_package
       |> WorkPackage.update_changeset(attrs)
       |> Ecto.Changeset.optimistic_lock(:contract_revision)

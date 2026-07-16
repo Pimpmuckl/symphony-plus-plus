@@ -1,4 +1,4 @@
-import type { PlannedSlice, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
+import type { WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import { sliceLane } from "@/lib/operational-state";
 import { sortedCopy } from "@/lib/collections";
 import type { CardDetailSelection } from "./runtime";
@@ -20,7 +20,7 @@ export function packageSelectionIndex(details: WorkRequestDetail[], packages: Wo
   const selections = new Map<string, CardDetailSelection>();
 
   details.forEach((detail) => {
-    (detail.planned_slices || []).forEach((slice) => {
+    (detail.work_packages || []).forEach((slice) => {
       if (!slice.work_package_id || selections.has(slice.work_package_id)) return;
 
       const pkg = packageById.get(slice.work_package_id);
@@ -37,13 +37,13 @@ export function packageHasActiveBlocker(pkg: WorkPackageCard) {
   return (pkg.active_blocker_count || 0) > 0 || (pkg.active_blockers || []).some((blocker) => blocker.active !== false);
 }
 
-export function sliceSuccessorLabel(slice: PlannedSlice) {
+export function sliceSuccessorLabel(slice: WorkRequestPackage) {
   return [
-    slice.successor?.planned_slice?.title,
-    slice.successor?.planned_slice_id,
     slice.successor?.work_package?.title,
     slice.successor?.work_package_id,
-    slice.delivery?.successor_planned_slice_id,
+    slice.successor?.work_package?.title,
+    slice.successor?.work_package_id,
+    slice.delivery?.successor_work_package_id,
     slice.delivery?.successor_work_package_id,
   ].find(Boolean) || null;
 }
@@ -57,11 +57,11 @@ export function sortWorkRequestDetails(details: WorkRequestDetail[]) {
   });
 }
 
-export function sortPlannedSlices(slices: PlannedSlice[]) {
-  return sortedCopy(slices, comparePlannedSlices);
+export function sortWorkRequestPackages(slices: WorkRequestPackage[]) {
+  return sortedCopy(slices, compareWorkRequestPackages);
 }
 
-function comparePlannedSlices(left: PlannedSlice, right: PlannedSlice) {
+function compareWorkRequestPackages(left: WorkRequestPackage, right: WorkRequestPackage) {
   const sequenceDelta = sortableSequence(left.sequence) - sortableSequence(right.sequence);
   if (sequenceDelta !== 0) return sequenceDelta;
 
@@ -88,7 +88,7 @@ export function workstreamCategoryCounts(details: WorkRequestDetail[]): Workstre
   details.forEach((detail) => {
     const summary = detail.product_tree?.summary;
     planNodes += summary?.node_count ?? detail.product_tree?.nodes?.length ?? 0;
-    slices += summary?.slice_count ?? detail.planned_slices?.length ?? 0;
+    slices += summary?.work_package_count ?? detail.work_packages?.length ?? 0;
   });
 
   return {

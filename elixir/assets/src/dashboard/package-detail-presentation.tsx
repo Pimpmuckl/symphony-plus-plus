@@ -414,7 +414,7 @@ export function PackageDetailDialogs({
         <DialogContent className="dashboard-dialog-content sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Close With Evidence</DialogTitle>
-            <DialogDescription>Record a completed-without-PR delivery for the linked planned slice.</DialogDescription>
+            <DialogDescription>Record a completed-without-PR delivery for the WorkPackage.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3">
             <Textarea

@@ -184,7 +184,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, expected_revision} <- optional_positive_integer_argument(arguments, "expected_contract_revision"),
          {:ok, patch} <- required_object(arguments, "patch"),
          :ok <- require_positive_revision(expected_revision),
-         {:ok, _work_request, _work_package, _filters, scope} <-
+         {:ok, work_request, _work_package, _filters, scope} <-
            WorkRequestScope.authorized_work_package_scope(
              config.repo,
              session,
@@ -193,6 +193,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              :work_package_update,
              tool
            ),
+         :ok <- require_work_package_authoring_status(work_request.status),
          {:ok, work_package} <-
            mutate_product_tree(config.repo, work_request_id, tool, session_claimed_by(session), fn ->
              WorkRequestService.update_work_package(
@@ -334,7 +335,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, current_status} <- required_argument(arguments, "current_status"),
-         {:ok, _work_request, _work_package, _filters, scope} <-
+         {:ok, work_request, _work_package, _filters, scope} <-
            WorkRequestScope.authorized_work_package_scope(
              config.repo,
              session,
@@ -343,6 +344,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              :work_package_skip,
              tool
            ),
+         :ok <- require_work_package_authoring_status(work_request.status),
          {:ok, work_package} <-
            mutate_product_tree(config.repo, work_request_id, tool, session_claimed_by(session), fn ->
              WorkRequestService.skip_work_package(config.repo, work_request_id, work_package_id, current_status)

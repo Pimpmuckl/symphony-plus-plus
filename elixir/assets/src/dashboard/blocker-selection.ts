@@ -1,4 +1,4 @@
-import type { ActiveBlockingEdge, ActiveBlockingEdgeEndpoint, PlannedSlice, WorkPackageBlocker, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
+import type { ActiveBlockingEdge, ActiveBlockingEdgeEndpoint, WorkRequestPackage, WorkPackageBlocker, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 
 export function activePackageBlockers(pkg: WorkPackageCard | undefined) {
   return (pkg?.active_blockers || []).filter((blocker) => blocker.active !== false);
@@ -9,7 +9,7 @@ export function packageBlockerEdge(
   pkg: WorkPackageCard,
   context: {
     detail?: WorkRequestDetail;
-    slice?: PlannedSlice;
+    slice?: WorkRequestPackage;
     fallbackKey?: string | number;
   } = {},
 ): ActiveBlockingEdge {
@@ -26,7 +26,6 @@ export function packageBlockerEdge(
     body: blocker.body,
     updated_at: blocker.updated_at,
     work_request_id: context.detail?.work_request.id || context.slice?.work_request_id || null,
-    planned_slice_id: context.slice?.id || null,
     work_package_id: pkg.id,
   };
 }
@@ -35,7 +34,7 @@ export function pendingPackageBlockerEdge(
   pkg: WorkPackageCard,
   context: {
     detail?: WorkRequestDetail;
-    slice?: PlannedSlice;
+    slice?: WorkRequestPackage;
   } = {},
 ): ActiveBlockingEdge {
   const fallbackPackageEndpoint = packageEndpoint(pkg);
@@ -50,12 +49,11 @@ export function pendingPackageBlockerEdge(
     body: null,
     updated_at: pkg.latest_progress_at || pkg.updated_at || null,
     work_request_id: context.detail?.work_request.id || context.slice?.work_request_id || null,
-    planned_slice_id: context.slice?.id || null,
     work_package_id: pkg.id,
   };
 }
 
-function packageBlockerEndpoints(blocker: WorkPackageBlocker, pkg: WorkPackageCard, slice?: PlannedSlice) {
+function packageBlockerEndpoints(blocker: WorkPackageBlocker, pkg: WorkPackageCard, slice?: WorkRequestPackage) {
   const fallbackPackageEndpoint = packageEndpoint(pkg);
   const fallbackSliceEndpoint = sliceEndpoint(slice);
 
@@ -69,8 +67,8 @@ function packageEndpoint(pkg: WorkPackageCard): ActiveBlockingEdgeEndpoint {
   return { kind: "work_package", id: pkg.id };
 }
 
-function sliceEndpoint(slice: PlannedSlice | undefined): ActiveBlockingEdgeEndpoint | null {
-  return slice ? { kind: "slice", id: slice.id } : null;
+function sliceEndpoint(slice: WorkRequestPackage | undefined): ActiveBlockingEdgeEndpoint | null {
+  return slice ? { kind: "work_package", id: slice.id } : null;
 }
 
 function blockerEdgeKey(blocker: WorkPackageBlocker, fallbackKey: string | number | undefined) {

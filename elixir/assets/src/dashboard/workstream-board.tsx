@@ -1,4 +1,4 @@
-import type { ActiveBlockingEdge, CopyArchitectHandoff, GuidanceItem, PlannedSlice, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
+import type { ActiveBlockingEdge, CopyArchitectHandoff, GuidanceItem, WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import type { ProductTreeNode } from "@/types/product-tree";
 import { AlertTriangle, ChevronRight, CircleDashed, GitBranch, Layers3, MessageSquareText, Split } from "lucide-react";
 import type { CSSProperties } from "react";
@@ -8,7 +8,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
 import { clarificationGuidanceItem } from "./dashboard-data";
 import { firstParagraph, stripMarkdown } from "./dashboard-text";
-import { finishedRequestChildrenStorageKey, sortPlannedSlices, sortWorkRequestDetails } from "./workstream-data";
+import { finishedRequestChildrenStorageKey, sortWorkRequestPackages, sortWorkRequestDetails } from "./workstream-data";
 import { activeBlockerEntityCounts, productTreeCounts, requestProgress, rootProductSliceIds } from "./workstream-progress";
 import { productNodeState, requestBoardState, rowProgressAttentionState, rowProgressIconState } from "./workstream-row-state";
 import { EntityCountChips, EntityKindSlot, ProductNodeHeader, ProgressPill, RequestHeaderActions, RowBadgeSlot } from "./workstream-row-ui";
@@ -28,7 +28,7 @@ const REQUEST_EXIT_MOTION_MS = 320;
 type ProductTreeRenderContext = {
   detail: WorkRequestDetail;
   treeIndex: TreeIndex;
-  slicesById: Map<string, PlannedSlice>;
+  slicesById: Map<string, WorkRequestPackage>;
   packageById: Map<string, WorkPackageCard>;
   activeBlockerCountBySliceId: Map<string, number>;
   activeBlockerKeysBySliceId: Map<string, Set<string>>;
@@ -170,14 +170,14 @@ function workstreamContextSignature(details: WorkRequestDetail[]) {
         id: node.id,
         label: node.title || node.id,
         parentId: node.parent_id || null,
-        sliceIds: node.slice_ids ?? [],
+        sliceIds: node.work_package_ids ?? [],
       })),
       request: {
         id: detail.work_request.id,
         label: detail.work_request.title || detail.work_request.id,
       },
       rootNodeIds: detail.product_tree?.root_node_ids ?? [],
-      rootSliceIds: detail.product_tree?.root_slice_ids ?? [],
+      rootSliceIds: detail.product_tree?.root_work_package_ids ?? [],
     })),
   );
 }
@@ -220,7 +220,7 @@ function ProductRequestRow({
   const request = detail.work_request;
   const requestTitle = request.title || request.id;
   const requestPath = [{ id: request.id, label: requestTitle }];
-  const slices = sortPlannedSlices(detail.planned_slices ?? []);
+  const slices = sortWorkRequestPackages(detail.work_packages ?? []);
   const progress = requestProgress(detail, packageById);
   const counts = productTreeCounts(detail, activeBlockerCount);
   const openQuestion = detail.clarification_questions?.find((question) => question.status === "open");
@@ -332,7 +332,7 @@ function RequestProgressSummary({
       className="v3-request-summary"
       items={[
         { key: "nodes", icon: <Layers3 className="size-3.5" />, count: counts.nodeCount, label: "plan nodes", showZero: true },
-        { key: "slices", icon: <Split className="size-3.5" />, count: counts.sliceCount, label: "slices", showZero: true },
+        { key: "slices", icon: <Split className="size-3.5" />, count: counts.sliceCount, label: "WorkPackages", showZero: true },
         { key: "guidance", icon: <MessageSquareText className="size-3.5" />, count: counts.guidanceCount, label: "guidance needed", onClick: counts.guidanceCount > 0 ? onOpenGuidance : undefined, tone: "guidance", showZero: true },
         { key: "blockers", icon: <AlertTriangle className="size-3.5" />, count: counts.blockerCount, label: "active blockers", onClick: counts.blockerCount > 0 ? onOpenBlockers : undefined, tone: "blocker", showZero: true },
       ]}
@@ -346,10 +346,10 @@ function RequestScopeSlot({ counts }: { counts: ReturnType<typeof productTreeCou
   }
 
   if (counts.sliceCount > 0) {
-    return <EntityKindSlot icon={<Split className="size-3.5" />} value={counts.sliceCount} title={`${counts.sliceCount} slices`} />;
+    return <EntityKindSlot icon={<Split className="size-3.5" />} value={counts.sliceCount} title={`${counts.sliceCount} WorkPackages`} />;
   }
 
-  return <EntityKindSlot icon={<CircleDashed className="size-3.5" />} title="No product plan or slices attached" muted />;
+  return <EntityKindSlot icon={<CircleDashed className="size-3.5" />} title="No product plan or WorkPackages attached" muted />;
 }
 
 function RequestActions({
@@ -388,7 +388,7 @@ function ProductPlanBody({
 }: {
   detail: WorkRequestDetail;
   packageById: Map<string, WorkPackageCard>;
-  slices: PlannedSlice[];
+  slices: WorkRequestPackage[];
   guidanceItems: GuidanceItem[];
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
@@ -473,7 +473,7 @@ function ProductTreeNodeRow({
   const childNodes = treeIndex.childrenByParent.get(node.id) ?? [];
   const nodeTitle = node.title || node.id;
   const nodePath = [...path, { id: node.id, label: nodeTitle }];
-  const nodeSlices = (node.slice_ids ?? []).map((sliceId) => slicesById.get(sliceId)).filter((slice): slice is PlannedSlice => Boolean(slice));
+  const nodeSlices = (node.work_package_ids ?? []).map((sliceId) => slicesById.get(sliceId)).filter((slice): slice is WorkRequestPackage => Boolean(slice));
   const nodeSubtreeSlices = productNodeSubtreeSlices(node, treeIndex, slicesById);
   const nodeState = productNodeState(node, nodeSlices.length, treeIndex, activeBlockerCountBySliceId, activeBlockerKeysBySliceId, nodeSubtreeSlices, packageById);
   const nodeFinished = nodeState.statusKind === "done";
@@ -521,7 +521,7 @@ function ProductTreeNodeRow({
   );
 }
 
-function productNodeHasDisclosureContent(node: ProductTreeNode, nodeSlices: PlannedSlice[], childNodes: ProductTreeNode[]) {
+function productNodeHasDisclosureContent(node: ProductTreeNode, nodeSlices: WorkRequestPackage[], childNodes: ProductTreeNode[]) {
   return Boolean(node.description) || nodeSlices.length > 0 || childNodes.length > 0;
 }
 
@@ -538,7 +538,7 @@ function ProductTreeNodeContent({
   contentId: string;
   hidden: boolean;
   node: ProductTreeNode;
-  nodeSlices: PlannedSlice[];
+  nodeSlices: WorkRequestPackage[];
   childNodes: ProductTreeNode[];
   depth: number;
   path: ContextPathPart[];

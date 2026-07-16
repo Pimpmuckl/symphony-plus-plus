@@ -1,4 +1,4 @@
-import type { ActiveBlockingEdge, GuidanceItem, PlannedSlice, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
+import type { ActiveBlockingEdge, GuidanceItem, WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import { AlertTriangle, GitBranch, MessageSquareText } from "lucide-react";
 
 import { operationalBadgeVariant, operationalLabel, operationalStatusIsRunning, sliceCardTone, sliceLane, sliceOperationalState } from "@/lib/operational-state";
@@ -29,7 +29,7 @@ export function DirectSliceGroup({
 }: {
   detail: WorkRequestDetail;
   sliceIds: string[];
-  slicesById: Map<string, PlannedSlice>;
+  slicesById: Map<string, WorkRequestPackage>;
   packageById: Map<string, WorkPackageCard>;
   activeBlockerCountBySliceId: Map<string, number>;
   activeBlockingEdges: ActiveBlockingEdge[];
@@ -39,7 +39,7 @@ export function DirectSliceGroup({
   requestPath: ContextPathPart[];
   updateAnimations: DashboardUpdateAnimations;
 }) {
-  const directSlices = sliceIds.map((sliceId) => slicesById.get(sliceId)).filter((slice): slice is PlannedSlice => Boolean(slice));
+  const directSlices = sliceIds.map((sliceId) => slicesById.get(sliceId)).filter((slice): slice is WorkRequestPackage => Boolean(slice));
   if (directSlices.length === 0) return null;
 
   return (
@@ -74,7 +74,7 @@ export function ProductSliceRow({
   updateAnimations,
 }: {
   detail: WorkRequestDetail;
-  slice: PlannedSlice;
+  slice: WorkRequestPackage;
   pkg?: WorkPackageCard;
   activeBlockerCountBySliceId: Map<string, number>;
   activeBlockingEdges: ActiveBlockingEdge[];
@@ -134,12 +134,12 @@ export function ProductSliceRow({
   );
 }
 
-function sliceTargetContext(detail: WorkRequestDetail, slice: PlannedSlice, pkg?: WorkPackageCard) {
+function sliceTargetContext(detail: WorkRequestDetail, slice: WorkRequestPackage, pkg?: WorkPackageCard) {
   const request = detail.work_request;
   const packageRepoRecorded = pkg ? uniqueNonEmpty([pkg.repo_key, pkg.repo, pkg.repo_display]).length > 0 : false;
   const repoDiffers = packageRepoRecorded ? repoIdentityKey(pkg) !== repoIdentityKey(request) : false;
   const requestBranch = uniqueNonEmpty([request.base_branch])[0] ?? "main";
-  const targetBranch = uniqueNonEmpty([slice.target_base_branch, pkg?.base_branch, requestBranch])[0] ?? requestBranch;
+  const targetBranch = uniqueNonEmpty([slice.base_branch, pkg?.base_branch, requestBranch])[0] ?? requestBranch;
 
   if (!repoDiffers && targetBranch === requestBranch) return null;
   return { repo: repoDiffers ? repoDisplayName(pkg) : repoDisplayName(request), branch: targetBranch };

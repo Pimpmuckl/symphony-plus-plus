@@ -48,7 +48,7 @@ describe("dashboard data helpers", () => {
       finishedPackage("pkg-old", new Date(Date.UTC(2026, 5, 4, 11)).toISOString()),
       finishedPackage("pkg-new", new Date(Date.UTC(2026, 5, 4, 12)).toISOString()),
     ];
-    const detail = { work_request: request, planned_slices: [] } satisfies WorkRequestDetail;
+    const detail = { work_request: request, work_packages: [] } satisfies WorkRequestDetail;
 
     const highlights = recentFinishedHighlights(packages, [request], [detail], new Map(), 1);
 
@@ -212,7 +212,7 @@ describe("dashboard data helpers", () => {
     const standalonePackage: WorkPackageCard = { id: "pkg-standalone", repo: "orphan-repo", base_branch: "main" };
     const detail: WorkRequestDetail = {
       work_request: request,
-      planned_slices: [{ id: "slice-child", work_request_id: request.id, work_package_id: linkedPackage.id, target_base_branch: "release" }],
+      work_packages: [{ id: "slice-child", work_request_id: request.id, work_package_id: linkedPackage.id, base_branch: "release" }],
     };
 
     const repos = repoSummaries([linkedPackage, standalonePackage], [request], [], [], [detail]);
@@ -226,7 +226,7 @@ describe("dashboard data helpers", () => {
     const html = renderToStaticMarkup(<RepoSummaryStrip repo={repo} categoryCounts={{ requests: 1, planNodes: 0, slices: 2 }} />);
 
     expect(html).toContain("Requests");
-    expect(html).toContain("Slices");
+    expect(html).toContain("WorkPackages");
     expect(html).not.toContain("Plan Nodes");
     expect(html).not.toContain("Guidance Needed");
     expect(html).not.toContain("Active Blockers");

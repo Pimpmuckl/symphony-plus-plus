@@ -79,6 +79,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTreeTest do
     assert Enum.all?(projection.nodes, &(&1.work_package_ids == []))
   end
 
+  test "normalizes atom-keyed goals into worker engineering scope", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-ATOM-GOAL")
+
+    assert {:ok, %{work_packages: [package]}} =
+             WorkRequestRepository.slice_work_request(repo, work_request.id, [
+               %{
+                 id: "wp_atom_goal",
+                 title: "Atom-keyed package",
+                 goal: "Own the canonical package boundary.",
+                 kind: "mcp",
+                 base_branch: work_request.base_branch,
+                 branch_pattern: "refactor/canonical-work-packages",
+                 allowed_file_globs: ["elixir/lib/**"],
+                 acceptance_criteria: ["The package has one identity."]
+               }
+             ])
+
+    assert package.goal == "Own the canonical package boundary."
+    assert package.engineering_scope == package.goal
+  end
+
+  test "validates the effective file scope when a package becomes docs work", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-DOCS-SCOPE")
+    package = add_work_package!(repo, work_request, id: "wp_docs_scope", allowed_file_globs: ["elixir/lib/**"])
+
+    assert {:error, errors} =
+             WorkRequestRepository.update_work_package(
+               repo,
+               work_request.id,
+               package.id,
+               package.contract_revision,
+               %{kind: "docs"}
+             )
+
+    assert Enum.any?(errors, &match?({:non_documentation_owned_glob, "elixir/lib/**"}, &1))
+    assert repo.get!(WorkPackage, package.id).kind == package.kind
+  end
+
   test "visible-only projection keeps the owned node path without leaking hidden nodes", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-VISIBLE-TREE")
     parent = create_node!(repo, work_request, id: "node_visible_parent")

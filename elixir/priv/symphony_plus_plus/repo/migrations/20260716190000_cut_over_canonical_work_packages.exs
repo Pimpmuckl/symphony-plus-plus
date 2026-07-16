@@ -2,17 +2,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
   use Ecto.Migration
 
   @disable_ddl_transaction true
-  @legacy_payload_keys %{
-    "planned_slice" => "work_package",
-    "planned_slices" => "work_packages",
-    "planned_slice_id" => "work_package_id",
-    "planned_slice_ids" => "work_package_ids",
-    "successor_planned_slice_id" => "successor_work_package_id",
-    "successor_planned_slice_ids" => "successor_work_package_ids"
-  }
-  @kind_keys ["entity_type", "kind", "scope_type", "source_kind", "target_kind", "target_type"]
-  @identifier_keys ["successor_work_package_id", "successor_work_package_ids", "work_package_id", "work_package_ids"]
-
   def up do
     repo().checkout(&cut_over/0)
   end
@@ -326,59 +315,86 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
       query!("SELECT old_id, work_package_id FROM sympp_canonical_work_package_map").rows
       |> Map.new(fn [old_id, work_package_id] -> {old_id, work_package_id} end)
 
-    for {table, column} <- payload_columns() do
-      rewrite_payload_column(table, column, id_map)
+    if column_exists?("sympp_product_tree_revisions", "tree_snapshot") do
+      rewrite_product_tree_snapshots(id_map)
     end
   end
 
-  defp rewrite_payload_column(table, column, id_map) do
-    %{rows: rows} = query!("SELECT id, #{column} FROM #{table} WHERE #{column} IS NOT NULL")
+  defp rewrite_product_tree_snapshots(id_map) do
+    %{rows: rows} = query!("SELECT id, tree_snapshot FROM sympp_product_tree_revisions WHERE tree_snapshot IS NOT NULL")
 
     for [id, encoded] <- rows,
         {:ok, payload} <- [Jason.decode(encoded)],
-        rewritten = rewrite_payload_value(payload, id_map, nil),
+        rewritten = rewrite_product_tree_snapshot(payload, id_map),
         rewritten != payload do
-      repo().query!("UPDATE #{table} SET #{column} = ? WHERE id = ?", [Jason.encode!(rewritten), id])
+      repo().query!("UPDATE sympp_product_tree_revisions SET tree_snapshot = ? WHERE id = ?", [Jason.encode!(rewritten), id])
     end
   end
 
-  defp rewrite_payload_value(value, id_map, _parent_key) when is_map(value) do
-    Enum.reduce(value, %{}, fn {key, child}, rewritten ->
-      canonical_key = Map.get(@legacy_payload_keys, key, key)
+  defp rewrite_product_tree_snapshot(%{} = snapshot, id_map) do
+    snapshot
+    |> move_key("root_slice_ids", "root_work_package_ids", &rewrite_ids(&1, id_map))
+    |> update_known_value("mode", &if(&1 == "direct_slices", do: "direct_work_packages", else: &1))
+    |> update_known_list("nodes", &rewrite_product_tree_node(&1, id_map))
+    |> update_known_list("dependency_edges", &rewrite_product_tree_edge(&1, id_map))
+    |> update_known_value("summary", &rewrite_product_tree_summary/1)
+  end
 
-      if canonical_key != key and Map.has_key?(value, canonical_key) do
-        rewritten
-      else
-        Map.put(rewritten, canonical_key, rewrite_payload_value(child, id_map, canonical_key))
-      end
+  defp rewrite_product_tree_snapshot(value, _id_map), do: value
+
+  defp rewrite_product_tree_node(%{} = node, id_map) do
+    move_key(node, "slice_ids", "work_package_ids", &rewrite_ids(&1, id_map))
+  end
+
+  defp rewrite_product_tree_node(value, _id_map), do: value
+
+  defp rewrite_product_tree_edge(%{} = edge, id_map) do
+    edge
+    |> update_known_value("source", &rewrite_product_tree_endpoint(&1, id_map))
+    |> update_known_value("target", &rewrite_product_tree_endpoint(&1, id_map))
+  end
+
+  defp rewrite_product_tree_edge(value, _id_map), do: value
+
+  defp rewrite_product_tree_endpoint(%{"kind" => "planned_slice"} = endpoint, id_map) do
+    endpoint
+    |> Map.put("kind", "work_package")
+    |> update_known_value("id", &Map.get(id_map, &1, &1))
+  end
+
+  defp rewrite_product_tree_endpoint(value, _id_map), do: value
+
+  defp rewrite_product_tree_summary(%{} = summary) do
+    summary
+    |> move_key("root_slice_count", "root_work_package_count", & &1)
+    |> move_key("slice_count", "work_package_count", & &1)
+    |> move_key("linked_slice_count", "linked_work_package_count", & &1)
+  end
+
+  defp rewrite_product_tree_summary(value), do: value
+
+  defp rewrite_ids(values, id_map) when is_list(values), do: Enum.map(values, &Map.get(id_map, &1, &1))
+  defp rewrite_ids(value, _id_map), do: value
+
+  defp update_known_list(map, key, fun) do
+    update_known_value(map, key, fn
+      values when is_list(values) -> Enum.map(values, fun)
+      value -> value
     end)
   end
 
-  defp rewrite_payload_value(value, id_map, parent_key) when is_list(value) do
-    Enum.map(value, &rewrite_payload_value(&1, id_map, parent_key))
-  end
-
-  defp rewrite_payload_value(value, id_map, parent_key) when is_binary(value) do
-    cond do
-      parent_key in @identifier_keys and Map.has_key?(id_map, value) -> Map.fetch!(id_map, value)
-      parent_key in @kind_keys and value == "planned_slice" -> "work_package"
-      true -> value
+  defp update_known_value(map, key, fun) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> Map.put(map, key, fun.(value))
+      :error -> map
     end
   end
 
-  defp rewrite_payload_value(value, _id_map, _parent_key), do: value
-
-  defp payload_columns do
-    [
-      {"sympp_access_grants", "scope_snapshot"},
-      {"sympp_access_grants", "provenance"},
-      {"sympp_progress_events", "payload"},
-      {"sympp_artifacts", "metadata"},
-      {"sympp_operator_audit_events", "request_metadata"},
-      {"sympp_operator_audit_events", "tool_metadata"},
-      {"sympp_product_tree_revisions", "tree_snapshot"}
-    ]
-    |> Enum.filter(fn {table, column} -> column_exists?(table, column) end)
+  defp move_key(map, legacy_key, canonical_key, fun) do
+    case Map.fetch(map, legacy_key) do
+      {:ok, value} -> map |> Map.delete(legacy_key) |> Map.put_new(canonical_key, fun.(value))
+      :error -> map
+    end
   end
 
   defp recreate_work_package_indexes do

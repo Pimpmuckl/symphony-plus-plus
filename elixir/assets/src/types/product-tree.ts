@@ -9,9 +9,9 @@ export type ProductTreeNode = {
   completion_mark?: ProductTreeCompletionMark | null;
   computed_completion_mark?: ProductTreeCompletionMark | null;
   completion_label?: string | null;
-  slice_ids?: string[];
+  work_package_ids?: string[];
   child_node_count?: number;
-  slice_count?: number;
+  work_package_count?: number;
   attention_count?: number;
   guidance_count?: number;
   blocker_count?: number;
@@ -23,7 +23,7 @@ export type ProductTreeNode = {
 };
 
 export type ProductTreeDependencyEndpoint = {
-  kind?: "product_node" | "planned_slice" | string | null;
+  kind?: "product_node" | "work_package" | string | null;
   id?: string | null;
 };
 
@@ -41,17 +41,17 @@ export type ProductTreeDependencyEdge = {
 export type ProductTreeProjection = {
   available?: boolean;
   schema_version?: string;
-  mode?: "product_tree" | "direct_slices" | "unavailable" | string;
+  mode?: "product_tree" | "direct_work_packages" | "unavailable" | string;
   root_node_ids?: string[];
-  root_slice_ids?: string[];
+  root_work_package_ids?: string[];
   nodes?: ProductTreeNode[];
   dependency_edges?: ProductTreeDependencyEdge[];
   summary?: {
     node_count?: number;
     root_node_count?: number;
-    root_slice_count?: number;
-    slice_count?: number;
-    linked_slice_count?: number;
+    root_work_package_count?: number;
+    work_package_count?: number;
+    linked_work_package_count?: number;
     done_count?: number;
     partial_count?: number;
     not_done_count?: number;

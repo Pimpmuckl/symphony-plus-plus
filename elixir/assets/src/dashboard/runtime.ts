@@ -1,4 +1,4 @@
-import type { ActiveBlockingEdge, ContextComment, DashboardPayload, HandoffCopyState, PlannedSlice, SoloSession, WorkPackageCard, WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
+import type { ActiveBlockingEdge, ContextComment, DashboardPayload, HandoffCopyState, WorkRequestPackage, SoloSession, WorkPackageCard, WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
 import type { UpdateMotion } from "@/components/dashboard/motion";
 
 declare global {
@@ -130,14 +130,14 @@ export const REPO_SUMMARY_PLATE_TONES: Record<RepoSummaryPlateTone, string> = {
 
 export type CardDetailSelection =
   | { kind: "request"; detail: WorkRequestDetail }
-  | { kind: "slice"; detail: WorkRequestDetail; slice: PlannedSlice; pkg?: WorkPackageCard }
-  | { kind: "package"; pkg: WorkPackageCard; detail?: WorkRequestDetail; slice?: PlannedSlice }
-  | { kind: "blocker"; blocker: ActiveBlockingEdge; pkg?: WorkPackageCard; detail?: WorkRequestDetail; slice?: PlannedSlice }
+  | { kind: "slice"; detail: WorkRequestDetail; slice: WorkRequestPackage; pkg?: WorkPackageCard }
+  | { kind: "package"; pkg: WorkPackageCard; detail?: WorkRequestDetail; slice?: WorkRequestPackage }
+  | { kind: "blocker"; blocker: ActiveBlockingEdge; pkg?: WorkPackageCard; detail?: WorkRequestDetail; slice?: WorkRequestPackage }
   | { kind: "solo"; session: SoloSession };
 
 export type CardDetailSelect = (selection: CardDetailSelection) => void;
 
-export type CommentTargetKind = "work_request" | "planned_slice" | "work_package";
+export type CommentTargetKind = "work_request" | "work_package" | "work_package";
 
 export type CommentTarget = { target_kind: CommentTargetKind; target_id: string };
 

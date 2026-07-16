@@ -1,6 +1,6 @@
 import type { SignalTone, StateCardTone } from "@/components/dashboard/state-card-style";
 import { statusLabel } from "@/lib/status-labels";
-import type { PackageOperationalAttention, PlannedSlice, WorkPackageCard, WorkRequestCard } from "@/types/dashboard";
+import type { PackageOperationalAttention, WorkRequestPackage, WorkPackageCard, WorkRequestCard } from "@/types/dashboard";
 
 export type BadgeTone = "default" | "secondary" | "outline" | "success" | "warning" | "danger" | "guidance" | "info" | "ready";
 export type BoardLane = "slices" | "implementing" | "finished";
@@ -173,7 +173,7 @@ export function architectHandoffEligibleRequest(request: WorkRequestCard) {
   );
 }
 
-export function sliceCardTone(slice: PlannedSlice, pkg: WorkPackageCard | undefined, lane: BoardLane): StateCardTone {
+export function sliceCardTone(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, lane: BoardLane): StateCardTone {
   const operational = sliceOperationalState(slice, pkg);
   const tone = operationalCardTone(operational, slice.status);
   if (tone) return tone;
@@ -209,7 +209,7 @@ function operationalCardTone(operational?: WorkPackageCard["operational_state"],
   return CARD_TONES[key] || null;
 }
 
-export function sliceOperationalState(slice: PlannedSlice, pkg?: WorkPackageCard): WorkPackageCard["operational_state"] {
+export function sliceOperationalState(slice: WorkRequestPackage, pkg?: WorkPackageCard): WorkPackageCard["operational_state"] {
   return slice.operational_state || pkg?.operational_state || null;
 }
 
@@ -282,7 +282,7 @@ export function packageLane(pkg: WorkPackageCard): BoardLane {
   return boardLaneForStatus(pkg.operational_state?.key || pkg.status);
 }
 
-export function sliceLane(slice: PlannedSlice, pkg?: WorkPackageCard): BoardLane {
+export function sliceLane(slice: WorkRequestPackage, pkg?: WorkPackageCard): BoardLane {
   return boardLaneForStatus(sliceOperationalState(slice, pkg)?.key || slice.work_package_status || slice.status);
 }
 

@@ -65,11 +65,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
       assert [[encoded_payload]] = rows!("SELECT payload FROM sympp_progress_events WHERE id = 'PROGRESS-LEGACY-PAYLOAD'")
 
       assert %{
-               "work_package_id" => "WP-LINKED",
-               "kind" => "work_package",
+               "planned_slice_id" => "WRS-LINKED",
+               "kind" => "planned_slice",
                "exact_note" => "WRS-LINKED",
                "note" => "planned slice WRS-LINKED remains prose"
              } = Jason.decode!(encoded_payload)
+
+      assert [[encoded_snapshot]] =
+               rows!("SELECT tree_snapshot FROM sympp_product_tree_revisions WHERE id = 'REVISION-LEGACY-SNAPSHOT'")
+
+      assert %{
+               "mode" => "direct_work_packages",
+               "root_work_package_ids" => [^generated_id],
+               "nodes" => [
+                 %{
+                   "id" => "PTN-CANONICAL",
+                   "work_package_ids" => ["WP-LINKED"],
+                   "metadata" => %{"planned_slice_id" => "WRS-LINKED", "kind" => "planned_slice"}
+                 }
+               ],
+               "dependency_edges" => [
+                 %{
+                   "source" => %{"kind" => "work_package", "id" => "WP-LINKED"},
+                   "target" => %{"kind" => "work_package", "id" => ^generated_id}
+                 }
+               ],
+               "summary" => %{
+                 "root_work_package_count" => 1,
+                 "work_package_count" => 2,
+                 "linked_work_package_count" => 1
+               },
+               "free_form" => %{"planned_slice_id" => "WRS-LINKED", "kind" => "planned_slice"}
+             } = Jason.decode!(encoded_snapshot)
 
       assert [] == rows!("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%planned_slice%'")
     after
@@ -241,6 +268,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
           "exact_note" => "WRS-LINKED",
           "note" => "planned slice WRS-LINKED remains prose"
         })
+      ]
+    )
+
+    query!(
+      """
+      INSERT INTO sympp_product_tree_revisions
+        (id, work_request_id, revision_number, tree_snapshot, reason, created_at, inserted_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      """,
+      [
+        "REVISION-LEGACY-SNAPSHOT",
+        "WR-CANONICAL-MIGRATION",
+        1,
+        Jason.encode!(%{
+          "mode" => "direct_slices",
+          "root_slice_ids" => ["WRS-UNDISPATCHED"],
+          "nodes" => [
+            %{
+              "id" => "PTN-CANONICAL",
+              "slice_ids" => ["WRS-LINKED"],
+              "metadata" => %{"planned_slice_id" => "WRS-LINKED", "kind" => "planned_slice"}
+            }
+          ],
+          "dependency_edges" => [
+            %{
+              "source" => %{"kind" => "planned_slice", "id" => "WRS-LINKED"},
+              "target" => %{"kind" => "planned_slice", "id" => "WRS-UNDISPATCHED"}
+            }
+          ],
+          "summary" => %{"root_slice_count" => 1, "slice_count" => 2, "linked_slice_count" => 1},
+          "free_form" => %{"planned_slice_id" => "WRS-LINKED", "kind" => "planned_slice"}
+        }),
+        "Legacy snapshot",
+        now,
+        now,
+        now
       ]
     )
   end

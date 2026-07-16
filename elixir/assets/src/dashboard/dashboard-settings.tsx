@@ -229,7 +229,7 @@ export function DashboardSettingsDialog({
   const initialFocusRef = useRef<HTMLDivElement | null>(null);
   const visibilityLabel = hideEmptyWorkstreams
     ? workstreamHiddenSummary(hiddenWorkstreamCount)
-    : "Showing repos even when they have no requests, plan nodes, or slices.";
+    : "Showing repos even when they have no requests, plan nodes, or WorkPackages.";
   const contextBarLabel = showWorkstreamContextBar
     ? "Shows the sticky repo, WR, and plan-node path while scrolling."
     : "Board rows scroll without the sticky context path.";
@@ -329,7 +329,7 @@ export function DashboardSettingsDialog({
 }
 
 function workstreamHiddenSummary(hiddenWorkstreamCount: number) {
-  if (hiddenWorkstreamCount <= 0) return "Only repos with requests, plan nodes, or slices appear.";
+  if (hiddenWorkstreamCount <= 0) return "Only repos with requests, plan nodes, or WorkPackages appear.";
   return hiddenWorkstreamCount === 1 ? "1 empty repo hidden" : `${hiddenWorkstreamCount} empty repos hidden`;
 }
 

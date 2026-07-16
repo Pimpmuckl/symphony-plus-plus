@@ -773,6 +773,55 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert persisted_sibling_slice.status == "planned"
   end
 
+  test "WorkRequest MCP work-package mutations require an authoring parent status", %{repo: repo} do
+    {anchor, session, _grant} =
+      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-AUTHORING-STATUS", [
+        "write:work_request"
+      ])
+
+    work_request =
+      create_work_request!(repo,
+        id: "WR-MCP-WR-AUTHORING-STATUS",
+        repo: anchor.repo,
+        base_branch: anchor.base_branch,
+        status: "ready_for_slicing"
+      )
+
+    grant_work_request_scope!(repo, session, work_request.id)
+
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
+               repo,
+               work_request.id,
+               work_request_work_package_attrs(id: "WP-MCP-WR-AUTHORING-STATUS")
+             )
+
+    repo.update_all(from(request in WorkRequest, where: request.id == ^work_request.id), set: [status: "completed"])
+
+    update_response =
+      mcp_tool(repo, session, "update_work_package", %{
+        "work_request_id" => work_request.id,
+        "work_package_id" => work_package.id,
+        "expected_contract_revision" => work_package.contract_revision,
+        "patch" => %{"title" => "Must not persist"}
+      })
+
+    assert get_in(update_response, ["error", "data", "reason"]) == "invalid_status"
+
+    skip_response =
+      mcp_tool(repo, session, "skip_work_package", %{
+        "work_request_id" => work_request.id,
+        "work_package_id" => work_package.id,
+        "current_status" => "planned"
+      })
+
+    assert get_in(skip_response, ["error", "data", "reason"]) == "invalid_status"
+
+    persisted = repo.get!(WorkPackage, work_package.id)
+    assert persisted.title == work_package.title
+    assert persisted.status == "planned"
+  end
+
   defp create_architect_handoff!(repo, work_request) do
     assert {:ok, handoff} =
              ArchitectHandoff.create_or_replay(repo, work_request.id,

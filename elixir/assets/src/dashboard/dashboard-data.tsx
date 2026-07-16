@@ -1,4 +1,4 @@
-import type { ActiveBlockingEdge, ClarificationQuestion, DashboardPayload, GuidanceItem, PlannedSlice, SoloSession, WorkPackageCard, WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
+import type { ActiveBlockingEdge, ClarificationQuestion, DashboardPayload, GuidanceItem, WorkRequestPackage, SoloSession, WorkPackageCard, WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
 import { operationalLabel, packageLane, sliceLane, sliceOperationalState, workRequestLane } from "@/lib/operational-state";
 import { sortedCopy } from "@/lib/collections";
 import type { BlockerItem, FinishedHighlight } from "./dashboard-state";
@@ -129,7 +129,7 @@ function activeBlockerItemsForPackage(pkg: WorkPackageCard, packageSelections: R
 type PackageBlockerContext = {
   selection: CardDetailSelection;
   detail?: WorkRequestDetail;
-  slice?: PlannedSlice;
+  slice?: WorkRequestPackage;
 };
 
 function packageBlockerContext(pkg: WorkPackageCard, packageSelections: ReadonlyMap<string, CardDetailSelection>): PackageBlockerContext {
@@ -164,7 +164,7 @@ function blockerEdgeItems(
   blockerEdges: ActiveBlockingEdge[],
   status: string | null | undefined,
   operationalReason: string | null | undefined,
-  context: { detail?: WorkRequestDetail; slice?: PlannedSlice },
+  context: { detail?: WorkRequestDetail; slice?: WorkRequestPackage },
 ): BlockerItem[] {
   return uniqueBlockerEdges(blockerEdges).map((edge) => blockerItem(pkg, edge, status, operationalReason, context));
 }
@@ -175,7 +175,7 @@ function packageBlockerItems(
   blockerEdges: ActiveBlockingEdge[],
   status: string | null | undefined,
   operationalReason: string | null | undefined,
-  context: { detail?: WorkRequestDetail; slice?: PlannedSlice },
+  context: { detail?: WorkRequestDetail; slice?: WorkRequestPackage },
 ): BlockerItem[] {
   const edgeBlockerIds = new Set(blockerEdges.map((edge) => edge.blocker_id).filter(Boolean));
 
@@ -265,7 +265,7 @@ export function recentFinishedHighlights(
         id: pkg.id,
         title: pkg.title || pkg.id,
         repo: repoDisplayName(pkg),
-        kind: "Work Package",
+        kind: "WorkPackage",
         state: operationalLabel(operational, pkg.status),
         at: latestTimestamp(pkg.latest_progress_at, pkg.updated_at, pkg.inserted_at),
         selection: packageSelections.get(pkg.id) ?? { kind: "package", pkg },
@@ -298,7 +298,7 @@ export function recentFinishedHighlights(
 
   const sliceHighlights = details.flatMap<FinishedHighlight>((detail) => {
     const items: FinishedHighlight[] = [];
-    (detail.planned_slices || []).forEach((slice) => {
+    (detail.work_packages || []).forEach((slice) => {
       const pkg = slice.work_package_id ? packageById.get(slice.work_package_id) : undefined;
 
       if (sliceLane(slice, pkg) === "finished") {
@@ -307,7 +307,7 @@ export function recentFinishedHighlights(
           id: slice.id,
           title: slice.title || slice.id,
           repo: repoDisplayName(detail.work_request),
-          kind: "Slice",
+          kind: "WorkPackage",
           state: operationalLabel(operational, slice.work_package_status || slice.status),
           at: detail.work_request.updated_at || detail.work_request.inserted_at,
           selection: pkg ? { kind: "package", pkg, detail, slice } : { kind: "slice", detail, slice },
@@ -342,7 +342,7 @@ export function repoSummaries(
   const packageOwner = new Map<string, WorkRequestCard>();
 
   details.forEach((detail) => {
-    (detail.planned_slices || []).forEach((slice) => {
+    (detail.work_packages || []).forEach((slice) => {
       if (slice.work_package_id) packageOwner.set(slice.work_package_id, detail.work_request);
     });
   });
@@ -412,7 +412,7 @@ export function repoSummaries(
 
   details.forEach((detail) => {
     const summary = ensure(detail.work_request);
-    (detail.planned_slices || []).forEach((slice) => {
+    (detail.work_packages || []).forEach((slice) => {
       const lane = sliceLane(slice, slice.work_package_id ? packageById.get(slice.work_package_id) : undefined);
       if (lane === "slices") summary.active += 1;
       if (lane === "implementing") summary.implementing += 1;

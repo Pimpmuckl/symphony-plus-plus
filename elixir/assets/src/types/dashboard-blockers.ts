@@ -1,5 +1,5 @@
 export type ActiveBlockingEdgeEndpoint = {
-  kind: "slice" | "work_package";
+  kind: "work_package";
   id: string;
 };
 
@@ -18,7 +18,6 @@ export type ActiveBlockingEdge = {
   body?: string | null;
   updated_at?: string | null;
   work_request_id?: string | null;
-  planned_slice_id?: string | null;
   work_package_id?: string | null;
 };
 
