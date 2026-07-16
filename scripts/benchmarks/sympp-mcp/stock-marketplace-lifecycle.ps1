@@ -144,14 +144,13 @@ try {
     SYMPP_HOME = Join-Path $tempRoot "home"
     SYMPP_RUNTIME_FILE = $runtimeFile
     SYMPP_LOG_DIR = Join-Path $tempRoot "logs"
-    SYMPP_DATABASE = Join-Path $tempRoot "data/sympp.sqlite3"
     SYMPP_BACKEND_PORT = [string]$backendPort
     SYMPP_DASHBOARD_PORT = [string]$backendPort
     SYMPP_OPEN_DASHBOARD = "0"
     SYMPP_MCP_BRIDGE_MODE = "http"
     SYMPP_ARTIFACT_RUNTIME = "1"
     SYMPP_BACKEND_STARTUP_TIMEOUT_SEC = [string]$StartupTimeoutSec
-    SYMPP_STARTUP_LOCK_TIMEOUT_SEC = [string]($StartupTimeoutSec + 60)
+    SYMPP_STARTUP_LOCK_TIMEOUT_SEC = "1800"
   }
 
   $previousCodexHome = $env:CODEX_HOME
