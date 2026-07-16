@@ -143,7 +143,7 @@ defmodule Mix.Tasks.CodeQuality.Guard do
     "test/symphony_elixir/symphony_plus_plus/work_packages_test.exs" => %{max_lines: 944},
     "test/symphony_elixir/symphony_plus_plus/work_request_architect_handoff_test.exs" => %{max_lines: 1812},
     "test/symphony_elixir/symphony_plus_plus/work_request_delivery_closeout_test.exs" => %{max_lines: 1334},
-    "test/symphony_elixir/symphony_plus_plus/work_request_planned_slices_test.exs" => %{max_lines: 1104},
+    "test/symphony_elixir/symphony_plus_plus/work_request_work_packages_test.exs" => %{max_lines: 1104},
     "test/symphony_elixir/symphony_plus_plus/work_requests_test.exs" => %{max_lines: 1168},
     "test/symphony_elixir/workspace_and_config_test.exs" => %{max_lines: 1483}
   }

@@ -13,7 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
   }
 
   @mcp_ci_required_policy @worker_package_policy
-                          |> Map.put(:work_package_kind, "mcp")
+                          |> Map.put(:kind, "mcp")
                           |> Map.update!(:required_gates, &(&1 ++ ["ci_waiting"]))
                           |> Map.update!(:readiness_requirements, &(&1 ++ ["ci_waiting"]))
 
@@ -42,12 +42,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
     "mcp_ci_required" => @mcp_ci_required_policy,
     "mcp_current_pr_state" =>
       @worker_package_policy
-      |> Map.put(:work_package_kind, "mcp")
+      |> Map.put(:kind, "mcp")
       |> Map.update!(:required_gates, &(&1 ++ ["current_pr_state"]))
       |> Map.update!(:readiness_requirements, &(&1 ++ ["current_pr_state"])),
     "mcp_changed_file_scope_guard" =>
       @worker_package_policy
-      |> Map.put(:work_package_kind, "mcp")
+      |> Map.put(:kind, "mcp")
       |> Map.update!(:required_gates, &(&1 ++ ["current_pr_state", "scope_guard"]))
       |> Map.update!(:readiness_requirements, &(&1 ++ ["current_pr_state", "scope_guard"])),
     "skill" => @worker_package_policy,
@@ -116,17 +116,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
   @spec compatible_kind?(String.t(), String.t()) :: boolean()
   def compatible_kind?(kind, policy_key) when is_binary(kind) and is_binary(policy_key) do
     case Map.fetch(@templates, policy_key) do
-      {:ok, template} -> Map.get(template, :work_package_kind, policy_key) == kind
+      {:ok, template} -> Map.get(template, :kind, policy_key) == kind
       :error -> false
     end
   end
 
   def compatible_kind?(_kind, _policy_key), do: false
 
-  @spec work_package_kind(String.t()) :: {:ok, String.t()} | {:error, :unknown_policy_template}
-  def work_package_kind(policy_key) when is_binary(policy_key) do
+  @spec kind(String.t()) :: {:ok, String.t()} | {:error, :unknown_policy_template}
+  def kind(policy_key) when is_binary(policy_key) do
     case Map.fetch(@templates, policy_key) do
-      {:ok, template} -> {:ok, Map.get(template, :work_package_kind, policy_key)}
+      {:ok, template} -> {:ok, Map.get(template, :kind, policy_key)}
       :error -> {:error, :unknown_policy_template}
     end
   end
@@ -134,7 +134,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
   @spec matches?(String.t(), String.t()) :: boolean()
   def matches?(policy_key, requested) when is_binary(policy_key) and is_binary(requested) do
     case Map.fetch(@templates, policy_key) do
-      {:ok, template} -> requested in [policy_key, template.template, Map.get(template, :work_package_kind)]
+      {:ok, template} -> requested in [policy_key, template.template, Map.get(template, :kind)]
       :error -> false
     end
   end

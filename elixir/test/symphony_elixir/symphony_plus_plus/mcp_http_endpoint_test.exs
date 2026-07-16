@@ -398,7 +398,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     assert "get_current_assignment" in tool_names
     assert "read_work_request" in tool_names
-    assert "dispatch_slice" in tool_names
+    assert "dispatch_work_package" in tool_names
     refute "solo_attach" in tool_names
 
     read =

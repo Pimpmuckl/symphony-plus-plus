@@ -31,15 +31,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.CommentProjection do
   end
 
   @spec work_request_counts(term(), term(), term()) :: map()
-  def work_request_counts(%{counts: counts}, %{id: work_request_id}, planned_slices) when is_list(planned_slices) do
+  def work_request_counts(%{counts: counts}, %{id: work_request_id}, work_packages) when is_list(work_packages) do
     total_counts(%{
       counts:
         counts
-        |> Map.take([{"work_request", work_request_id} | Enum.flat_map(planned_slices, &planned_slice_target/1)])
+        |> Map.take([{"work_request", work_request_id} | Enum.flat_map(work_packages, &work_package_target/1)])
     })
   end
 
-  def work_request_counts(_comment_context, _work_request, _planned_slices), do: %{comment_count: 0, open_comment_count: 0}
+  def work_request_counts(_comment_context, _work_request, _work_packages), do: %{comment_count: 0, open_comment_count: 0}
 
   @spec put_counts(map(), map()) :: map()
   def put_counts(payload, counts) do
@@ -66,6 +66,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.CommentProjection do
     }
   end
 
-  defp planned_slice_target(%{id: id}), do: [{"planned_slice", id}]
-  defp planned_slice_target(_planned_slice), do: []
+  defp work_package_target(%{id: id}), do: [{"work_package", id}]
+  defp work_package_target(_work_package), do: []
 end

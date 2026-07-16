@@ -6,7 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
     BlockerProjection,
-    DeliverySliceProjection,
+    DeliveryWorkPackageProjection,
     MetadataProjection,
     Sanitizer
   }
@@ -17,7 +17,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
   alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
 
   @stale_heartbeat_after_seconds 300
   @ready_statuses ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"]
@@ -111,16 +110,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     |> Map.put(:attention_items, attention_items)
   end
 
-  @spec planned_slice_operational_state(PlannedSlice.t(), map() | nil, map() | nil) :: map()
-  def planned_slice_operational_state(%PlannedSlice{} = planned_slice, work_package_context, delivery_slice) do
-    planned_slice_operational_state(planned_slice, work_package_context, delivery_slice, [])
+  @spec work_package_operational_state(WorkPackage.t(), map() | nil, map() | nil) :: map()
+  def work_package_operational_state(%WorkPackage{} = work_package, work_package_context, delivery_work_package) do
+    work_package_operational_state(work_package, work_package_context, delivery_work_package, [])
   end
 
-  @spec planned_slice_operational_state(PlannedSlice.t(), map() | nil, map() | nil, keyword()) :: map()
-  def planned_slice_operational_state(%PlannedSlice{} = planned_slice, work_package_context, delivery_slice, delivery_state_opts) do
-    base_state = base_planned_slice_operational_state(planned_slice, work_package_context)
+  @spec work_package_operational_state(WorkPackage.t(), map() | nil, map() | nil, keyword()) :: map()
+  def work_package_operational_state(%WorkPackage{} = work_package, work_package_context, delivery_work_package, delivery_state_opts) do
+    base_state = base_work_package_operational_state(work_package, work_package_context)
 
-    case DeliverySliceProjection.primary_operational_state(delivery_slice, delivery_state_opts) do
+    case DeliveryWorkPackageProjection.primary_operational_state(delivery_work_package, delivery_state_opts) do
       nil -> base_state
       operational_state -> delivery_operational_state_overlay(base_state, operational_state)
     end
@@ -377,7 +376,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       "ready_for_worker",
       "Ready For Worker",
       "neutral",
-      "No linked delivery, worker, runtime, progress, blocker, review, PR, or merge activity is recorded.",
+      "No delivery, worker, runtime, progress, blocker, review, PR, or merge activity is recorded.",
       status
     )
   end
@@ -402,130 +401,85 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     |> Enum.uniq_by(&Map.get(&1, :key))
   end
 
-  defp base_planned_slice_operational_state(%PlannedSlice{} = planned_slice, nil) do
-    planned_slice
-    |> base_unlinked_planned_slice_operational_state()
-    |> Map.put(:attention_items, planned_slice_attention_items(planned_slice, nil))
+  defp base_work_package_operational_state(%WorkPackage{} = work_package, nil) do
+    work_package
+    |> base_work_package_without_context_state()
+    |> Map.put(:attention_items, package_delivery_attention_items(work_package, nil))
   end
 
-  defp base_planned_slice_operational_state(%PlannedSlice{} = planned_slice, %{card: card, work_package: %WorkPackage{} = work_package}) do
-    linked_state = Map.fetch!(card, :operational_state)
-    attention_items = planned_slice_attention_items(planned_slice, work_package, linked_state)
+  defp base_work_package_operational_state(%WorkPackage{} = work_package, %{card: card, work_package: %WorkPackage{}}) do
+    package_state = Map.fetch!(card, :operational_state)
+    attention_items = package_delivery_attention_items(work_package, package_state)
 
-    if promoted_linked_operational_state?(linked_state) do
-      linked_state
+    if promoted_context_operational_state?(package_state) do
+      package_state
       |> operational_activity_fields()
       |> Map.merge(
         operational_state(
-          linked_state.key,
-          linked_state.label,
-          linked_state.tone,
-          "Linked WorkPackage #{work_package.id} is #{linked_state.label}.",
-          planned_slice.status,
+          package_state.key,
+          package_state.label,
+          package_state.tone,
+          "WorkPackage #{work_package.id} is #{package_state.label}.",
+          work_package.status,
           attention_items
         )
       )
     else
-      linked_idle_planned_slice_operational_state(planned_slice, work_package, attention_items)
+      idle_work_package_operational_state(work_package, attention_items)
     end
   end
 
-  defp base_unlinked_planned_slice_operational_state(%PlannedSlice{status: "approved"} = planned_slice) do
-    operational_state("ready_for_worker", "Ready For Worker", "neutral", "Approved slice has no linked WorkPackage or delivery activity.", planned_slice.status)
+  defp base_work_package_without_context_state(%WorkPackage{status: "planned"} = work_package) do
+    operational_state("planned", "Planned", "neutral", "WorkPackage is planned and has not been dispatched.", work_package.status)
   end
 
-  defp base_unlinked_planned_slice_operational_state(%PlannedSlice{status: "planned"} = planned_slice) do
-    operational_state("planned", "Planned", "neutral", "Slice is planned and has no linked WorkPackage.", planned_slice.status)
+  defp base_work_package_without_context_state(%WorkPackage{status: "skipped"} = work_package) do
+    operational_state("skipped", "Skipped", "neutral", "WorkPackage was skipped before dispatch.", work_package.status)
   end
 
-  defp base_unlinked_planned_slice_operational_state(%PlannedSlice{status: "skipped"} = planned_slice) do
-    operational_state("skipped", "Skipped", "neutral", "Slice was skipped before dispatch.", planned_slice.status)
+  defp base_work_package_without_context_state(%WorkPackage{} = work_package) do
+    status = work_package.status || "unknown"
+    operational_state(status, status_label(status), "neutral", "WorkPackage status is #{status}.", status)
   end
 
-  defp base_unlinked_planned_slice_operational_state(%PlannedSlice{} = planned_slice) do
-    operational_state("dispatched", "Dispatched", "warning", "Slice is marked dispatched but no linked WorkPackage is available.", planned_slice.status)
-  end
-
-  defp linked_idle_planned_slice_operational_state(%PlannedSlice{status: "approved"} = planned_slice, %WorkPackage{} = work_package, attention_items) do
-    operational_state(
-      "ready_for_worker",
-      "Ready For Worker",
-      "neutral",
-      "Approved slice is linked to WorkPackage #{work_package.id}, which has not started.",
-      planned_slice.status,
-      attention_items
-    )
-  end
-
-  defp linked_idle_planned_slice_operational_state(%PlannedSlice{status: "planned"} = planned_slice, %WorkPackage{} = work_package, attention_items) do
+  defp idle_work_package_operational_state(%WorkPackage{status: "planned"} = work_package, attention_items) do
     operational_state(
       "planned",
       "Planned",
       "neutral",
-      "Slice is linked to WorkPackage #{work_package.id}, which has not started.",
-      planned_slice.status,
+      "WorkPackage is planned and has not been dispatched.",
+      work_package.status,
       attention_items
     )
   end
 
-  defp linked_idle_planned_slice_operational_state(%PlannedSlice{status: "skipped"} = planned_slice, %WorkPackage{} = work_package, attention_items) do
+  defp idle_work_package_operational_state(%WorkPackage{status: "skipped"} = work_package, attention_items) do
     operational_state(
       "skipped",
       "Skipped",
       "neutral",
-      "Skipped slice is linked to WorkPackage #{work_package.id}.",
-      planned_slice.status,
+      "WorkPackage was skipped before dispatch.",
+      work_package.status,
       attention_items
     )
   end
 
-  defp linked_idle_planned_slice_operational_state(%PlannedSlice{} = planned_slice, %WorkPackage{} = work_package, attention_items) do
+  defp idle_work_package_operational_state(%WorkPackage{} = work_package, attention_items) do
     operational_state(
-      "dispatched",
-      "Dispatched",
+      work_package.status,
+      status_label(work_package.status),
       "neutral",
-      "Slice is linked to WorkPackage #{work_package.id}, which has not started.",
-      planned_slice.status,
+      "WorkPackage #{work_package.id} has not started.",
+      work_package.status,
       attention_items
     )
   end
 
-  defp planned_slice_attention_items(%PlannedSlice{} = planned_slice, nil) do
-    if planned_slice.status == "dispatched" and not filled_string?(planned_slice.work_package_id) do
-      [
-        %{
-          key: "missing_linked_work_package",
-          label: "Missing Linked WorkPackage",
-          tone: "warning",
-          reason: "Slice is marked dispatched without a linked WorkPackage."
-        }
-      ]
-    else
-      []
-    end
-  end
+  defp package_delivery_attention_items(%WorkPackage{}, nil), do: []
 
-  defp planned_slice_attention_items(%PlannedSlice{} = planned_slice, %WorkPackage{} = work_package, linked_state) do
-    inherited_items = Map.get(linked_state, :attention_items, [])
+  defp package_delivery_attention_items(%WorkPackage{}, package_state), do: Map.get(package_state, :attention_items, [])
 
-    maybe_idle_slice_attention =
-      if planned_slice.status in ["planned", "approved"] and linked_package_started_while_slice_idle?(linked_state) do
-        [
-          %{
-            key: "linked_package_started_while_slice_idle",
-            label: "Linked Package Started",
-            tone: "warning",
-            reason: "Linked WorkPackage #{work_package.id} has operational state #{linked_state.key} while slice status is #{planned_slice.status}."
-          }
-        ]
-      else
-        []
-      end
-
-    inherited_items ++ maybe_idle_slice_attention
-  end
-
-  defp promoted_linked_operational_state?(%{key: key}) do
+  defp promoted_context_operational_state?(%{key: key}) do
     key in [
       "blocked",
       "active",
@@ -543,10 +497,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     ]
   end
 
-  defp promoted_linked_operational_state?(_state), do: false
-
-  defp linked_package_started_while_slice_idle?(%{key: "prepared"}), do: false
-  defp linked_package_started_while_slice_idle?(linked_state), do: promoted_linked_operational_state?(linked_state)
+  defp promoted_context_operational_state?(_state), do: false
 
   defp work_package_attention_items(%WorkPackage{} = work_package, blockers, context) do
     missing_readiness = Map.fetch!(context, :missing_readiness)
@@ -1251,7 +1202,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   defp normalize_blocker_id(value), do: to_string(value)
 
   defp recommendation_artifact_recorded?(artifacts, work_package_id), do: MetadataProjection.recommendation_artifact_recorded?(artifacts, work_package_id)
-  defp filled_string?(value), do: MetadataProjection.filled_string?(value)
   defp review_head_matches?(payload, readiness_head_sha), do: MetadataProjection.review_head_matches?(payload, readiness_head_sha)
   defp latest_current_head_sha(progress_events), do: MetadataProjection.latest_current_head_sha(progress_events)
   defp metadata_present?(progress_events, type, head_sha), do: MetadataProjection.metadata_present?(progress_events, type, head_sha)

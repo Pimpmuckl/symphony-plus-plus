@@ -23,8 +23,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixirWeb.Endpoint
   alias SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions
@@ -982,23 +982,23 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     )
   end
 
-  @spec operator_dispatch_planned_slice(Conn.t(), map()) :: Conn.t()
-  def operator_dispatch_planned_slice(conn, %{"work_request_id" => work_request_id, "planned_slice_id" => planned_slice_id}) do
+  @spec operator_dispatch_work_package(Conn.t(), map()) :: Conn.t()
+  def operator_dispatch_work_package(conn, %{"work_request_id" => work_request_id, "work_package_id" => work_package_id}) do
     send_local_operator_response(
       conn,
-      :planned_slice_dispatch,
-      planned_slice_target(work_request_id, planned_slice_id),
-      :operator_dispatch_planned_slice,
+      :work_package_dispatch,
+      work_package_target(work_request_id, work_package_id),
+      :operator_dispatch_work_package,
       fn repo ->
         with {:ok, dispatch} <-
-               PlannedSliceDispatch.dispatch(
+               WorkPackageDispatch.dispatch(
                  repo,
                  work_request_id,
-                 planned_slice_id,
+                 work_package_id,
                  LocalOperatorActions.dispatch_handoff_opts(repo)
                ) do
-          refresh = %{work_request_id: work_request_id, planned_slice_id: planned_slice_id}
-          payload = %{dispatch: PlannedSliceDispatch.response_payload(dispatch)}
+          refresh = %{work_request_id: work_request_id, work_package_id: work_package_id}
+          payload = %{dispatch: WorkPackageDispatch.response_payload(dispatch)}
 
           json(conn, mutation_success_payload(payload, refresh))
         end
@@ -1160,7 +1160,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     |> Target.work_package()
   end
 
-  defp planned_slice_target(work_request_id, planned_slice_id), do: Target.planned_slice(planned_slice_id, work_request_id)
+  defp work_package_target(work_request_id, work_package_id), do: Target.work_package(work_package_id, work_request_id)
 
   defp guidance_request_target(work_package_id, guidance_request_id) do
     work_package_id
@@ -1615,14 +1615,17 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp error_response(conn, :invalid_target), do: error_response(conn, 422, "invalid_target", "Comment target is invalid")
   defp error_response(conn, :not_completed), do: error_response(conn, 422, "not_completed", "WorkRequest is not complete")
   defp error_response(conn, :not_delivered), do: error_response(conn, 422, "not_delivered", "WorkPackage is not delivered")
-  defp error_response(conn, :linked_work_package), do: error_response(conn, 422, "linked_work_package", "WorkPackage is linked to a WorkRequest")
-  defp error_response(conn, :linked_work_package_required), do: error_response(conn, 422, "linked_work_package_required", "WorkPackage is not linked to a WorkRequest")
+  defp error_response(conn, :work_request_package), do: error_response(conn, 422, "work_request_package", "WorkRequest WorkPackages cannot be archived independently")
+
+  defp error_response(conn, :work_request_package_required),
+    do: error_response(conn, 422, "work_request_package_required", "A WorkRequest WorkPackage is required")
+
   defp error_response(conn, :missing_no_pr_evidence), do: error_response(conn, 422, "missing_no_pr_evidence", "No-PR evidence is required")
   defp error_response(conn, :active_blocker), do: error_response(conn, 412, "active_blocker", "Closeout is blocked by active blockers")
   defp error_response(conn, :active_runtime), do: error_response(conn, 412, "active_runtime", "Closeout is blocked by active worker state")
   defp error_response(conn, :claim_not_current), do: error_response(conn, 412, "runtime_lease_conflict", "Closeout runtime state changed; retry the action")
   defp error_response(conn, :stale_status), do: error_response(conn, 409, "stale_status", "WorkPackage status changed; refresh and retry")
-  defp error_response(conn, :work_package_mismatch), do: error_response(conn, 409, "work_package_mismatch", "WorkPackage no longer matches its planned slice")
+  defp error_response(conn, :work_package_mismatch), do: error_response(conn, 409, "work_package_mismatch", "WorkPackage no longer matches its WorkPackage")
   defp error_response(conn, :work_package_not_abandonable), do: error_response(conn, 412, "work_package_not_abandonable", "WorkPackage cannot be abandoned from its current history")
 
   defp error_response(conn, :missing_custom_redirect_note) do
@@ -1643,8 +1646,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     error_response(conn, 422, "invalid_work_request_status", "WorkRequest is not ready for this action")
   end
 
-  defp error_response(conn, {:invalid_planned_slice_status, _status}) do
-    error_response(conn, 422, "invalid_planned_slice_status", "Planned slice is not ready for this action")
+  defp error_response(conn, {:invalid_work_package_status, _status}) do
+    error_response(conn, 422, "invalid_work_package_status", "WorkPackage is not ready for this action")
   end
 
   defp error_response(conn, {:storage_failed, _reason}) do

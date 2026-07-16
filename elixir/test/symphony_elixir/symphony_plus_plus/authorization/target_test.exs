@@ -6,8 +6,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.TargetTest do
   test "canonical target constructors do not keep conflicting caller-supplied scope ids" do
     assert %Target{work_request_id: "wr-1"} = Target.work_request("wr-1", work_request_id: "wr-spoofed")
 
-    assert %Target{work_request_id: "wr-1", planned_slice_id: "wrs-1"} =
-             Target.planned_slice("wrs-1", "wr-1", work_request_id: "wr-spoofed", planned_slice_id: "wrs-spoofed")
+    assert %Target{work_request_id: "wr-1", work_package_id: "wrs-1"} =
+             Target.work_package("wrs-1", "wr-1", work_request_id: "wr-spoofed", work_package_id: "wrs-spoofed")
 
     assert %Target{work_package_id: "wp-1"} = Target.work_package("wp-1", work_package_id: "wp-spoofed")
 

@@ -13,7 +13,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixirWeb.SymppDashboardApi.Runtime, as: DashboardRuntime
 
@@ -73,11 +72,11 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
     with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
          :ok <- require_closeable_work_package(work_package),
          {:ok, no_pr_evidence} <- required_no_pr_evidence(params),
-         {:ok, planned_slice} <- linked_planned_slice_for_work_package(repo, work_package_id),
+         {:ok, work_package} <- require_work_request_package(work_package),
          {:ok, _delivery} <-
-           WorkRequestService.record_planned_slice_delivery(repo, planned_slice.work_request_id, planned_slice.id, %{
+           WorkRequestService.record_work_package_delivery(repo, work_package.work_request_id, work_package.id, %{
              outcome: "completed_no_pr",
-             idempotency_key: completed_no_pr_idempotency_key(planned_slice.id),
+             idempotency_key: completed_no_pr_idempotency_key(work_package.id),
              no_pr_evidence: no_pr_evidence,
              recorded_by: @local_operator_actor
            }) do
@@ -149,7 +148,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
 
   defp hide_work_package_for_local_operator_in_transaction(repo, %WorkPackage{} = work_package) do
     with :ok <- require_hideable_work_package(work_package),
-         :ok <- require_unlinked_work_package(repo, work_package.id),
+         :ok <- require_direct_work_package(work_package),
          {:ok, _settings} <- append_hidden_work_package_id_for_local_operator(repo, work_package.id) do
       {:ok, work_package}
     end
@@ -159,28 +158,17 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
     if status in @local_operator_hideable_package_statuses, do: :ok, else: {:error, :not_delivered}
   end
 
-  defp require_unlinked_work_package(repo, work_package_id) do
-    linked? =
-      repo.exists?(
-        from(planned_slice in PlannedSlice,
-          where: planned_slice.work_package_id == ^work_package_id
-        )
-      )
+  defp require_direct_work_package(%WorkPackage{work_request_id: work_request_id})
+       when work_request_id in [nil, ""],
+       do: :ok
 
-    if linked?, do: {:error, :linked_work_package}, else: :ok
-  end
+  defp require_direct_work_package(%WorkPackage{}), do: {:error, :work_request_package}
 
-  defp linked_planned_slice_for_work_package(repo, work_package_id) do
-    repo.one(
-      from(planned_slice in PlannedSlice,
-        where: planned_slice.work_package_id == ^work_package_id
-      )
-    )
-    |> case do
-      %PlannedSlice{} = planned_slice -> {:ok, planned_slice}
-      nil -> {:error, :linked_work_package_required}
-    end
-  end
+  defp require_work_request_package(%WorkPackage{work_request_id: work_request_id} = work_package)
+       when is_binary(work_request_id) and work_request_id != "",
+       do: {:ok, work_package}
+
+  defp require_work_request_package(%WorkPackage{}), do: {:error, :work_request_package_required}
 
   defp required_no_pr_evidence(params) do
     case text_param(params, "no_pr_evidence") do
@@ -189,7 +177,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
     end
   end
 
-  defp completed_no_pr_idempotency_key(planned_slice_id), do: "local-operator-completed-no-pr:#{planned_slice_id}"
+  defp completed_no_pr_idempotency_key(work_package_id), do: "local-operator-completed-no-pr:#{work_package_id}"
 
   @spec clear_work_package_blocker_for_local_operator(module(), String.t(), term(), map()) ::
           {:ok, term()} | {:error, term()}
@@ -326,31 +314,16 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   defp normalize_local_operator_transaction_result({:error, reason}), do: {:error, reason}
 
   defp refresh_work_requests_for_work_package(repo, work_package_id) do
-    with {:ok, work_requests} <- WorkRequestService.list(repo, %{include_archived: true}) do
-      refresh_linked_work_requests(repo, work_requests, work_package_id)
+    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
+      refresh_work_request_for_package(repo, work_package)
     end
   end
 
-  defp refresh_linked_work_requests(repo, work_requests, work_package_id) do
-    Enum.reduce_while(work_requests, :ok, fn work_request, :ok ->
-      repo
-      |> refresh_work_request_if_linked_to_package(work_request, work_package_id)
-      |> reduce_linked_work_request_refresh()
-    end)
-  end
+  defp refresh_work_request_for_package(repo, %WorkPackage{work_request_id: work_request_id})
+       when is_binary(work_request_id),
+       do: refresh_work_request_completion(repo, work_request_id)
 
-  defp reduce_linked_work_request_refresh(:ok), do: {:cont, :ok}
-  defp reduce_linked_work_request_refresh({:error, reason}), do: {:halt, {:error, reason}}
-
-  defp refresh_work_request_if_linked_to_package(repo, work_request, work_package_id) do
-    with {:ok, planned_slices} <- WorkRequestService.list_planned_slices(repo, work_request.id),
-         true <- Enum.any?(planned_slices, &(&1.work_package_id == work_package_id)) do
-      refresh_work_request_completion(repo, work_request.id)
-    else
-      false -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  defp refresh_work_request_for_package(_repo, %WorkPackage{}), do: :ok
 
   defp refresh_work_request_completion(repo, work_request_id) do
     case WorkRequestService.refresh_completion(repo, work_request_id) do

@@ -22,7 +22,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Service do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @type error ::
@@ -268,10 +267,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Service do
 
   defp linked_work_request(repo, work_package_id) do
     repo.one(
-      from(planned_slice in PlannedSlice,
+      from(work_package in WorkPackage,
         join: work_request in WorkRequest,
-        on: work_request.id == planned_slice.work_request_id,
-        where: planned_slice.work_package_id == ^work_package_id,
+        on: work_request.id == work_package.work_request_id,
+        where: work_package.id == ^work_package_id,
         select: work_request,
         limit: 1
       )

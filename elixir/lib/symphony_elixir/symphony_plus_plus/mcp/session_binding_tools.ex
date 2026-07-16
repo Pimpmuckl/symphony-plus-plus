@@ -22,7 +22,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @assignment_release_tool ToolCatalog.assignment_release_tool()
   @local_assignment_claim_tool ToolCatalog.local_assignment_claim_tool()
@@ -229,10 +229,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
 
   defp work_request_id_for_work_package(repo, work_package_id) when is_binary(work_package_id) do
     query =
-      from(planned_slice in PlannedSlice,
-        where: planned_slice.work_package_id == ^work_package_id,
-        order_by: [asc: planned_slice.inserted_at, asc: planned_slice.id],
-        select: planned_slice.work_request_id,
+      from(work_package in WorkPackage,
+        where: work_package.id == ^work_package_id,
+        order_by: [asc: work_package.inserted_at, asc: work_package.id],
+        select: work_package.work_request_id,
         limit: 1
       )
 

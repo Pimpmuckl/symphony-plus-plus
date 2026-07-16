@@ -1,16 +1,16 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints do
   @moduledoc """
-  Pure path-scope validation for WorkRequest planned-slice owned file globs.
+  Pure path-scope validation for WorkRequest-backed WorkPackage file globs.
 
   The validator does not inspect the host filesystem. It checks repo-relative
-  slash-separated path/glob syntax and proves planned-slice ownership stays
+  slash-separated path/glob syntax and proves package ownership stays
   inside `constraints.allowed_paths` while avoiding `constraints.forbidden_paths`.
   """
 
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
-  @type field :: :constraints | :allowed_paths | :forbidden_paths | :owned_file_globs
+  @type field :: :constraints | :allowed_paths | :forbidden_paths | :allowed_file_globs
   @type path_error_reason ::
           :absolute_path
           | :backslash_separator
@@ -20,7 +20,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints do
           | :unsupported_globstar
   @type error ::
           {:invalid_constraints, field()}
-          | {:invalid_owned_file_globs, :owned_file_globs}
+          | {:invalid_allowed_file_globs, :allowed_file_globs}
           | {:invalid_path, field(), String.t(), path_error_reason()}
           | {:non_documentation_owned_glob, String.t()}
           | {:outside_allowed_paths, String.t(), [String.t()]}
@@ -36,63 +36,63 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints do
   @docs_extensions [".adoc", ".md", ".mdx", ".rst", ".txt"]
 
   @doc """
-  Validates planned-slice owned file globs against WorkRequest scope constraints.
+  Validates WorkPackage owned file globs against WorkRequest scope constraints.
 
   Missing or empty `allowed_paths` means no allow-list restriction.
   `forbidden_paths` still apply. The result is `:ok` or a non-empty list of
   typed, safe errors.
   """
-  @spec validate_owned_file_globs(WorkRequest.t() | map(), PlannedSlice.t() | [String.t()]) ::
+  @spec validate_allowed_file_globs(WorkRequest.t() | map(), WorkPackage.t() | [String.t()]) ::
           :ok | {:error, [error()]}
-  def validate_owned_file_globs(%WorkRequest{constraints: constraints}, %PlannedSlice{} = planned_slice) do
-    validate_owned_file_globs(constraints, planned_slice.owned_file_globs || [])
+  def validate_allowed_file_globs(%WorkRequest{constraints: constraints}, %WorkPackage{} = work_package) do
+    validate_allowed_file_globs(constraints, work_package.allowed_file_globs || [])
   end
 
-  def validate_owned_file_globs(%WorkRequest{constraints: constraints}, owned_file_globs) do
-    validate_owned_file_globs(constraints, owned_file_globs)
+  def validate_allowed_file_globs(%WorkRequest{constraints: constraints}, allowed_file_globs) do
+    validate_allowed_file_globs(constraints, allowed_file_globs)
   end
 
-  def validate_owned_file_globs(constraints, %PlannedSlice{} = planned_slice) do
-    validate_owned_file_globs(constraints, planned_slice.owned_file_globs || [])
+  def validate_allowed_file_globs(constraints, %WorkPackage{} = work_package) do
+    validate_allowed_file_globs(constraints, work_package.allowed_file_globs || [])
   end
 
-  def validate_owned_file_globs(%{constraints: constraints}, owned_file_globs) do
-    validate_owned_file_globs(constraints, owned_file_globs)
+  def validate_allowed_file_globs(%{constraints: constraints}, allowed_file_globs) do
+    validate_allowed_file_globs(constraints, allowed_file_globs)
   end
 
-  def validate_owned_file_globs(%{"constraints" => constraints}, owned_file_globs) do
-    validate_owned_file_globs(constraints, owned_file_globs)
+  def validate_allowed_file_globs(%{"constraints" => constraints}, allowed_file_globs) do
+    validate_allowed_file_globs(constraints, allowed_file_globs)
   end
 
-  def validate_owned_file_globs(constraints, owned_file_globs) when is_map(constraints) do
+  def validate_allowed_file_globs(constraints, allowed_file_globs) when is_map(constraints) do
     with {:ok, allowed_paths} <- constraint_entries(constraints, :allowed_paths),
          {:ok, forbidden_paths} <- constraint_entries(constraints, :forbidden_paths),
-         {:ok, owned_entries} <- owned_entries(owned_file_globs) do
+         {:ok, owned_entries} <- owned_entries(allowed_file_globs) do
       validate_patterns(owned_entries, allowed_paths, forbidden_paths)
     else
       {:error, errors} -> {:error, errors}
     end
   end
 
-  def validate_owned_file_globs(_constraints, _owned_file_globs), do: {:error, [{:invalid_constraints, :constraints}]}
+  def validate_allowed_file_globs(_constraints, _allowed_file_globs), do: {:error, [{:invalid_constraints, :constraints}]}
 
   @doc """
-  Validates that a `docs` planned-slice/package scope is documentation-only.
+  Validates that a `docs` WorkPackage scope is documentation-only.
 
   This is intentionally syntactic and repo-agnostic. Documentation-owned globs
   either live under a known documentation root or point at documentation files
   by extension.
   """
-  @spec validate_docs_owned_file_globs([String.t()]) :: :ok | {:error, [error()]}
-  def validate_docs_owned_file_globs(owned_file_globs) do
-    with {:ok, owned_entries} <- owned_entries(owned_file_globs),
+  @spec validate_docs_allowed_file_globs([String.t()]) :: :ok | {:error, [error()]}
+  def validate_docs_allowed_file_globs(allowed_file_globs) do
+    with {:ok, owned_entries} <- owned_entries(allowed_file_globs),
          {:ok, owned_patterns} <- parse_docs_owned_patterns(owned_entries) do
       validate_documentation_patterns(owned_patterns)
     end
   end
 
   defp validate_patterns(owned_entries, allowed_entries, forbidden_entries) do
-    {owned_patterns, owned_errors} = parse_entries(:owned_file_globs, owned_entries)
+    {owned_patterns, owned_errors} = parse_entries(:allowed_file_globs, owned_entries)
     {allowed_patterns, allowed_errors} = parse_entries(:allowed_paths, allowed_entries)
     {forbidden_patterns, forbidden_errors} = parse_entries(:forbidden_paths, forbidden_entries)
 
@@ -124,8 +124,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints do
     end
   end
 
-  defp owned_entries(value) when is_list(value), do: string_entries(value, :owned_file_globs, {:invalid_owned_file_globs, :owned_file_globs})
-  defp owned_entries(_value), do: {:error, [{:invalid_owned_file_globs, :owned_file_globs}]}
+  defp owned_entries(value) when is_list(value), do: string_entries(value, :allowed_file_globs, {:invalid_allowed_file_globs, :allowed_file_globs})
+  defp owned_entries(_value), do: {:error, [{:invalid_allowed_file_globs, :allowed_file_globs}]}
 
   defp string_entries(values, _field, error) do
     if Enum.all?(values, &nonblank_string?/1) do
@@ -159,9 +159,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints do
   end
 
   defp parse_docs_owned_patterns(owned_entries) do
-    case parse_entries(:owned_file_globs, owned_entries) do
+    case parse_entries(:allowed_file_globs, owned_entries) do
       {_owned_patterns, [_error | _rest] = owned_errors} -> {:error, owned_errors}
-      {[], []} -> {:error, [{:invalid_owned_file_globs, :owned_file_globs}]}
+      {[], []} -> {:error, [{:invalid_allowed_file_globs, :allowed_file_globs}]}
       {owned_patterns, []} -> {:ok, owned_patterns}
     end
   end

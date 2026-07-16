@@ -4,9 +4,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.AllowNullAccessGrantEx
   @disable_ddl_transaction true
 
   def up do
-    if expires_at_not_null?() do
-      rebuild_access_grants_with_nullable_expiry()
-    end
+    repo().checkout(fn ->
+      if expires_at_not_null?() do
+        rebuild_access_grants_with_nullable_expiry()
+      end
+    end)
   end
 
   def down do

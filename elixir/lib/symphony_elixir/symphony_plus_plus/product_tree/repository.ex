@@ -4,8 +4,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
   import Ecto.Query, only: [from: 2]
 
   alias Ecto.Changeset
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{Attrs, DependencyEdge, Node, Revision, SliceLink}
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{Attrs, DependencyEdge, Node, Revision}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @revision_number_retry_count 3
   @revision_number_unique_index "sympp_product_tree_revisions_work_request_revision_unique_index"
@@ -13,9 +13,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
     "sympp_product_tree_nodes_pkey",
     "sympp_product_tree_nodes_id_index",
     "sympp_product_tree_nodes_id_unique_index",
-    "sympp_product_tree_slice_links_pkey",
-    "sympp_product_tree_slice_links_id_index",
-    "sympp_product_tree_slice_links_id_unique_index",
     "sympp_product_tree_dependency_edges_pkey",
     "sympp_product_tree_dependency_edges_id_index",
     "sympp_product_tree_dependency_edges_id_unique_index",
@@ -25,7 +22,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
   ]
   @sqlite_primary_key_messages [
     "unique constraint failed: sympp_product_tree_nodes.id",
-    "unique constraint failed: sympp_product_tree_slice_links.id",
     "unique constraint failed: sympp_product_tree_dependency_edges.id",
     "unique constraint failed: sympp_product_tree_revisions.id"
   ]
@@ -43,7 +39,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
           {:ok,
            %{
              nodes: [Node.t()],
-             slice_links: [SliceLink.t()],
              dependency_edges: [DependencyEdge.t()],
              latest_revision: Revision.t() | nil
            }}
@@ -52,7 +47,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
     {:ok,
      %{
        nodes: list_nodes!(repo, work_request_id),
-       slice_links: list_slice_links!(repo, work_request_id),
        dependency_edges: list_dependency_edges!(repo, work_request_id),
        latest_revision: latest_revision!(repo, work_request_id)
      }}
@@ -82,36 +76,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
     case Map.get(attrs, "product_tree_node_id") || Map.get(attrs, "id") do
       id when is_binary(id) and id != "" -> update_node(repo, Map.put(attrs, "id", id))
       _id -> create_node(repo, attrs)
-    end
-  rescue
-    error in Ecto.ConstraintError -> normalize_constraint_error(error)
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  @spec create_slice_link(repo(), map()) :: {:ok, SliceLink.t()} | {:error, error()}
-  def create_slice_link(repo, attrs) when is_atom(repo) and is_map(attrs) do
-    attrs = Attrs.normalize_keys(attrs)
-
-    with :ok <- validate_slice_link_scope(repo, attrs) do
-      attrs
-      |> SliceLink.create_changeset()
-      |> repo.insert()
-      |> normalize_insert_result()
-    end
-  rescue
-    error in Ecto.ConstraintError -> normalize_constraint_error(error)
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  @spec move_slice_link(repo(), map()) :: {:ok, SliceLink.t() | nil} | {:error, error()}
-  def move_slice_link(repo, attrs) when is_atom(repo) and is_map(attrs) do
-    attrs = attrs |> Attrs.normalize_keys() |> normalize_blank_id("product_tree_node_id")
-
-    with :ok <- validate_slice_link_scope(repo, attrs) do
-      case Map.get(attrs, "product_tree_node_id") do
-        node_id when node_id in [nil, ""] -> unlink_slice(repo, attrs)
-        _node_id -> upsert_slice_link(repo, attrs)
-      end
     end
   rescue
     error in Ecto.ConstraintError -> normalize_constraint_error(error)
@@ -170,15 +134,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
     )
   end
 
-  defp list_slice_links!(repo, work_request_id) do
-    repo.all(
-      from(link in SliceLink,
-        where: link.work_request_id == ^work_request_id,
-        order_by: [asc: link.product_tree_node_id, asc: link.position, asc: link.created_at, asc: link.id]
-      )
-    )
-  end
-
   defp list_dependency_edges!(repo, work_request_id) do
     repo.all(
       from(edge in DependencyEdge,
@@ -220,40 +175,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
 
   defp update_node(repo, attrs), do: create_node(repo, attrs)
 
-  defp upsert_slice_link(repo, attrs) do
-    work_request_id = Map.get(attrs, "work_request_id")
-
-    case existing_slice_link(repo, Map.fetch!(attrs, "planned_slice_id")) do
-      nil ->
-        create_slice_link(repo, attrs)
-
-      %SliceLink{work_request_id: ^work_request_id} = slice_link ->
-        slice_link
-        |> SliceLink.update_changeset(attrs)
-        |> repo.update()
-        |> normalize_insert_result()
-
-      %SliceLink{} ->
-        {:error, {:constraint_failed, "product_tree_slice_link_existing_scope"}}
-    end
-  end
-
-  defp unlink_slice(repo, %{"work_request_id" => work_request_id, "planned_slice_id" => planned_slice_id}) do
-    repo.delete_all(
-      from(link in SliceLink,
-        where: link.work_request_id == ^work_request_id and link.planned_slice_id == ^planned_slice_id
-      )
-    )
-
-    {:ok, nil}
-  end
-
-  defp unlink_slice(_repo, _attrs), do: {:error, {:constraint_failed, "product_tree_slice_link_slice_scope"}}
-
-  defp existing_slice_link(repo, planned_slice_id) do
-    repo.one(from(link in SliceLink, where: link.planned_slice_id == ^planned_slice_id, limit: 1))
-  end
-
   defp validate_parent_scope(_repo, %{"parent_id" => parent_id}) when parent_id in [nil, ""], do: :ok
   defp validate_parent_scope(_repo, %{"work_request_id" => work_request_id}) when work_request_id in [nil, ""], do: :ok
 
@@ -293,14 +214,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
     end
   end
 
-  defp validate_slice_link_scope(repo, %{"work_request_id" => work_request_id} = attrs) when is_binary(work_request_id) and work_request_id != "" do
-    with :ok <- validate_record_scope(repo, Node, Map.get(attrs, "product_tree_node_id"), work_request_id, "product_tree_slice_link_node_scope") do
-      validate_record_scope(repo, PlannedSlice, Map.get(attrs, "planned_slice_id"), work_request_id, "product_tree_slice_link_slice_scope")
-    end
-  end
-
-  defp validate_slice_link_scope(_repo, _attrs), do: :ok
-
   defp validate_dependency_edge_scope(repo, %{"work_request_id" => work_request_id} = attrs) when is_binary(work_request_id) and work_request_id != "" do
     with :ok <- validate_dependency_endpoint_scope(repo, work_request_id, Map.get(attrs, "source_kind"), Map.get(attrs, "source_id"), "source") do
       validate_dependency_endpoint_scope(repo, work_request_id, Map.get(attrs, "target_kind"), Map.get(attrs, "target_id"), "target")
@@ -313,8 +226,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
     validate_record_scope(repo, Node, id, work_request_id, "product_tree_dependency_#{label}_scope")
   end
 
-  defp validate_dependency_endpoint_scope(repo, work_request_id, "planned_slice", id, label) do
-    validate_record_scope(repo, PlannedSlice, id, work_request_id, "product_tree_dependency_#{label}_scope")
+  defp validate_dependency_endpoint_scope(repo, work_request_id, "work_package", id, label) do
+    validate_record_scope(repo, WorkPackage, id, work_request_id, "product_tree_dependency_#{label}_scope")
   end
 
   defp validate_dependency_endpoint_scope(_repo, _work_request_id, _kind, _id, _label), do: :ok

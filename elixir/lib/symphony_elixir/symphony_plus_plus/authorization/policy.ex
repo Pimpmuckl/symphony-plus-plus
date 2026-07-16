@@ -36,11 +36,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
     :guidance_request_read
   ]
 
-  @planned_slice_actions [
-    :planned_slice_update,
-    :planned_slice_approve,
-    :planned_slice_skip,
-    :planned_slice_dispatch
+  @work_package_actions [
+    :work_package_update,
+    :work_package_approve,
+    :work_package_skip,
+    :work_package_dispatch
   ]
 
   @architect_work_request_actions [
@@ -50,11 +50,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
     :question_answer,
     :question_close,
     :decision_record,
-    :planned_slice_create,
-    :planned_slice_update,
-    :planned_slice_approve,
-    :planned_slice_skip,
-    :planned_slice_dispatch,
+    :work_package_create,
+    :work_package_update,
+    :work_package_approve,
+    :work_package_skip,
+    :work_package_dispatch,
     :work_package_read,
     :work_package_update,
     :work_package_repair_state,
@@ -158,7 +158,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
 
   defp architect_scope_types(action) when action in @read_actions, do: [:work_request, :work_package, :repo, :phase]
   defp architect_scope_types(:external_comment_add), do: [:work_request, :repo, :phase]
-  defp architect_scope_types(action) when action in @planned_slice_actions, do: [:work_request, :planned_slice]
+  defp architect_scope_types(action) when action in @work_package_actions, do: [:work_request, :work_package]
   defp architect_scope_types(action) when action in @worker_package_actions, do: [:work_request, :work_package]
   defp architect_scope_types(_action), do: [:work_request]
 
@@ -172,7 +172,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
     end
   end
 
-  defp architect_capability(:planned_slice_dispatch), do: "dispatch:work_request"
+  defp architect_capability(:work_package_dispatch), do: "dispatch:work_request"
   defp architect_capability(:delivery_reconcile_dry_run), do: "read:work_request"
   defp architect_capability(:guidance_request_read), do: "read:guidance_request"
   defp architect_capability(action) when action in [:guidance_request_answer, :guidance_request_escalate], do: "write:guidance_request"
@@ -203,10 +203,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
 
   defp scope_matches_target?(%Scope{type: :work_request, id: scope_id}, %Target{} = target) when is_binary(scope_id) do
     target.work_request_id == scope_id or (target.type == :work_request and target.id == scope_id)
-  end
-
-  defp scope_matches_target?(%Scope{type: :planned_slice, id: scope_id}, %Target{} = target) when is_binary(scope_id) do
-    target.planned_slice_id == scope_id or (target.type == :planned_slice and target.id == scope_id)
   end
 
   defp scope_matches_target?(%Scope{type: :work_package, id: scope_id}, %Target{} = target) when is_binary(scope_id) do

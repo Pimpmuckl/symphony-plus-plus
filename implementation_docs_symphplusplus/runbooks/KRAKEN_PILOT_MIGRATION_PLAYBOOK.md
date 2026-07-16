@@ -7,7 +7,7 @@ Use this current flow for any new or replayed Kraken pilot work.
 
 1. Claim the WorkRequest with `claim_local_architect_assignment`.
 2. Read the WorkRequest, product tree, and delivery board.
-3. Dispatch approved planned slices with `dispatch_slice`.
+3. Dispatch planned WorkPackages with `dispatch_work_package`.
 
 ## Worker
 
@@ -18,7 +18,7 @@ Use this current flow for any new or replayed Kraken pilot work.
 
 ## Closeout
 
-Use `record_planned_slice_delivery` with one typed `evidence` object matching
+Use `record_work_package_delivery` with one typed `evidence` object matching
 the outcome: `evidence.pr_merged`, `evidence.completed_no_pr`,
 `evidence.superseded`, or `evidence.abandoned`.
 

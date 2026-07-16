@@ -50,7 +50,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
     capabilities = option(opts, :capabilities, @default_architect_capabilities)
     work_package_id = option(opts, :work_package_id, nil)
     work_request_id = option(opts, :work_request_id, nil)
-    planned_slice_id = option(opts, :planned_slice_id, nil)
     work_key = WorkKey.generate()
 
     with {:ok, work_package_id} <- required_work_package_id(work_package_id),
@@ -65,7 +64,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
              grant_role: "architect",
              capabilities: capabilities,
              work_request_id: work_request_id,
-             planned_slice_id: planned_slice_id,
              expires_at: truncate_expires_at(expires_at)
            }) do
       {:ok, %{grant: grant, work_key: work_key}}
@@ -165,7 +163,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
           scope_repo: option(opts, :scope_repo, nil),
           scope_base_branch: option(opts, :scope_base_branch, nil),
           work_request_id: option(opts, :work_request_id, nil),
-          planned_slice_id: option(opts, :planned_slice_id, nil)
+          work_package_id: option(opts, :work_package_id, nil)
         },
         now,
         terminal_work_package_statuses: @terminal_work_package_statuses

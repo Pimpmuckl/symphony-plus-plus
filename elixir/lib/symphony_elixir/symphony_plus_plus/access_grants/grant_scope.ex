@@ -11,7 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.GrantScope do
   @primary_key {:id, :string, autogenerate: false}
   @foreign_key_type :string
 
-  @scope_types ["ledger", "repo", "work_request", "planned_slice", "work_package"]
+  @scope_types ["ledger", "repo", "work_request", "work_package"]
 
   @type t :: %__MODULE__{
           id: String.t() | nil,
@@ -67,7 +67,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.GrantScope do
   @spec to_authorization_scope(t()) :: Scope.t()
   def to_authorization_scope(%__MODULE__{scope_type: "ledger"}), do: Scope.ledger()
   def to_authorization_scope(%__MODULE__{scope_type: "work_request", scope_id: id}), do: Scope.work_request(id)
-  def to_authorization_scope(%__MODULE__{scope_type: "planned_slice", scope_id: id}), do: Scope.planned_slice(id)
   def to_authorization_scope(%__MODULE__{scope_type: "work_package", scope_id: id}), do: Scope.work_package(id)
   def to_authorization_scope(%__MODULE__{scope_type: "repo", repo: repo, base_branch: base_branch}), do: Scope.repo(repo, base_branch)
 
@@ -92,7 +91,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.GrantScope do
     case Map.fetch!(attrs, "scope_type") do
       "ledger" -> "ledger"
       "repo" -> "repo:#{Map.get(attrs, "repo")}:#{Map.get(attrs, "base_branch") || ""}"
-      type when type in ["work_request", "planned_slice", "work_package"] -> "#{type}:#{Map.get(attrs, "scope_id")}"
+      type when type in ["work_request", "work_package"] -> "#{type}:#{Map.get(attrs, "scope_id")}"
     end
   end
 
@@ -100,7 +99,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.GrantScope do
     case get_field(changeset, :scope_type) do
       "ledger" -> changeset
       "repo" -> validate_required(changeset, [:repo])
-      type when type in ["work_request", "planned_slice", "work_package"] -> validate_required(changeset, [:scope_id])
+      type when type in ["work_request", "work_package"] -> validate_required(changeset, [:scope_id])
       _type -> changeset
     end
   end

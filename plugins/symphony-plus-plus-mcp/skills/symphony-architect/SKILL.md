@@ -5,7 +5,7 @@ description: Use when assigned a Symphony++ WorkRequest, product-tree planning l
 
 # Symphony++ Architect
 
-Own product clarification, optional product-tree organization, slicing, worker
+Own product clarification, optional product-tree organization, WorkPackage planning, worker
 dispatch, guidance routing, and delivery closeout. Do not implement worker
 packages yourself.
 
@@ -24,7 +24,7 @@ packages yourself.
    restore the WorkRequest or start a new one.
 2. For WorkRequest lanes, read `read_work_request(work_request_id)`,
    `read_plan(work_request_id, view?)`, and
-   `list_guidance_requests(work_request_id?)` before slicing or rearranging
+   `list_guidance_requests(work_request_id?)` before planning WorkPackages or rearranging
    product nodes. The WorkRequest guidance filter requires the usual
    `read:work_request` grant.
 3. If MCP/session/scope state is unavailable, record/report the blocker. Do not
@@ -40,7 +40,7 @@ that as presentation only: tool arguments remain JSON/schema-native, and
 
 ## Clarify
 
-- Ask focused product/architecture questions before slicing when intent,
+- Ask focused product/architecture questions before planning WorkPackages when intent,
   compatibility, branch strategy, acceptance, validation, or ownership is
   unclear.
 - Use `ask_question` with `decision_prompt` for material choices;
@@ -50,27 +50,27 @@ that as presentation only: tool arguments remain JSON/schema-native, and
 - Escalate to `human_info_needed` when the human must decide. Do not choose
   product behavior just to keep work moving.
 - Once open questions are answered or closed, continue straight to
-  `read_work_request` and `plan_slice`; no separate
+  `read_work_request` and `slice_work_request`; no separate
   clarification-complete status tool is required. Open questions still block
-  slicing.
+  WorkPackage planning.
 
-## Slice
+## Plan WorkPackages
 
 For larger WorkRequests, use product plan nodes to make human progress legible
-before or alongside slice planning. Product plan nodes are optional and may be
+before or alongside WorkPackage planning. Product plan nodes are optional and may be
 nested however the product needs; do not force a fixed layer/capability shape.
 Use `read_plan` instead of direct ledger queries when you
-need existing node/link state; choose `nodes_only` for product plan outline,
-`nodes_with_slice_refs` for slice id mapping, and `nodes_with_slices` when
-slice bodies are needed. Product-tree rollups reflect scoped delivery-board
-operational state for linked WorkPackages.
+need existing node/package state; choose `nodes_only` for the product plan outline,
+`nodes_with_work_package_refs` for id mapping, and `nodes_with_work_packages` when
+package bodies are needed. Product-tree rollups reflect scoped delivery-board
+operational state for canonical WorkPackages.
 
-Design one PR-sized execution slice per worker unless the operator approves
-another shape. Each slice needs:
+Design one PR-sized WorkPackage per worker unless the operator approves
+another shape. Each WorkPackage needs:
 
 - Outcome-focused title and goal.
 - Owned globs. Keep this boundary explicit.
-- `work_package_kind` defaults to `standard_pr` for ordinary PR-backed work;
+- `kind` defaults to `standard_pr` for ordinary PR-backed work;
   use `mcp` only for MCP servers, protocols, tools, or plugins.
 - Delivery repo and target base branch default to the selected WorkRequest's
   primary repo scope. Pass the target base branch when selecting a secondary
@@ -79,44 +79,49 @@ another shape. Each slice needs:
 - Acceptance criteria the worker can prove.
 - Validation commands or blocked-validation owner.
 - Optional provider-agnostic review requirement.
-- PR-size or line-budget guidance; add slice-specific PR-size or line-budget
+- PR-size or line-budget guidance; add package-specific PR-size or line-budget
   constraints when the default boundary is not enough. These budgets should
   always be used and split between implementation- and test work when possible.
 - Stop conditions and guidance routing.
 - Dependencies and recorded decisions needed to avoid scope drift.
 
 After claiming a WorkRequest, current-WR lifecycle tools may omit
-`work_request_id`: `plan_slice`,
+`work_request_id`: `slice_work_request`,
+`update_work_package`,
 `upsert_plan_node`,
 `move_plan_node`,
-`set_plan_node_completion`,
-`move_slice_to_plan_node`,
-`approve_slice`, `skip_slice`, and
-`finish_slicing`, plus delivery board/reconcile, planned-slice
+`set_plan_node_completion`, and
+`skip_work_package`, plus delivery board/reconcile, work-package
 delivery closeout, runtime cleanup, worker-key revocation, and dispatch. Keep
 intentional sibling reads, status/question tools, durable decisions, and package
 tools explicit.
 
-For `plan_slice`, the selected WorkRequest also supplies
-the default primary delivery repo and target base branch. Pass the target base
-branch with a secondary delivery repo. The tool defaults the package kind to
-`standard_pr`; title, goal, owned globs, acceptance criteria, validation, and
-stop conditions remain explicit.
+`slice_work_request` atomically creates one or more planned canonical
+WorkPackages. The selected WorkRequest supplies the default primary delivery
+repo and target base branch. Pass the target base branch with a secondary
+delivery repo. Package kind defaults to `standard_pr`; title, goal, owned
+globs, acceptance criteria, validation, and stop conditions remain explicit.
+Assign `product_tree_node_id` only when the WorkPackage belongs beneath a real
+product plan node; root-level WorkPackages need no synthetic wrapper node.
+
+Use `update_work_package` with `expected_contract_revision` to edit a planned
+contract or move it between the WorkRequest root and an existing product node.
 
 Use product-plan node content, move, and completion tools separately: content
 changes title/description/kind, move changes parent/position, and completion
 sets completion marks plus any required blocker closeout.
 
-Approve slices only when the boundary is defensible. Skip stale/superseded
-slices. Mark the WorkRequest sliced once approved slices cover the request.
+Skip stale or superseded planned WorkPackages. The atomic planning call advances
+the WorkRequest to its planned state; there is no separate approval or finish step.
 
 ## Dispatch
 
-Dispatch only approved slices with `dispatch_slice`.
-For normal planned-slice dispatch, worker bootstrap is ledger-backed:
+Dispatch planned WorkPackages with `dispatch_work_package`.
+For normal work-package dispatch, worker bootstrap is ledger-backed:
 `worker_bootstrap.type=ledger_claim`, `mode=local_assignment`, and
-`claim.tool=claim_local_assignment`. Dispatch first to create the WorkPackage,
-then prepare or provide worker worktree scope before launch so the worker can
+`claim.tool=claim_local_assignment`. Dispatch activates the same canonical
+WorkPackage row and atomically creates its worker grant, resources, and claim
+bootstrap. Then prepare or provide worker worktree scope before launch so the worker can
 pass `branch`, `worktree_path`, `caller_id`, and `claimed_by` without asking
 for secrets.
 
@@ -140,9 +145,9 @@ Worker prompts must include:
   raw secrets.
 - Relevant decisions/dependencies.
 - Instruction to ask the architect about product, architecture, dependency,
-  slice-boundary, or reviewer-driven scope ambiguity.
+  package-boundary, or reviewer-driven scope ambiguity.
 - Requirement to return a green merge-ready PR, or no-PR evidence when the
-  slice is investigation/docs/read-only.
+  package is investigation/docs/read-only.
 
 Keep prompts short. The default worker skill is the baseline playbook; the
 prompt only needs task-specific scope, evidence, constraints, and deviations.
@@ -169,23 +174,23 @@ Decisions are rationale. Delivery closeout records lifecycle truth.
 For merged PR evidence, use `reconcile_work_request` first, then
 `reconcile_work_request(apply: true)` when the proposed repair matches the
 delivery board. That path uses attached/synced PR evidence and avoids repeating
-PR URL, package, or slice facts. If you choose explicit PR closeout instead of
+PR URL or package facts. If you choose explicit PR closeout instead of
 `apply: true`, replay the dry-run result's `action` payload through
-`record_planned_slice_delivery`.
+`record_work_package_delivery`.
 
-Record other terminal outcomes with `record_planned_slice_delivery`:
+Record other terminal outcomes with `record_work_package_delivery`:
 
 - `outcome: "pr_merged"` with `evidence.pr_merged`: PR URL, merged-at
-  timestamp, and merge commit for linked packages.
+  timestamp, and merge commit.
 - `outcome: "completed_no_pr"` with `evidence.completed_no_pr`: direct no-PR
   evidence.
-- `outcome: "superseded"` with `evidence.superseded`: successor slice id and
+- `outcome: "superseded"` with `evidence.superseded`: successor WorkPackage id and
   reason.
 - `outcome: "abandoned"` with `evidence.abandoned`: rationale.
 
 Do not infer delivery from prose decisions or chat. Phase-child PRs remain phase
 controlled; call `merge_child_into_phase` before `pr_merged` closeout when
-required. Use `cleanup_work_request_planned_slice_runtime` to recycle linked
+required. Use `cleanup_work_request_work_package_runtime` to recycle
 worker grants, non-paused claim leases, and recoverable worker MCP session bindings
 before final closeout when superseded or abandoned delivery truth is established;
 pass the flat superseded or abandoned evidence fields that authorize cleanup,

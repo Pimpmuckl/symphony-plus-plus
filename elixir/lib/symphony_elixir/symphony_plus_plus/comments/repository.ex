@@ -8,7 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Comments.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @type repo :: module()
@@ -204,9 +204,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Comments.Repository do
     end
   end
 
-  defp validate_target(repo, "planned_slice", target_id) when is_binary(target_id) do
-    case repo.get(PlannedSlice, target_id) do
-      %PlannedSlice{} -> :ok
+  defp validate_target(repo, "work_package", target_id) when is_binary(target_id) do
+    case repo.get(WorkPackage, target_id) do
+      %WorkPackage{} -> :ok
       nil -> {:error, :not_found}
     end
   end

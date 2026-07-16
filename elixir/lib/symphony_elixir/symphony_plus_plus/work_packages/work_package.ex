@@ -26,7 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     "hooks"
   ]
   @phase_child_kind "phase_child"
-  @planned_slice_kinds @executable_kinds
   @anchor_kinds ["delegation"]
   @kinds @executable_kinds ++ [@phase_child_kind] ++ @anchor_kinds
   @legacy_kinds [
@@ -47,6 +46,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   @ready_status "ready_for_merge"
 
   @statuses [
+    "planned",
+    "skipped",
     "created",
     "ready_for_worker",
     "claimed",
@@ -67,14 +68,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
 
   @type t :: %__MODULE__{
           id: String.t() | nil,
+          work_request_id: String.t() | nil,
+          product_tree_node_id: String.t() | nil,
+          sequence: pos_integer() | nil,
           kind: String.t() | nil,
           title: String.t() | nil,
+          goal: String.t() | nil,
           repo: String.t() | nil,
           base_branch: String.t() | nil,
           branch_pattern: String.t() | nil,
           product_description: String.t() | nil,
           engineering_scope: String.t() | nil,
           allowed_file_globs: [String.t()] | nil,
+          forbidden_file_globs: [String.t()] | nil,
+          validation_steps: [String.t()] | nil,
+          stop_conditions: [String.t()] | nil,
           review_requirement: map() | nil,
           policy_template: String.t() | nil,
           acceptance_criteria: [String.t()] | nil,
@@ -84,19 +92,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
           parent_id: String.t() | nil,
           phase_id: String.t() | nil,
           owner_id: String.t() | nil,
+          contract_revision: pos_integer() | nil,
+          dispatched_at: DateTime.t() | nil,
           inserted_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
 
   schema "sympp_work_packages" do
+    field(:work_request_id, :string)
+    field(:product_tree_node_id, :string)
+    field(:sequence, :integer)
     field(:kind, :string)
     field(:title, :string)
+    field(:goal, :string)
     field(:repo, :string)
     field(:base_branch, :string)
     field(:branch_pattern, :string)
     field(:product_description, :string)
     field(:engineering_scope, :string)
     field(:allowed_file_globs, StringList, default: [])
+    field(:forbidden_file_globs, StringList, default: [])
+    field(:validation_steps, StringList, default: [])
+    field(:stop_conditions, StringList, default: [])
     field(:review_requirement, :map)
     field(:policy_template, :string)
     field(:acceptance_criteria, StringList, default: [])
@@ -106,6 +123,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     field(:parent_id, :string)
     field(:phase_id, :string)
     field(:owner_id, :string)
+    field(:contract_revision, :integer, default: 1)
+    field(:dispatched_at, :utc_datetime_usec)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -116,14 +135,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   @spec executable_kinds() :: [String.t()]
   def executable_kinds, do: @executable_kinds
 
-  @spec planned_slice_kinds() :: [String.t()]
-  def planned_slice_kinds, do: @planned_slice_kinds
-
   @spec statuses() :: [String.t()]
   def statuses, do: @statuses
 
   @spec persisted_statuses() :: [String.t()]
   def persisted_statuses, do: @persisted_statuses
+
+  @spec repo(map(), t()) :: String.t() | nil
+  def repo(work_request, %__MODULE__{} = work_package) do
+    nonblank(work_package.repo) || nonblank(Map.get(work_request, :repo))
+  end
 
   @spec create_changeset(map()) :: Ecto.Changeset.t()
   def create_changeset(attrs) do
@@ -157,14 +178,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     work_package
     |> cast(attrs, [
       :id,
+      :work_request_id,
+      :product_tree_node_id,
+      :sequence,
       :kind,
       :title,
+      :goal,
       :repo,
       :base_branch,
       :branch_pattern,
       :product_description,
       :engineering_scope,
       :allowed_file_globs,
+      :forbidden_file_globs,
+      :validation_steps,
+      :stop_conditions,
       :review_requirement,
       :policy_template,
       :acceptance_criteria,
@@ -173,11 +201,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
       :status,
       :parent_id,
       :phase_id,
-      :owner_id
+      :owner_id,
+      :contract_revision,
+      :dispatched_at
     ])
     |> validate_required([:id, :kind, :title, :repo, :base_branch, :acceptance_criteria, :status])
     |> validate_inclusion(:kind, valid_kinds)
     |> validate_inclusion(:status, valid_statuses(work_package))
+    |> validate_number(:sequence, greater_than: 0)
+    |> validate_number(:contract_revision, greater_than: 0)
     |> validate_branch_pattern()
     |> validate_policy_template()
     |> validate_review_requirement()
@@ -229,6 +261,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   end
 
   defp canonical_policy_template?(kind, policy_template), do: Templates.compatible_kind?(kind, policy_template)
+
+  defp nonblank(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      value -> value
+    end
+  end
+
+  defp nonblank(_value), do: nil
 
   defp valid_statuses(%__MODULE__{status: @legacy_ready_status}), do: @persisted_statuses
   defp valid_statuses(%__MODULE__{}), do: @statuses

@@ -1,9 +1,9 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BulkRepository do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -36,10 +36,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.BulkRepository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  @spec list_planned_slices_many(Repository.repo(), [String.t()]) ::
-          {:ok, %{optional(String.t()) => [PlannedSlice.t()]}} | {:error, Repository.error()}
-  def list_planned_slices_many(repo, work_request_ids) when is_atom(repo) and is_list(work_request_ids) do
-    {:ok, list_sequence_records_by_work_request_id(repo, PlannedSlice, work_request_ids)}
+  @spec list_work_packages_many(Repository.repo(), [String.t()]) ::
+          {:ok, %{optional(String.t()) => [WorkPackage.t()]}} | {:error, Repository.error()}
+  def list_work_packages_many(repo, work_request_ids) when is_atom(repo) and is_list(work_request_ids) do
+    {:ok, list_sequence_records_by_work_request_id(repo, WorkPackage, work_request_ids)}
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end

@@ -252,7 +252,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     refute get_in(unbound_tools_by_name, ["upsert_plan_node", "description"]) =~ "claimed current WorkRequest"
 
     assert get_in(unbound_tools_by_name, ["upsert_plan_node", "description"]) =~
-             "Do not create a plan node solely to wrap one slice."
+             "Do not create a plan node solely to wrap one WorkPackage."
 
     assert get_in(unbound_tools_by_name, ["move_plan_node", "inputSchema", "required"]) == [
              "work_request_id",
@@ -285,9 +285,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     refute Map.has_key?(completion_properties, "title")
     refute Map.has_key?(completion_properties, "parent_id")
 
-    assert get_in(unbound_tools_by_name, ["move_slice_to_plan_node", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["update_work_package", "inputSchema", "required"]) == [
              "work_request_id",
-             "planned_slice_id"
+             "work_package_id",
+             "expected_contract_revision",
+             "patch"
            ]
 
     assert get_in(unbound_tools_by_name, ["resolve_blocker", "inputSchema", "required"]) == [
@@ -297,9 +299,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
              "idempotency_key"
            ]
 
-    assert get_in(unbound_tools_by_name, ["dispatch_slice", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["dispatch_work_package", "inputSchema", "required"]) == [
              "work_request_id",
-             "planned_slice_id"
+             "work_package_id"
            ]
 
     unclaimed_read_response =
@@ -406,16 +408,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     assert get_in(tools_by_name, ["report_blocker", "inputSchema", "properties", "blocker_id", "type"]) == "string"
     assert get_in(tools_by_name, ["resolve_blocker", "inputSchema", "required"]) == ["blocker_id", "resolution", "summary", "idempotency_key"]
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "required"]) == ["body"]
-    assert get_in(tools_by_name, ["add_comment", "inputSchema", "properties", "target_kind", "enum"]) == ["work_request", "planned_slice", "work_package"]
+    assert get_in(tools_by_name, ["add_comment", "inputSchema", "properties", "target_kind", "enum"]) == ["work_request", "work_package"]
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "properties", "body", "maxLength"]) == Comment.max_body_length()
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "properties", "body", "description"]) =~ "Markdown"
     assert get_in(tools_by_name, ["list_comments", "inputSchema", "required"]) == []
 
-    explicit_non_package_target = %{"required" => ["target_kind"], "properties" => %{"target_kind" => %{"enum" => ["work_request", "planned_slice"]}}}
+    explicit_work_request_target = %{"required" => ["target_kind"], "properties" => %{"target_kind" => %{"enum" => ["work_request"]}}}
 
-    assert get_in(tools_by_name, ["add_comment", "inputSchema", "if"]) == explicit_non_package_target
+    assert get_in(tools_by_name, ["add_comment", "inputSchema", "if"]) == explicit_work_request_target
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "then"]) == %{"required" => ["target_id"]}
-    assert get_in(tools_by_name, ["list_comments", "inputSchema", "if"]) == explicit_non_package_target
+    assert get_in(tools_by_name, ["list_comments", "inputSchema", "if"]) == explicit_work_request_target
     assert get_in(tools_by_name, ["list_comments", "inputSchema", "then"]) == %{"required" => ["target_id"]}
 
     assert get_in(tools_by_name, ["resolve_comment", "inputSchema", "required"]) == ["comment_id"]

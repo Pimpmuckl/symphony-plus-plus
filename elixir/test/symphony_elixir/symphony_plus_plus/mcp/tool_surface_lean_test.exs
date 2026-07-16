@@ -40,8 +40,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
 
     assert Map.has_key?(architect, "claim_local_architect_assignment")
     assert Map.has_key?(architect, "read_work_request")
-    assert Map.has_key?(architect, "dispatch_slice")
-    assert architect["dispatch_slice"]["inputSchema"]["required"] == ["planned_slice_id"]
+    assert Map.has_key?(architect, "dispatch_work_package")
+    assert architect["dispatch_work_package"]["inputSchema"]["required"] == ["work_package_id"]
     refute Enum.any?(@removed_tools, &Map.has_key?(architect, &1))
   end
 

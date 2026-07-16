@@ -36,7 +36,7 @@ Before coding:
 
 During coding:
 1. Keep changes tightly scoped to this package.
-   Treat linked planned-slice and WorkRequest ids as product/audit context
+   Treat linked work-package and WorkRequest ids as product/audit context
    unless a tool explicitly asks for a delivery closeout, successor, repair, or
    concurrency-protection target.
 2. Append meaningful discoveries with `append_finding(finding, idempotency_key)`.

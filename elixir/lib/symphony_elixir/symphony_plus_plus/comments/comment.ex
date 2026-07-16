@@ -10,7 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Comments.Comment do
   @primary_key {:id, :string, autogenerate: false}
   @foreign_key_type :string
 
-  @target_kinds ["work_request", "planned_slice", "work_package"]
+  @target_kinds ["work_request", "work_package"]
   @source_types ["human", "operator", "architect", "worker", "ask_pro", "review"]
   @statuses ["open", "resolved"]
   @max_body_length 4_000

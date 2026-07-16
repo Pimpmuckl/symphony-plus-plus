@@ -11,8 +11,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Comments.Service do
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Repository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -118,41 +118,48 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Comments.Service do
     end
   end
 
-  defp comment_target(repo, %Assignment{} = assignment, "planned_slice", target_id) do
-    case repo.one(planned_slice_with_work_request_query(target_id)) do
-      {%PlannedSlice{} = planned_slice, %WorkRequest{} = work_request} ->
+  defp comment_target(repo, %Assignment{} = assignment, "work_package", target_id) do
+    case repo.one(work_package_with_work_request_query(target_id)) do
+      {%WorkPackage{} = work_package, %WorkRequest{} = work_request} ->
         opts = [
-          repo: PlannedSlice.delivery_repo(work_request, planned_slice),
-          base_branch: planned_slice.target_base_branch || work_request.base_branch,
+          repo: WorkPackage.repo(work_request, work_package),
+          base_branch: work_package.base_branch || work_request.base_branch,
           phase_id: ArchitectHandoff.phase_id_for_work_request(work_request)
         ]
 
         opts =
           if assignment.grant_role == "architect" do
-            Keyword.put(opts, :work_package_id, planned_slice.work_package_id)
+            Keyword.put(opts, :work_package_id, work_package.id)
           else
             opts
           end
 
-        {:ok, Target.planned_slice(planned_slice.id, work_request.id, opts)}
+        {:ok, Target.work_package(work_package.id, work_request.id, opts)}
 
       nil ->
-        {:error, :not_found}
-    end
-  end
+        case repo.get(WorkPackage, target_id) do
+          %WorkPackage{work_request_id: nil} = work_package ->
+            {:ok,
+             Target.work_package(work_package.id,
+               repo: work_package.repo,
+               base_branch: work_package.base_branch,
+               phase_id: work_package.phase_id
+             )}
 
-  defp comment_target(repo, %Assignment{}, "work_package", target_id) do
-    PlanningService.package_resource_target(repo, target_id, :comment)
+          _work_package ->
+            {:error, :not_found}
+        end
+    end
   end
 
   defp comment_target(_repo, %Assignment{}, _target_kind, _target_id), do: {:error, :invalid_target}
 
-  defp planned_slice_with_work_request_query(target_id) do
-    from(planned_slice in PlannedSlice,
+  defp work_package_with_work_request_query(target_id) do
+    from(work_package in WorkPackage,
       join: work_request in WorkRequest,
-      on: work_request.id == planned_slice.work_request_id,
-      where: planned_slice.id == ^target_id,
-      select: {planned_slice, work_request},
+      on: work_request.id == work_package.work_request_id,
+      where: work_package.id == ^target_id,
+      select: {work_package, work_request},
       limit: 1
     )
   end

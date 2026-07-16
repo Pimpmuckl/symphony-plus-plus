@@ -31,8 +31,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceLinkage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -321,50 +319,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
     end
   end
 
+  defp require_worktree_work_package_scope(_repo, %WorkPackage{work_request_id: nil}, _filters), do: {:error, :forbidden}
+
   defp require_worktree_work_package_scope(repo, %WorkPackage{} = work_package, filters) do
-    case PlannedSliceLinkage.linked_work_requests_for_work_package(repo, work_package.id) do
-      {:ok, []} ->
+    case repo.get(WorkRequest, work_package.work_request_id) do
+      %WorkRequest{} = work_request ->
+        with :ok <- require_work_package_repo_scope(work_package, work_request, work_package),
+             :ok <- require_work_package_delivery_base_scope(work_package, work_package),
+             :ok <- require_work_request_scope(repo, work_request, filters) do
+          require_delivery_work_package_filter_scope(repo, work_package, work_request, filters)
+        end
+
+      nil ->
         {:error, :forbidden}
-
-      {:ok, links} ->
-        with :ok <- require_unique_worktree_work_request_link(links) do
-          require_any_worktree_work_package_link_scope(repo, work_package, links, filters)
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp require_unique_worktree_work_request_link(links) do
-    case Enum.uniq_by(links, fn {%PlannedSlice{}, %WorkRequest{id: work_request_id}} -> work_request_id end) do
-      [_single] -> :ok
-      [] -> {:error, :forbidden}
-      [_first | _rest] -> {:error, :ambiguous_planned_slice_link}
-    end
-  end
-
-  defp require_any_worktree_work_package_link_scope(repo, %WorkPackage{} = work_package, links, filters) do
-    Enum.reduce_while(links, {:error, :forbidden}, fn
-      {%PlannedSlice{} = planned_slice, %WorkRequest{} = work_request}, _error ->
-        case require_worktree_work_package_link_scope(repo, work_package, planned_slice, work_request, filters) do
-          :ok -> {:halt, :ok}
-          {:error, reason} when reason in [:forbidden, :not_found] -> {:cont, {:error, :forbidden}}
-        end
-    end)
-  end
-
-  defp require_worktree_work_package_link_scope(
-         repo,
-         %WorkPackage{} = work_package,
-         %PlannedSlice{} = planned_slice,
-         %WorkRequest{} = work_request,
-         filters
-       ) do
-    with :ok <- require_work_package_repo_scope(work_package, work_request, planned_slice),
-         :ok <- require_work_package_delivery_base_scope(work_package, planned_slice),
-         :ok <- require_work_request_scope(repo, work_request, filters) do
-      require_delivery_work_package_filter_scope(repo, work_package, work_request, filters)
     end
   end
 
@@ -387,14 +354,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
     end
   end
 
-  defp require_work_package_repo_scope(%WorkPackage{} = work_package, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice) do
-    if work_package.repo == PlannedSlice.delivery_repo(work_request, planned_slice), do: :ok, else: {:error, :forbidden}
+  defp require_work_package_repo_scope(%WorkPackage{} = work_package, %WorkRequest{} = work_request, %WorkPackage{} = work_package) do
+    if work_package.repo == WorkPackage.repo(work_request, work_package), do: :ok, else: {:error, :forbidden}
   end
 
-  defp require_work_package_delivery_base_scope(%WorkPackage{base_branch: base_branch}, %PlannedSlice{target_base_branch: base_branch}),
+  defp require_work_package_delivery_base_scope(%WorkPackage{base_branch: base_branch}, %WorkPackage{base_branch: base_branch}),
     do: :ok
 
-  defp require_work_package_delivery_base_scope(%WorkPackage{}, %PlannedSlice{}), do: {:error, :forbidden}
+  defp require_work_package_delivery_base_scope(%WorkPackage{}, %WorkPackage{}), do: {:error, :forbidden}
 
   defp primary_work_request_scope?(repo, %WorkRequest{} = work_request, filters) do
     {:ok, matches?} = work_request_matches_primary_filters?(repo, work_request, filters, [])

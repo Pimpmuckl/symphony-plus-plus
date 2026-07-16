@@ -12,6 +12,6 @@ Current contract:
 Architects may create or edit optional product plan node content with
 `upsert_plan_node`, rearrange product plan nodes
 with `move_plan_node`, set node completion marks with
-`set_plan_node_completion`, and move planned slices with
-`move_slice_to_plan_node`. These are agent-facing
-control-plane tools and do not dispatch slices or create WorkPackages.
+`set_plan_node_completion`, and assign planned WorkPackages with
+`update_work_package`. These are agent-facing
+control-plane tools and do not dispatch WorkPackages.

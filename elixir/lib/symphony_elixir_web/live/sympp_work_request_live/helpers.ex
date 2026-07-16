@@ -7,19 +7,19 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
   alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDispatch
 
-  @planned_slice_scalar_fields [
+  @work_package_scalar_fields [
     "title",
     "goal",
-    "work_package_kind",
-    "target_base_branch",
+    "kind",
+    "base_branch",
     "branch_pattern",
     "review_json"
   ]
-  @planned_slice_list_fields [
-    "owned_file_globs",
+  @work_package_list_fields [
+    "allowed_file_globs",
     "forbidden_file_globs",
     "acceptance_criteria",
     "validation_steps",
@@ -126,43 +126,43 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
 
   defp blank_form_value?(value), do: value |> string_or_empty() |> String.trim() == ""
 
-  @spec planned_slice_form(any(), any()) :: any()
-  def planned_slice_form(attrs \\ %{}, work_request \\ %{}) do
+  @spec work_package_form(any(), any()) :: any()
+  def work_package_form(attrs \\ %{}, work_request \\ %{}) do
     attrs = normalize_keys(attrs)
 
     %{
       "title" => "",
       "goal" => "",
-      "work_package_kind" => "standard_pr",
-      "target_base_branch" => value(work_request, :base_branch, ""),
+      "kind" => "standard_pr",
+      "base_branch" => value(work_request, :base_branch, ""),
       "branch_pattern" => "",
       "review_json" => review_form_value(Map.get(attrs, "review_requirement"))
     }
-    |> Map.merge(Map.take(attrs, @planned_slice_scalar_fields))
-    |> Map.merge(planned_slice_list_form_values(attrs))
+    |> Map.merge(Map.take(attrs, @work_package_scalar_fields))
+    |> Map.merge(work_package_list_form_values(attrs))
   end
 
-  @spec planned_slice_attrs(any()) :: any()
-  def planned_slice_attrs(form) do
+  @spec work_package_attrs(any()) :: any()
+  def work_package_attrs(form) do
     form = normalize_keys(form)
 
     scalar_attrs =
       form
-      |> Map.take(@planned_slice_scalar_fields)
+      |> Map.take(@work_package_scalar_fields)
       |> trim_string_values()
       |> Map.delete("review_json")
       |> maybe_put_review_requirement(Map.get(form, "review_json"))
 
     list_attrs =
-      Map.new(@planned_slice_list_fields, fn field ->
+      Map.new(@work_package_list_fields, fn field ->
         {field, newline_list(Map.get(form, field, ""))}
       end)
 
     Map.merge(scalar_attrs, list_attrs)
   end
 
-  defp planned_slice_list_form_values(attrs) do
-    Map.new(@planned_slice_list_fields, fn field ->
+  defp work_package_list_form_values(attrs) do
+    Map.new(@work_package_list_fields, fn field ->
       value =
         attrs
         |> Map.get(field, "")
@@ -591,31 +591,23 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
     value(work_request, :status) in ["ready_for_clarification", "clarifying", "human_info_needed"]
   end
 
-  @spec can_author_planned_slice?(any()) :: any()
-  def can_author_planned_slice?(%{work_request: work_request} = page) do
-    can_author_planned_slice?(work_request) or
-      (value(work_request, :status) in ["ready_for_clarification", "clarifying", "human_info_needed"] and
-         detail_open_question_count(page) == 0)
+  @spec can_author_work_package?(any()) :: any()
+  def can_author_work_package?(%{work_request: work_request}), do: can_author_work_package?(work_request)
+
+  def can_author_work_package?(work_request),
+    do: value(work_request, :status) == "ready_for_slicing"
+
+  @spec can_skip_work_package?(any(), any()) :: any()
+  def can_skip_work_package?(work_request, work_package),
+    do: value(work_request, :status) == "sliced" and value(work_package, :status) == "planned"
+
+  @spec can_dispatch_work_package?(any(), any(), any(), any()) :: any()
+  def can_dispatch_work_package?(true, nil, work_request, work_package) do
+    value(work_request, :status) == "sliced" and value(work_package, :status) == "planned" and
+      is_nil(value(work_package, :dispatched_at))
   end
 
-  def can_author_planned_slice?(work_request),
-    do: value(work_request, :status) in ["ready_for_slicing", "sliced"]
-
-  @spec can_approve_slice?(any(), any()) :: any()
-  def can_approve_slice?(work_request, slice),
-    do: can_author_planned_slice?(work_request) and value(slice, :status) == "planned"
-
-  @spec can_skip_slice?(any(), any()) :: any()
-  def can_skip_slice?(work_request, slice),
-    do: can_author_planned_slice?(work_request) and value(slice, :status) in ["planned", "approved"]
-
-  @spec can_dispatch_slice?(any(), any(), any(), any()) :: any()
-  def can_dispatch_slice?(true, nil, work_request, slice) do
-    can_author_planned_slice?(work_request) and value(slice, :status) == "approved" and
-      is_nil(value(slice, :work_package_id)) and is_nil(value(slice, :dispatched_at))
-  end
-
-  def can_dispatch_slice?(_operator_mode?, _board_grant, _work_request, _slice), do: false
+  def can_dispatch_work_package?(_operator_mode?, _board_grant, _work_request, _work_package), do: false
 
   @spec can_create_architect_handoff?(any(), any(), any()) :: any()
   def can_create_architect_handoff?(true, nil, work_request) do
@@ -625,11 +617,8 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
 
   def can_create_architect_handoff?(_operator_mode?, _board_grant, _work_request), do: false
 
-  @spec can_mark_sliced?(any()) :: any()
-  def can_mark_sliced?(work_request), do: value(work_request, :status) == "ready_for_slicing"
-
-  @spec work_package_kinds() :: any()
-  def work_package_kinds, do: WorkPackage.planned_slice_kinds()
+  @spec executable_kinds() :: any()
+  def executable_kinds, do: WorkPackage.executable_kinds()
 
   @spec decision_source_types() :: any()
   def decision_source_types, do: ["human", "architect", "operator", "ask_pro_advisory"]
@@ -670,12 +659,9 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
 
   @spec dispatch_notice(any()) :: any()
   def dispatch_notice(dispatch) do
-    create_work =
-      dispatch
-      |> PlannedSliceDispatch.response_payload()
-      |> Map.fetch!(:create_work)
-
-    work_package = Map.fetch!(create_work, :work_package)
+    payload = WorkPackageDispatch.response_payload(dispatch)
+    work_package = Map.fetch!(payload, :work_package)
+    create_work = Map.fetch!(payload, :dispatch)
 
     %{
       work_package_id: value(work_package, :id),
@@ -841,17 +827,14 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
   def total_decisions(requests),
     do: Enum.reduce(requests, 0, &(&2 + value(&1, :decision_count, 0)))
 
-  @spec total_slices(any()) :: any()
-  def total_slices(requests), do: Enum.reduce(requests, 0, &(&2 + slice_total(&1)))
+  @spec total_work_packages(any()) :: any()
+  def total_work_packages(requests), do: Enum.reduce(requests, 0, &(&2 + work_package_total(&1)))
 
-  @spec slice_total(any()) :: any()
-  def slice_total(item) do
-    value(item, :planned_slice_count, 0) + value(item, :approved_slice_count, 0) +
-      value(item, :dispatched_slice_count, 0) + value(item, :skipped_slice_count, 0)
-  end
+  @spec work_package_total(any()) :: any()
+  def work_package_total(item), do: value(item, :work_package_count, 0)
 
-  @spec summary_slice_total(any()) :: any()
-  def summary_slice_total(summary), do: slice_total(summary)
+  @spec summary_work_package_total(any()) :: any()
+  def summary_work_package_total(summary), do: work_package_total(summary)
 
   @spec detail_status_panel_class(any()) :: any()
   def detail_status_panel_class(page) do
@@ -874,9 +857,9 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
         value(work_request, :status),
         operator_mode?,
         detail_open_question_count(page),
-        value(page.summary, :planned_slice_count, 0),
-        value(page.summary, :approved_slice_count, 0),
-        value(page.summary, :dispatched_slice_count, 0)
+        value(page.summary, :work_package_count, 0),
+        value(page.summary, :planned_work_package_count, 0),
+        value(page.summary, :dispatched_work_package_count, 0)
       )
   end
 
@@ -889,13 +872,13 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
         value(work_request, :status),
         operator_mode?,
         detail_open_question_count(page),
-        value(page.summary, :planned_slice_count, 0),
-        value(page.summary, :approved_slice_count, 0),
-        value(page.summary, :dispatched_slice_count, 0)
+        value(page.summary, :work_package_count, 0),
+        value(page.summary, :planned_work_package_count, 0),
+        value(page.summary, :dispatched_work_package_count, 0)
       )
   end
 
-  def detail_state_summary(_page, _operator_mode?), do: "Check the current status, questions, and planned slices."
+  def detail_state_summary(_page, _operator_mode?), do: "Check the current status, questions, and WorkPackages."
 
   defp detail_next_action_for_handoff(%{architect_handoff: handoff, work_request: work_request} = page, true)
        when is_map(handoff) do
@@ -952,39 +935,39 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
   defp detail_next_action_for("human_info_needed", _operator_mode?, _open_questions, _planned, _approved, _dispatched),
     do: "Human guidance needed"
 
-  defp detail_next_action_for("ready_for_slicing", true, _open_questions, _planned, approved, _dispatched)
-       when approved > 0,
-       do: "Dispatch approved slices"
+  defp detail_next_action_for("ready_for_slicing", true, _open_questions, _total, planned, _dispatched)
+       when planned > 0,
+       do: "Finish slicing"
 
-  defp detail_next_action_for("ready_for_slicing", false, _open_questions, _planned, approved, _dispatched)
-       when approved > 0,
-       do: "Local dispatch pending"
+  defp detail_next_action_for("ready_for_slicing", false, _open_questions, _total, planned, _dispatched)
+       when planned > 0,
+       do: "Finish slicing"
 
   defp detail_next_action_for("ready_for_slicing", _operator_mode?, _open_questions, planned, _approved, _dispatched)
        when planned > 0,
-       do: "Approve planned slices"
+       do: "Finish slicing"
 
   defp detail_next_action_for("ready_for_slicing", _operator_mode?, _open_questions, _planned, _approved, dispatched)
        when dispatched > 0,
-       do: "Dispatched slices active"
+       do: "Dispatched WorkPackages active"
 
   defp detail_next_action_for("ready_for_slicing", _operator_mode?, _open_questions, _planned, _approved, _dispatched),
-    do: "Author planned slices"
+    do: "Author WorkPackages"
 
-  defp detail_next_action_for("sliced", true, _open_questions, _planned, approved, _dispatched)
-       when approved > 0,
-       do: "Dispatch approved slices"
+  defp detail_next_action_for("sliced", true, _open_questions, _total, planned, _dispatched)
+       when planned > 0,
+       do: "Dispatch planned WorkPackages"
 
-  defp detail_next_action_for("sliced", false, _open_questions, _planned, approved, _dispatched)
-       when approved > 0,
+  defp detail_next_action_for("sliced", false, _open_questions, _total, planned, _dispatched)
+       when planned > 0,
        do: "Local dispatch pending"
 
   defp detail_next_action_for("sliced", _operator_mode?, _open_questions, _planned, _approved, dispatched)
        when dispatched > 0,
-       do: "Dispatched slices active"
+       do: "Dispatched WorkPackages active"
 
   defp detail_next_action_for("sliced", _operator_mode?, _open_questions, _planned, _approved, _dispatched),
-    do: "No dispatchable slices"
+    do: "No dispatchable WorkPackages"
 
   defp detail_next_action_for(_status, _operator_mode?, _open_questions, _planned, _approved, _dispatched),
     do: "Review WorkRequest state"
@@ -1056,40 +1039,40 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
 
   defp detail_state_summary_for("ready_for_slicing", true, _open_questions, _planned, approved, _dispatched)
        when approved > 0,
-       do: "Approved slices are ready for local-operator dispatch."
+       do: "Planned WorkPackages are ready for local-operator dispatch."
 
   defp detail_state_summary_for("ready_for_slicing", false, _open_questions, _planned, approved, _dispatched)
        when approved > 0,
-       do: "Approved slices are waiting for local-operator dispatch."
+       do: "Planned WorkPackages are waiting for local-operator dispatch."
 
   defp detail_state_summary_for("ready_for_slicing", _operator_mode?, _open_questions, planned, _approved, _dispatched)
        when planned > 0,
-       do: "Planned slices are present and need approval before dispatch."
+       do: "WorkPackages are present and slicing must finish before dispatch."
 
   defp detail_state_summary_for("ready_for_slicing", _operator_mode?, _open_questions, _planned, _approved, dispatched)
        when dispatched > 0,
-       do: "At least one slice has been dispatched into a WorkPackage."
+       do: "At least one WorkPackage has been dispatched."
 
   defp detail_state_summary_for("ready_for_slicing", _operator_mode?, _open_questions, _planned, _approved, _dispatched),
-    do: "Slicing is ready but no planned slice has been authored."
+    do: "Slicing is ready but no WorkPackage has been authored."
 
   defp detail_state_summary_for("sliced", true, _open_questions, _planned, approved, _dispatched)
        when approved > 0,
-       do: "Slicing is complete; approved slices can be dispatched by the local operator."
+       do: "Slicing is complete; planned WorkPackages can be dispatched by the local operator."
 
   defp detail_state_summary_for("sliced", false, _open_questions, _planned, approved, _dispatched)
        when approved > 0,
-       do: "Slicing is complete; approved slices are waiting for local-operator dispatch."
+       do: "Slicing is complete; planned WorkPackages are waiting for local-operator dispatch."
 
   defp detail_state_summary_for("sliced", _operator_mode?, _open_questions, _planned, _approved, dispatched)
        when dispatched > 0,
-       do: "At least one slice has been dispatched into a WorkPackage."
+       do: "At least one WorkPackage has been dispatched."
 
   defp detail_state_summary_for("sliced", _operator_mode?, _open_questions, _planned, _approved, _dispatched),
-    do: "Slicing is complete with no approved slices currently dispatchable."
+    do: "Slicing is complete with no planned WorkPackages currently dispatchable."
 
   defp detail_state_summary_for(_status, _operator_mode?, _open_questions, _planned, _approved, _dispatched),
-    do: "Check the current status, questions, and planned slices."
+    do: "Check the current status, questions, and WorkPackages."
 
   defp handoff_next_action_status?("ready_for_clarification"), do: true
   defp handoff_next_action_status?(_status), do: false
@@ -1140,17 +1123,17 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
   @spec detail_slicing_label(any()) :: any()
   def detail_slicing_label(%{work_request: work_request, summary: summary}) do
     cond do
-      value(summary, :approved_slice_count, 0) > 0 ->
-        "#{value(summary, :approved_slice_count, 0)} approved"
+      value(summary, :planned_work_package_count, 0) > 0 ->
+        "#{value(summary, :planned_work_package_count, 0)} planned"
 
-      value(summary, :dispatched_slice_count, 0) > 0 ->
-        "#{value(summary, :dispatched_slice_count, 0)} dispatched"
+      value(summary, :dispatched_work_package_count, 0) > 0 ->
+        "#{value(summary, :dispatched_work_package_count, 0)} dispatched"
 
-      value(work_request, :status) in ["ready_for_slicing", "sliced"] and value(summary, :planned_slice_count, 0) == 0 ->
-        "ready, no slices"
+      value(work_request, :status) in ["ready_for_slicing", "sliced"] and value(summary, :work_package_count, 0) == 0 ->
+        "ready, no WorkPackages"
 
-      value(summary, :planned_slice_count, 0) > 0 ->
-        "#{value(summary, :planned_slice_count, 0)} planned"
+      value(summary, :work_package_count, 0) > 0 ->
+        "#{value(summary, :work_package_count, 0)} planned"
 
       true ->
         "not ready"

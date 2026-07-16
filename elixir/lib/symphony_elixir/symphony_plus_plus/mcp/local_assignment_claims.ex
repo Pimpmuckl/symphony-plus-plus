@@ -26,7 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -365,16 +364,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
 
   defp validate_local_work_request_scope(repo, %WorkPackage{} = work_package, work_request_id) do
     with {:ok, work_request} <- WorkRequestRepository.get(repo, work_request_id),
-         {:ok, planned_slice} <- local_work_request_package_link(repo, work_request_id, work_package.id),
+         {:ok, work_package} <- local_work_request_package_link(repo, work_request_id, work_package.id),
          :ok <-
            require_local_value_match(
-             PlannedSlice.delivery_repo(work_request, planned_slice),
+             WorkPackage.repo(work_request, work_package),
              work_package.repo,
              :work_request_repo_scope_mismatch
            ),
          :ok <-
            require_local_value_match(
-             planned_slice.target_base_branch,
+             work_package.base_branch,
              work_package.base_branch,
              :package_delivery_base_mismatch
            ) do
@@ -387,13 +386,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
 
   defp local_work_request_package_link(repo, work_request_id, work_package_id) do
     case repo.one(
-           from(planned_slice in PlannedSlice,
-             where: planned_slice.work_request_id == ^work_request_id,
-             where: planned_slice.work_package_id == ^work_package_id,
+           from(work_package in WorkPackage,
+             where: work_package.work_request_id == ^work_request_id,
+             where: work_package.id == ^work_package_id,
              limit: 1
            )
          ) do
-      %PlannedSlice{} = planned_slice -> {:ok, planned_slice}
+      %WorkPackage{} = work_package -> {:ok, work_package}
       nil -> {:error, :work_request_package_link_mismatch}
     end
   end
@@ -945,10 +944,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
 
   defp local_assignment_work_request_id(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
     repo.one(
-      from(planned_slice in PlannedSlice,
-        where: planned_slice.work_package_id == ^work_package_id,
-        order_by: [desc: planned_slice.dispatched_at, desc: planned_slice.updated_at, asc: planned_slice.id],
-        select: planned_slice.work_request_id,
+      from(work_package in WorkPackage,
+        where: work_package.id == ^work_package_id,
+        order_by: [desc: work_package.dispatched_at, desc: work_package.updated_at, asc: work_package.id],
+        select: work_package.work_request_id,
         limit: 1
       )
     )

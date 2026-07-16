@@ -5,17 +5,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   import Ecto.Query, only: [from: 2]
 
-  @terminal_planned_slice_statuses ["skipped"]
-  @terminal_work_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
+  @terminal_work_package_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
   @terminal_delivery_outcomes ["pr_merged", "completed_no_pr", "superseded", "abandoned"]
   @completion_blocking_work_request_statuses ["human_info_needed"]
   @operator_completion_source "operator"
@@ -49,19 +47,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     WorkPackageActivity.blocker_event_payload?(payload)
   end
 
-  @spec state(WorkRequest.t(), map(), [PlannedSlice.t()], %{optional(String.t()) => context()}) ::
+  @spec state(WorkRequest.t(), map(), [WorkPackage.t()], %{optional(String.t()) => context()}) ::
           state()
-  @spec state(WorkRequest.t(), map(), [PlannedSlice.t()], %{optional(String.t()) => context()}, %{
-          optional(String.t()) => PlannedSliceDelivery.t()
+  @spec state(WorkRequest.t(), map(), [WorkPackage.t()], %{optional(String.t()) => context()}, %{
+          optional(String.t()) => WorkPackageDelivery.t()
         }) :: state()
   def state(
         %WorkRequest{} = work_request,
         question_state,
-        planned_slices,
+        work_packages,
         work_package_contexts,
         deliveries_by_slice_id \\ %{}
       )
-      when is_map(question_state) and is_list(planned_slices) and is_map(work_package_contexts) and
+      when is_map(question_state) and is_list(work_packages) and is_map(work_package_contexts) and
              is_map(deliveries_by_slice_id) do
     if operator_completed?(work_request) do
       %{
@@ -70,24 +68,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
         archived_at: work_request.archived_at
       }
     else
-      derived_state(work_request, question_state, planned_slices, work_package_contexts, deliveries_by_slice_id)
+      derived_state(work_request, question_state, work_packages, work_package_contexts, deliveries_by_slice_id)
     end
   end
 
   defp derived_state(
          %WorkRequest{} = work_request,
          question_state,
-         planned_slices,
+         work_packages,
          work_package_contexts,
          deliveries_by_slice_id
        )
-       when is_map(question_state) and is_list(planned_slices) and is_map(work_package_contexts) and
+       when is_map(question_state) and is_list(work_packages) and is_map(work_package_contexts) and
               is_map(deliveries_by_slice_id) do
     completed? =
       derived_completed?(
         work_request,
         question_state,
-        planned_slices,
+        work_packages,
         work_package_contexts,
         deliveries_by_slice_id
       )
@@ -97,7 +95,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
         completed?,
         work_request,
         question_state,
-        planned_slices,
+        work_packages,
         work_package_contexts,
         deliveries_by_slice_id
       )
@@ -112,54 +110,54 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   defp derived_completed?(
          %WorkRequest{} = work_request,
          question_state,
-         planned_slices,
+         work_packages,
          work_package_contexts,
          deliveries_by_slice_id
        ) do
     completion_status_allowed?(work_request) and
       Map.get(question_state, :open_count, 0) == 0 and
-      planned_slices != [] and
-      Enum.all?(planned_slices, fn planned_slice ->
+      work_packages != [] and
+      Enum.all?(work_packages, fn work_package ->
         terminal_slice?(
-          planned_slice,
-          Map.get(work_package_contexts, planned_slice.work_package_id),
-          Map.get(deliveries_by_slice_id, planned_slice.id)
+          work_package,
+          Map.get(work_package_contexts, work_package.id),
+          Map.get(deliveries_by_slice_id, work_package.id)
         )
       end)
   end
 
-  defp derived_completed_at_if_complete(false, %WorkRequest{}, _question_state, _planned_slices, _work_package_contexts, _deliveries_by_slice_id), do: nil
+  defp derived_completed_at_if_complete(false, %WorkRequest{}, _question_state, _work_packages, _work_package_contexts, _deliveries_by_slice_id), do: nil
 
-  defp derived_completed_at_if_complete(true, %WorkRequest{} = work_request, question_state, planned_slices, work_package_contexts, deliveries_by_slice_id) do
+  defp derived_completed_at_if_complete(true, %WorkRequest{} = work_request, question_state, work_packages, work_package_contexts, deliveries_by_slice_id) do
     work_request.completed_at ||
       derived_completed_at(
         work_request,
-        planned_slices,
+        work_packages,
         work_package_contexts,
         deliveries_by_slice_id,
         Map.get(question_state, :latest_gate_at)
       )
   end
 
-  @spec visible_state(WorkRequest.t(), map(), [PlannedSlice.t()], %{optional(String.t()) => context()}) ::
+  @spec visible_state(WorkRequest.t(), map(), [WorkPackage.t()], %{optional(String.t()) => context()}) ::
           state()
-  @spec visible_state(WorkRequest.t(), map(), [PlannedSlice.t()], %{optional(String.t()) => context()}, map()) ::
+  @spec visible_state(WorkRequest.t(), map(), [WorkPackage.t()], %{optional(String.t()) => context()}, map()) ::
           state()
   def visible_state(
         %WorkRequest{} = work_request,
         question_state,
-        planned_slices,
+        work_packages,
         work_package_contexts,
         deliveries_by_slice_id \\ %{}
       )
-      when is_map(question_state) and is_list(planned_slices) and is_map(work_package_contexts) and
+      when is_map(question_state) and is_list(work_packages) and is_map(work_package_contexts) and
              is_map(deliveries_by_slice_id) do
     work_request
-    |> state(question_state, planned_slices, work_package_contexts, deliveries_by_slice_id)
+    |> state(question_state, work_packages, work_package_contexts, deliveries_by_slice_id)
     |> preserve_persisted_visible_state(
       work_request,
       question_state,
-      planned_slices,
+      work_packages,
       work_package_contexts,
       deliveries_by_slice_id
     )
@@ -182,10 +180,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   def refresh_in_transaction(repo, work_request_id) do
     with {:ok, work_request} <- Repository.get(repo, work_request_id),
          {:ok, question_state} <- question_state(repo, work_request_id),
-         {:ok, planned_slices} <- Repository.list_planned_slices(repo, work_request_id),
-         {:ok, contexts} <- linked_work_package_contexts(repo, planned_slices),
-         {:ok, deliveries_by_slice_id} <- planned_slice_deliveries_by_id(repo, planned_slices) do
-      state = state(work_request, question_state, planned_slices, contexts, deliveries_by_slice_id)
+         {:ok, work_packages} <- Repository.list_work_packages(repo, work_request_id),
+         {:ok, contexts} <- work_package_contexts(repo, work_packages),
+         {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_packages) do
+      state = state(work_request, question_state, work_packages, contexts, deliveries_by_slice_id)
       persist_state(repo, work_request, state)
     end
   end
@@ -225,9 +223,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   @spec delete(Repository.repo(), String.t()) :: {:ok, String.t()} | {:error, delete_error()}
   def delete(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
     with {:ok, %WorkRequest{}} <- Repository.get(repo, work_request_id),
-         {planned_slice_ids, linked_work_package_ids} <- archived_planned_slice_context(repo, [work_request_id]),
-         :ok <- cleanup_linked_work_package_worktrees(repo, linked_work_package_ids, force: true) do
-      delete_work_request_with_dependents(repo, work_request_id, planned_slice_ids, linked_work_package_ids)
+         work_package_ids <- archived_work_package_ids(repo, [work_request_id]),
+         :ok <- cleanup_work_package_worktrees(repo, work_package_ids, force: true) do
+      delete_work_request_with_dependents(repo, work_request_id, work_package_ids)
     end
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -298,19 +296,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
          %{completed?: false} = state,
          %WorkRequest{completed_at: %DateTime{} = completed_at} = work_request,
          question_state,
-         planned_slices,
+         work_packages,
          work_package_contexts,
          deliveries_by_slice_id
        ) do
     if completion_status_allowed?(work_request) and
-         filtered_completion_context?(question_state, planned_slices, work_package_contexts, deliveries_by_slice_id) do
+         filtered_completion_context?(question_state, work_packages, work_package_contexts, deliveries_by_slice_id) do
       %{state | completed?: true, completed_at: completed_at, archived_at: work_request.archived_at}
     else
       state
     end
   end
 
-  defp preserve_persisted_visible_state(state, %WorkRequest{}, _question_state, _planned_slices, _work_package_contexts, _deliveries_by_slice_id), do: state
+  defp preserve_persisted_visible_state(state, %WorkRequest{}, _question_state, _work_packages, _work_package_contexts, _deliveries_by_slice_id), do: state
 
   defp force_complete_work_request(repo, %WorkRequest{} = work_request) do
     attrs = %{
@@ -328,32 +326,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   defp operator_completed?(%WorkRequest{completed_at: %DateTime{}, completion_source: @operator_completion_source}), do: true
   defp operator_completed?(%WorkRequest{}), do: false
 
-  defp filtered_completion_context?(question_state, planned_slices, work_package_contexts, deliveries_by_slice_id) do
-    Map.get(question_state, :open_count, 0) == 0 and planned_slices != [] and
-      Enum.all?(planned_slices, &terminal_or_filtered_slice?(&1, work_package_contexts, deliveries_by_slice_id))
+  defp filtered_completion_context?(question_state, work_packages, work_package_contexts, deliveries_by_slice_id) do
+    Map.get(question_state, :open_count, 0) == 0 and work_packages != [] and
+      Enum.all?(work_packages, &terminal_or_filtered_slice?(&1, work_package_contexts, deliveries_by_slice_id))
   end
 
-  defp terminal_or_filtered_slice?(%PlannedSlice{status: status}, _work_package_contexts, _deliveries_by_slice_id)
-       when status in @terminal_planned_slice_statuses,
-       do: true
-
-  defp terminal_or_filtered_slice?(%PlannedSlice{status: status} = planned_slice, work_package_contexts, deliveries_by_slice_id)
-       when status in ["approved", "dispatched"] do
-    if terminal_delivery?(Map.get(deliveries_by_slice_id, planned_slice.id)) do
-      true
-    else
-      terminal_or_filtered_dispatched_slice?(planned_slice, work_package_contexts)
-    end
+  defp terminal_or_filtered_slice?(%WorkPackage{status: status, id: id}, work_package_contexts, _deliveries_by_slice_id)
+       when status in @terminal_work_package_statuses do
+    context = Map.get(work_package_contexts, id)
+    not active_blocker_context?(context) and not active_runtime_context?(context)
   end
 
-  defp terminal_or_filtered_slice?(%PlannedSlice{}, _work_package_contexts, _deliveries_by_slice_id), do: false
-
-  defp terminal_or_filtered_dispatched_slice?(%PlannedSlice{status: "dispatched", work_package_id: work_package_id}, work_package_contexts) do
-    context = Map.get(work_package_contexts, work_package_id)
-    is_nil(context) or terminal_slice?(%PlannedSlice{status: "dispatched"}, context)
-  end
-
-  defp terminal_or_filtered_dispatched_slice?(%PlannedSlice{}, _work_package_contexts), do: false
+  defp terminal_or_filtered_slice?(%WorkPackage{id: id}, _work_package_contexts, deliveries_by_slice_id),
+    do: terminal_delivery?(Map.get(deliveries_by_slice_id, id))
 
   defp completion_status_allowed?(%WorkRequest{status: status}), do: status not in @completion_blocking_work_request_statuses
 
@@ -538,26 +523,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   end
 
   defp delete_archived_work_request_with_cleanup(repo, work_request_id, cutoff) do
-    {planned_slice_ids, linked_work_package_ids} = archived_planned_slice_context(repo, [work_request_id])
+    work_package_ids = archived_work_package_ids(repo, [work_request_id])
 
     with {:ok, _current} <- claim_archived_before(repo, work_request_id, cutoff),
-         :ok <- cleanup_linked_work_package_worktrees(repo, linked_work_package_ids, force: true) do
+         :ok <- cleanup_work_package_worktrees(repo, work_package_ids, force: true) do
       repo.transaction(fn ->
         delete_archived_work_request_after_dependents(
           repo,
           work_request_id,
-          planned_slice_ids,
-          linked_work_package_ids,
+          work_package_ids,
           cutoff
         )
       end)
     end
   end
 
-  defp delete_archived_work_request_after_dependents(repo, work_request_id, planned_slice_ids, linked_work_package_ids, cutoff) do
+  defp delete_archived_work_request_after_dependents(repo, work_request_id, work_package_ids, cutoff) do
     case require_archived_before(repo, work_request_id, cutoff) do
       {:ok, _current} ->
-        case delete_work_request_dependents(repo, [work_request_id], planned_slice_ids, linked_work_package_ids) do
+        case delete_work_request_dependents(repo, [work_request_id], work_package_ids) do
           :ok -> delete_archived_work_request(repo, work_request_id, cutoff)
           {:error, reason} -> repo.rollback(reason)
         end
@@ -591,9 +575,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     count
   end
 
-  defp delete_work_request_with_dependents(repo, work_request_id, planned_slice_ids, linked_work_package_ids) do
+  defp delete_work_request_with_dependents(repo, work_request_id, work_package_ids) do
     repo.transaction(fn ->
-      case delete_work_request_dependents(repo, [work_request_id], planned_slice_ids, linked_work_package_ids) do
+      case delete_work_request_dependents(repo, [work_request_id], work_package_ids) do
         :ok -> delete_work_request_row(repo, work_request_id)
         {:error, reason} -> repo.rollback(reason)
       end
@@ -614,37 +598,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     end
   end
 
-  defp archived_planned_slice_context(repo, work_request_ids) do
-    rows =
-      work_request_ids
-      |> Enum.chunk_every(@delete_work_request_chunk_size)
-      |> Enum.flat_map(fn ids ->
-        repo.all(
-          from(planned_slice in PlannedSlice,
-            where: planned_slice.work_request_id in ^ids,
-            select: {planned_slice.id, planned_slice.work_package_id}
-          )
+  defp archived_work_package_ids(repo, work_request_ids) do
+    work_request_ids
+    |> Enum.chunk_every(@delete_work_request_chunk_size)
+    |> Enum.flat_map(fn ids ->
+      repo.all(
+        from(work_package in WorkPackage,
+          where: work_package.work_request_id in ^ids,
+          select: work_package.id
         )
-      end)
-
-    {
-      Enum.map(rows, fn {planned_slice_id, _work_package_id} -> planned_slice_id end),
-      rows
-      |> Enum.map(fn {_planned_slice_id, work_package_id} -> work_package_id end)
-      |> Enum.reject(&is_nil/1)
-    }
+      )
+    end)
   end
 
-  defp delete_work_request_dependents(repo, work_request_ids, planned_slice_ids, linked_work_package_ids) do
-    with :ok <- preserve_archived_linked_work_package_hides(repo, linked_work_package_ids),
-         :ok <- delete_archived_comments(repo, work_request_ids, planned_slice_ids) do
-      delete_archived_grant_scopes(repo, work_request_ids, planned_slice_ids)
+  defp delete_work_request_dependents(repo, work_request_ids, work_package_ids) do
+    with :ok <- preserve_archived_work_package_hides(repo, work_package_ids),
+         :ok <- delete_archived_comments(repo, work_request_ids, work_package_ids) do
+      delete_archived_grant_scopes(repo, work_request_ids, work_package_ids)
     end
   end
 
-  defp preserve_archived_linked_work_package_hides(_repo, []), do: :ok
+  defp preserve_archived_work_package_hides(_repo, []), do: :ok
 
-  defp preserve_archived_linked_work_package_hides(repo, work_package_ids) do
+  defp preserve_archived_work_package_hides(repo, work_package_ids) do
     case OperatorSettingsRepository.get(repo) do
       {:ok, settings} ->
         hidden_work_package_ids = Enum.uniq(settings.hidden_work_package_ids ++ Enum.uniq(work_package_ids))
@@ -659,10 +635,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     end
   end
 
-  defp delete_archived_comments(repo, work_request_ids, planned_slice_ids) do
+  defp delete_archived_comments(repo, work_request_ids, work_package_ids) do
     targets =
       Enum.map(work_request_ids, &{"work_request", &1}) ++
-        Enum.map(planned_slice_ids, &{"planned_slice", &1})
+        Enum.map(work_package_ids, &{"work_package", &1})
 
     case CommentService.delete_for_targets(repo, targets) do
       {:ok, _deleted_count} -> :ok
@@ -670,9 +646,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     end
   end
 
-  defp delete_archived_grant_scopes(repo, work_request_ids, planned_slice_ids) do
+  defp delete_archived_grant_scopes(repo, work_request_ids, work_package_ids) do
     with {:ok, _work_request_count} <- delete_grant_scope_ids(repo, "work_request", work_request_ids),
-         {:ok, _planned_slice_count} <- delete_grant_scope_ids(repo, "planned_slice", planned_slice_ids) do
+         {:ok, _work_package_count} <- delete_grant_scope_ids(repo, "work_package", work_package_ids) do
       :ok
     end
   end
@@ -819,7 +795,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     task = fn ->
       # ponytail: global cleanup lock; move to per-repo workers if archive throughput matters.
       :global.trans({__MODULE__, :archive_worktree_cleanup}, fn ->
-        best_effort_cleanup_work_request_linked_worktrees(repo, work_request_id, opts)
+        best_effort_cleanup_work_request_worktrees(repo, work_request_id, opts)
       end)
     end
 
@@ -831,10 +807,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     :ok
   end
 
-  defp best_effort_cleanup_work_request_linked_worktrees(repo, work_request_id, opts) do
-    {_planned_slice_ids, linked_work_package_ids} = archived_planned_slice_context(repo, [work_request_id])
+  defp best_effort_cleanup_work_request_worktrees(repo, work_request_id, opts) do
+    work_package_ids = archived_work_package_ids(repo, [work_request_id])
 
-    linked_work_package_ids
+    work_package_ids
     |> Enum.uniq()
     |> Enum.each(fn work_package_id ->
       WorkPackageService.cleanup_worktree(repo, work_package_id, opts)
@@ -848,7 +824,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     end
   end
 
-  defp cleanup_linked_work_package_worktrees(repo, work_package_ids, opts) do
+  defp cleanup_work_package_worktrees(repo, work_package_ids, opts) do
     work_package_ids
     |> Enum.uniq()
     |> Enum.reduce_while(:ok, fn work_package_id, :ok ->
@@ -936,17 +912,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp linked_work_package_contexts(_repo, []), do: {:ok, %{}}
+  defp work_package_contexts(_repo, []), do: {:ok, %{}}
 
-  defp linked_work_package_contexts(repo, planned_slices) do
+  defp work_package_contexts(repo, work_packages) do
     work_package_ids =
-      planned_slices
-      |> Enum.map(& &1.work_package_id)
+      work_packages
+      |> Enum.map(& &1.id)
       |> Enum.filter(&filled_string?/1)
       |> Enum.uniq()
-
-    work_packages =
-      repo.all(from(work_package in WorkPackage, where: work_package.id in ^work_package_ids))
 
     activity_contexts = WorkPackageActivity.contexts(repo, work_package_ids)
 
@@ -963,54 +936,39 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp planned_slice_deliveries_by_id(_repo, []), do: {:ok, %{}}
+  defp work_package_deliveries_by_id(_repo, []), do: {:ok, %{}}
 
-  defp planned_slice_deliveries_by_id(repo, planned_slices) do
-    planned_slice_ids = Enum.map(planned_slices, & &1.id)
+  defp work_package_deliveries_by_id(repo, work_packages) do
+    work_package_ids = Enum.map(work_packages, & &1.id)
 
     deliveries =
       repo.all(
-        from(delivery in PlannedSliceDelivery,
-          where: delivery.planned_slice_id in ^planned_slice_ids
+        from(delivery in WorkPackageDelivery,
+          where: delivery.work_package_id in ^work_package_ids
         )
       )
 
-    {:ok, Map.new(deliveries, &{&1.planned_slice_id, &1})}
+    {:ok, Map.new(deliveries, &{&1.work_package_id, &1})}
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp terminal_slice?(planned_slice, context, delivery \\ nil)
+  defp terminal_slice?(work_package, context, delivery)
 
-  defp terminal_slice?(%PlannedSlice{status: status}, _context, _delivery) when status in @terminal_planned_slice_statuses, do: true
+  defp terminal_slice?(%WorkPackage{status: status}, context, _delivery) when status in @terminal_work_package_statuses do
+    not active_blocker_context?(context) and not active_runtime_context?(context)
+  end
 
-  defp terminal_slice?(%PlannedSlice{status: status}, _context, %PlannedSliceDelivery{outcome: outcome})
-       when status in ["approved", "dispatched"] and outcome in @terminal_delivery_outcomes,
+  defp terminal_slice?(%WorkPackage{}, _context, %WorkPackageDelivery{outcome: outcome})
+       when outcome in @terminal_delivery_outcomes,
        do: true
 
-  defp terminal_slice?(%PlannedSlice{status: status}, _context, delivery)
-       when status in ["approved", "dispatched"] and is_map(delivery),
-       do: terminal_delivery?(delivery)
+  defp terminal_slice?(%WorkPackage{}, _context, delivery) when is_map(delivery),
+    do: terminal_delivery?(delivery)
 
-  defp terminal_slice?(%PlannedSlice{status: "dispatched"}, context, _delivery) when is_map(context) do
-    terminal_work_package?(context) and not active_blocker_context?(context) and not active_runtime_context?(context)
-  end
+  defp terminal_slice?(%WorkPackage{}, _context, _delivery), do: false
 
-  defp terminal_slice?(%PlannedSlice{}, _context, _delivery), do: false
-
-  defp terminal_work_package?(%{work_package: %WorkPackage{status: status}}), do: status in @terminal_work_package_statuses
-
-  defp terminal_work_package?(%{card: card}) when is_map(card) do
-    status = map_value(card, :status)
-    operational_state = map_value(card, :operational_state)
-    key = if is_map(operational_state), do: map_value(operational_state, :key)
-
-    status in @terminal_work_package_statuses or key in @terminal_work_package_statuses
-  end
-
-  defp terminal_work_package?(_context), do: false
-
-  defp terminal_delivery?(%PlannedSliceDelivery{outcome: outcome}), do: outcome in @terminal_delivery_outcomes
+  defp terminal_delivery?(%WorkPackageDelivery{outcome: outcome}), do: outcome in @terminal_delivery_outcomes
 
   defp terminal_delivery?(delivery) when is_map(delivery) do
     map_value(delivery, :outcome) in @terminal_delivery_outcomes
@@ -1042,7 +1000,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   defp map_value(map, key) when is_map(map) and is_atom(key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
 
-  defp derived_completed_at(%WorkRequest{} = work_request, planned_slices, work_package_contexts, deliveries_by_slice_id, question_gate_at) do
+  defp derived_completed_at(%WorkRequest{} = work_request, work_packages, work_package_contexts, deliveries_by_slice_id, question_gate_at) do
     work_package_timestamps =
       work_package_contexts
       |> Map.values()
@@ -1066,11 +1024,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
       |> Map.values()
       |> Enum.flat_map(&delivery_timestamps/1)
 
-    latest_timestamp([work_request.updated_at, question_gate_at] ++ Enum.map(planned_slices, & &1.updated_at) ++ work_package_timestamps ++ gate_timestamps ++ delivery_timestamps) ||
+    latest_timestamp([work_request.updated_at, question_gate_at] ++ Enum.map(work_packages, & &1.updated_at) ++ work_package_timestamps ++ gate_timestamps ++ delivery_timestamps) ||
       DateTime.utc_now(:microsecond)
   end
 
-  defp delivery_timestamps(%PlannedSliceDelivery{} = delivery), do: [delivery.recorded_at, delivery.updated_at]
+  defp delivery_timestamps(%WorkPackageDelivery{} = delivery), do: [delivery.recorded_at, delivery.updated_at]
 
   defp delivery_timestamps(delivery) when is_map(delivery) do
     [map_value(delivery, :recorded_at), map_value(delivery, :updated_at)]

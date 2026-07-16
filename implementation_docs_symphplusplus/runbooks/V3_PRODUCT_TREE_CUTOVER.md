@@ -59,7 +59,7 @@ http://127.0.0.1:20001/sympp/board
 - The cockpit renders one collapsed row per WorkRequest.
 - Expanding a WorkRequest renders product plan nodes when present.
 - A `--seed_work_request` preview shows nested product plan nodes linked to
-  planned slices for that request.
+  WorkPackages for that request.
 - WorkRequests without product plan nodes render direct slice rows.
 - Package detail remains reachable from linked slice rows.
 - Existing WorkRequest detail drawers still open.
@@ -70,10 +70,10 @@ http://127.0.0.1:20001/sympp/board
 
 Exercise three WorkRequest shapes before live cutover:
 
-1. Simple hotfix: no product plan nodes, direct planned slices only.
+1. Simple hotfix: no product plan nodes, direct WorkPackages only.
 2. Medium implementation: a WorkRequest with direct slices and no forced extra
    hierarchy.
-3. Large implementation: nested product plan nodes with planned slices moved
+3. Large implementation: nested product plan nodes with WorkPackages moved
    under the nodes through architect MCP tools.
 
 The preview passes only when all three read correctly in the cockpit and the

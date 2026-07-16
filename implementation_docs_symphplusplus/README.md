@@ -3,7 +3,7 @@
 This directory is the durable operator/product guide for Symphony++. It explains
 how the current system works: how operators and architects manage WorkRequests
 as product-facing rows, how optional product plan nodes make large work
-one-glance-readable, how planned slices dispatch to workers, how WorkPackages
+one-glance-readable, how WorkPackages dispatch to workers, how WorkPackages
 remain scoped execution/audit records, how MCP-backed planning resources are
 updated, and how readiness evidence flows into human merge decisions.
 
@@ -33,7 +33,7 @@ WorkPackages, MCP resources, and package-specific scope.
 - V3 product-tree cockpit contract: `docs/V3_PRODUCT_TREE_REWORK.md`
 - V3 copied-ledger preview and cutover: `runbooks/V3_PRODUCT_TREE_CUTOVER.md`
 - Product/operator guide: `docs/01_IMPLEMENTATION_GUIDE.md`
-- WorkRequest and planned-slice product contract: `docs/13_WORKREQUEST_CONTRACT.md`
+- WorkRequest and work-package product contract: `docs/13_WORKREQUEST_CONTRACT.md`
 - Solo Session product contract: `docs/14_SOLO_SESSION_CONTRACT.md`
 - Target permission redesign contract: `docs/16_PERMISSION_REDESIGN_CONTRACT.md`
 - Marketplace runtime artifact contract: `docs/17_RUNTIME_ARTIFACT_CONTRACT.md`

@@ -23,10 +23,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
       alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
       alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
       alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+      alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
       alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
       alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
-      alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-      alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
       alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
       alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
       alias SymphonyElixir.WorkPackageFactory
@@ -67,8 +66,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Comments.Comment)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant)
-    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery)
-    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice)
+    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery)
+    repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.Phases.Phase)
     repo.delete_all(SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry)
@@ -95,24 +94,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
     work_package
   end
 
-  def create_matching_work_package!(repo, work_request, planned_slice, overrides) do
-    create_work_package!(
-      repo,
-      Keyword.merge(
-        [
-          id: planned_slice.work_package_id || "SYMPP-#{planned_slice.id}",
-          kind: planned_slice.work_package_kind,
-          repo: planned_slice.delivery_repo || work_request.repo,
-          base_branch: planned_slice.target_base_branch || work_request.base_branch,
-          branch_pattern: planned_slice.branch_pattern,
-          product_description: work_request.human_description,
-          allowed_file_globs: planned_slice.owned_file_globs,
-          acceptance_criteria: planned_slice.acceptance_criteria,
-          title: planned_slice.title
-        ],
-        overrides
-      )
-    )
+  def create_matching_work_package!(repo, work_request, work_package, overrides) do
+    attrs =
+      overrides
+      |> Keyword.drop([:id])
+      |> Keyword.put_new(:repo, work_package.repo || work_request.repo)
+      |> Keyword.put_new(:base_branch, work_package.base_branch || work_request.base_branch)
+      |> Keyword.put_new(:dispatched_at, DateTime.utc_now(:microsecond))
+
+    repo.update!(Ecto.Changeset.change(work_package, attrs))
   end
 
   def work_request_attrs(overrides) do
@@ -133,13 +123,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.ApiCase do
     |> Map.merge(Enum.into(overrides, %{}))
   end
 
-  def planned_slice_attrs(overrides) do
+  def work_package_attrs(overrides) do
     %{
       title: "Dashboard slice",
       goal: "Exercise dashboard projection",
-      work_package_kind: "mcp",
-      target_base_branch: "main",
-      owned_file_globs: ["elixir/lib/**"],
+      kind: "mcp",
+      base_branch: "main",
+      allowed_file_globs: ["elixir/lib/**"],
       forbidden_file_globs: ["plugins/**"],
       acceptance_criteria: ["payload remains stable"],
       validation_steps: ["mix test"],

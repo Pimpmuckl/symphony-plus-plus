@@ -11,10 +11,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
@@ -44,8 +43,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
   end
 
   setup %{repo: repo} do
-    repo.delete_all(PlannedSliceDelivery)
-    repo.delete_all(PlannedSlice)
+    repo.delete_all(WorkPackageDelivery)
+    repo.delete_all(WorkPackage)
     repo.delete_all(DecisionLogEntry)
     repo.delete_all(ClarificationQuestion)
     repo.delete_all(Comment)
@@ -66,7 +65,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
              WorkRequestRepository.record_decision(repo, second.id, decision_attrs(id: "WRD-DASH-DETAIL-BATCH-1"))
 
     assert {:ok, _slice} =
-             WorkRequestRepository.add_planned_slice(repo, second.id, planned_slice_attrs(id: "WRS-DASH-DETAIL-BATCH-1"))
+             CanonicalWorkPackageFixtures.add_work_package(repo, second.id, work_package_attrs(id: "WRS-DASH-DETAIL-BATCH-1"))
 
     assert {:ok, _first_comment} =
              CommentService.create(repo, %{
@@ -155,14 +154,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
     Enum.into(overrides, defaults)
   end
 
-  defp planned_slice_attrs(overrides) do
+  defp work_package_attrs(overrides) do
     defaults = %{
       title: "Add WorkRequest dashboard API",
       goal: "Expose read-only dashboard view models.",
-      work_package_kind: "mcp",
-      target_base_branch: "main",
+      kind: "mcp",
+      base_branch: "main",
       branch_pattern: "agent/SYMPP-V2-WR-004/workrequest-read-api",
-      owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/dashboard.ex"],
+      allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/dashboard.ex"],
       forbidden_file_globs: ["elixir/lib/symphony_elixir_web/live/**"],
       acceptance_criteria: ["WorkRequest dashboard API reads are scoped and redacted."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/dashboard_api_test.exs"],

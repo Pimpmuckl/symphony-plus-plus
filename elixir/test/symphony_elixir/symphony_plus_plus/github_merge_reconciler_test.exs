@@ -26,8 +26,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
@@ -47,8 +47,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
     repo.delete_all(Artifact)
     repo.delete_all(ProgressEvent)
     repo.delete_all(AccessGrant)
-    repo.delete_all(PlannedSliceDelivery)
-    repo.delete_all(PlannedSlice)
+    repo.delete_all(WorkPackageDelivery)
+    repo.delete_all(WorkPackage)
     repo.delete_all(WorkRequest)
     repo.delete_all(WorkPackage)
     repo.delete_all(Phase)
@@ -118,8 +118,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
            )
   end
 
-  test "verified terminal sync closes a linked planned slice and replays cleanly", %{repo: repo} do
-    {work_request, planned_slice, package} = create_linked_package(repo, "SYMPP-GH-LINKED")
+  test "verified terminal sync closes a linked WorkPackage and replays cleanly", %{repo: repo} do
+    {work_request, work_package, package} = create_linked_package(repo, "SYMPP-GH-LINKED")
     append_pr_evidence(repo, package, 26, "head-a")
     FakeGitHubClient.put_response("nextide/repo", 26, GitHubPullRequestFixtures.metadata(26, "head-a", merged?: true))
 
@@ -128,14 +128,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
     assert first.delivery_reconciliation.applied_count == 1
     assert repo.get!(WorkPackage, package.id).status == "merged"
 
-    assert [delivery] = repo.all(PlannedSliceDelivery)
+    assert [delivery] = repo.all(WorkPackageDelivery)
     assert delivery.work_request_id == work_request.id
-    assert delivery.planned_slice_id == planned_slice.id
+    assert delivery.work_package_id == work_package.id
     assert delivery.outcome == "pr_merged"
 
     assert {:ok, replay} = MergeReconciler.reconcile_work_package(repo, package.id, client: FakeGitHubClient)
     assert replay.status == "already_merged"
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 1
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
   end
 
   test "non-merged PR syncs metadata without transitioning", %{repo: repo} do
@@ -444,42 +444,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
                status: "ready_for_slicing"
              })
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(repo, request_id, %{
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(repo, request_id, %{
                id: "WRS-#{work_package_id}",
                title: "Sync merged PR",
                goal: "Record the verified terminal merge.",
-               work_package_kind: "standard_pr",
-               target_base_branch: "main",
+               kind: "standard_pr",
+               base_branch: "main",
                branch_pattern: "fix/ready-sync",
-               owned_file_globs: ["elixir/lib/**"],
+               allowed_file_globs: ["elixir/lib/**"],
                acceptance_criteria: ["Merged delivery is recorded."],
                validation_steps: ["mix test"],
                review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "fast"}}
              })
 
     assert {:ok, approved_slice} =
-             WorkRequestRepository.approve_planned_slice(repo, request_id, planned_slice.id, "planned")
+             CanonicalWorkPackageFixtures.approve_work_package(repo, request_id, work_package.id, "planned")
 
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
                WorkPackageFactory.attrs(
                  id: work_package_id,
-                 kind: approved_slice.work_package_kind,
+                 kind: approved_slice.kind,
                  title: approved_slice.title,
                  repo: work_request.repo,
-                 base_branch: approved_slice.target_base_branch,
+                 base_branch: approved_slice.base_branch,
                  branch_pattern: approved_slice.branch_pattern,
                  product_description: work_request.human_description,
-                 allowed_file_globs: approved_slice.owned_file_globs,
+                 allowed_file_globs: approved_slice.allowed_file_globs,
                  acceptance_criteria: approved_slice.acceptance_criteria,
                  status: "ready_for_merge"
                )
              )
 
     assert {:ok, dispatched_slice} =
-             WorkRequestRepository.dispatch_planned_slice(repo, request_id, approved_slice.id, "approved", package.id)
+             CanonicalWorkPackageFixtures.dispatch_work_package(repo, request_id, approved_slice.id, "approved", package.id)
 
     {work_request, dispatched_slice, package}
   end

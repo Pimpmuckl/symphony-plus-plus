@@ -21,7 +21,7 @@
 1. `read_work_request`
 2. `read_plan`
 3. `read_delivery_board`
-4. Add/approve/dispatch planned slices.
+4. Add/approve/dispatch WorkPackages.
 5. Record delivery closeout from PR or no-PR evidence.
 
 ## Safety

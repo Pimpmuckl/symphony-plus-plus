@@ -285,7 +285,7 @@ defmodule SymphonyElixirWeb.SymppBoardLive do
                   <span class="sympp-board-request-hint"><%= request.action_hint %></span>
                   <span class="muted"><%= request.repo_base %></span>
                   <span class="numeric"><%= request.questions %></span>
-                  <span class="muted"><%= request.slice_signal %></span>
+                  <span class="muted"><%= request.work_package_signal %></span>
                 </a>
               </div>
             </section>
@@ -1134,7 +1134,7 @@ defmodule SymphonyElixirWeb.SymppBoardLive do
       repo_base: repo_base(request),
       questions: "#{Map.get(request, :open_question_count) || 0} Q",
       action_hint: work_request_action_hint(request, mode),
-      slice_signal: slice_signal(request)
+      work_package_signal: work_package_signal(request)
     }
   end
 
@@ -1162,19 +1162,16 @@ defmodule SymphonyElixirWeb.SymppBoardLive do
   defp work_request_action_hint(%{operational_state: %{key: "merged"}}, _mode), do: "Review merged delivery"
 
   defp work_request_action_hint(%{status: "ready_for_slicing"} = request, _mode) do
-    cond do
-      (Map.get(request, :approved_slice_count) || 0) > 0 -> "Dispatch approved slices"
-      (Map.get(request, :planned_slice_count) || 0) > 0 -> "Review architect plan"
-      (Map.get(request, :dispatched_slice_count) || 0) > 0 -> "Monitor dispatched packages"
-      true -> "Waiting for architect slices"
-    end
+    if (Map.get(request, :work_package_count) || 0) > 0,
+      do: "Review architect plan",
+      else: "Waiting for architect WorkPackages"
   end
 
   defp work_request_action_hint(%{status: "sliced"} = request, _mode) do
     cond do
-      (Map.get(request, :approved_slice_count) || 0) > 0 -> "Dispatch approved slices"
-      (Map.get(request, :dispatched_slice_count) || 0) > 0 -> "Monitor dispatched packages"
-      true -> "No dispatchable slices"
+      (Map.get(request, :planned_work_package_count) || 0) > 0 -> "Dispatch planned WorkPackages"
+      (Map.get(request, :dispatched_work_package_count) || 0) > 0 -> "Monitor dispatched packages"
+      true -> "No dispatchable WorkPackages"
     end
   end
 
@@ -1191,7 +1188,7 @@ defmodule SymphonyElixirWeb.SymppBoardLive do
         title: Map.get(request, :title) || Map.get(request, :id) || "Untitled WorkRequest",
         state: item_operational_label(request),
         state_class: state_badge_class(item_operational_key(request) || Map.get(request, :status)),
-        detail: "#{open_questions} open questions / #{slice_total(request)} slices"
+        detail: "#{open_questions} open questions / #{work_package_total(request)} WorkPackages"
       }
     end)
   end
@@ -1391,29 +1388,25 @@ defmodule SymphonyElixirWeb.SymppBoardLive do
     end
   end
 
-  defp slice_total(item) do
-    (Map.get(item, :planned_slice_count) || 0) + (Map.get(item, :approved_slice_count) || 0) +
-      (Map.get(item, :dispatched_slice_count) || 0) + (Map.get(item, :skipped_slice_count) || 0)
-  end
+  defp work_package_total(item), do: Map.get(item, :work_package_count) || 0
 
-  defp slice_signal(item) do
-    total = slice_total(item)
+  defp work_package_signal(item) do
+    total = work_package_total(item)
 
     item
-    |> slice_signal_counts()
+    |> work_package_signal_counts()
     |> Enum.find(fn {_label, count} -> count > 0 end)
     |> case do
-      {label, count} -> "#{count} #{label} / #{total} slices"
-      nil -> "0 slices"
+      {label, count} -> "#{count} #{label} / #{total} WorkPackages"
+      nil -> "0 WorkPackages"
     end
   end
 
-  defp slice_signal_counts(item) do
+  defp work_package_signal_counts(item) do
     [
-      {"approved", Map.get(item, :approved_slice_count) || 0},
-      {"planned", Map.get(item, :planned_slice_count) || 0},
-      {"dispatched", Map.get(item, :dispatched_slice_count) || 0},
-      {"skipped", Map.get(item, :skipped_slice_count) || 0}
+      {"planned", Map.get(item, :planned_work_package_count) || 0},
+      {"dispatched", Map.get(item, :dispatched_work_package_count) || 0},
+      {"skipped", Map.get(item, :skipped_work_package_count) || 0}
     ]
   end
 

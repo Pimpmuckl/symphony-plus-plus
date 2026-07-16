@@ -3,12 +3,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{Node, SliceLink}
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -46,32 +46,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   def work_request_detail(repo, %WorkRequest{} = work_request, _opts) do
     with {:ok, questions} <- WorkRequestService.list_questions(repo, work_request.id),
          {:ok, decisions} <- WorkRequestService.list_decisions(repo, work_request.id),
-         {:ok, planned_slices} <- WorkRequestService.list_planned_slices(repo, work_request.id),
-         {:ok, slice_visibility} <- DeliveryBoard.planned_slice_visibility(repo, work_request.id, planned_slices) do
-      visible_planned_slices = Map.fetch!(slice_visibility, :visible_planned_slices)
+         {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
+         {:ok, slice_visibility} <- DeliveryBoard.work_package_visibility(repo, work_request.id, work_packages) do
+      visible_work_packages = Map.fetch!(slice_visibility, :visible_work_packages)
 
       {:ok,
        %{
          "work_request" => work_request(work_request),
          "clarification_questions" => Enum.map(questions, &clarification_question/1),
          "decision_log_entries" => Enum.map(decisions, &decision_log_entry/1),
-         "planned_slices" => Enum.map(visible_planned_slices, &planned_slice/1),
-         "summary" => work_request_summary(questions, decisions, visible_planned_slices)
+         "work_packages" => Enum.map(visible_work_packages, &work_package/1),
+         "summary" => work_request_summary(questions, decisions, visible_work_packages)
        }}
     end
   end
 
-  @spec work_request_product_tree(repo(), WorkRequest.t(), [PlannedSlice.t()], map(), binary()) :: map()
-  def work_request_product_tree(repo, %WorkRequest{} = work_request, planned_slices, delivery_board, view) do
-    projection_slice_payloads = delivery_board |> Map.fetch!(:slices) |> json_safe_payload()
-    visible_planned_slices = visible_planned_slices_from_projection(planned_slices, projection_slice_payloads)
-    slice_payloads = product_tree_slice_payloads(visible_planned_slices, projection_slice_payloads)
+  @spec work_request_product_tree(repo(), WorkRequest.t(), [WorkPackage.t()], map(), binary()) :: map()
+  def work_request_product_tree(repo, %WorkRequest{} = work_request, work_packages, delivery_board, view) do
+    projection_work_package_payloads = delivery_board |> Map.fetch!(:work_packages) |> json_safe_payload()
+    visible_work_packages = visible_work_packages_from_projection(work_packages, projection_work_package_payloads)
+    work_package_payloads = product_tree_work_package_payloads(visible_work_packages, projection_work_package_payloads)
 
     product_tree =
       repo
-      |> ProductTree.project(work_request.id, projection_slice_payloads, product_tree_projection_opts())
+      |> ProductTree.project(work_request.id, projection_work_package_payloads, product_tree_projection_opts())
       |> json_safe_payload()
-      |> product_tree_view_payload(slice_payloads, view)
+      |> product_tree_view_payload(work_package_payloads, view)
 
     %{
       "work_request" => work_request(work_request),
@@ -155,29 +155,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     }
   end
 
-  @spec planned_slice(PlannedSlice.t()) :: map()
-  def planned_slice(%PlannedSlice{} = planned_slice) do
+  @spec work_package(WorkPackage.t()) :: map()
+  def work_package(%WorkPackage{} = work_package) do
     %{
-      "id" => planned_slice.id,
-      "work_request_id" => planned_slice.work_request_id,
-      "sequence" => planned_slice.sequence,
-      "title" => Redactor.redact_text(planned_slice.title),
-      "goal" => Redactor.redact_text(planned_slice.goal),
-      "work_package_kind" => planned_slice.work_package_kind,
-      "delivery_repo" => Redactor.redact_text(planned_slice.delivery_repo),
-      "target_base_branch" => Redactor.redact_text(planned_slice.target_base_branch),
-      "branch_pattern" => Redactor.redact_text(planned_slice.branch_pattern),
-      "owned_file_globs" => Enum.map(planned_slice.owned_file_globs || [], &Redactor.redact_text/1),
-      "forbidden_file_globs" => Enum.map(planned_slice.forbidden_file_globs || [], &Redactor.redact_text/1),
-      "acceptance_criteria" => Enum.map(planned_slice.acceptance_criteria || [], &Redactor.redact_text/1),
-      "validation_steps" => Enum.map(planned_slice.validation_steps || [], &Redactor.redact_text/1),
-      "review" => Redactor.redact_output(planned_slice.review_requirement),
-      "stop_conditions" => Enum.map(planned_slice.stop_conditions || [], &Redactor.redact_text/1),
-      "status" => planned_slice.status,
-      "work_package_id" => planned_slice.work_package_id,
-      "dispatched_at" => timestamp(planned_slice.dispatched_at),
-      "inserted_at" => timestamp(planned_slice.inserted_at),
-      "updated_at" => timestamp(planned_slice.updated_at)
+      "id" => work_package.id,
+      "work_request_id" => work_package.work_request_id,
+      "product_tree_node_id" => work_package.product_tree_node_id,
+      "sequence" => work_package.sequence,
+      "title" => Redactor.redact_text(work_package.title),
+      "goal" => Redactor.redact_text(work_package.goal),
+      "kind" => work_package.kind,
+      "repo" => Redactor.redact_text(work_package.repo),
+      "base_branch" => Redactor.redact_text(work_package.base_branch),
+      "branch_pattern" => Redactor.redact_text(work_package.branch_pattern),
+      "allowed_file_globs" => Enum.map(work_package.allowed_file_globs || [], &Redactor.redact_text/1),
+      "forbidden_file_globs" => Enum.map(work_package.forbidden_file_globs || [], &Redactor.redact_text/1),
+      "acceptance_criteria" => Enum.map(work_package.acceptance_criteria || [], &Redactor.redact_text/1),
+      "validation_steps" => Enum.map(work_package.validation_steps || [], &Redactor.redact_text/1),
+      "review" => Redactor.redact_output(work_package.review_requirement),
+      "stop_conditions" => Enum.map(work_package.stop_conditions || [], &Redactor.redact_text/1),
+      "status" => work_package.status,
+      "contract_revision" => work_package.contract_revision,
+      "dispatched_at" => timestamp(work_package.dispatched_at),
+      "inserted_at" => timestamp(work_package.inserted_at),
+      "updated_at" => timestamp(work_package.updated_at)
     }
   end
 
@@ -199,30 +200,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     }
   end
 
-  @spec product_tree_slice_link(SliceLink.t() | nil) :: map() | nil
-  def product_tree_slice_link(nil), do: nil
-
-  def product_tree_slice_link(%SliceLink{} = slice_link) do
-    %{
-      "id" => slice_link.id,
-      "work_request_id" => slice_link.work_request_id,
-      "product_tree_node_id" => slice_link.product_tree_node_id,
-      "planned_slice_id" => slice_link.planned_slice_id,
-      "role" => slice_link.role,
-      "position" => slice_link.position,
-      "created_by" => Redactor.redact_text(slice_link.created_by),
-      "created_at" => timestamp(slice_link.created_at),
-      "inserted_at" => timestamp(slice_link.inserted_at),
-      "updated_at" => timestamp(slice_link.updated_at)
-    }
-  end
-
-  @spec planned_slice_delivery(PlannedSliceDelivery.t()) :: map()
-  def planned_slice_delivery(%PlannedSliceDelivery{} = delivery) do
+  @spec work_package_delivery(WorkPackageDelivery.t()) :: map()
+  def work_package_delivery(%WorkPackageDelivery{} = delivery) do
     %{
       "id" => delivery.id,
       "work_request_id" => delivery.work_request_id,
-      "planned_slice_id" => delivery.planned_slice_id,
+      "work_package_id" => delivery.work_package_id,
       "outcome" => delivery.outcome,
       "idempotency_key" => Redactor.redact_text(delivery.idempotency_key),
       "recorded_by" => Redactor.redact_text(delivery.recorded_by),
@@ -233,7 +216,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       "pr_merged_at" => timestamp(delivery.pr_merged_at),
       "merge_commit_sha" => Redactor.redact_text(delivery.merge_commit_sha),
       "no_pr_evidence" => Redactor.redact_text(delivery.no_pr_evidence),
-      "successor_planned_slice_id" => delivery.successor_planned_slice_id,
       "successor_work_package_id" => delivery.successor_work_package_id,
       "superseded_reason" => Redactor.redact_text(delivery.superseded_reason),
       "abandoned_rationale" => Redactor.redact_text(delivery.abandoned_rationale),
@@ -249,49 +231,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     |> Redactor.redact_output()
   end
 
-  defp visible_planned_slices_from_projection(planned_slices, projection_slice_payloads) do
-    visible_slice_ids =
-      projection_slice_payloads
+  defp visible_work_packages_from_projection(work_packages, projection_work_package_payloads) do
+    visible_work_package_ids =
+      projection_work_package_payloads
       |> Enum.map(&map_get(&1, :id))
       |> Enum.reject(&is_nil/1)
       |> MapSet.new()
 
-    Enum.filter(planned_slices, &MapSet.member?(visible_slice_ids, &1.id))
+    Enum.filter(work_packages, &MapSet.member?(visible_work_package_ids, &1.id))
   end
 
-  defp product_tree_view_payload(product_tree, _slice_payloads, "nodes_only") do
+  defp product_tree_view_payload(product_tree, _work_package_payloads, "nodes_only") do
     product_tree
     |> Map.put("nodes", product_tree |> Map.get("nodes", []) |> Enum.map(&product_tree_node_only_payload/1))
-    |> Map.put("root_slice_ids", [])
+    |> Map.put("root_work_package_ids", [])
     |> Map.put("dependency_edges", product_tree |> Map.get("dependency_edges", []) |> Enum.filter(&product_tree_node_dependency?/1))
-    |> Map.update("summary", %{"root_slice_count" => 0}, &Map.put(&1, "root_slice_count", 0))
-    |> Map.put("omitted_slice_count", product_tree |> Map.get("summary", %{}) |> Map.get("slice_count", 0))
+    |> Map.update("summary", %{"root_work_package_count" => 0}, &Map.put(&1, "root_work_package_count", 0))
+    |> Map.put("omitted_work_package_count", product_tree |> Map.get("summary", %{}) |> Map.get("work_package_count", 0))
   end
 
-  defp product_tree_view_payload(product_tree, slice_payloads, "nodes_with_slices") do
-    Map.put(product_tree, "slices", slice_payloads)
+  defp product_tree_view_payload(product_tree, work_package_payloads, "nodes_with_work_packages") do
+    Map.put(product_tree, "work_packages", work_package_payloads)
   end
 
-  defp product_tree_view_payload(product_tree, slice_payloads, "nodes_with_slice_refs") do
-    Map.put(product_tree, "slice_refs", Enum.map(slice_payloads, &product_tree_slice_ref_payload/1))
+  defp product_tree_view_payload(product_tree, work_package_payloads, "nodes_with_work_package_refs") do
+    Map.put(product_tree, "work_package_refs", Enum.map(work_package_payloads, &product_tree_work_package_ref_payload/1))
   end
 
-  defp product_tree_slice_payloads(visible_planned_slices, projection_slice_payloads) do
-    projection_slice_payloads_by_id = Map.new(projection_slice_payloads, &{map_get(&1, :id), &1})
+  defp product_tree_work_package_payloads(visible_work_packages, projection_work_package_payloads) do
+    projection_work_package_payloads_by_id = Map.new(projection_work_package_payloads, &{map_get(&1, :id), &1})
 
-    Enum.map(visible_planned_slices, fn %PlannedSlice{} = planned_slice ->
-      planned_slice
-      |> planned_slice()
-      |> Map.merge(product_tree_operational_slice_fields(Map.get(projection_slice_payloads_by_id, planned_slice.id, %{})))
+    Enum.map(visible_work_packages, fn %WorkPackage{} = work_package ->
+      work_package
+      |> work_package()
+      |> Map.merge(product_tree_operational_work_package_fields(Map.get(projection_work_package_payloads_by_id, work_package.id, %{})))
     end)
   end
 
-  defp product_tree_projection_opts, do: [visible_only?: true, include_unlinked_nodes?: true]
+  defp product_tree_projection_opts, do: [visible_only?: true, include_unowned_nodes?: true]
 
-  defp product_tree_operational_slice_fields(projection_slice_payload) when is_map(projection_slice_payload) do
-    projection_slice_payload
+  defp product_tree_operational_work_package_fields(projection_work_package_payload) when is_map(projection_work_package_payload) do
+    projection_work_package_payload
     |> Map.take(["raw_status", "delivery_outcome", "operational_state", "attention_reason_codes"])
-    |> Map.put("status", map_get(projection_slice_payload, :raw_status))
+    |> Map.put("status", map_get(projection_work_package_payload, :raw_status))
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
   end
@@ -303,10 +285,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   defp product_tree_node_dependency?(%{"source_kind" => "product_node", "target_kind" => "product_node"}), do: true
   defp product_tree_node_dependency?(_edge), do: false
 
-  defp product_tree_slice_ref_payload(slice) when is_map(slice) do
-    slice
-    |> Map.take(["id", "sequence", "title", "status", "work_package_id"])
-    |> Map.merge(product_tree_operational_slice_fields(slice))
+  defp product_tree_work_package_ref_payload(work_package) when is_map(work_package) do
+    work_package
+    |> Map.take(["id", "sequence", "title", "status"])
+    |> Map.merge(product_tree_operational_work_package_fields(work_package))
     |> Map.put("has_full_payload", false)
   end
 
@@ -318,16 +300,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     }
   end
 
-  defp work_request_summary(questions, decisions, planned_slices) do
+  defp work_request_summary(questions, decisions, work_packages) do
     %{
       "open_question_count" => Enum.count(questions, &(&1.status == "open")),
       "answered_question_count" => Enum.count(questions, &(&1.status == "answered")),
       "closed_question_count" => Enum.count(questions, &(&1.status == "closed")),
       "decision_count" => length(decisions),
-      "planned_slice_count" => Enum.count(planned_slices, &(&1.status == "planned")),
-      "approved_slice_count" => Enum.count(planned_slices, &(&1.status == "approved")),
-      "dispatched_slice_count" => Enum.count(planned_slices, &(&1.status == "dispatched")),
-      "skipped_slice_count" => Enum.count(planned_slices, &(&1.status == "skipped"))
+      "work_package_count" => length(work_packages),
+      "planned_work_package_count" => Enum.count(work_packages, &(&1.status == "planned")),
+      "dispatched_work_package_count" => Enum.count(work_packages, &(not is_nil(&1.dispatched_at))),
+      "skipped_work_package_count" => Enum.count(work_packages, &(&1.status == "skipped"))
     }
   end
 

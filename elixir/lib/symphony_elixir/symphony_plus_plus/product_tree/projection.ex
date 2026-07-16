@@ -30,98 +30,99 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   ]
 
   @spec project(module(), String.t(), [map()], keyword()) :: map()
-  def project(repo, work_request_id, planned_slice_payloads, opts \\ [])
-      when is_atom(repo) and is_binary(work_request_id) and is_list(planned_slice_payloads) and is_list(opts) do
+  def project(repo, work_request_id, work_package_payloads, opts \\ [])
+      when is_atom(repo) and is_binary(work_request_id) and is_list(work_package_payloads) and is_list(opts) do
     case ProductTree.tree_for_work_request(repo, work_request_id) do
-      {:ok, tree} -> project_tree(tree, planned_slice_payloads, opts)
-      {:error, reason} -> unavailable_projection(reason, planned_slice_payloads)
+      {:ok, tree} -> project_tree(tree, work_package_payloads, opts)
+      {:error, reason} -> unavailable_projection(reason, work_package_payloads)
     end
   end
 
   defp project_tree(
          %{
            nodes: nodes,
-           slice_links: slice_links,
            dependency_edges: dependency_edges,
            latest_revision: latest_revision
          },
-         planned_slice_payloads,
+         work_package_payloads,
          opts
        ) do
-    planned_slice_ids = Enum.map(planned_slice_payloads, &map_value(&1, "id"))
-    visible_slice_ids = planned_slice_ids |> Enum.reject(&is_nil/1) |> MapSet.new()
+    work_package_ids = Enum.map(work_package_payloads, &map_value(&1, "id"))
+    visible_work_package_ids = work_package_ids |> Enum.reject(&is_nil/1) |> MapSet.new()
 
-    {nodes, slice_links, dependency_edges} =
+    {nodes, work_package_payloads, dependency_edges} =
       scope_tree_records(
         nodes,
-        slice_links,
+        work_package_payloads,
         dependency_edges,
-        visible_slice_ids,
+        visible_work_package_ids,
         opts
       )
 
-    linked_slice_ids = slice_links |> Enum.map(& &1.planned_slice_id) |> MapSet.new()
-    slices_by_id = Map.new(planned_slice_payloads, &{map_value(&1, "id"), &1})
+    node_work_package_ids =
+      work_package_payloads
+      |> Enum.filter(&(map_value(&1, "product_tree_node_id") not in [nil, ""]))
+      |> Enum.map(&map_value(&1, "id"))
+      |> MapSet.new()
 
     projected_nodes =
       nodes
-      |> Enum.map(&node_payload(&1, slice_links, slices_by_id))
+      |> Enum.map(&node_payload(&1, work_package_payloads))
       |> rollup_node_completion()
       |> Enum.map(&put_child_counts(&1, nodes))
 
-    root_slice_ids =
-      Enum.reject(planned_slice_ids, &(is_nil(&1) or MapSet.member?(linked_slice_ids, &1)))
+    root_work_package_ids =
+      Enum.reject(work_package_ids, &(is_nil(&1) or MapSet.member?(node_work_package_ids, &1)))
 
     %{
       available: true,
       schema_version: "product_tree.v3",
-      mode: if(nodes == [], do: "direct_slices", else: "product_tree"),
+      mode: if(nodes == [], do: "direct_work_packages", else: "product_tree"),
       root_node_ids: root_node_ids(projected_nodes),
-      root_slice_ids: root_slice_ids,
+      root_work_package_ids: root_work_package_ids,
       nodes: projected_nodes,
       dependency_edges: Enum.map(dependency_edges, &dependency_edge_payload/1),
-      summary: summary(projected_nodes, root_slice_ids, planned_slice_payloads),
+      summary: summary(projected_nodes, root_work_package_ids, work_package_payloads),
       latest_revision: revision_payload(latest_revision)
     }
   end
 
-  defp scope_tree_records(nodes, slice_links, dependency_edges, visible_slice_ids, opts) when is_list(opts) do
+  defp scope_tree_records(nodes, work_packages, dependency_edges, visible_work_package_ids, opts) when is_list(opts) do
     if Keyword.get(opts, :visible_only?, false) do
-      scope_visible_tree_records(nodes, slice_links, dependency_edges, visible_slice_ids, opts)
+      scope_visible_tree_records(nodes, work_packages, dependency_edges, visible_work_package_ids, opts)
     else
-      {nodes, slice_links, dependency_edges}
+      {nodes, work_packages, dependency_edges}
     end
   end
 
-  defp scope_visible_tree_records(nodes, slice_links, dependency_edges, visible_slice_ids, opts) do
-    visible_slice_links = Enum.filter(slice_links, &MapSet.member?(visible_slice_ids, &1.planned_slice_id))
+  defp scope_visible_tree_records(nodes, work_packages, dependency_edges, visible_work_package_ids, opts) do
+    visible_work_packages = Enum.filter(work_packages, &MapSet.member?(visible_work_package_ids, map_value(&1, "id")))
     node_ids_by_id = Map.new(nodes, &{&1.id, &1})
 
     visible_node_ids =
-      visible_slice_links
-      |> Enum.reduce(MapSet.new(), fn link, node_ids ->
-        add_node_with_ancestors(node_ids, node_ids_by_id, link.product_tree_node_id)
+      visible_work_packages
+      |> Enum.reduce(MapSet.new(), fn work_package, node_ids ->
+        add_node_with_ancestors(node_ids, node_ids_by_id, map_value(work_package, "product_tree_node_id"))
       end)
-      |> maybe_add_unlinked_node_ids(nodes, slice_links, node_ids_by_id, opts)
+      |> maybe_add_unowned_node_ids(nodes, visible_work_packages, node_ids_by_id, opts)
 
     nodes = Enum.filter(nodes, &MapSet.member?(visible_node_ids, &1.id))
-    slice_links = Enum.filter(visible_slice_links, &MapSet.member?(visible_node_ids, &1.product_tree_node_id))
 
     dependency_edges =
       Enum.filter(dependency_edges, fn edge ->
-        visible_dependency_endpoint?(edge.source_kind, edge.source_id, visible_node_ids, visible_slice_ids) and
-          visible_dependency_endpoint?(edge.target_kind, edge.target_id, visible_node_ids, visible_slice_ids)
+        visible_dependency_endpoint?(edge.source_kind, edge.source_id, visible_node_ids, visible_work_package_ids) and
+          visible_dependency_endpoint?(edge.target_kind, edge.target_id, visible_node_ids, visible_work_package_ids)
       end)
 
-    {nodes, slice_links, dependency_edges}
+    {nodes, visible_work_packages, dependency_edges}
   end
 
-  defp maybe_add_unlinked_node_ids(node_ids, nodes, slice_links, nodes_by_id, opts) do
-    if Keyword.get(opts, :include_unlinked_nodes?, false) do
-      linked_node_ids = slice_links |> Enum.map(& &1.product_tree_node_id) |> MapSet.new()
+  defp maybe_add_unowned_node_ids(node_ids, nodes, work_packages, nodes_by_id, opts) do
+    if Keyword.get(opts, :include_unowned_nodes?, false) do
+      owned_node_ids = work_packages |> Enum.map(&map_value(&1, "product_tree_node_id")) |> MapSet.new()
 
       nodes
-      |> Enum.reject(&MapSet.member?(linked_node_ids, &1.id))
+      |> Enum.reject(&MapSet.member?(owned_node_ids, &1.id))
       |> Enum.reduce(node_ids, fn node, acc -> add_node_with_ancestors(acc, nodes_by_id, node.id) end)
     else
       node_ids
@@ -143,25 +144,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
     end
   end
 
-  defp visible_dependency_endpoint?("product_node", id, visible_node_ids, _visible_slice_ids) do
+  defp visible_dependency_endpoint?("product_node", id, visible_node_ids, _visible_work_package_ids) do
     MapSet.member?(visible_node_ids, id)
   end
 
-  defp visible_dependency_endpoint?("planned_slice", id, _visible_node_ids, visible_slice_ids) do
-    MapSet.member?(visible_slice_ids, id)
+  defp visible_dependency_endpoint?("work_package", id, _visible_node_ids, visible_work_package_ids) do
+    MapSet.member?(visible_work_package_ids, id)
   end
 
-  defp visible_dependency_endpoint?(_kind, _id, _visible_node_ids, _visible_slice_ids), do: false
+  defp visible_dependency_endpoint?(_kind, _id, _visible_node_ids, _visible_work_package_ids), do: false
 
-  defp node_payload(%Node{} = node, slice_links, slices_by_id) do
-    links =
-      slice_links
-      |> Enum.filter(&(&1.product_tree_node_id == node.id))
-      |> Enum.sort_by(&{&1.position || 0, timestamp_sort(&1.created_at), &1.id || ""})
+  defp node_payload(%Node{} = node, work_packages) do
+    node_work_packages =
+      work_packages
+      |> Enum.filter(&(map_value(&1, "product_tree_node_id") == node.id))
+      |> Enum.sort_by(&{map_value(&1, "sequence") || 0, map_value(&1, "id") || ""})
 
-    slice_ids = Enum.map(links, & &1.planned_slice_id)
-    linked_slices = slice_ids |> Enum.map(&Map.get(slices_by_id, &1)) |> Enum.reject(&is_nil/1)
-    computed_mark = computed_completion_mark(node.completion_mark, linked_slices)
+    work_package_ids = Enum.map(node_work_packages, &map_value(&1, "id"))
+    computed_mark = computed_completion_mark(node.completion_mark, node_work_packages)
 
     %{
       id: node.id,
@@ -172,12 +172,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
       completion_mark: node.completion_mark,
       computed_completion_mark: computed_mark,
       completion_label: completion_label(computed_mark),
-      slice_ids: slice_ids,
+      work_package_ids: work_package_ids,
       child_node_count: 0,
-      slice_count: length(slice_ids),
-      attention_count: attention_count(linked_slices),
-      guidance_count: guidance_count(linked_slices),
-      blocker_count: blocker_count(linked_slices),
+      work_package_count: length(work_package_ids),
+      attention_count: attention_count(node_work_packages),
+      guidance_count: guidance_count(node_work_packages),
+      blocker_count: blocker_count(node_work_packages),
       position: node.position || 0,
       metadata: Sanitizer.redacted_json(node.metadata || %{}),
       created_by: Sanitizer.redacted_text(node.created_by),
@@ -216,7 +216,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   defp rollup_completion_mark(node, child_marks) do
     self_marks =
       cond do
-        (node.slice_count || 0) > 0 -> [node.computed_completion_mark]
+        (node.work_package_count || 0) > 0 -> [node.computed_completion_mark]
         node.completion_mark in ["done", "partial", "not_done", "deferred"] -> [node.completion_mark]
         true -> []
       end
@@ -264,8 +264,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   defp computed_completion_mark("partial", []), do: "partial"
   defp computed_completion_mark(_mark, []), do: "unknown"
 
-  defp computed_completion_mark(_mark, linked_slices) do
-    states = Enum.map(linked_slices, &slice_state/1)
+  defp computed_completion_mark(_mark, work_packages) do
+    states = Enum.map(work_packages, &work_package_state/1)
 
     cond do
       Enum.all?(states, &terminal_completion_state?/1) -> "done"
@@ -306,41 +306,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
     }
   end
 
-  defp summary(nodes, root_slice_ids, planned_slice_payloads) do
+  defp summary(nodes, root_work_package_ids, work_package_payloads) do
     marks = Enum.map(nodes, & &1.computed_completion_mark)
 
     %{
       node_count: length(nodes),
       root_node_count: length(root_node_ids(nodes)),
-      root_slice_count: length(root_slice_ids),
-      slice_count: length(planned_slice_payloads),
-      linked_slice_count: Enum.sum(Enum.map(nodes, & &1.slice_count)),
+      root_work_package_count: length(root_work_package_ids),
+      work_package_count: length(work_package_payloads),
+      node_work_package_count: Enum.sum(Enum.map(nodes, & &1.work_package_count)),
       done_count: Enum.count(marks, &(&1 == "done")),
       partial_count: Enum.count(marks, &(&1 == "partial")),
       not_done_count: Enum.count(marks, &(&1 == "not_done")),
       deferred_count: Enum.count(marks, &(&1 == "deferred")),
       unknown_count: Enum.count(marks, &(&1 == "unknown")),
-      attention_count: Enum.count(planned_slice_payloads, &slice_attention?/1),
-      guidance_count: Enum.count(planned_slice_payloads, &slice_guidance?/1),
-      blocker_count: Enum.count(planned_slice_payloads, &slice_blocker?/1)
+      attention_count: Enum.count(work_package_payloads, &work_package_attention?/1),
+      guidance_count: Enum.count(work_package_payloads, &work_package_guidance?/1),
+      blocker_count: Enum.count(work_package_payloads, &work_package_blocker?/1)
     }
   end
 
-  defp unavailable_projection(reason, planned_slice_payloads) do
+  defp unavailable_projection(reason, work_package_payloads) do
     %{
       available: false,
       schema_version: "product_tree.v3",
       mode: "unavailable",
       root_node_ids: [],
-      root_slice_ids: planned_slice_payloads |> Enum.map(&map_value(&1, "id")) |> Enum.reject(&is_nil/1),
+      root_work_package_ids: work_package_payloads |> Enum.map(&map_value(&1, "id")) |> Enum.reject(&is_nil/1),
       nodes: [],
       dependency_edges: [],
       summary: %{
         node_count: 0,
         root_node_count: 0,
-        root_slice_count: length(planned_slice_payloads),
-        slice_count: length(planned_slice_payloads),
-        linked_slice_count: 0,
+        root_work_package_count: length(work_package_payloads),
+        work_package_count: length(work_package_payloads),
+        node_work_package_count: 0,
         done_count: 0,
         partial_count: 0,
         not_done_count: 0,
@@ -368,30 +368,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
     |> Enum.map(& &1.id)
   end
 
-  defp attention_count(slices), do: Enum.count(slices, &slice_attention?/1)
-  defp guidance_count(slices), do: Enum.count(slices, &slice_guidance?/1)
-  defp blocker_count(slices), do: Enum.count(slices, &slice_blocker?/1)
+  defp attention_count(work_packages), do: Enum.count(work_packages, &work_package_attention?/1)
+  defp guidance_count(work_packages), do: Enum.count(work_packages, &work_package_guidance?/1)
+  defp blocker_count(work_packages), do: Enum.count(work_packages, &work_package_blocker?/1)
 
-  defp slice_attention?(slice) do
-    state = map_value(slice, "operational_state") || %{}
+  defp work_package_attention?(work_package) do
+    state = map_value(work_package, "operational_state") || %{}
 
     map_value(state, "key") in ["blocked", "needs_attention"] or
       (map_value(state, "attention_items") || []) != [] or
-      (map_value(slice, "attention_reason_codes") || []) != []
+      (map_value(work_package, "attention_reason_codes") || []) != []
   end
 
-  defp slice_blocker?(slice) do
-    state = map_value(slice, "operational_state") || %{}
+  defp work_package_blocker?(work_package) do
+    state = map_value(work_package, "operational_state") || %{}
 
     map_value(state, "key") == "blocked" or
       Enum.any?(map_value(state, "attention_items") || [], &attention_item_blocker?/1)
   end
 
-  defp slice_guidance?(slice) do
-    state = map_value(slice, "operational_state") || %{}
+  defp work_package_guidance?(work_package) do
+    state = map_value(work_package, "operational_state") || %{}
     attention_items = map_value(state, "attention_items") || []
 
-    [map_value(state, "key"), map_value(slice, "status"), map_value(slice, "work_package_status")]
+    [map_value(state, "key"), map_value(work_package, "status"), map_value(work_package, "work_package_status")]
     |> Enum.any?(&(&1 in @guidance_completion_keys)) or Enum.any?(attention_items, &attention_item_guidance?/1)
   end
 
@@ -417,12 +417,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   defp downcased(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
   defp downcased(_value), do: ""
 
-  defp slice_state(slice) do
-    state = map_value(slice, "operational_state") || %{}
+  defp work_package_state(work_package) do
+    state = map_value(work_package, "operational_state") || %{}
 
     map_value(state, "key") ||
-      map_value(slice, "work_package_status") ||
-      map_value(slice, "status")
+      map_value(work_package, "work_package_status") ||
+      map_value(work_package, "status")
   end
 
   defp completion_label("done"), do: "Done"
@@ -442,7 +442,4 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
 
   defp timestamp(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
   defp timestamp(_datetime), do: nil
-
-  defp timestamp_sort(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
-  defp timestamp_sort(_datetime), do: ""
 end

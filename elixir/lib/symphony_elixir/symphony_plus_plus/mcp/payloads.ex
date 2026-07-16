@@ -6,7 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @type timestamp_value :: DateTime.t() | NaiveDateTime.t() | nil
@@ -80,11 +80,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
     }
   end
 
-  @spec dispatch_slice_payload(map(), map()) :: map()
-  def dispatch_slice_payload(
+  @spec dispatch_work_package_result_payload(map(), map()) :: map()
+  def dispatch_work_package_result_payload(
         %{
           work_request: %WorkRequest{} = work_request,
-          planned_slice: %PlannedSlice{} = planned_slice,
+          work_package: %WorkPackage{} = work_package,
           creation: creation
         } = dispatch,
         scope
@@ -96,17 +96,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
     %{
       "coordinates" => worker_bootstrap && Map.get(worker_bootstrap, "coordinates"),
       "work_request" => %{"id" => work_request.id},
-      "planned_slice" => %{
-        "id" => planned_slice.id,
-        "status" => planned_slice.status,
-        "work_package_id" => planned_slice.work_package_id,
-        "dispatched_at" => timestamp(planned_slice.dispatched_at)
+      "work_package" => %{
+        "id" => work_package.id,
+        "status" => work_package.status,
+        "dispatched_at" => timestamp(work_package.dispatched_at)
       },
-      "work_package" => dispatch_work_package_payload(Map.fetch!(creation, :work_package)),
       "worker_bootstrap" => worker_bootstrap,
       "worker_grant" => dispatch_worker_grant_payload(Map.fetch!(creation, :worker_grant)),
       "scope" => scope,
-      "status" => %{"planned_slice_status" => planned_slice.status}
+      "status" => %{"work_package_status" => work_package.status}
     }
   end
 

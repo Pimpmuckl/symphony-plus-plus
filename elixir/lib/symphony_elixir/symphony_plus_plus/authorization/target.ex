@@ -9,7 +9,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Target do
     :base_branch,
     :phase_id,
     :work_request_id,
-    :planned_slice_id,
     :work_package_id,
     repo_scopes: [],
     resolution: :resolved,
@@ -20,7 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Target do
           :ledger
           | :repo
           | :work_request
-          | :planned_slice
           | :work_package
           | :task_plan
           | :progress
@@ -44,7 +42,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Target do
           repo_scopes: [repo_scope()],
           phase_id: String.t() | nil,
           work_request_id: String.t() | nil,
-          planned_slice_id: String.t() | nil,
           work_package_id: String.t() | nil,
           resolution: resolution(),
           metadata: map()
@@ -65,19 +62,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Target do
     new(:work_request, id, Keyword.put(opts, :work_request_id, id))
   end
 
-  @spec planned_slice(String.t(), String.t(), keyword()) :: t()
-  def planned_slice(id, work_request_id, opts \\ []) when is_binary(id) and is_binary(work_request_id) do
+  @spec work_package(String.t(), String.t(), keyword()) :: t()
+  def work_package(id, work_request_id, opts) when is_binary(id) and is_binary(work_request_id) and is_list(opts) do
     opts =
       opts
       |> Keyword.put(:work_request_id, work_request_id)
-      |> Keyword.put(:planned_slice_id, id)
+      |> Keyword.put(:work_package_id, id)
 
-    new(:planned_slice, id, opts)
+    new(:work_package, id, opts)
   end
 
-  @spec work_package(String.t(), keyword()) :: t()
+  @spec work_package(String.t(), keyword() | String.t()) :: t()
   def work_package(id, opts \\ []) when is_binary(id) do
-    new(:work_package, id, Keyword.put(opts, :work_package_id, id))
+    if is_binary(opts) do
+      work_package(id, opts, [])
+    else
+      new(:work_package, id, Keyword.put(opts, :work_package_id, id))
+    end
   end
 
   @spec package_resource(type(), String.t(), keyword()) :: t()
@@ -107,7 +108,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Target do
       repo_scopes: normalize_repo_scopes(Keyword.get(opts, :repo_scopes, [])),
       phase_id: Keyword.get(opts, :phase_id),
       work_request_id: Keyword.get(opts, :work_request_id),
-      planned_slice_id: Keyword.get(opts, :planned_slice_id),
       work_package_id: Keyword.get(opts, :work_package_id),
       resolution: Keyword.get(opts, :resolution, :resolved),
       metadata: Keyword.get(opts, :metadata, %{})

@@ -4,16 +4,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProductTreeRevisionIdempotencyTest
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Revision
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
 
   test "delivery replay does not record another product tree revision", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-MCP-DELIVERY-REVISION-REPLAY", status: "sliced")
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(id: "WRS-MCP-DELIVERY-REVISION-REPLAY")
+               work_request_work_package_attrs(id: "WRS-MCP-DELIVERY-REVISION-REPLAY")
              )
 
     {_anchor, session, _grant} =
@@ -21,7 +21,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProductTreeRevisionIdempotencyTest
 
     args = %{
       "work_request_id" => work_request.id,
-      "planned_slice_id" => planned_slice.id,
+      "work_package_id" => work_package.id,
       "outcome" => "completed_no_pr",
       "evidence" => %{
         "completed_no_pr" => %{"no_pr_evidence" => "Operator confirmed the no-PR closeout."}
@@ -29,16 +29,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProductTreeRevisionIdempotencyTest
       "idempotency_key" => "delivery-revision-replay"
     }
 
-    closeout = mcp_tool(repo, session, "record_planned_slice_delivery", args)
-    assert get_in(closeout, ["result", "structuredContent", "planned_slice_delivery", "id"])
+    closeout = mcp_tool(repo, session, "record_work_package_delivery", args)
+    assert get_in(closeout, ["result", "structuredContent", "work_package_delivery", "id"])
     assert revision_count(repo, work_request.id) == 1
 
-    replay = mcp_tool(repo, session, "record_planned_slice_delivery", args)
+    replay = mcp_tool(repo, session, "record_work_package_delivery", args)
 
-    assert get_in(replay, ["result", "structuredContent", "planned_slice_delivery", "id"]) ==
-             get_in(closeout, ["result", "structuredContent", "planned_slice_delivery", "id"])
+    assert get_in(replay, ["result", "structuredContent", "work_package_delivery", "id"]) ==
+             get_in(closeout, ["result", "structuredContent", "work_package_delivery", "id"])
 
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 1
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
     assert revision_count(repo, work_request.id) == 1
   end
 

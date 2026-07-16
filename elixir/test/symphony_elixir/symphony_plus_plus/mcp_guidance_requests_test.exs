@@ -19,7 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.TestSupport
@@ -95,7 +94,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     repo.delete_all(GuidanceRequest)
     repo.delete_all(ProgressEvent)
     repo.delete_all(AccessGrant)
-    repo.delete_all(PlannedSlice)
+    repo.delete_all(WorkPackage)
     repo.delete_all(WorkRequest)
     repo.delete_all(WorkPackage)
     repo.delete_all(Phase)
@@ -255,8 +254,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
 
   test "WorkRequest architect sees guidance for unphased dispatched slice packages", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-GUIDANCE-WR-DISPATCHED")
-    planned_slice = create_planned_slice!(repo, work_request, id: "WRS-GUIDANCE-WR-DISPATCHED")
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+    work_package = create_work_package!(repo, work_request, id: "WRS-GUIDANCE-WR-DISPATCHED")
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
     package =
       create_matching_work_package!(repo, work_request, approved_slice,
@@ -266,7 +265,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
       )
 
     assert is_nil(package.phase_id)
-    assert {:ok, _dispatched_slice} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", package.id)
+    assert {:ok, _dispatched_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", package.id)
 
     worker_session = create_worker_session_for_package(repo, package, "wr-worker")
 
@@ -274,7 +273,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
       create_guidance_request(repo, worker_session, %{
         "summary" => "Need WorkRequest architect guidance",
         "question" => "Should this no-code dispatch be abandoned?",
-        "context" => "The package is linked through a WorkRequest planned slice, not a phase child.",
+        "context" => "The package is linked through a WorkRequest WorkPackage, not a phase child.",
         "idempotency_key" => "wr-linked-guidance"
       })
 
@@ -313,8 +312,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
         base_branch: "main"
       )
 
-    planned_slice = create_planned_slice!(repo, work_request, id: "WRS-GUIDANCE-WR-REPO-ALIAS")
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+    work_package = create_work_package!(repo, work_request, id: "WRS-GUIDANCE-WR-REPO-ALIAS")
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
     package =
       create_matching_work_package!(repo, work_request, approved_slice,
@@ -323,7 +322,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
         status: "planning"
       )
 
-    assert {:ok, _dispatched_slice} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", package.id)
+    assert {:ok, _dispatched_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", package.id)
 
     worker_session = create_worker_session_for_package(repo, package, "repo-alias-worker")
 
@@ -363,8 +362,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     assert {:ok, _phase} = PhaseRepository.create(repo, %{id: other_phase_id, title: "Other guidance phase"})
 
     work_request = create_work_request!(repo, id: "WR-GUIDANCE-WR-OTHER-PHASE")
-    planned_slice = create_planned_slice!(repo, work_request, id: "WRS-GUIDANCE-WR-OTHER-PHASE")
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+    work_package = create_work_package!(repo, work_request, id: "WRS-GUIDANCE-WR-OTHER-PHASE")
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
     package =
       create_matching_work_package!(repo, work_request, approved_slice,
@@ -373,7 +372,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
         status: "planning"
       )
 
-    assert {:ok, _dispatched_slice} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", package.id)
+    assert {:ok, _dispatched_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", package.id)
 
     worker_session = create_worker_session_for_package(repo, package, "other-phase-worker")
 
@@ -393,8 +392,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
 
   test "architect escalation records human_info_needed blocker that blocks readiness", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-GUIDANCE-BLOCKED")
-    planned_slice = create_planned_slice!(repo, work_request, id: "WRS-GUIDANCE-BLOCKED")
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+    work_package = create_work_package!(repo, work_request, id: "WRS-GUIDANCE-BLOCKED")
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
     package =
       create_matching_work_package!(repo, work_request, approved_slice,
@@ -403,7 +402,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
         status: "ci_waiting"
       )
 
-    assert {:ok, _dispatched_slice} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", package.id)
+    assert {:ok, _dispatched_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", package.id)
 
     worker_session = create_worker_session_for_package(repo, package, "blocked-worker")
     {_anchor, architect_session} = create_work_request_architect_session(repo, work_request)
@@ -718,24 +717,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     work_request
   end
 
-  defp create_planned_slice!(repo, %WorkRequest{} = work_request, overrides) do
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(work_request, overrides))
+  defp create_work_package!(repo, %WorkRequest{} = work_request, overrides) do
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(work_request, overrides))
 
-    planned_slice
+    work_package
   end
 
-  defp create_matching_work_package!(repo, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, overrides) do
+  defp create_matching_work_package!(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, overrides) do
     attrs =
       [
-        kind: planned_slice.work_package_kind,
-        title: planned_slice.title,
+        kind: work_package.kind,
+        title: work_package.title,
         repo: work_request.repo,
-        base_branch: planned_slice.target_base_branch,
-        branch_pattern: planned_slice.branch_pattern,
+        base_branch: work_package.base_branch,
+        branch_pattern: work_package.branch_pattern,
         product_description: work_request.human_description,
-        allowed_file_globs: planned_slice.owned_file_globs,
-        acceptance_criteria: planned_slice.acceptance_criteria
+        allowed_file_globs: work_package.allowed_file_globs,
+        acceptance_criteria: work_package.acceptance_criteria
       ]
       |> Keyword.merge(overrides)
       |> work_package_attrs()
@@ -811,15 +810,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     Enum.into(overrides, defaults)
   end
 
-  defp planned_slice_attrs(%WorkRequest{} = work_request, overrides) do
+  defp work_package_attrs(%WorkRequest{} = work_request, overrides) do
     defaults = %{
       id: "WRS-GUIDANCE-#{System.unique_integer([:positive])}",
       title: "Guidance linked slice",
       goal: "Keep package guidance visible to the WorkRequest architect.",
-      work_package_kind: "mcp",
-      target_base_branch: work_request.base_branch,
+      kind: "mcp",
+      base_branch: work_request.base_branch,
       branch_pattern: "feat/guidance-linked-slice",
-      owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/**"],
+      allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/**"],
       forbidden_file_globs: ["elixir/assets/**"],
       acceptance_criteria: ["Guidance remains answerable through the owning architect."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/mcp_guidance_requests_test.exs"],

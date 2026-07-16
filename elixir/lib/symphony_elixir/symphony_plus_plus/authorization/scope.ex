@@ -4,7 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Scope do
   @enforce_keys [:type]
   defstruct [:type, :id, :repo, :base_branch, metadata: %{}]
 
-  @type type :: :ledger | :work_request | :work_package | :planned_slice | :repo | :phase
+  @type type :: :ledger | :work_request | :work_package | :repo | :phase
 
   @type t :: %__MODULE__{
           type: type(),
@@ -23,9 +23,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Scope do
   @spec work_package(String.t(), keyword()) :: t()
   def work_package(id, opts \\ []) when is_binary(id), do: new(:work_package, id, opts)
 
-  @spec planned_slice(String.t(), keyword()) :: t()
-  def planned_slice(id, opts \\ []) when is_binary(id), do: new(:planned_slice, id, opts)
-
   @spec repo(String.t(), String.t() | nil, keyword()) :: t()
   def repo(repo, base_branch \\ nil, opts \\ []) when is_binary(repo) do
     new(:repo, nil, Keyword.merge(opts, repo: repo, base_branch: base_branch))
@@ -35,7 +32,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Scope do
   def phase(id, opts \\ []) when is_binary(id), do: new(:phase, id, opts)
 
   @spec new(type(), String.t() | nil, keyword()) :: t()
-  def new(type, id \\ nil, opts \\ []) when type in [:ledger, :work_request, :work_package, :planned_slice, :repo, :phase] do
+  def new(type, id \\ nil, opts \\ []) when type in [:ledger, :work_request, :work_package, :repo, :phase] do
     %__MODULE__{
       type: type,
       id: id,

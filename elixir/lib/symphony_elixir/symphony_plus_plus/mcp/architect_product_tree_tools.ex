@@ -3,13 +3,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
+      optional_list_argument: 2,
       optional_nonnegative_integer_argument: 2,
+      optional_positive_integer_argument: 2,
       optional_object_argument: 2,
       optional_string_argument: 2,
       optional_string_argument: 3,
-      optional_string_list_argument: 2,
       required_argument: 2,
-      required_string_array: 2
+      required_object: 2
     ]
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads, only: [json_safe_payload: 1]
@@ -34,22 +35,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @tools [
     "ask_question",
     "record_decision",
-    "plan_slice",
+    "slice_work_request",
+    "update_work_package",
     "upsert_plan_node",
     "move_plan_node",
     "set_plan_node_completion",
-    "move_slice_to_plan_node",
-    "approve_slice",
-    "skip_slice"
+    "skip_work_package"
   ]
   @terminal_product_tree_completion_marks ["done", "deferred"]
 
@@ -148,64 +144,78 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("plan_slice", %Config{} = config, session, arguments) do
+  def call("slice_work_request", %Config{} = config, session, arguments) do
+    tool = "slice_work_request"
+
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
-         {:ok, work_request, filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :planned_slice_create, "plan_slice"),
-         {:ok, title} <- required_argument(arguments, "title"),
-         {:ok, goal} <- required_argument(arguments, "goal"),
-         {:ok, work_package_kind} <- optional_string_argument(arguments, "work_package_kind", "standard_pr"),
-         {:ok, delivery_repo} <- optional_string_argument(arguments, "delivery_repo", work_request.repo),
-         {:ok, target_base_branch} <- target_branch(arguments, delivery_repo, work_request),
-         {:ok, owned_file_globs} <- required_string_array(arguments, "owned_file_globs"),
-         {:ok, forbidden_file_globs} <- optional_string_list_argument(arguments, "forbidden_file_globs"),
-         {:ok, acceptance_criteria} <- required_string_array(arguments, "acceptance_criteria"),
-         {:ok, validation_steps} <- required_string_array(arguments, "validation_steps"),
-         {:ok, review} <- optional_object_argument(arguments, "review"),
-         {:ok, review} <- normalize_review_requirement(review),
-         {:ok, stop_conditions} <- required_string_array(arguments, "stop_conditions"),
-         {:ok, branch_pattern} <- optional_string_argument(arguments, "branch_pattern"),
-         :ok <- require_supported_branch_pattern(branch_pattern),
-         :ok <- validate_planned_slice_scope_for_tool(work_request, work_package_kind, owned_file_globs),
-         attrs =
-           %{
-             "title" => title,
-             "goal" => goal,
-             "work_package_kind" => work_package_kind,
-             "delivery_repo" => delivery_repo,
-             "target_base_branch" => target_base_branch,
-             "owned_file_globs" => owned_file_globs,
-             "forbidden_file_globs" => forbidden_file_globs,
-             "acceptance_criteria" => acceptance_criteria,
-             "validation_steps" => validation_steps,
-             "stop_conditions" => stop_conditions
-           }
-           |> optional_put_present("review_requirement", review, Map.has_key?(arguments, "review"))
-           |> optional_put("branch_pattern", branch_pattern),
-         {:ok, {planned_slice, updated_work_request}} <-
+         {:ok, work_packages} <- optional_list_argument(arguments, "work_packages"),
+         :ok <- require_work_package_batch(work_packages),
+         {:ok, _work_request, _filters, scope} <-
+           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_package_create, tool),
+         {:ok, result} <-
            mutate_product_tree(
              config.repo,
              work_request_id,
-             "plan_slice",
+             tool,
              session_claimed_by(session),
-             fn -> add_planned_slice_and_reload_work_request(config.repo, work_request_id, attrs, filters) end
+             fn -> WorkRequestService.slice_work_request(config.repo, work_request_id, work_packages) end
            ) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "planned_slice" => WorkRequestPayloads.planned_slice(planned_slice),
+         "work_package_ids" => Enum.map(result.work_packages, & &1.id),
          "scope" => scope,
-         "status" => %{
-           "work_request_status" => updated_work_request.status,
-           "planned_slice_status" => planned_slice.status
-         }
+         "status" => %{"work_request_status" => result.work_request.status}
        })}
     else
-      {:tool_error, reason} -> invalid_params_error("plan_slice", reason)
-      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error("plan_slice", "invalid_planned_slice", changeset)
-      {:error, :not_found} -> not_found_error("plan_slice")
-      {:error, reason} -> architect_error(reason, "plan_slice")
+      {:tool_error, reason} -> invalid_params_error(tool, reason)
+      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_work_package", changeset)
+      {:error, :not_found} -> not_found_error(tool)
+      {:error, reason} -> architect_error(reason, tool)
+    end
+  end
+
+  def call("update_work_package", %Config{} = config, session, arguments) do
+    tool = "update_work_package"
+
+    with {:ok, session} <- Auth.require_session(session, config.repo),
+         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
+         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
+         {:ok, expected_revision} <- optional_positive_integer_argument(arguments, "expected_contract_revision"),
+         {:ok, patch} <- required_object(arguments, "patch"),
+         :ok <- require_positive_revision(expected_revision),
+         :ok <- require_object(patch, "patch"),
+         {:ok, _work_request, _work_package, _filters, scope} <-
+           WorkRequestScope.authorized_work_package_scope(
+             config.repo,
+             session,
+             work_request_id,
+             work_package_id,
+             :work_package_update,
+             tool
+           ),
+         {:ok, work_package} <-
+           mutate_product_tree(config.repo, work_request_id, tool, session_claimed_by(session), fn ->
+             WorkRequestService.update_work_package(
+               config.repo,
+               work_request_id,
+               work_package_id,
+               expected_revision,
+               patch
+             )
+           end) do
+      {:ok,
+       ToolResult.tool_result(%{
+         "work_package_id" => work_package.id,
+         "contract_revision" => work_package.contract_revision,
+         "scope" => scope,
+         "status" => %{"work_package_status" => work_package.status}
+       })}
+    else
+      {:tool_error, reason} -> invalid_params_error(tool, reason)
+      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_work_package", changeset)
+      {:error, :not_found} -> not_found_error(tool)
+      {:error, reason} -> architect_error(reason, tool)
     end
   end
 
@@ -222,7 +232,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          :ok <- require_product_plan_node_content(product_tree_node_id, title, description, node_kind),
          {:ok, work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
-         :ok <- require_planned_slice_authoring_status(work_request.status),
+         :ok <- require_work_package_authoring_status(work_request.status),
          {:ok, current_parent_id} <- product_plan_node_current_parent_id(config.repo, work_request_id, product_tree_node_id),
          attrs =
            %{
@@ -258,7 +268,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          :ok <- require_product_plan_node_topology(parent_id_supplied?, position),
          {:ok, work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
-         :ok <- require_planned_slice_authoring_status(work_request.status),
+         :ok <- require_work_package_authoring_status(work_request.status),
          attrs =
            %{
              "work_request_id" => work_request_id,
@@ -289,7 +299,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, created_by} <- optional_string_argument(arguments, "created_by", session_claimed_by(session)),
          {:ok, work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
-         :ok <- require_planned_slice_authoring_status(work_request.status),
+         :ok <- require_work_package_authoring_status(work_request.status),
          attrs =
            %{
              "work_request_id" => work_request_id,
@@ -318,159 +328,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("move_slice_to_plan_node", %Config{} = config, session, arguments) do
-    tool = "move_slice_to_plan_node"
+  def call("skip_work_package", %Config{} = config, session, arguments) do
+    tool = "skip_work_package"
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
-         {:ok, planned_slice_id} <- required_argument(arguments, "planned_slice_id"),
-         {:ok, product_tree_node_id} <- optional_string_argument(arguments, "product_tree_node_id"),
-         {:ok, role} <- optional_string_argument(arguments, "role"),
-         {:ok, position} <- optional_nonnegative_integer_argument(arguments, "position"),
-         {:ok, created_by} <- optional_string_argument(arguments, "created_by", session_claimed_by(session)),
-         {:ok, work_request, _filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
-         :ok <- require_planned_slice_authoring_status(work_request.status),
-         attrs =
-           %{
-             "work_request_id" => work_request_id,
-             "planned_slice_id" => planned_slice_id
-           }
-           |> optional_put("product_tree_node_id", product_tree_node_id)
-           |> optional_put("role", role)
-           |> optional_put("position", position)
-           |> optional_put("created_by", created_by),
-         {:ok, {slice_link, detail}} <-
-           mutate_product_tree_with_projection(config.repo, work_request_id, tool, created_by, fn ->
-             ProductTree.move_slice_link(config.repo, attrs)
+         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
+         {:ok, current_status} <- required_argument(arguments, "current_status"),
+         {:ok, _work_request, _work_package, _filters, scope} <-
+           WorkRequestScope.authorized_work_package_scope(
+             config.repo,
+             session,
+             work_request_id,
+             work_package_id,
+             :work_package_skip,
+             tool
+           ),
+         {:ok, work_package} <-
+           mutate_product_tree(config.repo, work_request_id, tool, session_claimed_by(session), fn ->
+             WorkRequestService.skip_work_package(config.repo, work_request_id, work_package_id, current_status)
            end) do
       {:ok,
        ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-         "product_tree_slice_link" => WorkRequestPayloads.product_tree_slice_link(slice_link),
-         "product_tree" => json_safe_payload(detail.product_tree),
+         "work_package_id" => work_package.id,
          "scope" => scope,
-         "status" => %{
-           "work_request_status" => work_request.status,
-           "slice_product_tree_location" => if(is_nil(slice_link), do: "direct", else: "product_plan_node")
-         }
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_product_tree_slice_link", changeset)
-      {:error, :not_found} -> not_found_error(tool)
-      {:error, reason} -> architect_error(reason, tool)
-    end
-  end
-
-  def call("approve_slice", %Config{} = config, session, arguments) do
-    mutate_work_request_planned_slice_status(
-      "approve_slice",
-      arguments,
-      config.repo,
-      session,
-      "approved",
-      :planned_slice_approve
-    )
-  end
-
-  def call("skip_slice", %Config{} = config, session, arguments) do
-    mutate_work_request_planned_slice_status(
-      "skip_slice",
-      arguments,
-      config.repo,
-      session,
-      "skipped",
-      :planned_slice_skip
-    )
-  end
-
-  defp target_branch(args, repo, %{repo: repo, base_branch: branch}), do: optional_string_argument(args, "target_base_branch", branch)
-  defp target_branch(args, _repo, _work_request), do: required_argument(args, "target_base_branch")
-
-  defp add_planned_slice_and_reload_work_request(repo, work_request_id, attrs, filters) do
-    with {:ok, planned_slice} <- WorkRequestService.add_planned_slice_for_authoring(repo, work_request_id, attrs),
-         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(repo, work_request_id, filters) do
-      {:ok, {planned_slice, updated_work_request}}
-    end
-  end
-
-  defp mutate_work_request_planned_slice_status(tool, arguments, repo, session, next_status, action) do
-    with {:ok, session} <- Auth.require_session(session, repo),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
-         {:ok, planned_slice_id} <- required_argument(arguments, "planned_slice_id"),
-         {:ok, current_status} <- required_argument(arguments, "current_status"),
-         {:ok, work_request, planned_slice_for_validation, filters, scope} <-
-           WorkRequestScope.authorized_planned_slice_scope(
-             repo,
-             session,
-             work_request_id,
-             planned_slice_id,
-             action,
-             tool
-           ),
-         :ok <- require_planned_slice_authoring_status(work_request.status),
-         :ok <-
-           maybe_validate_planned_slice_scope_for_approval(
-             next_status,
-             work_request,
-             planned_slice_for_validation
-           ),
-         {:ok, {planned_slice, updated_work_request}} <-
-           mutate_product_tree(
-             repo,
-             work_request_id,
-             tool,
-             session_claimed_by(session),
-             fn ->
-               update_planned_slice_and_work_request(
-                 repo,
-                 work_request_id,
-                 planned_slice_id,
-                 current_status,
-                 next_status,
-                 filters
-               )
-             end
-           ) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "planned_slice" => WorkRequestPayloads.planned_slice(planned_slice),
-         "scope" => scope,
-         "status" => %{
-           "work_request_status" => updated_work_request.status,
-           "previous_planned_slice_status" => current_status,
-           "planned_slice_status" => planned_slice.status
-         }
+         "status" => %{"work_package_status" => work_package.status}
        })}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
       {:error, :not_found} -> not_found_error(tool)
       {:error, reason} -> architect_error(reason, tool)
     end
-  end
-
-  defp update_planned_slice_and_work_request(repo, work_request_id, planned_slice_id, current_status, next_status, filters) do
-    with {:ok, planned_slice} <-
-           update_work_request_planned_slice_status(
-             repo,
-             work_request_id,
-             planned_slice_id,
-             current_status,
-             next_status
-           ),
-         {:ok, updated_work_request} <- WorkRequestScope.scoped_work_request(repo, work_request_id, filters) do
-      {:ok, {planned_slice, updated_work_request}}
-    end
-  end
-
-  defp update_work_request_planned_slice_status(repo, work_request_id, planned_slice_id, current_status, "approved") do
-    WorkRequestService.approve_planned_slice(repo, work_request_id, planned_slice_id, current_status)
-  end
-
-  defp update_work_request_planned_slice_status(repo, work_request_id, planned_slice_id, current_status, "skipped") do
-    WorkRequestService.skip_planned_slice(repo, work_request_id, planned_slice_id, current_status)
   end
 
   defp upsert_product_plan_node_with_blocker_closeout(repo, %Session{} = session, attrs, blocker_closeout_plan) do
@@ -522,10 +410,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   defp product_plan_node_work_package_ids(repo, work_request_id, product_tree_node_id) do
     with {:ok, tree} <- ProductTree.tree_for_work_request(repo, work_request_id),
-         {:ok, planned_slices} <- WorkRequestService.list_planned_slices(repo, work_request_id) do
+         {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request_id) do
       subtree_node_ids = product_tree_subtree_node_ids(tree.nodes, product_tree_node_id)
-      slice_ids = product_tree_subtree_slice_ids(tree.slice_links, subtree_node_ids)
-      package_ids = planned_slices |> Enum.filter(&(&1.id in slice_ids)) |> Enum.map(& &1.work_package_id)
+
+      package_ids =
+        work_packages
+        |> Enum.filter(&(&1.product_tree_node_id in subtree_node_ids))
+        |> Enum.map(& &1.id)
 
       {:ok, package_ids}
     end
@@ -545,46 +436,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     |> Enum.to_list()
   end
 
-  defp product_tree_subtree_slice_ids(slice_links, subtree_node_ids) do
-    subtree_node_ids = MapSet.new(subtree_node_ids)
-
-    slice_links
-    |> Enum.filter(&MapSet.member?(subtree_node_ids, &1.product_tree_node_id))
-    |> Enum.map(& &1.planned_slice_id)
-    |> Enum.uniq()
-  end
-
-  defp validate_planned_slice_scope_for_tool(%WorkRequest{} = work_request, work_package_kind, owned_file_globs) do
-    with :ok <- ScopeConstraints.validate_owned_file_globs(work_request, owned_file_globs),
-         :ok <- validate_docs_planned_slice_scope(work_package_kind, owned_file_globs) do
-      :ok
-    else
-      {:error, errors} -> {:tool_error, {:planned_slice_scope_violation, errors}}
-    end
-  end
-
-  defp maybe_validate_planned_slice_scope_for_approval("approved", %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice) do
-    validate_planned_slice_scope_for_tool(
-      work_request,
-      planned_slice.work_package_kind,
-      planned_slice.owned_file_globs || []
-    )
-  end
-
-  defp maybe_validate_planned_slice_scope_for_approval(_next_status, %WorkRequest{}, %PlannedSlice{}), do: :ok
-
-  defp validate_docs_planned_slice_scope("docs", owned_file_globs), do: ScopeConstraints.validate_docs_owned_file_globs(owned_file_globs)
-  defp validate_docs_planned_slice_scope(_work_package_kind, _owned_file_globs), do: :ok
-
-  defp require_supported_branch_pattern(branch_pattern) do
-    case BranchPattern.validate(branch_pattern) do
-      :ok -> :ok
-      {:error, reason} -> {:tool_error, {:branch_pattern, branch_pattern, reason}}
-    end
-  end
-
-  defp require_planned_slice_authoring_status(status) when status in ["ready_for_slicing", "sliced"], do: :ok
-  defp require_planned_slice_authoring_status(_status), do: {:tool_error, "invalid_status"}
+  defp require_work_package_authoring_status(status) when status in ["ready_for_slicing", "sliced"], do: :ok
+  defp require_work_package_authoring_status(_status), do: {:tool_error, "invalid_status"}
 
   defp require_product_plan_node_content(nil, title, _description, _node_kind) do
     if filled_string?(title), do: :ok, else: {:tool_error, "missing_title"}
@@ -676,13 +529,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     |> Map.delete("latest_revision")
   end
 
-  defp product_tree_revision_reason("plan_slice"), do: "Planned slice added to product tree through MCP."
+  defp product_tree_revision_reason("slice_work_request"), do: "WorkRequest sliced into canonical WorkPackages through MCP."
+  defp product_tree_revision_reason("update_work_package"), do: "WorkPackage contract updated through MCP."
   defp product_tree_revision_reason("upsert_plan_node"), do: "Product plan node content changed through MCP."
   defp product_tree_revision_reason("move_plan_node"), do: "Product plan node rearranged through MCP."
   defp product_tree_revision_reason("set_plan_node_completion"), do: "Product plan node completion changed through MCP."
-  defp product_tree_revision_reason("move_slice_to_plan_node"), do: "Planned slice rearranged in product tree through MCP."
-  defp product_tree_revision_reason("approve_slice"), do: "Planned slice approved in product tree through MCP."
-  defp product_tree_revision_reason("skip_slice"), do: "Planned slice skipped in product tree through MCP."
+  defp product_tree_revision_reason("skip_work_package"), do: "WorkPackage skipped in product tree through MCP."
 
   defp run_architect_transaction(repo, fun) do
     case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do
@@ -723,6 +575,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
 
+  defp require_work_package_batch([first | rest]) when is_map(first) do
+    if Enum.all?(rest, &is_map/1), do: :ok, else: {:tool_error, "invalid_work_packages"}
+  end
+
+  defp require_work_package_batch(_work_packages), do: {:tool_error, "invalid_work_packages"}
+
+  defp require_positive_revision(revision) when is_integer(revision) and revision > 0, do: :ok
+  defp require_positive_revision(_revision), do: {:tool_error, "invalid_contract_revision"}
+
+  defp require_object(value, _key) when is_map(value), do: :ok
+  defp require_object(_value, key), do: {:tool_error, "#{key} must be an object"}
+
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
   defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
   defp architect_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
@@ -740,24 +604,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp architect_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
-  defp architect_error({:planned_slice_scope_violation, errors}, tool), do: invalid_params_error(tool, {:planned_slice_scope_violation, errors})
+  defp architect_error({:work_package_scope_violation, errors}, tool), do: invalid_params_error(tool, {:work_package_scope_violation, errors})
 
   defp architect_error(:open_questions, tool) do
     {:error, -32_602, "Invalid params",
      %{
        "tool" => tool,
        "reason" => "open_questions",
-       "message" => "Answer or close all open clarification questions before adding planned slices."
+       "message" => "Answer or close all open clarification questions before adding WorkPackages."
      }}
   end
 
   defp architect_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
-  defp invalid_params_error(tool, {:planned_slice_scope_violation, errors}) do
+  defp invalid_params_error(tool, {:work_package_scope_violation, errors}) do
     {:error, -32_602, "Invalid params",
      %{
        "tool" => tool,
-       "reason" => "planned_slice_scope_violation",
+       "reason" => "work_package_scope_violation",
        "validation_errors" => scope_validation_details(errors)
      }}
   end
@@ -815,8 +679,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     %{"field" => Atom.to_string(field), "reason" => "invalid_constraints"}
   end
 
-  defp scope_validation_detail({:invalid_owned_file_globs, field}) do
-    %{"field" => Atom.to_string(field), "reason" => "invalid_owned_file_globs"}
+  defp scope_validation_detail({:invalid_allowed_file_globs, field}) do
+    %{"field" => Atom.to_string(field), "reason" => "invalid_allowed_file_globs"}
   end
 
   defp scope_validation_detail({:invalid_path, field, value, reason}) do
@@ -829,7 +693,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   defp scope_validation_detail({:non_documentation_owned_glob, value}) do
     %{
-      "field" => "owned_file_globs",
+      "field" => "allowed_file_globs",
       "value" => value,
       "reason" => "non_documentation_owned_glob"
     }
@@ -837,7 +701,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   defp scope_validation_detail({:outside_allowed_paths, value, allowed_paths}) do
     %{
-      "field" => "owned_file_globs",
+      "field" => "allowed_file_globs",
       "value" => value,
       "reason" => "outside_allowed_paths",
       "allowed_paths" => allowed_paths
@@ -846,18 +710,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   defp scope_validation_detail({:forbidden_path_overlap, value, forbidden_path}) do
     %{
-      "field" => "owned_file_globs",
+      "field" => "allowed_file_globs",
       "value" => value,
       "reason" => "forbidden_path_overlap",
       "forbidden_path" => forbidden_path
     }
-  end
-
-  defp normalize_review_requirement(review) do
-    case ReviewRequirement.normalize(review) do
-      {:ok, requirement} -> {:ok, requirement}
-      {:error, reason} -> {:tool_error, Atom.to_string(reason)}
-    end
   end
 
   defp auth_error(:unauthorized, resource), do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}

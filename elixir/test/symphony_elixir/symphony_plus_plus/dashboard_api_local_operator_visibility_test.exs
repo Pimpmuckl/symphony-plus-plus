@@ -20,10 +20,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
@@ -64,8 +63,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     repo.delete_all(GuidanceRequest)
     repo.delete_all(Comment)
     repo.delete_all(AccessGrant)
-    repo.delete_all(PlannedSliceDelivery)
-    repo.delete_all(PlannedSlice)
+    repo.delete_all(WorkPackageDelivery)
+    repo.delete_all(WorkPackage)
     repo.delete_all(WorkPackage)
     repo.delete_all(Phase)
     repo.delete_all(DecisionLogEntry)
@@ -128,14 +127,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       refute stale_package.id in package_ids
       assert active_package.id in package_ids
 
-      assert terminal_package.id in payload["linked_work_package_ids"]
-      assert stale_package.id in payload["linked_work_package_ids"]
-      assert active_package.id in payload["linked_work_package_ids"]
+      assert terminal_package.id in payload["work_request_work_package_ids"]
+      assert stale_package.id in payload["work_request_work_package_ids"]
+      assert active_package.id in payload["work_request_work_package_ids"]
 
       refute Enum.any?(payload["work_request_details"], &(get_in(&1, ["work_request", "id"]) == archived_request.id))
 
       active_detail = work_request_detail(payload, active_request.id)
-      assert get_in(active_detail, ["planned_slices", Access.at(0), "work_package_id"]) == active_package.id
+      assert get_in(active_detail, ["work_packages", Access.at(0), "work_package_id"]) == active_package.id
     end)
   end
 
@@ -227,10 +226,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
   end
 
   defp create_dispatched_package!(repo, work_request, opts) do
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: Keyword.fetch!(opts, :slice_id), target_base_branch: work_request.base_branch))
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: Keyword.fetch!(opts, :slice_id), base_branch: work_request.base_branch))
 
-    assert {:ok, approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+    assert {:ok, approved} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
     package =
       create_matching_work_package!(repo, work_request, approved,
@@ -239,7 +238,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       )
 
     assert {:ok, _dispatched} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", package.id)
+             CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", package.id)
 
     package
   end
@@ -254,17 +253,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     end
   end
 
-  defp create_matching_work_package!(repo, work_request, planned_slice, overrides) do
+  defp create_matching_work_package!(repo, work_request, work_package, overrides) do
     attrs =
       [
-        kind: planned_slice.work_package_kind,
-        title: planned_slice.title,
+        kind: work_package.kind,
+        title: work_package.title,
         repo: work_request.repo,
-        base_branch: planned_slice.target_base_branch,
-        branch_pattern: planned_slice.branch_pattern,
+        base_branch: work_package.base_branch,
+        branch_pattern: work_package.branch_pattern,
         product_description: work_request.human_description,
-        allowed_file_globs: planned_slice.owned_file_globs,
-        acceptance_criteria: planned_slice.acceptance_criteria
+        allowed_file_globs: work_package.allowed_file_globs,
+        acceptance_criteria: work_package.acceptance_criteria
       ]
       |> Keyword.merge(overrides)
 
@@ -287,14 +286,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     Enum.into(overrides, defaults)
   end
 
-  defp planned_slice_attrs(overrides) do
+  defp work_package_attrs(overrides) do
     defaults = %{
       title: "Add WorkRequest dashboard API",
       goal: "Expose read-only dashboard view models.",
-      work_package_kind: "mcp",
-      target_base_branch: "main",
+      kind: "mcp",
+      base_branch: "main",
       branch_pattern: "agent/SYMPP-V2-WR-004/workrequest-read-api",
-      owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/dashboard.ex"],
+      allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/dashboard.ex"],
       forbidden_file_globs: ["elixir/lib/symphony_elixir_web/live/**"],
       acceptance_criteria: ["WorkRequest dashboard API reads are scoped and redacted."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/dashboard_api_local_operator_visibility_test.exs"],

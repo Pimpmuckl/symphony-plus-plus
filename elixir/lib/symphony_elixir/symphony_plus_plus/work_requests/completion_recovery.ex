@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.CompletionRecovery do
 
   import Ecto.Query, only: [from: 2]
 
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -12,9 +12,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.CompletionRecovery do
   @spec clearable_query(String.t()) :: Ecto.Query.t()
   def clearable_query(work_package_id) when is_binary(work_package_id) do
     from(work_request in WorkRequest,
-      join: planned_slice in PlannedSlice,
-      on: planned_slice.work_request_id == work_request.id,
-      where: planned_slice.work_package_id == ^work_package_id,
+      join: work_package in WorkPackage,
+      on: work_package.work_request_id == work_request.id,
+      where: work_package.id == ^work_package_id,
       where:
         is_nil(work_request.completion_source) or
           work_request.completion_source != @operator_completion_source,

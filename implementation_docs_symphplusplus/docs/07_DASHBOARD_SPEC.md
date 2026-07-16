@@ -60,19 +60,19 @@ Local operator mode:
 - lets the local operator create draft WorkRequests and use a human-owned
   `Start agent questions` action to move draft requests to
   `ready_for_clarification`;
-- lets the local operator dispatch approved, undispatched planned slices into
+- lets the local operator dispatch approved, undispatched WorkPackages into
   WorkPackages through the ledger-backed local assignment claim flow;
 - lets the local operator prepare/replay a WorkRequest architect handoff with a
   scoped phase, architect anchor package, unclaimed architect grant, and
   non-secret local architect claim metadata;
 - lets the local operator add and resolve contextual comments on WorkRequests,
-  planned slices, and WorkPackages from detail views;
+  WorkPackages, and WorkPackages from detail views;
 - shows package guidance requests that need human input in the operator
   priority watchlist and lets the local operator answer only
   `human_info_needed` guidance from the WorkPackage detail page;
 - records local operator WorkRequest answers with the stable actor label
   `local-operator`;
-- records local browser planned-slice dispatch grants with the stable worker
+- records local browser work-package dispatch grants with the stable worker
   identity `local-operator-worker`;
 - keeps board-grant WorkRequest intake locked to the grant's frozen repo/base
   scope and ignores submitted repo/base values in board-grant mode;
@@ -93,8 +93,8 @@ Repository group
 |-- collapsed WorkRequest row
 |   |-- optional product plan node
 |   |   |-- optional product plan node
-|   |   `-- planned slice rows
-|   `-- direct planned slice rows
+|   |   `-- WorkPackage rows
+|   `-- direct WorkPackage rows
 ```
 
 The collapsed WorkRequest row is the first-glance product progress unit. It
@@ -204,25 +204,21 @@ payload and warning attention instead of returning the empty no-lineage shape.
 Scoped board payloads only serialize relationships where both the source and
 target WorkPackage are already visible in that board scope.
 
-Planned-slice payloads include `operational_state` only when dispatch linkage is
-included. Approved slices without linked delivery activity can project as
-`ready_for_worker`; linked slices promote the linked WorkPackage operational
-truth once the package is active, started/paused, needs attention, reviewing,
-merge-ready, merged, blocked, or has active runtime evidence. The raw slice
-`status` remains the authoring/dispatch lifecycle, so a dispatched slice linked
-to a merged package still reports raw `status: dispatched` while its operational
-state reports `Merged`. If a slice still appears idle while the linked package
-has started, the slice projection includes an attention item.
+WorkRequest-owned WorkPackage payloads project `operational_state` from the same
+canonical row plus its runtime and delivery evidence. A planned package projects
+as planned; dispatch activates that row as `ready_for_worker`. Active,
+started/paused, attention, review, merge-ready, merged, and blocked states remain
+visible without joining a second identity.
 
 WorkRequest-led delivery closeout is projected through the backend delivery
-board. Delivery closeout, not raw dispatched slice status, is the source of
-human delivery truth after work lands. A stale dispatched slice linked to a raw
-`ready_for_worker` or otherwise stale package can project as `Needs Closeout`
+board. Delivery closeout, not raw package status alone, is the source of
+human delivery truth after work lands. A stale `ready_for_worker` package can
+project as `Needs Closeout`
 from structured merged-PR evidence before closeout, then as `Delivered`,
 `Completed Without PR`, `Superseded`, or `Abandoned` after closeout while raw
 status remains available for audit.
 
-WorkRequest, planned-slice, and WorkPackage projections may include
+WorkRequest, work-package, and WorkPackage projections may include
 `comment_count`, `open_comment_count`, and `comments` detail arrays. Comment
 bodies, author names, resolver names, and resolution notes are redacted in
 dashboard projections. Cards show an attention signal only when comments remain
@@ -311,25 +307,25 @@ mode it remains filtered by the grant's board scope.
 
 WorkRequest cards and detail payloads preserve raw lifecycle `status` and also
 include `operational_state` with the same projection shape as WorkPackages.
-The WorkRequest projection aggregates planned-slice and linked WorkPackage
+The WorkRequest projection aggregates work-package and linked WorkPackage
 truth so a request with active, reviewing, merge-ready, merged, blocked, or
 paused package work no longer presents `ready_for_slicing` as its primary human
 state. Raw WorkRequest status remains available for controls and lifecycle
 transitions. Grant-scoped WorkRequest list and detail responses promote only
-linked WorkPackages that remain inside the grant's frozen repo/base scope;
-out-of-scope links are treated as unavailable instead of leaking hidden package
+WorkPackages that remain inside the grant's frozen repo/base scope;
+out-of-scope packages are treated as unavailable instead of leaking hidden package
 state.
 
 Local operator dashboard refresh applies the operator archive-age setting to
-completed WorkRequests and to terminal root WorkPackages with no planned-slice,
-parent, or phase relationship. Stale root unlinked packages are hidden from the
+completed WorkRequests and to terminal root WorkPackages with no WorkRequest,
+parent, or phase relationship. Stale standalone root packages are hidden from the
 active board during refresh; manual package hides remain stored in the local
-hidden-package list. Linked or parent/phase packages remain visible for their
-WorkRequest, planned-slice, or phase retention path.
+hidden-package list. WorkRequest-owned or parent/phase packages remain visible
+for their WorkRequest, parent, or phase retention path.
 
 The delivery-board projection is the closeout detail source for WorkRequest-led
-delivery. It shows per-slice delivery outcomes, closeout evidence summaries,
-linked package raw status, attention reason codes, successor links, and counts
+delivery. It shows per-WorkPackage delivery outcomes, closeout evidence summaries,
+package raw status, attention reason codes, successor links, and counts
 such as `needs_closeout`. Dashboard clients should display those backend
 projections rather than deriving delivery truth from package cards or decision
 text.
@@ -352,7 +348,7 @@ ownership. In local operator mode, the page stays human-owned: the operator can
 start agent questions for a draft request, answer product questions,
 prepare/replay an architect handoff, inspect architect-owned context, and
 dispatch approved slices. It does not expose architect authoring controls for
-questions, decisions, or planned slices.
+questions, decisions, or WorkPackages.
 
 Scoped board-grant detail remains the architect/planning surface:
 
@@ -362,7 +358,7 @@ Ask / answer / close clarification questions
 Record decisions
 Mark human info needed
 Mark ready for slicing
-Add / approve / skip planned slices
+Add / approve / skip WorkPackages
 Mark sliced
 ```
 
@@ -372,7 +368,7 @@ Local operator detail keeps this smaller action set:
 Start agent questions
 Answer open human questions
 Prepare architect handoff
-Dispatch approved planned slices
+Dispatch approved WorkPackages
 ```
 
 Architect handoff is local-operator-only and appears for WorkRequests in
@@ -395,11 +391,11 @@ plugin skill prompt. It must not show raw grant secrets, secret hashes, or
 full MCP secret-retrieval commands. Board-grant WorkRequest detail does not show
 or run this control.
 
-Planned-slice dispatch is local-operator-only. Approval and slice authoring stay
-in the architect workflow; dispatch is the explicit operator action that turns
-an already approved slice into a WorkPackage. It reuses the existing
-`PlannedSliceDispatch` flow to create a WorkPackage, return ledger-backed local
-assignment bootstrap metadata, link the planned slice, and refresh the page
+WorkPackage dispatch is local-operator-only. Package authoring stays in the
+architect workflow; dispatch is the explicit operator action that activates the
+planned canonical WorkPackage. It reuses the existing `WorkPackageDispatch`
+flow to update that row, create its worker grant and resources, return
+ledger-backed local assignment bootstrap metadata, and refresh the page
 with the WorkPackage id/status. It does not prepare worktrees or record
 worktree scope; operators must complete the separate worktree preparation flow
 before launching a worker. The browser may show only non-secret claim metadata
@@ -454,6 +450,6 @@ implementation_docs_symphplusplus/docs/V3_PRODUCT_TREE_REWORK.md
 
 Execution Atlas remains historical design context only. The implemented V3
 direction is the WorkRequest product tree: optional nested product plan nodes,
-planned slices as execution units, and WorkPackages as linked execution/audit
+WorkPackages as execution units, and WorkPackages as linked execution/audit
 evidence. Dashboard changes should preserve raw ledger truth while making the
 product tree the default operator reading order.

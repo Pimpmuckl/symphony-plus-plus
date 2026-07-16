@@ -294,36 +294,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(response, ["error", "data", "reason"]) == "outside_session_scope"
   end
 
-  test "mark WorkRequest sliced MCP tool preserves approved-slice requirement", %{repo: repo} do
-    {anchor, session, _grant} =
-      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-SLICE-GUARD", [
-        "write:work_request"
-      ])
-
-    work_request =
-      create_work_request!(repo,
-        id: "WR-MCP-WR-SLICE-GUARD",
-        repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "ready_for_slicing"
-      )
-
-    grant_work_request_scope!(repo, session, work_request.id)
-
-    response =
-      mcp_tool(repo, session, "finish_slicing", %{
-        "work_request_id" => work_request.id,
-        "current_status" => "ready_for_slicing"
-      })
-
-    assert get_in(response, ["error", "code"]) == -32_602
-    assert get_in(response, ["error", "data", "reason"]) == "no_approved_slices"
-
-    assert {:ok, persisted_work_request} = WorkRequestRepository.get(repo, work_request.id)
-    assert persisted_work_request.status == "ready_for_slicing"
-  end
-
-  test "WorkRequest MCP planned-slice mutations require slice authoring status", %{repo: repo} do
+  test "WorkRequest MCP work-package mutations require slice authoring status", %{repo: repo} do
     {anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-SLICE-STATUS", [
         "write:work_request"
@@ -343,9 +314,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       "work_request_id" => work_request.id,
       "title" => "Draft-state slice",
       "goal" => "Should wait until slicing is open.",
-      "work_package_kind" => "mcp",
-      "target_base_branch" => anchor.base_branch,
-      "owned_file_globs" => ["elixir/lib/**"],
+      "kind" => "mcp",
+      "base_branch" => anchor.base_branch,
+      "allowed_file_globs" => ["elixir/lib/**"],
       "forbidden_file_globs" => [],
       "acceptance_criteria" => ["WorkRequest is sliceable."],
       "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
@@ -353,31 +324,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       "stop_conditions" => ["Stop before dispatch."]
     }
 
-    add_response = mcp_tool(repo, session, "plan_slice", add_args)
+    add_response =
+      mcp_tool(repo, session, "slice_work_request", %{
+        "work_request_id" => work_request.id,
+        "work_packages" => [Map.delete(add_args, "work_request_id")]
+      })
+
     assert get_in(add_response, ["error", "code"]) == -32_602
     assert get_in(add_response, ["error", "data", "reason"]) == "invalid_status"
-    assert {:ok, []} = WorkRequestRepository.list_planned_slices(repo, work_request.id)
-
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, Map.delete(add_args, "work_request_id"))
-
-    for tool <- ["approve_slice", "skip_slice"] do
-      response =
-        mcp_tool(repo, session, tool, %{
-          "work_request_id" => work_request.id,
-          "planned_slice_id" => planned_slice.id,
-          "current_status" => "planned"
-        })
-
-      assert get_in(response, ["error", "code"]) == -32_602
-      assert get_in(response, ["error", "data", "reason"]) == "invalid_status"
-    end
-
-    assert {:ok, [persisted_slice]} = WorkRequestRepository.list_planned_slices(repo, work_request.id)
-    assert persisted_slice.status == "planned"
+    assert {:ok, []} = WorkRequestRepository.list_work_packages(repo, work_request.id)
   end
 
-  test "WorkRequest MCP planned-slice writes honor planned-slice scope without parent WorkRequest scope", %{repo: repo} do
+  test "WorkRequest MCP work-package writes honor work-package scope without parent WorkRequest scope", %{repo: repo} do
     {anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-SLICE-EXPLICIT", [
         "write:work_request"
@@ -391,34 +349,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
         status: "ready_for_slicing"
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-WR-SLICE-EXPLICIT",
-                 target_base_branch: anchor.base_branch
+                 base_branch: anchor.base_branch
                )
              )
 
-    grant_planned_slice_scope!(repo, session, planned_slice.id)
+    grant_work_package_scope!(repo, session, work_package.id)
     remove_grant_scope_type!(repo, session, "repo")
 
     response =
-      mcp_tool(repo, session, "approve_slice", %{
+      mcp_tool(repo, session, "update_work_package", %{
         "work_request_id" => work_request.id,
-        "planned_slice_id" => planned_slice.id,
-        "current_status" => "planned"
+        "work_package_id" => work_package.id,
+        "expected_contract_revision" => work_package.contract_revision,
+        "patch" => %{"title" => "Updated explicit package"}
       })
 
-    assert get_in(response, ["result", "structuredContent", "planned_slice", "status"]) == "approved"
-    assert get_in(response, ["result", "structuredContent", "work_request", "id"]) == work_request.id
-    text = assert_toon_tool_text!(response)
-    assert text =~ "planned_slice:"
-    assert text =~ "planned_slice_status: approved"
+    assert get_in(response, ["result", "structuredContent", "work_package_id"]) == work_package.id,
+           inspect(response)
 
-    assert {:ok, persisted_slice} = WorkRequestRepository.get_planned_slice(repo, work_request.id, planned_slice.id)
-    assert persisted_slice.status == "approved"
+    assert get_in(response, ["result", "structuredContent", "contract_revision"]) == 2
+    text = assert_toon_tool_text!(response)
+    assert text =~ "work_package_id: #{work_package.id}"
+    assert text =~ "contract_revision: 2"
+
+    assert {:ok, persisted_package} = WorkRequestRepository.get_work_package(repo, work_request.id, work_package.id)
+    assert persisted_package.title == "Updated explicit package"
   end
 
   test "WorkRequest MCP mutations require write capability and explicit live phase scope", %{repo: repo} do
@@ -436,12 +397,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       )
 
     assert {:ok, read_only_slice} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                read_only_work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-WR-MUTATE-READONLY",
-                 target_base_branch: read_anchor.base_branch
+                 base_branch: read_anchor.base_branch
                )
              )
 
@@ -458,17 +419,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(read_only_response, ["error", "data", "reason_code"]) == "insufficient_capability"
 
     read_only_slice_response =
-      mcp_tool(repo, read_session, "plan_slice", %{
+      mcp_tool(repo, read_session, "slice_work_request", %{
         "work_request_id" => read_only_work_request.id,
-        "title" => "Denied slice",
-        "goal" => "Capability check.",
-        "work_package_kind" => "mcp",
-        "target_base_branch" => read_anchor.base_branch,
-        "owned_file_globs" => [],
-        "forbidden_file_globs" => [],
-        "acceptance_criteria" => [],
-        "validation_steps" => [],
-        "stop_conditions" => []
+        "work_packages" => [%{}]
       })
 
     assert get_in(read_only_slice_response, ["error", "code"]) == -32_003
@@ -476,9 +429,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(read_only_slice_response, ["error", "data", "reason_code"]) == "insufficient_capability"
 
     read_only_dispatch_response =
-      mcp_tool(repo, read_session, "dispatch_slice", %{
+      mcp_tool(repo, read_session, "dispatch_work_package", %{
         "work_request_id" => read_only_work_request.id,
-        "planned_slice_id" => read_only_slice.id,
+        "work_package_id" => read_only_slice.id,
         "claimed_by" => "worker-1"
       })
 
@@ -531,13 +484,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
 
     grant_work_request_scope!(repo, drift_session, drift_work_request.id)
 
-    assert {:ok, drift_planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, drift_work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                drift_work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-WR-MUTATE-DRIFT",
-                 target_base_branch: drift_anchor.base_branch
+                 base_branch: drift_anchor.base_branch
                )
              )
 
@@ -554,18 +507,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(drift_response, ["error", "data", "reason"]) == "outside_session_scope"
 
     drift_slice_response =
-      mcp_tool(repo, drift_session, "finish_slicing", %{
+      mcp_tool(repo, drift_session, "slice_work_request", %{
         "work_request_id" => drift_work_request.id,
-        "current_status" => "ready_for_slicing"
+        "work_packages" => [%{}]
       })
 
     assert get_in(drift_slice_response, ["error", "code"]) == -32_003
     assert get_in(drift_slice_response, ["error", "data", "reason"]) == "outside_session_scope"
 
     drift_dispatch_response =
-      mcp_tool(repo, drift_session, "dispatch_slice", %{
+      mcp_tool(repo, drift_session, "dispatch_work_package", %{
         "work_request_id" => drift_work_request.id,
-        "planned_slice_id" => drift_planned_slice.id,
+        "work_package_id" => drift_work_package.id,
         "claimed_by" => "worker-1"
       })
 
@@ -599,18 +552,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(revoked_response, ["error", "data", "reason"]) == "revoked"
 
     revoked_slice_response =
-      mcp_tool(repo, revoked_session, "finish_slicing", %{
+      mcp_tool(repo, revoked_session, "slice_work_request", %{
         "work_request_id" => revoked_work_request.id,
-        "current_status" => "ready_for_slicing"
+        "work_packages" => [%{}]
       })
 
     assert get_in(revoked_slice_response, ["error", "code"]) == -32_001
     assert get_in(revoked_slice_response, ["error", "data", "reason"]) == "revoked"
 
     revoked_dispatch_response =
-      mcp_tool(repo, revoked_session, "dispatch_slice", %{
+      mcp_tool(repo, revoked_session, "dispatch_work_package", %{
         "work_request_id" => revoked_work_request.id,
-        "planned_slice_id" => "WRS-MCP-WR-MUTATE-REVOKED",
+        "work_package_id" => "WRS-MCP-WR-MUTATE-REVOKED",
         "claimed_by" => "worker-1"
       })
 
@@ -630,13 +583,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
         status: "ready_for_slicing"
       )
 
-    assert {:ok, worker_planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, worker_work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                worker_work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-WR-MUTATE-WORKER",
-                 target_base_branch: "symphony-plus-plus/beta"
+                 base_branch: "symphony-plus-plus/beta"
                )
              )
 
@@ -651,18 +604,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(worker_response, ["error", "data", "reason_code"]) == "insufficient_role"
 
     worker_slice_response =
-      mcp_tool(repo, worker_session, "finish_slicing", %{
+      mcp_tool(repo, worker_session, "slice_work_request", %{
         "work_request_id" => worker_work_request.id,
-        "current_status" => "ready_for_slicing"
+        "work_packages" => [%{}]
       })
 
     assert get_in(worker_slice_response, ["error", "code"]) == -32_003
     assert get_in(worker_slice_response, ["error", "data", "reason_code"]) == "insufficient_role"
 
     worker_dispatch_response =
-      mcp_tool(repo, worker_session, "dispatch_slice", %{
+      mcp_tool(repo, worker_session, "dispatch_work_package", %{
         "work_request_id" => worker_work_request.id,
-        "planned_slice_id" => worker_planned_slice.id,
+        "work_package_id" => worker_work_package.id,
         "claimed_by" => "worker-1"
       })
 
@@ -681,9 +634,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(anonymous_response, ["error", "data", "action"]) == "claim_local_architect_assignment"
 
     anonymous_slice_response =
-      mcp_tool(repo, nil, "finish_slicing", %{
+      mcp_tool(repo, nil, "slice_work_request", %{
         "work_request_id" => "WR-MCP-WR-MISSING",
-        "current_status" => "ready_for_slicing"
+        "work_packages" => [%{}]
       })
 
     assert get_in(anonymous_slice_response, ["error", "code"]) == -32_001
@@ -691,9 +644,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(anonymous_slice_response, ["error", "data", "action"]) == "claim_local_architect_assignment"
 
     anonymous_dispatch_response =
-      mcp_tool(repo, nil, "dispatch_slice", %{
+      mcp_tool(repo, nil, "dispatch_work_package", %{
         "work_request_id" => "WR-MCP-WR-MISSING",
-        "planned_slice_id" => "WRS-MCP-WR-MISSING",
+        "work_package_id" => "WRS-MCP-WR-MISSING",
         "claimed_by" => "worker-1"
       })
 
@@ -762,7 +715,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert persisted_sibling_question.answer == nil
   end
 
-  test "WorkRequest MCP planned-slice status mutations fail closed for sibling slice ids", %{repo: repo} do
+  test "WorkRequest MCP work-package status mutations fail closed for sibling slice ids", %{repo: repo} do
     {anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-MUTATE-SIBLING-SLICE", [
         "write:work_request"
@@ -787,27 +740,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       )
 
     assert {:ok, sibling_slice} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                sibling.id,
-               work_request_planned_slice_attrs(id: "WRS-MCP-WR-SIBLING-SLICE")
+               work_request_work_package_attrs(id: "WRS-MCP-WR-SIBLING-SLICE")
              )
 
-    approve_response =
-      mcp_tool(repo, session, "approve_slice", %{
+    update_response =
+      mcp_tool(repo, session, "update_work_package", %{
         "work_request_id" => work_request.id,
-        "planned_slice_id" => sibling_slice.id,
-        "current_status" => "planned"
+        "work_package_id" => sibling_slice.id,
+        "expected_contract_revision" => sibling_slice.contract_revision,
+        "patch" => %{"title" => "Out of scope"}
       })
 
-    assert get_in(approve_response, ["error", "code"]) == -32_004
-    assert get_in(approve_response, ["error", "data", "reason"]) == "not_found"
-    refute inspect(approve_response) =~ sibling.id
+    assert get_in(update_response, ["error", "code"]) == -32_004, inspect(update_response)
+    assert get_in(update_response, ["error", "data", "reason"]) == "not_found"
+    refute inspect(update_response) =~ sibling.id
 
     skip_response =
-      mcp_tool(repo, session, "skip_slice", %{
+      mcp_tool(repo, session, "skip_work_package", %{
         "work_request_id" => work_request.id,
-        "planned_slice_id" => sibling_slice.id,
+        "work_package_id" => sibling_slice.id,
         "current_status" => "planned"
       })
 
@@ -815,9 +769,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(skip_response, ["error", "data", "reason"]) == "not_found"
     refute inspect(skip_response) =~ sibling.id
 
-    assert {:ok, [persisted_sibling_slice]} = WorkRequestRepository.list_planned_slices(repo, sibling.id)
+    assert {:ok, [persisted_sibling_slice]} = WorkRequestRepository.list_work_packages(repo, sibling.id)
     assert persisted_sibling_slice.status == "planned"
-    assert persisted_sibling_slice.work_package_id == nil
   end
 
   defp create_architect_handoff!(repo, work_request) do

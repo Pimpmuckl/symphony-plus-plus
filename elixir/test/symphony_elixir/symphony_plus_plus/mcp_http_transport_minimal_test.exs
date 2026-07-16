@@ -89,8 +89,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
           "mark_ready",
           "read_work_request",
           "list_guidance_requests",
-          "plan_slice",
-          "dispatch_slice",
+          "slice_work_request",
+          "update_work_package",
+          "dispatch_work_package",
           "read_delivery_board",
           "solo_attach",
           "solo_list",
@@ -149,8 +150,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
           "mark_ready",
           "read_work_request",
           "list_guidance_requests",
-          "plan_slice",
-          "dispatch_slice",
+          "slice_work_request",
+          "update_work_package",
+          "dispatch_work_package",
           "read_delivery_board",
           "sympp.health"
         ] do

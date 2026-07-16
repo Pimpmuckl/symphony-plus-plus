@@ -10,13 +10,13 @@ Symphony++ is a product-tree cockpit plus a permissioned execution layer on top
 of the upstream Symphony Elixir runtime. Operators and architects manage
 `WorkRequest` records as the human-facing product unit. Larger requests can add
 optional nested product plan nodes so progress is visible by product area.
-Architects dispatch planned slices to workers. The resulting `WorkPackage`
+Architects dispatch WorkPackages to workers. The resulting `WorkPackage`
 records remain scoped execution/audit units for grants, worktrees, virtual
 planning resources, branch/PR/review evidence, and readiness gates.
 
 The source-of-truth split is:
 
-- Symphony++ ledger: WorkRequests, product plan nodes, planned slices,
+- Symphony++ ledger: WorkRequests, product plan nodes, WorkPackages,
   WorkPackages, permissions, virtual planning files, blockers, findings,
   progress, readiness evidence, and audit events.
 - GitHub: code, branches, commits, pull requests, CI, and review status.
@@ -36,7 +36,7 @@ The normal human flow is: create the WorkRequest in the local operator cockpit,
 choose `Start agent questions` on the WorkRequest detail page, prepare the
 architect handoff from the detail page, let the architect use the
 `symphony-plus-plus-mcp:symphony-architect` skill and scoped MCP tools to clarify,
-record decisions, author/approve planned slices, and dispatch approved slices,
+record decisions, author/approve WorkPackages, and dispatch approved slices,
 then let workers handle their assigned WorkPackages. Workers route product or
 architecture ambiguity back to the architect first; unresolved human intent is
 recorded as `human_info_needed` for the operator instead of being guessed.
@@ -48,7 +48,7 @@ available freeform redirect path.
 Use a single-slice WorkRequest for one already-bounded quick fix, hotfix, or
 investigation that does not need product-tree planning.
 These requests do not need extra product plan nodes or a phase branch; the
-worker still starts from planned-slice dispatch and the normal ledger-backed
+worker still starts from work-package dispatch and the normal ledger-backed
 local claim.
 
 Use an architect-led package when the work must be split across multiple child
@@ -61,7 +61,7 @@ package explicitly requires it.
 
 ## Branch And PR Model
 
-Each worker owns one branch and one PR per dispatched planned slice/WorkPackage
+Each worker owns one branch and one PR per dispatched WorkPackage/WorkPackage
 unless the overseeing architect explicitly splits or combines scope. PR titles
 use:
 
@@ -79,12 +79,12 @@ Target the base branch recorded on the package. Do not assume a historical beta
 branch. Human merge remains controlled by branch protection, required reviews,
 and package readiness evidence.
 
-## Planned-Slice Worker Lifecycle
+## Canonical WorkPackage Worker Lifecycle
 
-1. Operator creates the package request with repo, base branch, owned paths,
+1. Architect creates the planned WorkPackage with repo, base branch, owned paths,
    acceptance criteria, test plan, and review-suite requirements.
-2. Operator dispatches the approved planned-slice package and prepares a scoped
-   worker worktree. Normal output returns only non-secret ledger claim metadata for
+2. Operator dispatches that same WorkPackage row and prepares a scoped worker
+   worktree. Normal output returns only non-secret ledger claim metadata for
    `claim_local_assignment`.
 3. Worker starts in a dedicated S++ MCP-enabled session connected to the same
    local ledger.
@@ -104,7 +104,7 @@ and package readiness evidence.
 ## Architect Lifecycle
 
 An architect agent starts from `00_ARCHITECT_AGENT_HANDOFF.md`, the live
-WorkRequest, optional product plan tree, linked WorkPackage execution records,
+WorkRequest, optional product plan tree, canonical WorkPackage execution records,
 and the operator-approved scope. It may create same-phase child packages, mint
 narrower child worker grants, inspect child progress, and approve ready
 children for phase integration when gates still pass.

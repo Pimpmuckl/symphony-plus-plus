@@ -1,11 +1,10 @@
-defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PlannedSliceWorkerRevoke do
+defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkPackageWorkerRevoke do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @block_on_revoke_statuses ["claimed", "implementing", "reviewing", "ci_waiting"]
@@ -23,20 +22,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PlannedSliceWorkerRevoke do
       when status in @block_on_revoke_statuses do
     case WorkPackageRepository.update_status(repo, work_package.id, status, "blocked") do
       {:ok, %WorkPackage{} = blocked} -> {:ok, blocked}
-      {:error, :stale_status} -> {:tool_error, "planned_slice_worker_revoke_conflict"}
+      {:error, :stale_status} -> {:tool_error, "work_package_worker_revoke_conflict"}
       {:error, reason} -> {:error, reason}
     end
   end
 
   def update_status(_repo, %WorkPackage{} = work_package, %DateTime{}), do: {:ok, work_package}
 
-  @spec payload(WorkRequest.t(), PlannedSlice.t(), String.t() | nil, WorkPackage.t(), AccessGrant.t(), term()) :: map()
-  def payload(%WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, previous_status, %WorkPackage{} = work_package, %AccessGrant{} = grant, reason) do
+  @spec payload(WorkRequest.t(), WorkPackage.t(), String.t() | nil, AccessGrant.t(), term()) :: map()
+  def payload(%WorkRequest{} = work_request, %WorkPackage{} = work_package, previous_status, %AccessGrant{} = grant, reason) do
     %{
-      "type" => "planned_slice_worker_key_revoke",
-      "source_tool" => "revoke_planned_slice_worker_key",
+      "type" => "work_package_worker_key_revoke",
+      "source_tool" => "revoke_work_package_worker_key",
       "work_request_id" => work_request.id,
-      "planned_slice_id" => planned_slice.id,
       "work_package_id" => work_package.id,
       "grant_id" => grant.id,
       "reason" => redacted_reason(reason),
@@ -49,9 +47,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PlannedSliceWorkerRevoke do
   end
 
   @spec reason_codes(String.t() | nil, String.t() | nil) :: [String.t()]
-  def reason_codes(previous_status, new_status) when previous_status == new_status, do: ["worker_recycled", "planned_slice_worker_key_revoked"]
+  def reason_codes(previous_status, new_status) when previous_status == new_status, do: ["worker_recycled", "work_package_worker_key_revoked"]
 
-  def reason_codes(_previous_status, _new_status), do: ["worker_recycled", "planned_slice_worker_key_revoked", "work_package_blocked_for_recycle"]
+  def reason_codes(_previous_status, _new_status), do: ["worker_recycled", "work_package_worker_key_revoked", "work_package_blocked_for_recycle"]
 
   @spec redacted_reason(term()) :: String.t()
   def redacted_reason(reason) when is_binary(reason) do

@@ -22,9 +22,9 @@ default cockpit becomes:
 WorkRequest
 |-- optional product plan node
 |   |-- optional product plan node
-|   |   `-- planned slices
-|   `-- planned slices
-`-- planned slices
+|   |   `-- WorkPackages
+|   `-- WorkPackages
+`-- WorkPackages
 ```
 
 The tree is optional. A simple hotfix can be a single WorkRequest with direct
@@ -39,7 +39,7 @@ The WorkRequest remains the top-level product intent, operator surface, and
 human-facing row on the cockpit.
 
 The cockpit renders one collapsed line per WorkRequest. Expanding the line
-shows the WorkRequest's optional product plan tree and planned slices.
+shows the WorkRequest's optional product plan tree and WorkPackages.
 
 ### Product Plan Node
 
@@ -75,14 +75,16 @@ created_at
 `node_kind` is only a label. The schema must not require a fixed hierarchy such
 as `layer -> capability`.
 
-### Planned Slice
+### Canonical WorkPackage
 
-A planned slice remains the architect-to-worker execution unit.
+A WorkPackage is the architect-to-worker execution unit from planning through
+delivery.
 
-In V3, slices can link to one product plan node or remain direct children of
-the WorkRequest. Direct slices are valid and expected for simple work.
+In V3, WorkPackages can belong directly to one product plan node or remain
+direct children of the WorkRequest. Direct WorkPackages are valid and expected
+for simple work.
 
-Do not create a plan node solely to wrap one slice. Leave simple slices direct
+Do not create a plan node solely to wrap one WorkPackage. Leave simple packages direct
 unless the node groups multiple units or records a real product boundary.
 
 ### WorkPackage
@@ -122,7 +124,7 @@ Supported endpoints:
 
 ```text
 product_node
-planned_slice
+work_package
 ```
 
 Supported edge kinds:
@@ -146,23 +148,22 @@ reference. This keeps the board from inventing blockers from vague proximity.
 This branch introduces the v3 foundation:
 
 - `sympp_product_tree_nodes`
-- `sympp_product_tree_slice_links`
 - `sympp_product_tree_dependency_edges`
 - `sympp_product_tree_revisions`
 - backend repository and projection modules
 - `product_tree` on WorkRequest detail payloads
 - `read_plan` MCP read projection for agent planning
 - cockpit WorkRequest rows collapsed by default
-- expanded arbitrary nested plan-node tree with linked slice rows
+- expanded arbitrary nested plan-node tree with canonical WorkPackage rows
 - Vite port override for isolated preview servers
 
 Architect-facing MCP mutation tools maintain product trees:
 
 - `read_plan` reads the current scoped product tree without
   direct ledger queries. `nodes_only` returns product plan nodes, the default
-  `nodes_with_slice_refs` includes compact slice id/status refs, and
-  `nodes_with_slices` includes visible planned-slice payloads. Completion and
-  attention rollups use scoped delivery-board operational state for linked
+  `nodes_with_work_package_refs` includes compact package id/status refs, and
+  `nodes_with_work_packages` includes visible WorkPackage payloads. Completion and
+  attention rollups use scoped delivery-board operational state for canonical
   WorkPackages.
 - `upsert_plan_node` creates product plan nodes
   and edits their title, description, or node kind inside a scoped WorkRequest.
@@ -171,12 +172,11 @@ Architect-facing MCP mutation tools maintain product trees:
 - `set_plan_node_completion` updates product plan node
   completion marks and uses the existing blocker closeout guard for terminal
   marks.
-- `move_slice_to_plan_node` moves a planned slice under
-  a product plan node, or unlinks it back to the WorkRequest's direct slice
-  list.
+- `update_work_package` changes a planned WorkPackage contract, including its
+  optional `product_tree_node_id`, using optimistic contract revision checking.
 
 These tools are intentionally small rearrangement primitives. They do not
-dispatch slices, create WorkPackages, mutate Linear, or force every WorkRequest
+dispatch WorkPackages, create WorkPackages, mutate Linear, or force every WorkRequest
 to use product plan nodes.
 
 ## Cutover Non-Goals And Follow-Ups
@@ -198,10 +198,10 @@ polling cannot hold up the server.
 
 1. Land schema and read projection behind the existing local cockpit.
 2. Migrate a copy of the current local SQLite DB and preview the v3 cockpit.
-3. Seed representative WorkRequests with product plan nodes and slice links.
+3. Seed representative WorkRequests with product plan nodes and canonical WorkPackages.
 4. Backfill existing large WorkRequests opportunistically with the architect
    product-tree tools; leave simple work as
-   direct-slice WorkRequests.
+   direct-WorkPackage WorkRequests.
 5. Make the product-tree cockpit the default board once the copied-DB preview
    proves stable.
 

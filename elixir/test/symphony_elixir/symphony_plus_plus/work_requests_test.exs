@@ -16,17 +16,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.TestSupport
-  alias SymphonyElixir.WorkPackageFactory
 
   defmodule LockedWorkRequestUpdateRepo do
     alias SymphonyElixir.SymphonyPlusPlus.Repo
@@ -102,7 +100,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     repo.delete_all(ClaimLease)
     repo.delete_all(AccessGrant)
     repo.delete_all(Comment)
-    repo.delete_all(PlannedSlice)
+    repo.delete_all(WorkPackage)
     repo.delete_all(WorkPackage)
     repo.delete_all(ClarificationQuestion)
     repo.delete_all(RepoScope)
@@ -334,8 +332,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
   test "refreshes conservative completion and archive state without changing raw status", %{repo: repo} do
     assert {:ok, request} = Repository.create(repo, attrs(id: "WR-COMPLETE", status: "ready_for_slicing"))
-    assert {:ok, slice} = Repository.add_planned_slice(repo, request.id, planned_slice_attrs(id: "WRS-COMPLETE"))
-    assert {:ok, _skipped} = Repository.skip_planned_slice(repo, request.id, slice.id, "planned")
+    assert {:ok, slice} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-COMPLETE"))
+    assert {:ok, _skipped} = Repository.skip_work_package(repo, request.id, slice.id, "planned")
 
     assert {:ok, completed} = Service.refresh_completion(repo, request.id)
     assert completed.status == "ready_for_slicing"
@@ -393,19 +391,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, request} = Repository.create(repo, attrs(id: "WR-ARCHIVE-MULTI-WORKTREE", status: "ready_for_slicing"))
 
     assert {:ok, clean_slice} =
-             Repository.add_planned_slice(repo, request.id, planned_slice_attrs(id: "WRS-ARCHIVE-MULTI-CLEAN"))
+             CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-ARCHIVE-MULTI-CLEAN"))
 
     assert {:ok, dirty_slice} =
-             Repository.add_planned_slice(repo, request.id, planned_slice_attrs(id: "WRS-ARCHIVE-MULTI-DIRTY"))
+             CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-ARCHIVE-MULTI-DIRTY"))
 
-    assert {:ok, clean_slice} = Repository.approve_planned_slice(repo, request.id, clean_slice.id, "planned")
-    assert {:ok, dirty_slice} = Repository.approve_planned_slice(repo, request.id, dirty_slice.id, "planned")
+    assert {:ok, clean_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, clean_slice.id, "planned")
+    assert {:ok, dirty_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, dirty_slice.id, "planned")
 
-    clean_package = create_matching_work_package!(repo, request, clean_slice, id: "WP-ARCHIVE-MULTI-CLEAN", status: "merged")
-    dirty_package = create_matching_work_package!(repo, request, dirty_slice, id: "WP-ARCHIVE-MULTI-DIRTY", status: "merged")
-
-    assert {:ok, _clean_dispatch} = Repository.dispatch_planned_slice(repo, request.id, clean_slice.id, "approved", clean_package.id)
-    assert {:ok, _dirty_dispatch} = Repository.dispatch_planned_slice(repo, request.id, dirty_slice.id, "approved", dirty_package.id)
+    clean_package = set_work_package_status!(repo, clean_slice, "merged")
+    dirty_package = set_work_package_status!(repo, dirty_slice, "merged")
     assert {:ok, completed} = Service.refresh_completion(repo, request.id)
 
     completed
@@ -441,8 +436,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
   test "completion write failures are normalized", %{repo: repo} do
     assert {:ok, request} = Repository.create(repo, attrs(id: "WR-COMPLETE-LOCKED", status: "ready_for_slicing"))
-    assert {:ok, slice} = Repository.add_planned_slice(repo, request.id, planned_slice_attrs(id: "WRS-COMPLETE-LOCKED"))
-    assert {:ok, _skipped} = Repository.skip_planned_slice(repo, request.id, slice.id, "planned")
+    assert {:ok, slice} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-COMPLETE-LOCKED"))
+    assert {:ok, _skipped} = Repository.skip_work_package(repo, request.id, slice.id, "planned")
 
     assert {:error, :database_busy} = Service.refresh_completion(LockedWorkRequestUpdateRepo, request.id)
     assert {:ok, unchanged} = Repository.get(repo, request.id)
@@ -502,10 +497,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
   test "blocker reopen events roll back when completion clearing fails", %{repo: repo} do
     assert {:ok, request} = Repository.create(repo, attrs(id: "WR-BLOCKER-ROLLBACK", status: "ready_for_slicing"))
-    assert {:ok, planned_slice} = Repository.add_planned_slice(repo, request.id, planned_slice_attrs(id: "WRS-BLOCKER-ROLLBACK"))
-    assert {:ok, approved_slice} = Repository.approve_planned_slice(repo, request.id, planned_slice.id, "planned")
-    linked_package = create_matching_work_package!(repo, request, approved_slice, id: "WP-BLOCKER-ROLLBACK", status: "merged")
-    assert {:ok, _dispatched} = Repository.dispatch_planned_slice(repo, request.id, approved_slice.id, "approved", linked_package.id)
+    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-BLOCKER-ROLLBACK"))
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
+    linked_package = set_work_package_status!(repo, approved_slice, "merged")
     assert {:ok, _completed} = Service.refresh_completion(repo, request.id)
     assert {:ok, archived} = Service.archive(repo, request.id)
 
@@ -542,7 +536,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert archived.completed_at == old_completed_at
     assert %DateTime{} = archived.archived_at
 
-    assert {:ok, [_slice]} = Repository.list_planned_slices(repo, old_request.id)
+    assert {:ok, [_slice]} = Repository.list_work_packages(repo, old_request.id)
     assert {:ok, [_decision]} = Repository.list_decisions(repo, old_request.id)
 
     assert {:ok, [^recent_request]} = Repository.list(repo)
@@ -599,9 +593,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, slice_comment} =
              CommentService.create(repo, %{
                id: "comment-retention-delete-slice",
-               target_kind: "planned_slice",
+               target_kind: "work_package",
                target_id: expired_slice_id,
-               body: "Remove with planned slice",
+               body: "Remove with WorkPackage",
                source_type: "operator",
                author_name: "retention-test"
              })
@@ -618,20 +612,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
                author_name: "retention-test"
              })
 
-    collision_package = create_activity_work_package!(repo, expired_slice_id, status: "merged")
-    grant = insert_claimed_activity_grant!(repo, collision_package, "worker", "retention-worker")
+    scope_owner = create_activity_work_package!(repo, "WP-RETENTION-SCOPE-OWNER", status: "merged")
+    grant = insert_claimed_activity_grant!(repo, scope_owner, "worker", "retention-worker")
     insert_grant_scope!(repo, grant.id, "work_request", expired.id)
-    insert_grant_scope!(repo, grant.id, "planned_slice", expired_slice_id)
-
-    assert {:ok, collision_comment} =
-             CommentService.create(repo, %{
-               id: "comment-retention-keep-collision",
-               target_kind: "work_package",
-               target_id: collision_package.id,
-               body: "Keep matching id on another target kind",
-               source_type: "operator",
-               author_name: "retention-test"
-             })
+    insert_grant_scope!(repo, grant.id, "work_package", expired_slice_id)
 
     completed = completed_skipped_request!(repo, "WR-RETENTION-DELETE-COMPLETED", stale_at)
     assert {:ok, open} = Repository.create(repo, attrs(id: "WR-RETENTION-DELETE-OPEN", status: "draft"))
@@ -653,12 +637,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:error, :not_found} = CommentService.get(repo, request_comment.id)
     assert {:error, :not_found} = CommentService.get(repo, slice_comment.id)
     assert grant_scope_count(repo, "work_request", expired.id) == 0
-    assert grant_scope_count(repo, "planned_slice", expired_slice_id) == 0
+    assert grant_scope_count(repo, "work_package", expired_slice_id) == 0
 
     assert {:ok, ^active} = Service.get(repo, active.id)
     assert {:ok, ^active_comment} = CommentService.get(repo, active_comment.id)
-    assert {:ok, ^collision_comment} = CommentService.get(repo, collision_comment.id)
-    assert grant_scope_count(repo, "work_package", collision_package.id) == 1
+    assert grant_scope_count(repo, "work_package", expired_slice_id) == 0
     assert {:ok, ^completed} = Service.get(repo, completed.id)
     assert {:ok, ^open} = Service.get(repo, open.id)
     assert {:ok, ^recent_archived} = Service.get(repo, recent_archived.id)
@@ -695,8 +678,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
       assert {:error, :not_found} = Service.get(repo, dirty_request.id)
       refute File.exists?(clean_worktree.worktree_path)
       refute File.exists?(dirty_worktree.worktree_path)
-      assert repo.get!(WorkPackage, clean_package.id).worktree_path == nil
-      assert repo.get!(WorkPackage, dirty_package.id).worktree_path == nil
+      assert repo.get(WorkPackage, clean_package.id) == nil
+      assert repo.get(WorkPackage, dirty_package.id) == nil
     after
       restore_env("CODEX_HOME", previous_codex_home)
     end
@@ -824,10 +807,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
   test "dependency lifecycle changes reopen archived work requests", %{repo: repo} do
     assert {:ok, request} = Repository.create(repo, attrs(id: "WR-RETENTION-LINKED-REOPEN", status: "ready_for_slicing"))
-    assert {:ok, planned_slice} = Repository.add_planned_slice(repo, request.id, planned_slice_attrs(id: "WRS-RETENTION-LINKED-REOPEN"))
-    assert {:ok, approved_slice} = Repository.approve_planned_slice(repo, request.id, planned_slice.id, "planned")
-    linked_package = create_matching_work_package!(repo, request, approved_slice, id: "WP-RETENTION-LINKED-REOPEN", status: "merged")
-    assert {:ok, _dispatched} = Repository.dispatch_planned_slice(repo, request.id, approved_slice.id, "approved", linked_package.id)
+    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-RETENTION-LINKED-REOPEN"))
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
+    linked_package = set_work_package_status!(repo, approved_slice, "merged")
     assert {:ok, completed} = Service.refresh_completion(repo, request.id)
     assert %DateTime{} = completed.completed_at
     assert {:ok, archived} = Service.archive(repo, request.id)
@@ -887,13 +869,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
   test "revoking expired grants does not reopen archived work requests", %{repo: repo} do
     assert {:ok, request} = Repository.create(repo, attrs(id: "WR-RETENTION-GRANT-REVOKE", status: "ready_for_slicing"))
-    assert {:ok, planned_slice} = Repository.add_planned_slice(repo, request.id, planned_slice_attrs(id: "WRS-RETENTION-GRANT-REVOKE"))
-    assert {:ok, approved_slice} = Repository.approve_planned_slice(repo, request.id, planned_slice.id, "planned")
+    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-RETENTION-GRANT-REVOKE"))
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
 
-    linked_package =
-      create_matching_work_package!(repo, request, approved_slice, id: "WP-RETENTION-GRANT-REVOKE", status: "merged")
-
-    assert {:ok, _dispatched} = Repository.dispatch_planned_slice(repo, request.id, approved_slice.id, "approved", linked_package.id)
+    linked_package = set_work_package_status!(repo, approved_slice, "merged")
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
 
     expired_at = utc_usec(~U[2026-05-01 00:00:00Z])
@@ -916,13 +895,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
   test "completion waits for terminal package active grants even without claimed_by", %{repo: repo} do
     assert {:ok, request} = Repository.create(repo, attrs(id: "WR-COMPLETE-UNNAMED-GRANT", status: "ready_for_slicing"))
-    assert {:ok, planned_slice} = Repository.add_planned_slice(repo, request.id, planned_slice_attrs(id: "WRS-COMPLETE-UNNAMED-GRANT"))
-    assert {:ok, approved_slice} = Repository.approve_planned_slice(repo, request.id, planned_slice.id, "planned")
+    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-COMPLETE-UNNAMED-GRANT"))
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
 
-    linked_package =
-      create_matching_work_package!(repo, request, approved_slice, id: "WP-COMPLETE-UNNAMED-GRANT", status: "merged")
-
-    assert {:ok, _dispatched} = Repository.dispatch_planned_slice(repo, request.id, approved_slice.id, "approved", linked_package.id)
+    linked_package = set_work_package_status!(repo, approved_slice, "merged")
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
 
     minted.grant
@@ -939,11 +915,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
   test "completion and archive wait for a paused current claim lease", %{repo: repo} do
     assert {:ok, request} = Repository.create(repo, attrs(id: "WR-COMPLETE-PAUSED-LEASE", status: "ready_for_slicing"))
-    assert {:ok, planned_slice} = Repository.add_planned_slice(repo, request.id, planned_slice_attrs(id: "WRS-COMPLETE-PAUSED-LEASE"))
-    assert {:ok, approved_slice} = Repository.approve_planned_slice(repo, request.id, planned_slice.id, "planned")
-    linked_package = create_matching_work_package!(repo, request, approved_slice, id: "WP-COMPLETE-PAUSED-LEASE", status: "merged")
-
-    assert {:ok, _dispatched} = Repository.dispatch_planned_slice(repo, request.id, approved_slice.id, "approved", linked_package.id)
+    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-COMPLETE-PAUSED-LEASE"))
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
+    linked_package = set_work_package_status!(repo, approved_slice, "merged")
 
     assert {:ok, claim_lease} =
              ClaimLeaseService.claim(repo, linked_package.id, activity_actor("paused-completion-worker"), stale_after_ms: 60_000)
@@ -975,8 +949,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
   test "completion waits for questions blockers linked packages and honors terminal runtime", %{repo: repo} do
     assert {:ok, human_request} = Repository.create(repo, attrs(id: "WR-COMPLETE-HUMAN", status: "ready_for_slicing"))
-    assert {:ok, human_slice} = Repository.add_planned_slice(repo, human_request.id, planned_slice_attrs(id: "WRS-COMPLETE-HUMAN"))
-    assert {:ok, _human_skipped} = Repository.skip_planned_slice(repo, human_request.id, human_slice.id, "planned")
+    assert {:ok, human_slice} = CanonicalWorkPackageFixtures.add_work_package(repo, human_request.id, work_package_attrs(id: "WRS-COMPLETE-HUMAN"))
+    assert {:ok, _human_skipped} = Repository.skip_work_package(repo, human_request.id, human_slice.id, "planned")
     human_request |> Ecto.Changeset.change(status: "human_info_needed") |> repo.update!()
 
     assert {:ok, waiting_for_human} = Service.refresh_completion(repo, human_request.id)
@@ -984,8 +958,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:error, :not_completed} = Service.archive(repo, human_request.id)
 
     assert {:ok, question_request} = Repository.create(repo, attrs(id: "WR-COMPLETE-QUESTION", status: "ready_for_slicing"))
-    assert {:ok, question_slice} = Repository.add_planned_slice(repo, question_request.id, planned_slice_attrs(id: "WRS-COMPLETE-QUESTION"))
-    assert {:ok, _skipped} = Repository.skip_planned_slice(repo, question_request.id, question_slice.id, "planned")
+    assert {:ok, question_slice} = CanonicalWorkPackageFixtures.add_work_package(repo, question_request.id, work_package_attrs(id: "WRS-COMPLETE-QUESTION"))
+    assert {:ok, _skipped} = Repository.skip_work_package(repo, question_request.id, question_slice.id, "planned")
     assert {:ok, open_question} = Repository.ask_question(repo, question_request.id, question_attrs(id: "WRQ-COMPLETE-OPEN"))
 
     assert {:ok, with_question} = Service.refresh_completion(repo, question_request.id)
@@ -996,11 +970,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert %DateTime{} = without_question.completed_at
 
     assert {:ok, linked_request} = Repository.create(repo, attrs(id: "WR-COMPLETE-LINKED", status: "ready_for_slicing"))
-    assert {:ok, planned_slice} = Repository.add_planned_slice(repo, linked_request.id, planned_slice_attrs(id: "WRS-COMPLETE-LINKED"))
-    assert {:ok, approved_slice} = Repository.approve_planned_slice(repo, linked_request.id, planned_slice.id, "planned")
-    linked_package = create_matching_work_package!(repo, linked_request, approved_slice, id: "WP-COMPLETE-LINKED", status: "merged")
-
-    assert {:ok, _dispatched} = Repository.dispatch_planned_slice(repo, linked_request.id, approved_slice.id, "approved", linked_package.id)
+    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, linked_request.id, work_package_attrs(id: "WRS-COMPLETE-LINKED"))
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, linked_request.id, work_package.id, "planned")
+    linked_package = set_work_package_status!(repo, approved_slice, "merged")
 
     append_blocker_event!(repo, linked_package.id, "blocker-completion", true)
     assert {:ok, blocked} = Service.refresh_completion(repo, linked_request.id)
@@ -1012,10 +984,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert DateTime.compare(unblocked.completed_at, resolved_blocker.created_at) in [:eq, :gt]
 
     assert {:ok, ordered_request} = Repository.create(repo, attrs(id: "WR-COMPLETE-BLOCKER-ORDER", status: "ready_for_slicing"))
-    assert {:ok, ordered_slice} = Repository.add_planned_slice(repo, ordered_request.id, planned_slice_attrs(id: "WRS-COMPLETE-BLOCKER-ORDER"))
-    assert {:ok, ordered_slice} = Repository.approve_planned_slice(repo, ordered_request.id, ordered_slice.id, "planned")
-    ordered_package = create_matching_work_package!(repo, ordered_request, ordered_slice, id: "WP-COMPLETE-BLOCKER-ORDER", status: "merged")
-    assert {:ok, _ordered_dispatched} = Repository.dispatch_planned_slice(repo, ordered_request.id, ordered_slice.id, "approved", ordered_package.id)
+    assert {:ok, ordered_slice} = CanonicalWorkPackageFixtures.add_work_package(repo, ordered_request.id, work_package_attrs(id: "WRS-COMPLETE-BLOCKER-ORDER"))
+    assert {:ok, ordered_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, ordered_request.id, ordered_slice.id, "planned")
+    ordered_package = set_work_package_status!(repo, ordered_slice, "merged")
 
     event_time = utc_usec(~U[2026-05-23 12:00:00Z])
     append_blocker_event!(repo, ordered_package.id, "blocker-order", true, created_at: DateTime.add(event_time, 10, :second))
@@ -1024,11 +995,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert %DateTime{} = ordered_unblocked.completed_at
 
     assert {:ok, runtime_request} = Repository.create(repo, attrs(id: "WR-COMPLETE-RUNTIME", status: "ready_for_slicing"))
-    assert {:ok, runtime_slice} = Repository.add_planned_slice(repo, runtime_request.id, planned_slice_attrs(id: "WRS-COMPLETE-RUNTIME"))
-    assert {:ok, runtime_slice} = Repository.approve_planned_slice(repo, runtime_request.id, runtime_slice.id, "planned")
-    runtime_package = create_matching_work_package!(repo, runtime_request, runtime_slice, id: "WP-COMPLETE-RUNTIME", status: "merged")
-
-    assert {:ok, _runtime_dispatched} = Repository.dispatch_planned_slice(repo, runtime_request.id, runtime_slice.id, "approved", runtime_package.id)
+    assert {:ok, runtime_slice} = CanonicalWorkPackageFixtures.add_work_package(repo, runtime_request.id, work_package_attrs(id: "WRS-COMPLETE-RUNTIME"))
+    assert {:ok, runtime_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, runtime_request.id, runtime_slice.id, "planned")
+    runtime_package = set_work_package_status!(repo, runtime_slice, "merged")
 
     assert {:ok, run} =
              AgentRunRepository.start_run(repo, %{
@@ -1050,13 +1019,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   test "visible completion treats terminal package cards as terminal" do
     updated_at = utc_usec(~U[2026-05-23 12:00:00Z])
     work_request = %WorkRequest{id: "WR-COMPLETE-CARD", status: "ready_for_slicing", updated_at: updated_at}
-    planned_slice = %PlannedSlice{id: "WRS-COMPLETE-CARD", status: "dispatched", work_package_id: "WP-COMPLETE-CARD", updated_at: updated_at}
+    work_package = %WorkPackage{id: "WP-COMPLETE-CARD", status: "merged", updated_at: updated_at}
 
     state =
       Completion.visible_state(
         work_request,
         %{open_count: 0, latest_gate_at: nil},
-        [planned_slice],
+        [work_package],
         %{"WP-COMPLETE-CARD" => %{card: %{operational_state: %{key: "merged"}}}}
       )
 
@@ -1067,7 +1036,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
       Completion.visible_state(
         work_request,
         %{open_count: 0, latest_gate_at: nil},
-        [planned_slice],
+        [work_package],
         %{"WP-COMPLETE-CARD" => %{card: %{operational_state: %{"key" => "merged", "has_active_worker" => true}}}}
       )
 
@@ -1077,7 +1046,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
       Completion.visible_state(
         work_request,
         %{open_count: 0, latest_gate_at: nil},
-        [planned_slice],
+        [work_package],
         %{"WP-COMPLETE-CARD" => %{card: %{operational_state: %{"key" => "merged", "attention_items" => [%{"key" => "active_blocker"}]}}}}
       )
 
@@ -1094,8 +1063,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
       updated_at: completed_at
     }
 
-    visible_slice = %PlannedSlice{id: "WRS-COMPLETE-FILTERED-1", status: "dispatched", work_package_id: "WP-COMPLETE-FILTERED-1", updated_at: completed_at}
-    filtered_slice = %PlannedSlice{id: "WRS-COMPLETE-FILTERED-2", status: "dispatched", work_package_id: "WP-COMPLETE-FILTERED-2", updated_at: completed_at}
+    visible_slice = %WorkPackage{id: "WP-COMPLETE-FILTERED-1", status: "merged", updated_at: completed_at}
+    filtered_slice = %WorkPackage{id: "WP-COMPLETE-FILTERED-2", status: "merged", updated_at: completed_at}
 
     state =
       Completion.visible_state(
@@ -1121,7 +1090,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
       updated_at: completed_at
     }
 
-    planned_slice = %PlannedSlice{
+    work_package = %WorkPackage{
       id: "WRS-COMPLETE-DELIVERED-APPROVED",
       work_request_id: work_request.id,
       status: "approved",
@@ -1132,9 +1101,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
       Completion.visible_state(
         work_request,
         %{open_count: 0, latest_gate_at: nil},
-        [planned_slice],
+        [work_package],
         %{},
-        %{planned_slice.id => %{outcome: "completed_no_pr"}}
+        %{work_package.id => %{outcome: "completed_no_pr"}}
       )
 
     assert state.completed? == true
@@ -1145,9 +1114,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
       Completion.visible_state(
         %{work_request | completed_at: nil, archived_at: nil},
         %{open_count: 0, latest_gate_at: nil},
-        [planned_slice],
+        [work_package],
         %{},
-        %{planned_slice.id => %{outcome: "completed_no_pr"}}
+        %{work_package.id => %{outcome: "completed_no_pr"}}
       )
 
     assert derived_state.completed? == true
@@ -1320,13 +1289,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     Enum.into(overrides, defaults)
   end
 
-  defp planned_slice_attrs(overrides) do
+  defp work_package_attrs(overrides) do
     defaults = %{
       title: "Complete WorkRequest state",
       goal: "Track completed WorkRequests.",
-      work_package_kind: "mcp",
-      target_base_branch: "main",
-      owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
+      kind: "mcp",
+      base_branch: "main",
+      allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
       forbidden_file_globs: [],
       acceptance_criteria: ["Completion state is explicit."],
       validation_steps: ["mix test"],
@@ -1363,9 +1332,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, request} = Repository.create(repo, attrs(Keyword.merge([id: id, status: "ready_for_slicing"], overrides)))
 
     assert {:ok, slice} =
-             Repository.add_planned_slice(repo, request.id, planned_slice_attrs(id: "WRS-#{id}", target_base_branch: request.base_branch))
+             CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-#{id}", base_branch: request.base_branch))
 
-    assert {:ok, _skipped} = Repository.skip_planned_slice(repo, request.id, slice.id, "planned")
+    assert {:ok, _skipped} = Repository.skip_work_package(repo, request.id, slice.id, "planned")
     assert {:ok, completed} = Service.refresh_completion(repo, request.id)
 
     completed
@@ -1377,11 +1346,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, request} = Repository.create(repo, attrs(id: id, status: "ready_for_slicing"))
 
     assert {:ok, slice} =
-             Repository.add_planned_slice(repo, request.id, planned_slice_attrs(id: "WRS-#{id}", target_base_branch: request.base_branch))
+             CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-#{id}", base_branch: request.base_branch))
 
-    assert {:ok, approved_slice} = Repository.approve_planned_slice(repo, request.id, slice.id, "planned")
-    package = create_matching_work_package!(repo, request, approved_slice, id: "WP-#{id}", status: "merged")
-    assert {:ok, _dispatched} = Repository.dispatch_planned_slice(repo, request.id, approved_slice.id, "approved", package.id)
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, slice.id, "planned")
+    package = set_work_package_status!(repo, approved_slice, "merged")
     assert {:ok, completed} = Service.refresh_completion(repo, request.id)
 
     completed =
@@ -1411,15 +1379,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   defp create_activity_work_package!(repo, id, overrides) do
     attrs =
       overrides
-      |> Keyword.merge(
+      |> Map.new()
+      |> Map.merge(%{
         id: id,
         kind: "mcp",
         title: id,
         repo: "nextide/example",
         base_branch: "main",
         acceptance_criteria: ["Activity context is projected."]
-      )
-      |> WorkPackageFactory.attrs()
+      })
 
     assert {:ok, work_package} = WorkPackageRepository.create(repo, attrs)
     work_package
@@ -1503,23 +1471,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
       assert_eventually(fun, attempts - 1)
   end
 
-  defp create_matching_work_package!(repo, work_request, planned_slice, overrides) do
-    attrs =
-      [
-        kind: planned_slice.work_package_kind,
-        title: planned_slice.title,
-        repo: work_request.repo,
-        base_branch: planned_slice.target_base_branch,
-        branch_pattern: planned_slice.branch_pattern,
-        product_description: work_request.human_description,
-        allowed_file_globs: planned_slice.owned_file_globs,
-        acceptance_criteria: planned_slice.acceptance_criteria
-      ]
-      |> Keyword.merge(overrides)
-      |> WorkPackageFactory.attrs()
-
-    assert {:ok, work_package} = WorkPackageRepository.create(repo, attrs)
-    work_package
+  defp set_work_package_status!(repo, work_package, status) do
+    repo.update!(
+      Ecto.Changeset.change(work_package,
+        status: status,
+        dispatched_at: DateTime.utc_now(:microsecond)
+      )
+    )
   end
 
   defp append_blocker_event!(repo, work_package_id, blocker_id, active, overrides \\ []) do

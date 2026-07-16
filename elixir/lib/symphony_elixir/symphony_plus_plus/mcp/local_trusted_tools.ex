@@ -5,9 +5,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedTools do
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, ToolCatalog}
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -186,17 +185,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedTools do
     end
   end
 
-  defp require_comment_target(repo, "planned_slice", target_id) do
-    case repo.get(PlannedSlice, target_id) do
-      %PlannedSlice{} -> :ok
-      nil -> {:error, :not_found}
-    end
-  end
-
   defp require_comment_target(repo, "work_package", target_id) do
-    case WorkPackageRepository.get(repo, target_id) do
-      {:ok, %WorkPackage{}} -> :ok
-      {:error, reason} -> {:error, reason}
+    case repo.get(WorkPackage, target_id) do
+      %WorkPackage{} -> :ok
+      nil -> {:error, :not_found}
     end
   end
 

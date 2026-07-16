@@ -11,7 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge do
   @primary_key {:id, :string, autogenerate: false}
   @foreign_key_type :string
 
-  @ref_kinds ["product_node", "planned_slice"]
+  @ref_kinds ["product_node", "work_package"]
   @edge_kinds ["depends_on", "blocks", "enables", "validates", "replaces", "supersedes", "recut_from", "related"]
   @hard_edge_kinds ["depends_on", "blocks"]
 

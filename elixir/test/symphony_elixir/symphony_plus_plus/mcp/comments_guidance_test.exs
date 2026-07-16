@@ -6,29 +6,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
 
   test "worker comment tools create list and resolve exact package comments only", %{repo: repo} do
-    assert {:ok, work_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-MCP-COMMENTS", kind: "mcp", repo: "nextide/symphony-plus-plus", base_branch: "main"))
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, work_package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
     work_request =
       create_work_request!(
         repo,
         id: "WR-MCP-COMMENTS",
-        repo: work_package.repo,
-        base_branch: work_package.base_branch
+        repo: "nextide/symphony-plus-plus",
+        base_branch: "main"
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(id: "WRS-MCP-COMMENTS", target_base_branch: work_package.base_branch)
+               work_request_work_package_attrs(id: "WRS-MCP-COMMENTS", base_branch: work_request.base_branch)
              )
 
-    repo.update!(Ecto.Changeset.change(planned_slice, status: "dispatched", work_package_id: work_package.id))
+    work_package =
+      repo.update!(
+        Ecto.Changeset.change(work_package,
+          status: "ready_for_worker",
+          dispatched_at: DateTime.utc_now(:microsecond)
+        )
+      )
+
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, work_package.id)
+    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
+    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
     work_request_comment_response =
       mcp_tool(repo, session, "add_comment", %{
@@ -40,17 +43,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
 
     assert get_in(work_request_comment_response, ["error", "code"]) == -32_003
     assert get_in(work_request_comment_response, ["error", "data", "reason"]) == "outside_session_scope"
-
-    planned_slice_comment_response =
-      mcp_tool(repo, session, "add_comment", %{
-        "work_package_id" => work_package.id,
-        "target_kind" => "planned_slice",
-        "target_id" => planned_slice.id,
-        "body" => "This must stay architect-owned"
-      })
-
-    assert get_in(planned_slice_comment_response, ["error", "code"]) == -32_003
-    assert get_in(planned_slice_comment_response, ["error", "data", "reason"]) == "outside_session_scope"
 
     overlong_response =
       mcp_tool(repo, session, "add_comment", %{
@@ -139,26 +131,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
         status: "ready_for_slicing"
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(id: "WRS-MCP-ARCH-PACKAGE-SURFACES", target_base_branch: work_request.base_branch)
+               work_request_work_package_attrs(id: "WRS-MCP-ARCH-PACKAGE-SURFACES", base_branch: work_request.base_branch)
              )
 
-    assert {:ok, work_package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-MCP-ARCH-PACKAGE-SURFACES",
-                 kind: "mcp",
-                 repo: work_request.repo,
-                 base_branch: work_request.base_branch,
-                 status: "implementing"
-               )
-             )
-
-    repo.update!(Ecto.Changeset.change(planned_slice, status: "dispatched", work_package_id: work_package.id))
+    work_package = repo.update!(Ecto.Changeset.change(work_package, status: "implementing"))
 
     {_phase_anchor, phase_session, _phase_grant} =
       create_phase_architect_session(
@@ -383,7 +363,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
           "jsonrpc" => "2.0",
           "id" => "local-operator-dispatch-denied",
           "method" => "tools/call",
-          "params" => %{"name" => "dispatch_slice", "arguments" => %{}}
+          "params" => %{"name" => "dispatch_work_package", "arguments" => %{}}
         },
         note_server
       )
@@ -537,47 +517,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
     assert {:ok, _phase} = PhaseRepository.create(repo, %{id: other_phase_id, title: "Other WorkRequest guidance phase"})
 
     assert {:ok, first_package} =
-             WorkPackageRepository.create(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
-               WorkPackageFactory.attrs(
+               first_work_request.id,
+               work_request_work_package_attrs(
                  id: "SYMPP-MCP-GUIDANCE-WR-FILTER-A",
-                 kind: "mcp",
-                 repo: anchor.repo,
                  base_branch: anchor.base_branch,
                  phase_id: architect_session.assignment.phase_id,
-                 status: "implementing"
+                 status: "implementing",
+                 dispatched_at: DateTime.utc_now(:microsecond)
                )
              )
 
     assert {:ok, second_package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-MCP-GUIDANCE-WR-FILTER-B",
-                 kind: "mcp",
-                 repo: anchor.repo,
-                 base_branch: anchor.base_branch,
-                 phase_id: other_phase_id,
-                 status: "implementing"
-               )
-             )
-
-    assert {:ok, first_slice} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               first_work_request.id,
-               work_request_planned_slice_attrs(id: "WRS-MCP-GUIDANCE-WR-FILTER-A", target_base_branch: anchor.base_branch)
-             )
-
-    assert {:ok, second_slice} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                second_work_request.id,
-               work_request_planned_slice_attrs(id: "WRS-MCP-GUIDANCE-WR-FILTER-B", target_base_branch: anchor.base_branch)
+               work_request_work_package_attrs(
+                 id: "SYMPP-MCP-GUIDANCE-WR-FILTER-B",
+                 base_branch: anchor.base_branch,
+                 phase_id: other_phase_id,
+                 status: "implementing",
+                 dispatched_at: DateTime.utc_now(:microsecond)
+               )
              )
-
-    repo.update!(Ecto.Changeset.change(first_slice, status: "dispatched", work_package_id: first_package.id))
-    repo.update!(Ecto.Changeset.change(second_slice, status: "dispatched", work_package_id: second_package.id))
 
     first_guidance_id = create_worker_guidance_request!(repo, first_package.id, "first")
     second_guidance_id = create_worker_guidance_request!(repo, second_package.id, "second")

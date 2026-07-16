@@ -26,7 +26,7 @@ matching S++ MCP tools, so this pass used the requested fallback path:
   WorkPackage `wp_ZtFeuFtbjHyAXvNY2jllEA`
 
 The fallback ledger created WorkRequest `SYMPP-V2-DOGFOOD-002-WR`, recorded the
-two child planned slices, marked the WorkRequest `sliced`, and dispatched both
+two child WorkPackages, marked the WorkRequest `sliced`, and dispatched both
 slices into quick-fix WorkPackages. Dispatch output reported
 `secret_in_stdout: false`. Raw work keys, grant secrets, private handoff
 payloads, and MCP session ids are intentionally not recorded here.
@@ -95,7 +95,7 @@ Final evidence PR validation is recorded on the final PR.
 Creator-data orchestration can start, with one operational condition: launch it
 from a fresh or reloaded dedicated S++ MCP-enabled Codex session so the native
 `symphony_plus_plus` MCP namespace is present before the model starts. The
-doctor, HTTP smoke, isolated ledger, WorkRequest/planned-slice dispatch, bound
+doctor, HTTP smoke, isolated ledger, WorkRequest/work-package dispatch, bound
 worker smoke, child PR reviews, and two sequential child merges all passed.
 
 Already-running sessions that cannot see the S++ MCP namespace remain blocked

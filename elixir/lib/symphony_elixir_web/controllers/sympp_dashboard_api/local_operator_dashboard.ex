@@ -8,7 +8,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service, as: SoloSessionService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -104,16 +104,16 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
          {:ok, settings} <- OperatorSettingsRepository.get(repo),
          :ok <- run_operator_retention(repo, settings),
          {:ok, settings} <- OperatorSettingsRepository.get(repo),
-         {:ok, linked_work_package_id_sets} <- linked_work_package_id_sets(repo),
+         {:ok, work_request_work_package_id_sets} <- work_request_work_package_id_sets(repo),
          {:ok, architect_handoff_anchor_work_package_ids} <- architect_handoff_anchor_work_package_ids(repo),
          {:ok, settings} <- dedupe_hidden_work_package_ids_for_local_operator(repo, settings),
-         {:ok, expired_unlinked_work_package_ids} <-
-           expired_unlinked_work_package_ids_for_local_operator(repo, settings, linked_work_package_id_sets.active) do
+         {:ok, expired_unwork_request_work_package_ids} <-
+           expired_unwork_request_work_package_ids_for_local_operator(repo, settings, work_request_work_package_id_sets.active) do
       hidden_work_package_ids =
         settings
-        |> effective_hidden_work_package_ids(linked_work_package_id_sets.active)
-        |> MapSet.union(expired_unlinked_work_package_ids)
-        |> MapSet.union(linked_work_package_id_sets.archived_only)
+        |> effective_hidden_work_package_ids(work_request_work_package_id_sets.active)
+        |> MapSet.union(expired_unwork_request_work_package_ids)
+        |> MapSet.union(work_request_work_package_id_sets.archived_only)
         |> MapSet.union(architect_handoff_anchor_work_package_ids)
 
       {:ok,
@@ -122,7 +122,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
          repo_identity_catalog: repo_identity_catalog,
          hidden_work_package_ids: hidden_work_package_ids,
          settings: operator_settings_payload(settings),
-         linked_work_package_ids: linked_work_package_id_sets.persisted |> MapSet.to_list() |> Enum.sort()
+         work_request_work_package_ids: work_request_work_package_id_sets.persisted |> MapSet.to_list() |> Enum.sort()
        }}
     end
   end
@@ -149,7 +149,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       active_blocking_edges: active_blocking_edges,
       board: board,
       settings: context.settings,
-      linked_work_package_ids: context.linked_work_package_ids
+      work_request_work_package_ids: context.work_request_work_package_ids
     }
   end
 
@@ -173,10 +173,10 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     Enum.reject(active_blocking_edges, &MapSet.member?(hidden_ids, Map.get(&1, :work_package_id)))
   end
 
-  defp effective_hidden_work_package_ids(%OperatorSettings{} = settings, linked_work_package_ids) do
+  defp effective_hidden_work_package_ids(%OperatorSettings{} = settings, work_request_work_package_ids) do
     settings.hidden_work_package_ids
     |> MapSet.new()
-    |> MapSet.difference(linked_work_package_ids)
+    |> MapSet.difference(work_request_work_package_ids)
   end
 
   defp dedupe_hidden_work_package_ids_for_local_operator(repo, %OperatorSettings{} = settings) do
@@ -189,14 +189,14 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     end
   end
 
-  defp expired_unlinked_work_package_ids_for_local_operator(repo, %OperatorSettings{} = settings, linked_work_package_ids) do
+  defp expired_unwork_request_work_package_ids_for_local_operator(repo, %OperatorSettings{} = settings, work_request_work_package_ids) do
     cutoff = DateTime.add(DateTime.utc_now(:microsecond), -settings.work_request_archive_after_days * 24 * 60 * 60, :second)
 
     WorkPackage
     |> expired_terminal_work_package_query(cutoff)
     |> repo.all()
     |> MapSet.new(& &1.id)
-    |> MapSet.difference(linked_work_package_ids)
+    |> MapSet.difference(work_request_work_package_ids)
     |> then(&{:ok, &1})
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -204,28 +204,26 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   defp expired_terminal_work_package_query(queryable, cutoff) do
     from(work_package in queryable,
-      left_join: planned_slice in PlannedSlice,
-      on: planned_slice.work_package_id == work_package.id,
       left_join: child_work_package in WorkPackage,
       on: child_work_package.parent_id == work_package.id,
       where: work_package.status in ^@local_operator_hideable_package_statuses,
       where: is_nil(work_package.parent_id),
       where: is_nil(work_package.phase_id),
-      where: is_nil(planned_slice.id),
+      where: is_nil(work_package.work_request_id),
       where: is_nil(child_work_package.id),
       where: work_package.updated_at <= ^cutoff,
       order_by: [asc: work_package.updated_at, asc: work_package.id]
     )
   end
 
-  defp linked_work_package_id_sets(repo) do
+  defp work_request_work_package_id_sets(repo) do
     rows =
       repo.all(
-        from(planned_slice in PlannedSlice,
+        from(work_package in WorkPackage,
           left_join: work_request in WorkRequest,
-          on: work_request.id == planned_slice.work_request_id,
-          where: not is_nil(planned_slice.work_package_id),
-          select: {planned_slice.work_package_id, work_request.id, work_request.archived_at}
+          on: work_request.id == work_package.work_request_id,
+          where: not is_nil(work_package.work_request_id),
+          select: {work_package.id, work_request.id, work_request.archived_at}
         )
       )
 

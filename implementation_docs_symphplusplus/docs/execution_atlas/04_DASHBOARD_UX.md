@@ -9,7 +9,7 @@ Current contract:
 - `implementation_docs_symphplusplus/runbooks/V3_PRODUCT_TREE_CUTOVER.md`
 
 Current V3 cockpit behavior: each WorkRequest is the primary collapsed row.
-Expanding a row shows optional product plan nodes and planned slices. Simple
+Expanding a row shows optional product plan nodes and WorkPackages. Simple
 WorkRequests with no product tree remain valid. WorkPackage details stay
 reachable as execution evidence, not as primary product rows.
 

@@ -611,18 +611,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
         status: "ready_for_slicing"
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-LOCAL-RECONNECT",
-                 target_base_branch: package.base_branch,
+                 base_branch: package.base_branch,
                  branch_pattern: package.branch_pattern
                )
              )
 
-    repo.update!(Ecto.Changeset.change(planned_slice, work_package_id: package.id))
+    assert {:ok, _canonical_package} =
+             CanonicalWorkPackageFixtures.dispatch_work_package(
+               repo,
+               work_request.id,
+               work_package.id,
+               "planned",
+               package.id
+             )
 
     {claim_response, claimed_server} =
       Server.handle_state(

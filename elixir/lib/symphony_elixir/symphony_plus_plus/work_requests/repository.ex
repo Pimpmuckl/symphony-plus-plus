@@ -2,21 +2,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   @moduledoc false
 
   alias Ecto.Changeset
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.CompletionRecovery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDeliveryScope
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @completion_blocking_statuses ["human_info_needed"]
-  @planned_slice_delivery_replay_fields [
+  @work_package_delivery_replay_fields [
     :work_request_id,
-    :planned_slice_id,
+    :work_package_id,
     :outcome,
     :idempotency_key,
     :recorded_by,
@@ -26,7 +27,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     :pr_merged_at,
     :merge_commit_sha,
     :no_pr_evidence,
-    :successor_planned_slice_id,
     :successor_work_package_id,
     :superseded_reason,
     :abandoned_rationale
@@ -45,13 +45,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     "status",
     "updated_at"
   ]
-  @planned_slice_create_ignored_attrs [
+  @work_package_create_ignored_attrs [
     "created_at",
     "dispatched_at",
     "inserted_at",
     "sequence",
     "updated_at",
-    "work_package_id"
+    "contract_revision"
   ]
 
   @type repo :: module()
@@ -60,17 +60,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
           | :already_closed
           | :database_busy
           | :delivery_outcome_conflict
-          | :last_approved_slice
-          | :no_approved_slices
+          | :last_active_work_package
+          | :no_work_packages
           | :open_questions
           | :not_found
           | :invalid_work_package_id
-          | :work_package_already_linked
-          | :work_package_mismatch
-          | :work_package_not_found
           | :id_already_exists
           | :invalid_status
-          | :planned_slice_delivery_scope_out_of_scope
+          | :work_package_delivery_scope_out_of_scope
           | :sequence_conflict
           | :stale_status
           | {:constraint_failed, String.t()}
@@ -218,8 +215,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end
   end
 
-  @spec prepare_for_planned_slices(repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error()}
-  def prepare_for_planned_slices(repo, id) when is_atom(repo) and is_binary(id) do
+  @spec prepare_for_work_packages(repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error()}
+  def prepare_for_work_packages(repo, id) when is_atom(repo) and is_binary(id) do
     case get(repo, id) do
       {:ok, %WorkRequest{status: status} = work_request} when status in ["ready_for_slicing", "sliced"] ->
         case ensure_no_open_questions(repo, work_request.id) do
@@ -296,65 +293,81 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     insert_with_sequence(repo, attrs, &next_decision_sequence/2, &DecisionLogEntry.create_changeset/1)
   end
 
-  @spec add_planned_slice(repo(), String.t(), map()) :: {:ok, PlannedSlice.t()} | {:error, error()}
-  def add_planned_slice(repo, work_request_id, attrs)
-      when is_atom(repo) and is_binary(work_request_id) and is_map(attrs) do
-    add_planned_slice(repo, work_request_id, attrs, [])
-  end
-
-  @spec add_planned_slice_for_authoring(repo(), String.t(), map()) :: {:ok, PlannedSlice.t()} | {:error, error()}
-  def add_planned_slice_for_authoring(repo, work_request_id, attrs)
-      when is_atom(repo) and is_binary(work_request_id) and is_map(attrs) do
-    add_planned_slice(repo, work_request_id, attrs, prepare_for_planned_slices?: true)
-  end
-
-  defp add_planned_slice(repo, work_request_id, attrs, opts) do
-    attrs =
-      attrs
-      |> normalize_keys()
-      |> Map.drop(@planned_slice_create_ignored_attrs)
-      |> Map.put("work_request_id", work_request_id)
-
-    changeset_fun = &PlannedSlice.create_changeset/1
-
-    with {:ok, attrs} <- PlannedSliceDeliveryScope.normalize_explicit(repo, work_request_id, attrs) do
-      insert_with_sequence(repo, attrs, &next_planned_slice_sequence/2, changeset_fun, Keyword.put(opts, :clear_completion?, true))
-    end
-  end
-
-  @spec list_planned_slices(repo(), String.t()) :: {:ok, [PlannedSlice.t()]} | {:error, error()}
-  def list_planned_slices(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
-    planned_slices =
-      repo.all(
-        from(planned_slice in PlannedSlice,
-          where: planned_slice.work_request_id == ^work_request_id,
-          order_by: [asc: planned_slice.sequence, asc: planned_slice.id]
-        )
-      )
-
-    {:ok, planned_slices}
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  @spec get_planned_slice(repo(), String.t(), String.t()) :: {:ok, PlannedSlice.t()} | {:error, error()}
-  def get_planned_slice(repo, work_request_id, id)
-      when is_atom(repo) and is_binary(work_request_id) and is_binary(id) do
-    case repo.get(PlannedSlice, id) do
-      nil -> {:error, :not_found}
-      %PlannedSlice{work_request_id: ^work_request_id} = planned_slice -> {:ok, planned_slice}
-      %PlannedSlice{} -> {:error, :not_found}
-    end
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  @spec record_planned_slice_delivery(repo(), String.t(), String.t(), map()) ::
-          {:ok, PlannedSliceDelivery.t()} | {:error, error()}
-  def record_planned_slice_delivery(repo, work_request_id, planned_slice_id, attrs)
-      when is_atom(repo) and is_binary(work_request_id) and is_binary(planned_slice_id) and is_map(attrs) do
+  @spec slice_work_request(repo(), String.t(), [map()]) ::
+          {:ok, %{work_request: WorkRequest.t(), work_packages: [WorkPackage.t()]}} | {:error, error()}
+  def slice_work_request(repo, work_request_id, package_attrs)
+      when is_atom(repo) and is_binary(work_request_id) and is_list(package_attrs) do
     repo.transaction(fn ->
-      case record_planned_slice_delivery_in_transaction(repo, work_request_id, planned_slice_id, attrs) do
+      with {:ok, %WorkRequest{} = work_request} <- get(repo, work_request_id),
+           :ok <- require_slicing_status(work_request.status),
+           false <- open_questions?(repo, work_request_id),
+           :ok <- require_package_batch(package_attrs),
+           {:ok, work_packages} <- insert_work_package_batch(repo, work_request, package_attrs),
+           {:ok, updated_work_request} <- mark_sliced_in_transaction(repo, work_request) do
+        %{work_request: updated_work_request, work_packages: work_packages}
+      else
+        true -> repo.rollback(:open_questions)
+        {:error, reason} -> repo.rollback(reason)
+      end
+    end)
+    |> normalize_transaction_result()
+  rescue
+    error in Ecto.ConstraintError -> normalize_constraint_error(error)
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  @spec list_work_packages(repo(), String.t()) :: {:ok, [WorkPackage.t()]} | {:error, error()}
+  def list_work_packages(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
+    {:ok,
+     repo.all(
+       from(work_package in WorkPackage,
+         where: work_package.work_request_id == ^work_request_id,
+         order_by: [asc: work_package.sequence, asc: work_package.id]
+       )
+     )}
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  @spec get_work_package(repo(), String.t(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
+  def get_work_package(repo, work_request_id, id)
+      when is_atom(repo) and is_binary(work_request_id) and is_binary(id) do
+    case repo.get(WorkPackage, id) do
+      %WorkPackage{work_request_id: ^work_request_id} = work_package -> {:ok, work_package}
+      _work_package -> {:error, :not_found}
+    end
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  @spec update_work_package(repo(), String.t(), String.t(), pos_integer(), map()) ::
+          {:ok, WorkPackage.t()} | {:error, error()}
+  def update_work_package(repo, work_request_id, id, expected_revision, attrs)
+      when is_atom(repo) and is_binary(work_request_id) and is_binary(id) and is_integer(expected_revision) and
+             expected_revision > 0 and is_map(attrs) do
+    with {:ok, %WorkPackage{} = work_package} <- get_work_package(repo, work_request_id, id),
+         :ok <- require_contract_revision(work_package, expected_revision),
+         :ok <- require_mutable_contract(work_package) do
+      update_contract(repo, work_package, attrs)
+    end
+  rescue
+    Ecto.StaleEntryError -> {:error, :stale_status}
+    error in Ecto.ConstraintError -> normalize_constraint_error(error)
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  @spec skip_work_package(repo(), String.t(), String.t(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
+  def skip_work_package(repo, work_request_id, id, current_status)
+      when is_atom(repo) and is_binary(work_request_id) and is_binary(id) and is_binary(current_status) do
+    update_work_package_status(repo, work_request_id, id, current_status, "skipped", ["planned"])
+  end
+
+  @spec record_work_package_delivery(repo(), String.t(), String.t(), map()) ::
+          {:ok, WorkPackageDelivery.t()} | {:error, error()}
+  def record_work_package_delivery(repo, work_request_id, work_package_id, attrs)
+      when is_atom(repo) and is_binary(work_request_id) and is_binary(work_package_id) and is_map(attrs) do
+    repo.transaction(fn ->
+      case record_work_package_delivery_in_transaction(repo, work_request_id, work_package_id, attrs) do
         {:ok, delivery} -> delivery
         {:error, reason} -> repo.rollback(reason)
       end
@@ -366,59 +379,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   end
 
   @doc false
-  @spec record_planned_slice_delivery_in_transaction(repo(), String.t(), String.t(), map()) ::
-          {:ok, PlannedSliceDelivery.t()} | {:error, error()}
-  def record_planned_slice_delivery_in_transaction(repo, work_request_id, planned_slice_id, attrs)
-      when is_atom(repo) and is_binary(work_request_id) and is_binary(planned_slice_id) and is_map(attrs) do
+  @spec record_work_package_delivery_in_transaction(repo(), String.t(), String.t(), map()) ::
+          {:ok, WorkPackageDelivery.t()} | {:error, error()}
+  def record_work_package_delivery_in_transaction(repo, work_request_id, work_package_id, attrs)
+      when is_atom(repo) and is_binary(work_request_id) and is_binary(work_package_id) and is_map(attrs) do
     attrs =
       attrs
       |> normalize_keys()
       |> Map.drop(["id", "inserted_at", "recorded_at", "updated_at"])
       |> Map.put("work_request_id", work_request_id)
-      |> Map.put("planned_slice_id", planned_slice_id)
+      |> Map.put("work_package_id", work_package_id)
 
-    changeset = PlannedSliceDelivery.create_changeset(attrs)
+    changeset = WorkPackageDelivery.create_changeset(attrs)
 
     with {:ok, candidate} <- Changeset.apply_action(changeset, :insert),
-         :ok <- validate_planned_slice_delivery_scope(repo, work_request_id, planned_slice_id, candidate) do
-      {:ok, insert_or_replay_scoped_planned_slice_delivery(repo, planned_slice_id, changeset, candidate)}
+         :ok <- validate_work_package_delivery_scope(repo, work_request_id, work_package_id, candidate) do
+      {:ok, insert_or_replay_scoped_work_package_delivery(repo, work_package_id, changeset, candidate)}
     end
   rescue
     error in Ecto.ConstraintError -> normalize_constraint_error(error)
     error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  @spec approve_planned_slice(repo(), String.t(), String.t(), String.t()) ::
-          {:ok, PlannedSlice.t()} | {:error, error()}
-  def approve_planned_slice(repo, work_request_id, id, current_status)
-      when is_atom(repo) and is_binary(work_request_id) and is_binary(id) and is_binary(current_status) do
-    update_planned_slice_status(repo, work_request_id, id, current_status, "approved", ["planned"])
-  end
-
-  @spec skip_planned_slice(repo(), String.t(), String.t(), String.t()) :: {:ok, PlannedSlice.t()} | {:error, error()}
-  def skip_planned_slice(repo, work_request_id, id, current_status)
-      when is_atom(repo) and is_binary(work_request_id) and is_binary(id) and is_binary(current_status) do
-    update_planned_slice_status(repo, work_request_id, id, current_status, "skipped", ["planned", "approved"])
-  end
-
-  @spec dispatch_planned_slice(repo(), String.t(), String.t(), String.t(), String.t()) ::
-          {:ok, PlannedSlice.t()} | {:error, error()}
-  def dispatch_planned_slice(repo, work_request_id, id, current_status, work_package_id)
-      when is_atom(repo) and is_binary(work_request_id) and is_binary(id) and is_binary(current_status) do
-    with :ok <- validate_planned_slice_status(current_status),
-         :ok <- require_status(current_status, ["approved"]),
-         {:ok, work_package_id} <- normalize_dispatch_work_package_id(work_package_id) do
-      dispatch_valid_planned_slice(repo, work_request_id, id, current_status, work_package_id)
-    end
-  end
-
-  @spec mark_sliced(repo(), String.t(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error()}
-  def mark_sliced(repo, id, current_status)
-      when is_atom(repo) and is_binary(id) and is_binary(current_status) do
-    with :ok <- validate_status(current_status),
-         :ok <- require_status(current_status, ["ready_for_slicing"]) do
-      mark_valid_sliced(repo, id, current_status)
-    end
   end
 
   @spec list_decisions(repo(), String.t()) :: {:ok, [DecisionLogEntry.t()]} | {:error, error()}
@@ -518,7 +498,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp prepare_for_planned_slices_in_transaction(repo, work_request_id) do
+  defp prepare_for_work_packages_in_transaction(repo, work_request_id) do
     case get(repo, work_request_id) do
       {:ok, %WorkRequest{status: status} = work_request} when status in ["ready_for_slicing", "sliced"] ->
         ensure_no_open_questions(repo, work_request.id)
@@ -609,14 +589,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end
   end
 
-  defp validate_planned_slice_status(status) do
-    if status in PlannedSlice.statuses() do
-      :ok
-    else
-      {:error, :invalid_status}
-    end
-  end
-
   defp require_status(status, allowed_statuses) do
     if status in allowed_statuses do
       :ok
@@ -673,7 +645,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
   defp insert_sequence_transaction(repo, attrs, next_sequence, changeset_fun, opts) do
     repo.transaction(fn ->
-      case maybe_prepare_for_planned_slices(repo, attrs, opts) do
+      case maybe_prepare_for_work_packages(repo, attrs, opts) do
         :ok ->
           attrs = Map.put(attrs, "sequence", next_sequence.(repo, Map.fetch!(attrs, "work_request_id")))
 
@@ -755,15 +727,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
   defp maybe_clear_completion_state(_repo, _attrs, _opts), do: :ok
 
-  defp maybe_prepare_for_planned_slices(repo, %{"work_request_id" => work_request_id}, opts) do
-    if Keyword.get(opts, :prepare_for_planned_slices?, false) do
-      prepare_for_planned_slices_in_transaction(repo, work_request_id)
+  defp maybe_prepare_for_work_packages(repo, %{"work_request_id" => work_request_id}, opts) do
+    if Keyword.get(opts, :prepare_for_work_packages?, false) do
+      prepare_for_work_packages_in_transaction(repo, work_request_id)
     else
       :ok
     end
   end
 
-  defp maybe_prepare_for_planned_slices(_repo, _attrs, _opts), do: :ok
+  defp maybe_prepare_for_work_packages(_repo, _attrs, _opts), do: :ok
 
   defp retry_delay_ms(attempts_left, total_attempts) do
     used_attempts = max(total_attempts - attempts_left, 0)
@@ -782,10 +754,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
   defp next_decision_sequence(repo, work_request_id) do
     next_sequence(repo, DecisionLogEntry, work_request_id)
-  end
-
-  defp next_planned_slice_sequence(repo, work_request_id) do
-    next_sequence(repo, PlannedSlice, work_request_id)
   end
 
   defp next_sequence(repo, schema, work_request_id) do
@@ -880,437 +848,308 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end
   end
 
-  defp validate_planned_slice_delivery_scope(
+  defp validate_work_package_delivery_scope(
          repo,
          work_request_id,
-         planned_slice_id,
-         %PlannedSliceDelivery{outcome: "superseded"} = candidate
+         work_package_id,
+         %WorkPackageDelivery{outcome: "superseded"} = candidate
        ) do
-    with true <- planned_slice_in_scope?(repo, work_request_id, planned_slice_id),
-         %PlannedSlice{work_request_id: ^work_request_id} = successor_slice <-
-           repo.get(PlannedSlice, candidate.successor_planned_slice_id) do
-      if candidate.successor_work_package_id in [nil, successor_slice.work_package_id] do
-        :ok
-      else
-        {:error, :not_found}
-      end
+    with true <- work_package_in_scope?(repo, work_request_id, work_package_id),
+         %WorkPackage{work_request_id: ^work_request_id} <- repo.get(WorkPackage, candidate.successor_work_package_id) do
+      :ok
     else
       _ -> {:error, :not_found}
     end
   end
 
-  defp validate_planned_slice_delivery_scope(repo, work_request_id, planned_slice_id, %PlannedSliceDelivery{}) do
-    if planned_slice_in_scope?(repo, work_request_id, planned_slice_id), do: :ok, else: {:error, :not_found}
+  defp validate_work_package_delivery_scope(repo, work_request_id, work_package_id, %WorkPackageDelivery{}) do
+    if work_package_in_scope?(repo, work_request_id, work_package_id), do: :ok, else: {:error, :not_found}
   end
 
-  defp insert_or_replay_scoped_planned_slice_delivery(repo, planned_slice_id, changeset, candidate) do
-    case existing_planned_slice_delivery(repo, planned_slice_id) do
-      %PlannedSliceDelivery{} = existing -> replay_planned_slice_delivery(repo, existing, candidate)
-      nil -> insert_planned_slice_delivery(repo, planned_slice_id, changeset, candidate)
+  defp insert_or_replay_scoped_work_package_delivery(repo, work_package_id, changeset, candidate) do
+    case existing_work_package_delivery(repo, work_package_id) do
+      %WorkPackageDelivery{} = existing -> replay_work_package_delivery(repo, existing, candidate)
+      nil -> insert_work_package_delivery(repo, work_package_id, changeset, candidate)
     end
   end
 
-  defp insert_planned_slice_delivery(repo, planned_slice_id, changeset, candidate) do
+  defp insert_work_package_delivery(repo, work_package_id, changeset, candidate) do
     case repo.insert(changeset) do
       {:ok, delivery} ->
         delivery
 
       {:error, %Changeset{} = changeset} ->
-        replay_unique_planned_slice_delivery(repo, planned_slice_id, candidate, changeset)
+        replay_unique_work_package_delivery(repo, work_package_id, candidate, changeset)
 
       {:error, reason} ->
         repo.rollback(reason)
     end
   end
 
-  defp planned_slice_in_scope?(repo, work_request_id, planned_slice_id) do
+  defp work_package_in_scope?(repo, work_request_id, work_package_id) do
     repo.exists?(
-      from(planned_slice in PlannedSlice,
-        where: planned_slice.id == ^planned_slice_id and planned_slice.work_request_id == ^work_request_id
+      from(work_package in WorkPackage,
+        where: work_package.id == ^work_package_id and work_package.work_request_id == ^work_request_id
       )
     )
   end
 
-  defp existing_planned_slice_delivery(repo, planned_slice_id) do
+  defp existing_work_package_delivery(repo, work_package_id) do
     repo.one(
-      from(delivery in PlannedSliceDelivery,
-        where: delivery.planned_slice_id == ^planned_slice_id,
+      from(delivery in WorkPackageDelivery,
+        where: delivery.work_package_id == ^work_package_id,
         limit: 1
       )
     )
   end
 
-  defp replay_unique_planned_slice_delivery(repo, planned_slice_id, candidate, changeset) do
+  defp replay_unique_work_package_delivery(repo, work_package_id, candidate, changeset) do
     cond do
-      not planned_slice_delivery_unique_conflict?(changeset) ->
+      not work_package_delivery_unique_conflict?(changeset) ->
         repo.rollback(changeset)
 
-      existing = existing_planned_slice_delivery(repo, planned_slice_id) ->
-        replay_planned_slice_delivery(repo, existing, candidate)
+      existing = existing_work_package_delivery(repo, work_package_id) ->
+        replay_work_package_delivery(repo, existing, candidate)
 
       true ->
         repo.rollback(changeset)
     end
   end
 
-  defp replay_planned_slice_delivery(repo, existing, candidate) do
-    if planned_slice_delivery_replay?(existing, candidate) do
+  defp replay_work_package_delivery(repo, existing, candidate) do
+    if work_package_delivery_replay?(existing, candidate) do
       existing
     else
       repo.rollback(:delivery_outcome_conflict)
     end
   end
 
-  defp planned_slice_delivery_replay?(%PlannedSliceDelivery{} = existing, %PlannedSliceDelivery{} = candidate) do
-    Enum.all?(@planned_slice_delivery_replay_fields, fn field ->
+  defp work_package_delivery_replay?(%WorkPackageDelivery{} = existing, %WorkPackageDelivery{} = candidate) do
+    Enum.all?(@work_package_delivery_replay_fields, fn field ->
       Map.get(existing, field) == Map.get(candidate, field)
     end)
   end
 
-  defp planned_slice_delivery_unique_conflict?(%Changeset{errors: errors}) do
+  defp work_package_delivery_unique_conflict?(%Changeset{errors: errors}) do
     Enum.any?(errors, fn
-      {:planned_slice_id, {_message, options}} -> Keyword.get(options, :constraint) == :unique
+      {:work_package_id, {_message, options}} -> Keyword.get(options, :constraint) == :unique
       _error -> false
     end)
   end
 
-  defp update_planned_slice_status(repo, work_request_id, id, current_status, next_status, allowed_current_statuses) do
-    with :ok <- validate_planned_slice_status(current_status),
-         :ok <- validate_planned_slice_status(next_status),
-         :ok <- require_status(current_status, allowed_current_statuses) do
-      update_valid_planned_slice_status(
-        repo,
-        work_request_id,
-        id,
-        current_status,
-        next_status,
-        allowed_current_statuses
-      )
+  defp update_work_package_status(repo, work_request_id, id, current_status, next_status, allowed_current_statuses) do
+    with :ok <- require_status(current_status, allowed_current_statuses) do
+      now = DateTime.utc_now(:microsecond)
+
+      repo.transaction(fn ->
+        update_work_package_status_row(
+          repo,
+          work_request_id,
+          id,
+          current_status,
+          next_status,
+          allowed_current_statuses,
+          now
+        )
+      end)
+      |> normalize_transaction_result()
     end
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp update_valid_planned_slice_status(
+  defp update_work_package_status_row(
          repo,
          work_request_id,
          id,
          current_status,
          next_status,
-         allowed_current_statuses
+         allowed_current_statuses,
+         now
        ) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo.transaction(fn ->
-      work_request_id
-      |> planned_slice_status_update_query(id, current_status, next_status, allowed_current_statuses)
+    result =
+      from(work_package in WorkPackage,
+        where:
+          work_package.id == ^id and work_package.work_request_id == ^work_request_id and
+            work_package.status == ^current_status and work_package.status in ^allowed_current_statuses
+      )
       |> repo.update_all(set: [status: next_status, updated_at: now])
-      |> case do
-        {1, _rows} ->
-          repo.get!(PlannedSlice, id)
 
-        {0, _rows} ->
-          repo.rollback(planned_slice_terminal_error(repo, work_request_id, id, current_status, next_status))
-      end
-    end)
-    |> normalize_transaction_result()
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp planned_slice_status_update_query(work_request_id, id, current_status, next_status, allowed_current_statuses) do
-    from(planned_slice in PlannedSlice,
-      join: work_request in WorkRequest,
-      on: work_request.id == planned_slice.work_request_id,
-      where:
-        planned_slice.id == ^id and planned_slice.work_request_id == ^work_request_id and
-          planned_slice.status == ^current_status and planned_slice.status in ^allowed_current_statuses,
-      where: work_request.status in ["ready_for_slicing", "sliced"]
-    )
-    |> preserve_sliced_approved_slice(next_status)
-  end
-
-  defp preserve_sliced_approved_slice(query, "skipped") do
-    from([planned_slice, work_request] in query,
-      where:
-        planned_slice.status != "approved" or work_request.status != "sliced" or
-          fragment(
-            """
-            EXISTS (
-              SELECT 1
-              FROM sympp_work_request_planned_slices AS sibling
-              WHERE sibling.work_request_id = ?
-                AND sibling.id != ?
-                AND (
-                  sibling.status = 'approved'
-                  OR (
-                    sibling.status = 'dispatched'
-                    AND sibling.work_package_id IS NOT NULL
-                    AND sibling.dispatched_at IS NOT NULL
-                  )
-                )
-            )
-            """,
-            planned_slice.work_request_id,
-            planned_slice.id
-          )
-    )
-  end
-
-  defp preserve_sliced_approved_slice(query, _next_status), do: query
-
-  defp dispatch_valid_planned_slice(repo, work_request_id, id, current_status, work_package_id) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo.transaction(fn ->
-      work_request_id
-      |> planned_slice_dispatch_query(id, current_status, work_package_id)
-      |> repo.update_all(
-        set: [
-          status: "dispatched",
-          work_package_id: work_package_id,
-          dispatched_at: now,
-          updated_at: now
-        ]
-      )
-      |> case do
-        {1, _rows} ->
-          repo.get!(PlannedSlice, id)
-
-        {0, _rows} ->
-          error = planned_slice_dispatch_terminal_error(repo, work_request_id, id, current_status, work_package_id)
-          repo.rollback(error)
-      end
-    end)
-    |> normalize_transaction_result()
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp planned_slice_dispatch_query(work_request_id, id, current_status, work_package_id) do
-    from(planned_slice in PlannedSlice,
-      join: work_request in WorkRequest,
-      on: work_request.id == planned_slice.work_request_id,
-      join: work_package in WorkPackage,
-      on: work_package.id == ^work_package_id,
-      where: planned_slice.id == ^id,
-      where: planned_slice.work_request_id == ^work_request_id,
-      where: planned_slice.status == ^current_status,
-      where: planned_slice.status == "approved",
-      where: is_nil(planned_slice.work_package_id),
-      where: is_nil(planned_slice.dispatched_at),
-      where: work_request.status in ["ready_for_slicing", "sliced"],
-      where: work_package.repo == fragment("COALESCE(NULLIF(?, ''), ?)", planned_slice.delivery_repo, work_request.repo),
-      where: work_package.base_branch == planned_slice.target_base_branch,
-      where: work_package.kind == planned_slice.work_package_kind,
-      where: work_package.title == planned_slice.title,
-      where: work_package.product_description == work_request.human_description,
-      where: work_package.allowed_file_globs == planned_slice.owned_file_globs,
-      where: work_package.acceptance_criteria == planned_slice.acceptance_criteria,
-      where: fragment("COALESCE(?, '') = COALESCE(?, '')", work_package.branch_pattern, planned_slice.branch_pattern),
-      where:
-        fragment(
-          """
-          NOT EXISTS (
-            SELECT 1
-            FROM sympp_work_request_planned_slices AS linked_slice
-            WHERE linked_slice.work_package_id = ?
-          )
-          """,
-          ^work_package_id
-        )
-    )
-  end
-
-  defp planned_slice_dispatch_terminal_error(repo, work_request_id, id, current_status, work_package_id) do
-    case repo.get(PlannedSlice, id) do
-      nil ->
-        :not_found
-
-      %PlannedSlice{work_request_id: slice_work_request_id} when slice_work_request_id != work_request_id ->
-        :not_found
-
-      %PlannedSlice{status: status} when status != current_status ->
-        :stale_status
-
-      %PlannedSlice{status: status} when status != "approved" ->
-        :invalid_status
-
-      %PlannedSlice{work_package_id: linked_work_package_id} when not is_nil(linked_work_package_id) ->
-        :work_package_already_linked
-
-      %PlannedSlice{dispatched_at: %DateTime{}} ->
-        :stale_status
-
-      %PlannedSlice{} ->
-        dispatch_context_error(repo, work_request_id, id, work_package_id)
+    case result do
+      {1, _rows} -> repo.get!(WorkPackage, id)
+      {0, _rows} -> repo.rollback(work_package_status_error(repo, work_request_id, id, current_status))
     end
   end
 
-  defp dispatch_context_error(repo, work_request_id, id, work_package_id) do
-    case get(repo, work_request_id) do
-      {:ok, %WorkRequest{status: status}} when status in ["ready_for_slicing", "sliced"] ->
-        cond do
-          not work_package_exists?(repo, work_package_id) -> :work_package_not_found
-          work_package_linked?(repo, work_package_id) -> :work_package_already_linked
-          not work_package_matches_planned_slice?(repo, work_request_id, id, work_package_id) -> :work_package_mismatch
-          true -> :stale_status
+  defp work_package_status_error(repo, work_request_id, id, current_status) do
+    case repo.get(WorkPackage, id) do
+      %WorkPackage{work_request_id: ^work_request_id, status: ^current_status} -> :invalid_status
+      %WorkPackage{work_request_id: ^work_request_id} -> :stale_status
+      _work_package -> :not_found
+    end
+  end
+
+  defp require_slicing_status(status) when status in ["ready_for_slicing", "sliced"], do: :ok
+  defp require_slicing_status(_status), do: {:error, :invalid_status}
+
+  defp require_package_batch([first | rest]) when is_map(first) do
+    if Enum.all?(rest, &is_map/1), do: :ok, else: {:error, :invalid_work_package}
+  end
+
+  defp require_package_batch(_packages), do: {:error, :invalid_work_package}
+
+  defp insert_work_package_batch(repo, %WorkRequest{} = work_request, package_attrs) do
+    first_sequence = next_sequence(repo, WorkPackage, work_request.id)
+
+    package_attrs
+    |> Enum.with_index(first_sequence)
+    |> Enum.reduce_while({:ok, []}, fn {attrs, sequence}, {:ok, packages} ->
+      with {:ok, attrs} <- work_package_attrs(repo, work_request, attrs, sequence),
+           {:ok, work_package} <- attrs |> WorkPackage.create_changeset() |> repo.insert() do
+        {:cont, {:ok, [work_package | packages]}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, packages} ->
+        case maybe_clear_completion_state(repo, %{"work_request_id" => work_request.id}, clear_completion?: true) do
+          :ok -> {:ok, Enum.reverse(packages)}
+          {:error, reason} -> {:error, reason}
         end
 
-      {:ok, %WorkRequest{}} ->
-        :invalid_status
-
       {:error, reason} ->
-        reason
+        {:error, reason}
     end
   end
 
-  defp planned_slice_terminal_error(repo, work_request_id, id, current_status, next_status) do
-    case repo.get(PlannedSlice, id) do
-      nil -> :not_found
-      %PlannedSlice{work_request_id: slice_work_request_id} when slice_work_request_id != work_request_id -> :not_found
-      %PlannedSlice{status: status} when status != current_status -> :stale_status
-      %PlannedSlice{} -> parent_planned_slice_status_error(repo, work_request_id, id, current_status, next_status)
+  defp work_package_attrs(repo, %WorkRequest{} = work_request, attrs, sequence) do
+    attrs =
+      attrs
+      |> normalize_keys()
+      |> rename_key("review", "review_requirement")
+      |> Map.drop(@work_package_create_ignored_attrs)
+      |> put_new_value("repo", work_request.repo)
+      |> put_new_value("base_branch", work_request.base_branch)
+      |> put_new_value("kind", "standard_pr")
+      |> then(&put_new_value(&1, "policy_template", Map.get(&1, "kind")))
+      |> put_new_value("product_description", work_request.human_description)
+      |> put_new_value("engineering_scope", Map.get(attrs, "goal"))
+      |> put_new_value("allowed_file_globs", [])
+      |> put_new_value("forbidden_file_globs", [])
+      |> put_new_value("acceptance_criteria", [])
+      |> put_new_value("validation_steps", [])
+      |> put_new_value("stop_conditions", [])
+      |> Map.put("work_request_id", work_request.id)
+      |> Map.put("sequence", sequence)
+      |> Map.put("status", "planned")
+      |> Map.put("contract_revision", 1)
+
+    with :ok <- WorkPackageDeliveryScope.validate(repo, work_request, attrs),
+         :ok <- ScopeConstraints.validate_allowed_file_globs(work_request, Map.get(attrs, "allowed_file_globs", [])),
+         :ok <- validate_docs_work_package_scope(attrs),
+         :ok <- validate_product_tree_node(repo, work_request.id, Map.get(attrs, "product_tree_node_id")) do
+      {:ok, attrs}
     end
   end
 
-  defp parent_planned_slice_status_error(repo, work_request_id, planned_slice_id, current_status, next_status) do
-    case get(repo, work_request_id) do
-      {:ok, %WorkRequest{status: "sliced"}}
-      when current_status == "approved" and next_status == "skipped" ->
-        if other_active_planned_slice?(repo, work_request_id, planned_slice_id) do
-          :invalid_status
-        else
-          :last_approved_slice
-        end
+  defp validate_docs_work_package_scope(%{"kind" => "docs", "allowed_file_globs" => globs}) do
+    ScopeConstraints.validate_docs_allowed_file_globs(globs)
+  end
 
-      {:ok, %WorkRequest{status: status}} when status in ["ready_for_slicing", "sliced"] ->
-        :invalid_status
+  defp validate_docs_work_package_scope(_attrs), do: :ok
 
-      {:ok, %WorkRequest{}} ->
-        :invalid_status
+  defp validate_product_tree_node(_repo, _work_request_id, nil), do: :ok
+  defp validate_product_tree_node(_repo, _work_request_id, ""), do: :ok
 
-      {:error, reason} ->
-        reason
+  defp validate_product_tree_node(repo, work_request_id, node_id) when is_binary(node_id) do
+    case repo.get(Node, node_id) do
+      %Node{work_request_id: ^work_request_id} -> :ok
+      _node -> {:error, :not_found}
     end
   end
 
-  defp other_active_planned_slice?(repo, work_request_id, planned_slice_id) do
-    not is_nil(
-      repo.one(
-        from(planned_slice in PlannedSlice,
-          where:
-            planned_slice.work_request_id == ^work_request_id and planned_slice.id != ^planned_slice_id and
-              (planned_slice.status == "approved" or
-                 (planned_slice.status == "dispatched" and not is_nil(planned_slice.work_package_id) and
-                    not is_nil(planned_slice.dispatched_at))),
-          select: 1,
-          limit: 1
-        )
-      )
-    )
-  end
+  defp validate_product_tree_node(_repo, _work_request_id, _node_id), do: {:error, :not_found}
 
-  defp mark_valid_sliced(repo, id, current_status) do
+  defp mark_sliced_in_transaction(repo, %WorkRequest{} = work_request) do
     now = DateTime.utc_now(:microsecond)
 
-    repo.transaction(fn ->
-      id
-      |> sliced_status_update_query(current_status)
-      |> repo.update_all(set: [status: "sliced", updated_at: now])
-      |> case do
-        {1, _rows} -> repo.get!(WorkRequest, id)
-        {0, _rows} -> repo.rollback(sliced_status_terminal_error(repo, id, current_status))
-      end
-    end)
-    |> normalize_transaction_result()
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp sliced_status_update_query(id, current_status) do
-    from(work_request in WorkRequest,
-      where: work_request.id == ^id and work_request.status == ^current_status,
-      where:
-        fragment(
-          """
-          EXISTS (
-            SELECT 1
-            FROM sympp_work_request_planned_slices AS planned_slice
-            WHERE planned_slice.work_request_id = ?
-              AND (
-                planned_slice.status = 'approved'
-                OR (
-                  planned_slice.status = 'dispatched'
-                  AND planned_slice.work_package_id IS NOT NULL
-                  AND planned_slice.dispatched_at IS NOT NULL
-                )
-              )
-          )
-          """,
-          work_request.id
-        )
+    from(request in WorkRequest,
+      where: request.id == ^work_request.id and request.status == ^work_request.status,
+      where: request.status in ["ready_for_slicing", "sliced"]
     )
-  end
-
-  defp sliced_status_terminal_error(repo, id, current_status) do
-    case get(repo, id) do
-      {:error, reason} ->
-        reason
-
-      {:ok, %WorkRequest{status: status}} when status != current_status ->
-        :stale_status
-
-      {:ok, %WorkRequest{}} ->
-        if active_planned_slice?(repo, id), do: :stale_status, else: :no_approved_slices
+    |> repo.update_all(set: [status: "sliced", updated_at: now])
+    |> case do
+      {1, _rows} -> {:ok, repo.get!(WorkRequest, work_request.id)}
+      {0, _rows} -> {:error, :stale_status}
     end
   end
 
-  defp active_planned_slice?(repo, work_request_id) do
-    not is_nil(
-      repo.one(
-        from(planned_slice in PlannedSlice,
-          where:
-            planned_slice.work_request_id == ^work_request_id and
-              (planned_slice.status == "approved" or
-                 (planned_slice.status == "dispatched" and not is_nil(planned_slice.work_package_id) and
-                    not is_nil(planned_slice.dispatched_at))),
-          select: 1,
-          limit: 1
-        )
-      )
-    )
+  defp require_contract_revision(%WorkPackage{contract_revision: revision}, revision), do: :ok
+  defp require_contract_revision(%WorkPackage{}, _expected_revision), do: {:error, :stale_status}
+
+  defp require_mutable_contract(%WorkPackage{status: status})
+       when status in ["skipped", "merged", "merged_into_phase", "closed", "abandoned"],
+       do: {:error, :invalid_status}
+
+  defp require_mutable_contract(%WorkPackage{}), do: :ok
+
+  defp update_contract(repo, %WorkPackage{} = work_package, attrs) do
+    attrs =
+      attrs
+      |> normalize_keys()
+      |> rename_key("review", "review_requirement")
+      |> Map.take([
+        "product_tree_node_id",
+        "kind",
+        "title",
+        "goal",
+        "repo",
+        "base_branch",
+        "branch_pattern",
+        "allowed_file_globs",
+        "forbidden_file_globs",
+        "acceptance_criteria",
+        "validation_steps",
+        "review_requirement",
+        "stop_conditions"
+      ])
+      |> maybe_sync_policy_template()
+      |> maybe_sync_engineering_scope()
+      |> maybe_invalidate_readiness(work_package)
+
+    with :ok <- validate_product_tree_node(repo, work_package.work_request_id, Map.get(attrs, "product_tree_node_id")),
+         {:ok, %WorkRequest{} = work_request} <- get(repo, work_package.work_request_id),
+         :ok <- WorkPackageDeliveryScope.validate(repo, work_request, Map.merge(Map.from_struct(work_package), attrs)),
+         :ok <- ScopeConstraints.validate_allowed_file_globs(work_request, Map.get(attrs, "allowed_file_globs", work_package.allowed_file_globs)),
+         :ok <- validate_docs_work_package_scope(Map.put_new(attrs, "kind", work_package.kind)) do
+      work_package
+      |> WorkPackage.update_changeset(attrs)
+      |> Ecto.Changeset.optimistic_lock(:contract_revision)
+      |> repo.update()
+    end
   end
 
-  defp work_package_exists?(repo, work_package_id), do: not is_nil(repo.get(WorkPackage, work_package_id))
-
-  defp work_package_matches_planned_slice?(repo, work_request_id, id, work_package_id) do
-    repo.exists?(
-      from(planned_slice in PlannedSlice,
-        join: work_request in WorkRequest,
-        on: work_request.id == planned_slice.work_request_id,
-        join: work_package in WorkPackage,
-        on: work_package.id == ^work_package_id,
-        where: planned_slice.id == ^id and planned_slice.work_request_id == ^work_request_id,
-        where: work_package.repo == fragment("COALESCE(NULLIF(?, ''), ?)", planned_slice.delivery_repo, work_request.repo),
-        where: work_package.base_branch == planned_slice.target_base_branch,
-        where: work_package.kind == planned_slice.work_package_kind,
-        where: work_package.title == planned_slice.title,
-        where: work_package.product_description == work_request.human_description,
-        where: work_package.allowed_file_globs == planned_slice.owned_file_globs,
-        where: work_package.acceptance_criteria == planned_slice.acceptance_criteria,
-        where: fragment("COALESCE(?, '') = COALESCE(?, '')", work_package.branch_pattern, planned_slice.branch_pattern),
-        select: 1,
-        limit: 1
-      )
-    )
+  defp maybe_sync_policy_template(attrs) do
+    case Map.fetch(attrs, "kind") do
+      {:ok, kind} -> Map.put(attrs, "policy_template", kind)
+      :error -> attrs
+    end
   end
 
-  defp work_package_linked?(repo, work_package_id) do
-    repo.exists?(
-      from(planned_slice in PlannedSlice,
-        where: planned_slice.work_package_id == ^work_package_id
-      )
-    )
+  defp maybe_sync_engineering_scope(attrs) do
+    case Map.fetch(attrs, "goal") do
+      {:ok, goal} -> Map.put(attrs, "engineering_scope", goal)
+      :error -> attrs
+    end
   end
+
+  defp maybe_invalidate_readiness(attrs, %WorkPackage{status: status})
+       when status in ["reviewing", "ci_waiting", "ready_for_merge", "ready_for_architect_merge"] do
+    Map.put(attrs, "status", "implementing")
+  end
+
+  defp maybe_invalidate_readiness(attrs, %WorkPackage{}), do: attrs
 
   defp update_existing_work_request(repo, %WorkRequest{} = work_request, attrs) do
     repo.transaction(fn ->
@@ -1436,11 +1275,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   end
 
   defp normalize_constraint_error(%Ecto.ConstraintError{constraint: constraint}) when is_binary(constraint) do
-    cond do
-      duplicate_id_constraint?(constraint) -> {:error, :id_already_exists}
-      constraint == "sympp_work_request_planned_slices_work_package_id_unique_index" -> {:error, :work_package_already_linked}
-      true -> {:error, {:constraint_failed, constraint}}
-    end
+    if duplicate_id_constraint?(constraint),
+      do: {:error, :id_already_exists},
+      else: {:error, {:constraint_failed, constraint}}
   end
 
   defp normalize_constraint_error(%Ecto.ConstraintError{type: type}) do
@@ -1451,16 +1288,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     message = Exception.message(error)
     normalized_message = String.downcase(message)
 
-    cond do
-      String.contains?(normalized_message, "busy") or String.contains?(normalized_message, "locked") ->
-        {:error, :database_busy}
-
-      String.contains?(normalized_message, "sympp_work_request_planned_slices.work_package_id") ->
-        {:error, :work_package_already_linked}
-
-      true ->
-        {:error, {:storage_failed, message}}
-    end
+    if String.contains?(normalized_message, "busy") or String.contains?(normalized_message, "locked"),
+      do: {:error, :database_busy},
+      else: {:error, {:storage_failed, message}}
   end
 
   defp duplicate_id_constraint?(constraint) do
@@ -1471,26 +1301,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       "sympp_work_request_clarification_questions_id_index",
       "sympp_work_request_decision_logs_id_unique_index",
       "sympp_work_request_decision_logs_id_index",
-      "sympp_work_request_planned_slices_id_unique_index",
-      "sympp_work_request_planned_slices_id_index"
+      "sympp_work_packages_id_unique_index",
+      "sympp_work_packages_id_index"
     ] or
       (String.contains?(constraint, "sympp_work_requests") and String.contains?(constraint, ".id")) or
       (String.contains?(constraint, "sympp_work_request_clarification_questions") and
          String.contains?(constraint, ".id")) or
       (String.contains?(constraint, "sympp_work_request_decision_logs") and String.contains?(constraint, ".id")) or
-      (String.contains?(constraint, "sympp_work_request_planned_slices") and String.contains?(constraint, ".id"))
+      (String.contains?(constraint, "sympp_work_packages") and String.contains?(constraint, ".id"))
   end
 
   defp sequence_constraint?(constraint) do
     constraint in [
       "sympp_work_request_questions_work_request_sequence_unique_index",
       "sympp_work_request_decision_logs_work_request_sequence_unique_index",
-      "sympp_work_request_planned_slices_work_request_sequence_unique_index"
+      "sympp_work_packages_work_request_sequence_unique_index"
     ] or
       (String.contains?(constraint, "sympp_work_request_clarification_questions") and
          String.contains?(constraint, "sequence")) or
       (String.contains?(constraint, "sympp_work_request_decision_logs") and String.contains?(constraint, "sequence")) or
-      (String.contains?(constraint, "sympp_work_request_planned_slices") and String.contains?(constraint, "sequence"))
+      (String.contains?(constraint, "sympp_work_packages") and String.contains?(constraint, "sequence"))
   end
 
   defp normalize_keys(attrs) when is_map(attrs) do
@@ -1505,17 +1335,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   defp normalize_key(key) when is_atom(key), do: Atom.to_string(key)
   defp normalize_key(key), do: to_string(key)
 
-  defp normalize_dispatch_work_package_id(work_package_id) when is_binary(work_package_id) do
-    work_package_id = String.trim(work_package_id)
-
-    if work_package_id == "" do
-      {:error, :invalid_work_package_id}
-    else
-      {:ok, work_package_id}
+  defp rename_key(attrs, source, target) do
+    case Map.pop(attrs, source) do
+      {nil, attrs} -> attrs
+      {value, attrs} -> Map.put_new(attrs, target, value)
     end
   end
-
-  defp normalize_dispatch_work_package_id(_work_package_id), do: {:error, :invalid_work_package_id}
 
   defp put_new_value(attrs, key, value) do
     if Map.get(attrs, key) in [nil, ""] do

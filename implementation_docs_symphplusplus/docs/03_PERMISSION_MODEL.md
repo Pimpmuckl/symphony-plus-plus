@@ -21,7 +21,7 @@ UI are workflow aids only.
 
 Workers can update task plan, findings, progress, blockers, comments, branch/PR
 metadata, review evidence, and readiness for their assigned WorkPackage.
-Workers cannot mint grants, dispatch planned slices, approve scope, merge PRs,
+Workers cannot mint grants, dispatch WorkPackages, approve scope, merge PRs,
 or close WorkRequest delivery.
 
 Architects can slice WorkRequests, manage product-plan nodes, dispatch planned
@@ -29,7 +29,7 @@ slices, coordinate phase children, answer guidance, reconcile delivery, and
 record closeout.
 Architects may resolve blockers only for policy-scoped descendant WorkPackages
 visible from their claimed WorkRequest or phase scope. They cannot report new
-worker blockers, mutate sibling or unlinked packages, or use blocker resolution
+worker blockers, mutate sibling or out-of-scope packages, or use blocker resolution
 as scope expansion.
 
 ## Safety

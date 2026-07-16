@@ -74,9 +74,9 @@ defmodule SymphonyElixirWeb.Router do
     )
 
     post(
-      "/api/v1/sympp/operator/work-requests/:work_request_id/planned-slices/:planned_slice_id/dispatch",
+      "/api/v1/sympp/operator/work-requests/:work_request_id/work-packages/:work_package_id/dispatch",
       SymppDashboardApiController,
-      :operator_dispatch_planned_slice
+      :operator_dispatch_work_package
     )
   end
 

@@ -30,16 +30,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02BareOriginTest 
         status: "sliced"
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-WORKTREE-BARE-ORIGIN",
                  title: "Prepare bare repo target origin worktree",
-                 target_base_branch: anchor.base_branch,
+                 base_branch: anchor.base_branch,
                  branch_pattern: "feat/bare-origin-worktree",
-                 owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
+                 allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
                  acceptance_criteria: ["Accept unambiguous owner-qualified target origin."]
                )
              )
@@ -49,20 +49,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02BareOriginTest 
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-WORKTREE-BARE-ORIGIN",
-                 kind: planned_slice.work_package_kind,
-                 title: planned_slice.title,
+                 kind: work_package.kind,
+                 title: work_package.title,
                  repo: work_request.repo,
-                 base_branch: planned_slice.target_base_branch,
-                 branch_pattern: planned_slice.branch_pattern,
+                 base_branch: work_package.base_branch,
+                 branch_pattern: work_package.branch_pattern,
                  product_description: work_request.human_description,
-                 allowed_file_globs: planned_slice.owned_file_globs,
-                 acceptance_criteria: planned_slice.acceptance_criteria,
+                 allowed_file_globs: work_package.allowed_file_globs,
+                 acceptance_criteria: work_package.acceptance_criteria,
                  status: "ready_for_worker"
                )
              )
 
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
-    assert {:ok, _linked_slice} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", package.id)
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
+    assert {:ok, _linked_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", package.id)
 
     previous_codex_home = System.get_env("CODEX_HOME")
 

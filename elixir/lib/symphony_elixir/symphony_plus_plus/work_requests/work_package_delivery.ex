@@ -1,4 +1,4 @@
-defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery do
+defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
   @moduledoc false
 
   use Ecto.Schema
@@ -15,7 +15,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery do
   @type t :: %__MODULE__{
           id: String.t() | nil,
           work_request_id: String.t() | nil,
-          planned_slice_id: String.t() | nil,
+          work_package_id: String.t() | nil,
           outcome: String.t() | nil,
           idempotency_key: String.t() | nil,
           recorded_by: String.t() | nil,
@@ -26,7 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery do
           pr_merged_at: DateTime.t() | nil,
           merge_commit_sha: String.t() | nil,
           no_pr_evidence: String.t() | nil,
-          successor_planned_slice_id: String.t() | nil,
           successor_work_package_id: String.t() | nil,
           superseded_reason: String.t() | nil,
           abandoned_rationale: String.t() | nil,
@@ -34,9 +33,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery do
           updated_at: DateTime.t() | nil
         }
 
-  schema "sympp_work_request_planned_slice_deliveries" do
+  schema "sympp_work_package_deliveries" do
     field(:work_request_id, :string)
-    field(:planned_slice_id, :string)
+    field(:work_package_id, :string)
     field(:outcome, :string)
     field(:idempotency_key, :string)
     field(:recorded_by, :string)
@@ -47,7 +46,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery do
     field(:pr_merged_at, :utc_datetime_usec)
     field(:merge_commit_sha, :string)
     field(:no_pr_evidence, :string)
-    field(:successor_planned_slice_id, :string)
     field(:successor_work_package_id, :string)
     field(:superseded_reason, :string)
     field(:abandoned_rationale, :string)
@@ -86,7 +84,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery do
     |> cast(attrs, [
       :id,
       :work_request_id,
-      :planned_slice_id,
+      :work_package_id,
       :outcome,
       :idempotency_key,
       :recorded_by,
@@ -97,12 +95,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery do
       :pr_merged_at,
       :merge_commit_sha,
       :no_pr_evidence,
-      :successor_planned_slice_id,
       :successor_work_package_id,
       :superseded_reason,
       :abandoned_rationale
     ])
-    |> validate_required([:id, :work_request_id, :planned_slice_id, :outcome, :idempotency_key, :recorded_at])
+    |> validate_required([:id, :work_request_id, :work_package_id, :outcome, :idempotency_key, :recorded_at])
     |> validate_inclusion(:outcome, @outcomes)
     |> validate_number(:pr_number, greater_than: 0)
     |> validate_nonblank_optional(:recorded_by)
@@ -110,13 +107,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery do
     |> validate_nonblank_optional(:merge_commit_sha)
     |> validate_outcome_evidence()
     |> validate_successor_is_different()
-    |> unique_constraint(:id, name: :sympp_work_request_planned_slice_deliveries_id_unique_index)
-    |> unique_constraint(:planned_slice_id,
-      name: :sympp_work_request_planned_slice_deliveries_planned_slice_id_unique_index
+    |> unique_constraint(:id, name: :sympp_work_package_deliveries_id_unique_index)
+    |> unique_constraint(:work_package_id,
+      name: :sympp_work_package_deliveries_package_unique_index
     )
     |> foreign_key_constraint(:work_request_id)
-    |> foreign_key_constraint(:planned_slice_id)
-    |> foreign_key_constraint(:successor_planned_slice_id)
+    |> foreign_key_constraint(:work_package_id)
     |> foreign_key_constraint(:successor_work_package_id)
   end
 
@@ -130,7 +126,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery do
 
       "superseded" ->
         changeset
-        |> validate_required([:successor_planned_slice_id, :superseded_reason])
+        |> validate_required([:successor_work_package_id, :superseded_reason])
         |> validate_nonblank_optional(:successor_work_package_id)
 
       "abandoned" ->
@@ -142,11 +138,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery do
   end
 
   defp validate_successor_is_different(changeset) do
-    planned_slice_id = get_field(changeset, :planned_slice_id)
-    successor_id = get_field(changeset, :successor_planned_slice_id)
+    work_package_id = get_field(changeset, :work_package_id)
+    successor_id = get_field(changeset, :successor_work_package_id)
 
-    if is_binary(planned_slice_id) and planned_slice_id == successor_id do
-      add_error(changeset, :successor_planned_slice_id, "must be different from planned_slice_id")
+    if is_binary(work_package_id) and work_package_id == successor_id do
+      add_error(changeset, :successor_work_package_id, "must be different from work_package_id")
     else
       changeset
     end

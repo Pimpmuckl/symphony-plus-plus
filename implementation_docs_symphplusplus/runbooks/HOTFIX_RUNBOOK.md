@@ -9,14 +9,14 @@ review evidence. For role context, start with
 1. Open the local operator cockpit.
 2. Create a WorkRequest with `work_type: hotfix` and
    `desired_dispatch_shape: single_package`.
-3. Add one direct planned slice with the repo, base branch, branch pattern,
+3. Add one direct WorkPackage with the repo, base branch, branch pattern,
    owned paths, acceptance criteria, validation, review-suite requirement, and
    stop conditions.
 4. Dispatch the approved slice from the dashboard, architect MCP tool, or CLI:
 
 ```powershell
 Set-Location elixir
-mise exec -- mix sympp.dispatch_planned_slice --work-request-id <WR id> --planned-slice-id <slice id> --claimed-by <stable-worker-id>
+mise exec -- mix sympp.dispatch_work_package --work-request-id <WR id> --work-package-id <slice id> --claimed-by <stable-worker-id>
 ```
 
 5. Confirm dispatch output returns only non-secret handoff metadata. It must not
@@ -26,7 +26,7 @@ mise exec -- mix sympp.dispatch_planned_slice --work-request-id <WR id> --planne
 
 Send the worker:
 
-- WorkRequest id, planned-slice id, WorkPackage id, base branch, target branch
+- WorkRequest id, work-package id, WorkPackage id, base branch, target branch
   convention, and PR title format.
 - WorkPackage claim call and optional stable `claimed_by` identity.
 - Package scope, owned files, acceptance criteria, and stop conditions.

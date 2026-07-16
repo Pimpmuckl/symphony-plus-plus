@@ -2,7 +2,7 @@
 
 ## PR conventions
 
-- One dispatched planned slice/WorkPackage per PR.
+- One dispatched WorkPackage/WorkPackage per PR.
 - PR title format: `[SYMPP-...] <title>`.
 - PR body must list acceptance criteria and tests run.
 - Do not implement dependent packages unless explicitly assigned.
