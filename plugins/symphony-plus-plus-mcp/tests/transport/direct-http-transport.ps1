@@ -14,6 +14,147 @@ function Fail([string]$Message, [int]$Code = 1) {
   exit $Code
 }
 
+function Get-ScriptFunctionDefinitions([string]$Path, [string[]]$Names) {
+  $tokens = $null
+  $errors = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors)
+  if ($errors.Count -ne 0) { throw "PowerShell parse failed for $Path" }
+  $definitions = @{}
+  foreach ($functionAst in $ast.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Names -contains $node.Name
+      }, $true)) {
+    $body = $functionAst.Body.Extent.Text
+    $parameters = if ($functionAst.Parameters.Count -gt 0) { "param(" + (($functionAst.Parameters.Extent.Text) -join ", ") + ")`n" } else { "" }
+    $definitions[$functionAst.Name] = $parameters + $body.Substring(1, $body.Length - 2)
+  }
+  return $definitions
+}
+
+function Assert-CutoverProcessClassifier([string]$CutoverPath) {
+  $names = @(
+    "ConvertTo-FullPath", "Normalize-McpContractFingerprint", "Test-CommandLineContainsPath",
+    "Test-CutoverPathWithinRoot", "Test-InstalledPluginRootOrigin", "Resolve-ManagedArtifactRuntimeContext",
+    "Test-ManagedArtifactRuntimeProcess", "Get-SymppProcessKind", "Update-RuntimeStatePids"
+  )
+  $definitions = Get-ScriptFunctionDefinitions $CutoverPath $names
+  foreach ($name in $names) {
+    if (-not $definitions.ContainsKey($name)) { throw "cutover classifier is missing '$name'" }
+    Set-Item -Path "Function:\$name" -Value $definitions[$name]
+  }
+
+  $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("sympp-cutover-classifier-" + [guid]::NewGuid().ToString("N"))
+  $expectedRevision = "a" * 40
+  $artifactRevision = "e" * 40
+  $contract = "b" * 64
+  $sha256 = "c" * 64
+  $platform = "windows-x86_64"
+  $symppHome = Join-Path $tempRoot ".agents\splusplus"
+  $marketplaceSourceRoot = Join-Path $tempRoot "marketplace"
+  $installedPluginRoot = Join-Path $tempRoot "installed\symphony-plus-plus-mcp\0.1.9"
+  $previousInstalledPluginRoot = Join-Path (Split-Path -Parent $installedPluginRoot) "0.1.8"
+  $runtimeFile = Join-Path $symppHome "runtime\codex-plugin.json"
+  $artifactRoot = Join-Path $symppHome "artifacts\mcp\$platform\$($artifactRevision.Substring(0, 12))\$($sha256.Substring(0, 16))\runtime"
+  $executable = Join-Path $artifactRoot "runtime\erts-17.0.2\bin\erl.exe"
+
+  try {
+    New-Item -ItemType Directory -Path (Split-Path -Parent $executable), $marketplaceSourceRoot, $installedPluginRoot, $previousInstalledPluginRoot, (Split-Path -Parent $runtimeFile) -Force | Out-Null
+    Set-Content -LiteralPath $executable -Value "fixture" -Encoding UTF8
+    $marker = [pscustomobject]@{ sha256 = $sha256; platform = $platform; source_revision = $artifactRevision }
+    $manifest = [pscustomobject]@{
+      source_revision = $artifactRevision
+      plugin = [pscustomobject]@{ name = "symphony-plus-plus-mcp" }
+      backend = [pscustomobject]@{ kind = "mix_release"; relative_path = "runtime" }
+      launcher_contract = [pscustomobject]@{ mcp_contract_fingerprint = $contract }
+    }
+    $state = [pscustomobject]@{
+      runtime_kind = "artifact"; runtime_mode = "artifact"; plugin_root = $installedPluginRoot
+      backend = [pscustomobject]@{
+        pid = 4242; managed = $true; source_revision = $artifactRevision; expected_source_revision = $artifactRevision
+        contract_fingerprint = $contract; expected_contract_fingerprint = $contract
+      }
+    }
+    $marker | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $artifactRoot ".sympp-artifact.json") -Encoding UTF8
+    $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $artifactRoot "runtime-manifest.json") -Encoding UTF8
+    $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $runtimeFile -Encoding UTF8
+
+    $context = Resolve-ManagedArtifactRuntimeContext $runtimeFile $symppHome $installedPluginRoot $contract
+    $process = [pscustomobject]@{ ProcessId = 4242; Name = "erl.exe"; ExecutablePath = $executable; CommandLine = "`"$executable`" -mode embedded" }
+    if ((Get-SymppProcessKind $process $marketplaceSourceRoot $installedPluginRoot $context) -ne "managed_artifact_runtime") {
+      throw "verified managed artifact listener was not classified"
+    }
+    if ([string]$context.SourceRevision -ne $artifactRevision -or [string]$context.ExpectedSourceRevision -ne $artifactRevision) {
+      throw "contract-compatible artifact source revision was not preserved"
+    }
+    $state.plugin_root = $previousInstalledPluginRoot
+    $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $runtimeFile -Encoding UTF8
+    $upgradeContext = Resolve-ManagedArtifactRuntimeContext $runtimeFile $symppHome $installedPluginRoot $contract
+    if (-not $upgradeContext -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals([string]$upgradeContext.RecordedPluginRoot, (ConvertTo-FullPath $previousInstalledPluginRoot))) {
+      throw "contract-compatible artifact from a previous installed plugin version was not classified"
+    }
+    $preservedState = Update-RuntimeStatePids $runtimeFile $installedPluginRoot 4242 4343 $expectedRevision 19998 19999 $contract $upgradeContext
+    if ([string]$preservedState.runtime_kind -ne "artifact" -or $preservedState.backend.managed -ne $true -or
+        [string]$preservedState.backend.source_revision -ne $artifactRevision -or
+        -not [System.StringComparer]::OrdinalIgnoreCase.Equals((ConvertTo-FullPath ([string]$preservedState.plugin_root)), (ConvertTo-FullPath $installedPluginRoot))) {
+      throw "accepted artifact runtime identity was not preserved across refresh"
+    }
+    $state = $preservedState
+    if (-not (Resolve-ManagedArtifactRuntimeContext $runtimeFile $symppHome $installedPluginRoot $contract)) {
+      throw "preserved artifact runtime could not be classified again"
+    }
+
+    foreach ($unsafeProcess in @(
+        [pscustomobject]@{ ProcessId = 4243; Name = "erl.exe"; ExecutablePath = $executable; CommandLine = $process.CommandLine },
+        [pscustomobject]@{ ProcessId = 4242; Name = "cmd.exe"; ExecutablePath = $executable; CommandLine = $process.CommandLine },
+        [pscustomobject]@{ ProcessId = 4242; Name = "erl.exe"; ExecutablePath = (Join-Path $tempRoot "erl.exe"); CommandLine = $process.CommandLine }
+      )) {
+      if (Get-SymppProcessKind $unsafeProcess $marketplaceSourceRoot $installedPluginRoot $context) {
+        throw "unsafe artifact listener process was classified"
+      }
+    }
+
+    $state.plugin_root = Join-Path $tempRoot "unmanaged-plugin-root\0.1.8"
+    $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $runtimeFile -Encoding UTF8
+    if (Resolve-ManagedArtifactRuntimeContext $runtimeFile $symppHome $installedPluginRoot $contract) {
+      throw "runtime state from outside the installed plugin cache was accepted"
+    }
+    $state.plugin_root = $installedPluginRoot
+
+    $state.backend.managed = $false
+    $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $runtimeFile -Encoding UTF8
+    if (Resolve-ManagedArtifactRuntimeContext $runtimeFile $symppHome $installedPluginRoot $contract) {
+      throw "unmanaged runtime state was accepted"
+    }
+    $state.backend.managed = $true
+    $state.backend.expected_source_revision = "d" * 40
+    $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $runtimeFile -Encoding UTF8
+    if (Resolve-ManagedArtifactRuntimeContext $runtimeFile $symppHome $installedPluginRoot $contract) {
+      throw "mismatched runtime revision was accepted"
+    }
+    $state.backend.expected_source_revision = $artifactRevision
+    $state | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $runtimeFile -Encoding UTF8
+    if (Resolve-ManagedArtifactRuntimeContext $runtimeFile $symppHome $installedPluginRoot ("d" * 64)) {
+      throw "mismatched runtime contract was accepted"
+    }
+
+    $marker.source_revision = "d" * 40
+    $marker | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $artifactRoot ".sympp-artifact.json") -Encoding UTF8
+    if (Get-SymppProcessKind $process $marketplaceSourceRoot $installedPluginRoot $context) {
+      throw "artifact marker revision mismatch was accepted"
+    }
+    $marker.source_revision = $artifactRevision
+    $marker | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $artifactRoot ".sympp-artifact.json") -Encoding UTF8
+    $manifest.launcher_contract.mcp_contract_fingerprint = "d" * 64
+    $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $artifactRoot "runtime-manifest.json") -Encoding UTF8
+    if (Get-SymppProcessKind $process $marketplaceSourceRoot $installedPluginRoot $context) {
+      throw "artifact manifest contract mismatch was accepted"
+    }
+  } finally {
+    Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Assert-StaticContract {
   $configPath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/.mcp.json"
   $cutoverPath = Join-Path $repoRoot "scripts/sympp-mcp-cutover.ps1"
@@ -43,6 +184,16 @@ function Assert-StaticContract {
   if ($cutover.Contains("Stop-Process")) {
     throw "cutover must let active stdio sessions drain"
   }
+  $artifactContextIndex = $cutover.IndexOf('$managedArtifactContext = Resolve-ManagedArtifactRuntimeContext')
+  $existingListenerIndex = $cutover.IndexOf('if ($backendListeners.Count -eq 1)')
+  $artifactSetupGateIndex = $cutover.IndexOf('if ($acceptedManagedArtifactContext)')
+  $sourceSetupIndex = $cutover.IndexOf('Invoke-ElixirSetup $marketplaceSourceRoot')
+  if ($artifactContextIndex -lt 0 -or $existingListenerIndex -lt 0 -or $artifactSetupGateIndex -lt 0 -or $sourceSetupIndex -lt 0 -or
+      $artifactContextIndex -ge $existingListenerIndex -or $existingListenerIndex -ge $artifactSetupGateIndex -or
+      $artifactSetupGateIndex -ge $sourceSetupIndex) {
+    throw "cutover does not classify an existing managed artifact listener before source setup"
+  }
+  Assert-CutoverProcessClassifier $cutoverPath
 }
 
 function New-McpRequest([string]$Body, [string]$SessionId = $null) {
