@@ -182,6 +182,7 @@ try {
   Wait-McpInitialize $second
   $after = Get-RuntimeIdentity
   if ($after.pid -ne $before.pid -or $after.start_ticks -ne $before.start_ticks) { throw "Marketplace upgrade replaced the healthy backend singleton." }
+  if ($after.runtime_mode -ne "artifact") { throw "Installed lifecycle used unexpected runtime mode: $($after.runtime_mode)" }
 
   $result = [pscustomobject]@{
     marketplace_source = $MarketplaceSource

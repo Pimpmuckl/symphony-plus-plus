@@ -23,8 +23,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginStockMarketplaceLifecycleTest do
     assert workflow =~ "npm install --global @openai/codex@0.143.0"
     assert workflow =~ "stock-marketplace-lifecycle.ps1"
 
-    assert bridge =~ "marketplaceSourceWithoutAdvisoryRevision"
-    assert bridge =~ ~s(env: { ...process.env, SYMPP_REPO_ROOT: sourceRoot })
+    assert script =~ ~s($after.runtime_mode -ne "artifact")
+
+    assert bridge =~ "installedMarketplaceMissingAdvisoryRevision"
+    assert bridge =~ "runPowerShellForInstalledMarketplace"
+    refute bridge =~ "SYMPP_REPO_ROOT: sourceRoot"
     assert bridge =~ ~s(stdio: "inherit")
   end
 end
