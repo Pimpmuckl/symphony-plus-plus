@@ -109,6 +109,17 @@ function Stop-McpClient($Client) {
   $Client.process = $null
 }
 
+function Stop-OwnedProcesses([string]$Path) {
+  $resolved = [System.IO.Path]::GetFullPath($Path).TrimEnd("\") + "\"
+  if (-not $resolved.StartsWith($ownedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Process cleanup root escaped its owned prefix: $resolved" }
+  foreach ($process in @(Get-Process -ErrorAction SilentlyContinue)) {
+    try { $executable = [System.IO.Path]::GetFullPath([string]$process.Path) } catch { continue }
+    if (-not $executable.StartsWith($resolved, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+    try { $process.Kill($true) } catch [System.InvalidOperationException] { continue }
+    if (-not $process.WaitForExit(60000)) { throw "Timed out waiting for owned process cleanup: $($process.Id)" }
+  }
+}
+
 function Remove-OwnedTree([string]$Path) {
   $resolved = [System.IO.Path]::GetFullPath($Path)
   if (-not $resolved.StartsWith($ownedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Cleanup root escaped its owned prefix: $resolved" }
@@ -206,6 +217,7 @@ try {
     }
   }
   foreach ($client in @($clients)) { Stop-McpClient $client }
+  Stop-OwnedProcesses $tempRoot
   Remove-OwnedTree $tempRoot
 }
 
