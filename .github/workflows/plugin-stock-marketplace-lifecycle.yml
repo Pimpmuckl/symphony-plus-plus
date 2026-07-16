@@ -1,0 +1,44 @@
+name: plugin-stock-marketplace-lifecycle
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/plugin-stock-marketplace-lifecycle.yml"
+      - "scripts/benchmarks/sympp-mcp/stock-marketplace-lifecycle.ps1"
+      - "plugins/symphony-plus-plus-mcp/**"
+      - "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json"
+      - ".agents/plugins/marketplace.json"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/plugin-stock-marketplace-lifecycle.yml"
+      - "scripts/benchmarks/sympp-mcp/stock-marketplace-lifecycle.ps1"
+      - "plugins/symphony-plus-plus-mcp/**"
+      - "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json"
+      - ".agents/plugins/marketplace.json"
+
+permissions:
+  contents: read
+
+jobs:
+  stock-marketplace-lifecycle:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - name: Install stock Codex CLI
+        shell: pwsh
+        run: npm install --global @openai/codex@0.143.0
+
+      - name: Exercise stock marketplace lifecycle
+        shell: pwsh
+        env:
+          MARKETPLACE_REF: ${{ github.head_ref || github.ref_name }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.clone_url }}
+        run: |
+          $source = if ($env:HEAD_REPOSITORY) { $env:HEAD_REPOSITORY } else { "https://github.com/${{ github.repository }}.git" }
+          ./scripts/benchmarks/sympp-mcp/stock-marketplace-lifecycle.ps1 `
+            -MarketplaceSource $source `
+            -MarketplaceRef $env:MARKETPLACE_REF

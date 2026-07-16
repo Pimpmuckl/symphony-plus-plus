@@ -60,6 +60,39 @@ function readJson(file) {
   }
 }
 
+function marketplaceSourceWithoutAdvisoryRevision(pluginRoot) {
+  const versionRoot = path.resolve(pluginRoot);
+  const packageRoot = path.dirname(versionRoot);
+  const marketplaceRoot = path.dirname(packageRoot);
+  const cacheRoot = path.dirname(marketplaceRoot);
+  const pluginsRoot = path.dirname(cacheRoot);
+  if (path.basename(cacheRoot).toLowerCase() !== "cache" || path.basename(pluginsRoot).toLowerCase() !== "plugins") return null;
+
+  const sourceRoot = path.resolve(path.dirname(pluginsRoot), ".tmp", "marketplaces", path.basename(marketplaceRoot));
+  const sourcePluginRoot = path.join(sourceRoot, "plugins", path.basename(packageRoot));
+  if (fs.existsSync(path.join(sourceRoot, ".codex-marketplace-install.json"))) return null;
+  try {
+    if (!fs.statSync(path.join(sourceRoot, "elixir", "mix.exs")).isFile() ||
+        !fs.statSync(path.join(sourcePluginRoot, ".codex-plugin", "plugin.json")).isFile()) return null;
+  } catch (_) {
+    return null;
+  }
+  return sourceRoot;
+}
+
+function runPowerShellForMarketplaceSource(sourceRoot) {
+  const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "start-sympp-mcp.ps1"), ...process.argv.slice(2)];
+  const options = { stdio: "inherit", env: { ...process.env, SYMPP_REPO_ROOT: sourceRoot } };
+  trace("marketplace_advisory_revision_missing");
+  let result = spawnSync("pwsh.exe", args, options);
+  if (result.error && result.error.code === "ENOENT") result = spawnSync("powershell.exe", args, options);
+  if (result.error) {
+    diagnostic(`Symphony++ marketplace launcher fallback failed: ${result.error.message}`);
+    return 1;
+  }
+  return Number.isInteger(result.status) ? result.status : 1;
+}
+
 function generationKey(pluginRoot, sourcePluginRoot, sourceRoot) {
   try {
     if (!fs.statSync(pluginRoot).isDirectory() || !fs.statSync(sourcePluginRoot).isDirectory()) return null;
@@ -716,11 +749,14 @@ async function main() {
   }
   if (process.argv.some((arg) => /^-(Help|ValidateOnly)$/i.test(arg)) || process.env.SYMPP_REPO_ROOT || String(process.env.SYMPP_MCP_BRIDGE_MODE || "http").toLowerCase() !== "http") process.exit(POWERSHELL_FALLBACK);
 
+  const pluginRoot = path.resolve(__dirname, "..");
+  const marketplaceSource = marketplaceSourceWithoutAdvisoryRevision(pluginRoot);
+  if (marketplaceSource) process.exit(runPowerShellForMarketplaceSource(marketplaceSource));
+
   await ensureLivenessProbe();
   const runtimeFile = resolveRuntimeFile();
   const state = readJson(runtimeFile);
   if (!state) { trace("warm_miss_state"); process.exit(WARM_MISS); }
-  const pluginRoot = path.resolve(__dirname, "..");
   const cachedIdentity = await resolveCachedIdentity(pluginRoot);
   const identity = resolveStateIdentity(state, pluginRoot, cachedIdentity);
   if (!identity) { trace("warm_miss_state"); process.exit(WARM_MISS); }
