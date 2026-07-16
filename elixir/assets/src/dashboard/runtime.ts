@@ -1,5 +1,5 @@
 import type { ActiveBlockingEdge, ContextComment, DashboardPayload, HandoffCopyState, PlannedSlice, SoloSession, WorkPackageCard, WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
-import type { UpdateMotion, UpdateMotionKind } from "@/components/dashboard/motion";
+import type { UpdateMotion } from "@/components/dashboard/motion";
 
 declare global {
   interface Window {
@@ -109,9 +109,7 @@ export type UpdateAnimationEntity = {
 };
 
 export type DashboardUpdateAnimations = {
-  countPulseFor: (panel: TopPanelKey) => number;
   motionFor: (key?: string | null) => UpdateMotion | undefined;
-  simulate: (kind: UpdateMotionKind) => void;
 };
 
 export type DashboardConnectionIssue = {

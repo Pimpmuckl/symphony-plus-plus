@@ -11,12 +11,11 @@ export function AttentionBarButton({
   tone,
   open,
   onToggle,
-  pulseToken = 0,
 }: AttentionButtonConfig & {
   open: boolean;
   onToggle: (panel: TopPanelKey | null) => void;
 }) {
-  const countMotion = useCountMotion(value, pulseToken);
+  const countMotion = useCountMotion(value);
 
   return (
     <Tooltip>

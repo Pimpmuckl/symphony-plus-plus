@@ -2,9 +2,9 @@ import type { GuidanceItem, PlannedSlice, SoloSession, WorkPackageCard, WorkRequ
 import { UPDATE_ANIMATION_TTL_MS } from "@/components/dashboard/motion";
 import type { UpdateMotion, UpdateMotionKind } from "@/components/dashboard/motion";
 import { packageLane, sliceLane, sliceOperationalState, workRequestLane } from "@/lib/operational-state";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
 import { BlockerItem, updateMotionsReducer } from "./dashboard-state";
-import { DashboardUpdateAnimations, MAX_UPDATE_MOTION_ENTRIES, TopPanelKey, UpdateAnimationEntity } from "./runtime";
+import { DashboardUpdateAnimations, MAX_UPDATE_MOTION_ENTRIES, UpdateAnimationEntity } from "./runtime";
 import { soloSessionAttention, soloSessionLane, soloSessionUpdateKey } from "./solo-session-utils";
 
 export function useDashboardUpdateAnimations({
@@ -23,12 +23,9 @@ export function useDashboardUpdateAnimations({
   soloSessions: SoloSession[];
 }): DashboardUpdateAnimations {
   const previousSnapshotRef = useRef<Map<string, UpdateAnimationEntity> | null>(null);
-  const initialLatestSnapshot = useMemo(() => new Map<string, UpdateAnimationEntity>(), []);
-  const latestSnapshotRef = useRef<Map<string, UpdateAnimationEntity>>(initialLatestSnapshot);
   const timersRef = useRef<number[]>([]);
   const tokenRef = useRef(0);
   const [motions, dispatchMotions] = useReducer(updateMotionsReducer, {});
-  const [countPulses, setCountPulses] = useState<Record<TopPanelKey, number>>({ blockers: 0, guidance: 0 });
 
   const applyMotions = useCallback((nextMotions: Record<string, UpdateMotion>) => {
     const motionEntries = Object.entries(nextMotions).slice(0, MAX_UPDATE_MOTION_ENTRIES);
@@ -53,14 +50,12 @@ export function useDashboardUpdateAnimations({
 
   useLayoutEffect(() => {
     if (!ready) {
-      latestSnapshotRef.current = new Map();
       previousSnapshotRef.current = null;
       dispatchMotions({ type: "clear" });
       return;
     }
 
     const snapshot = dashboardAnimationSnapshot({ blockerItems, guidanceItems, packages, requestDetails, soloSessions });
-    latestSnapshotRef.current = snapshot;
     const previousSnapshot = previousSnapshotRef.current;
 
     if (!previousSnapshot) {
@@ -82,24 +77,8 @@ export function useDashboardUpdateAnimations({
   }, [applyMotions, blockerItems, guidanceItems, packages, ready, requestDetails, soloSessions]);
 
   const motionFor = useCallback((key?: string | null) => (ready && key ? motions[key] : undefined), [motions, ready]);
-  const countPulseFor = useCallback((panel: TopPanelKey) => countPulses[panel] || 0, [countPulses]);
-  const simulate = useCallback(
-    (kind: UpdateMotionKind) => {
-      const snapshot = latestSnapshotRef.current;
-      const keys = simulatedMotionKeys(kind, snapshot);
-      const nextMotions = Object.fromEntries(keys.map((key) => [key, { kind, token: (tokenRef.current += 1) } satisfies UpdateMotion]));
 
-      applyMotions(nextMotions);
-
-      const panel = topPanelForMotionKind(kind);
-      if (panel) {
-        setCountPulses((current) => ({ ...current, [panel]: (current[panel] || 0) + 1 }));
-      }
-    },
-    [applyMotions],
-  );
-
-  return useMemo(() => ({ countPulseFor, motionFor, simulate }), [countPulseFor, motionFor, simulate]);
+  return useMemo(() => ({ motionFor }), [motionFor]);
 }
 
 function dashboardAnimationSnapshot({
@@ -178,26 +157,6 @@ function classifyUpdateMotion(previous: UpdateAnimationEntity | undefined, curre
   if (current.blockerCount > previous.blockerCount || (!isBlockedStatus(previous.status) && isBlockedStatus(current.status))) return "blocker";
   if (current.guidanceCount > previous.guidanceCount) return "guidance";
   return "changed";
-}
-
-function simulatedMotionKeys(kind: UpdateMotionKind, snapshot: Map<string, UpdateAnimationEntity>) {
-  const entries = [...snapshot.entries()];
-  const preferred =
-    kind === "guidance"
-      ? entries.filter(([, entity]) => entity.guidanceCount > 0)
-      : kind === "blocker"
-        ? entries.filter(([, entity]) => entity.blockerCount > 0 || isBlockedStatus(entity.status))
-        : kind === "finished"
-          ? entries.filter(([, entity]) => entity.finished)
-          : entries.filter(([key]) => key.startsWith("request:") || key.startsWith("slice:") || key.startsWith("package:") || key.startsWith("solo:"));
-
-  return (preferred.length > 0 ? preferred : entries).slice(0, kind === "changed" ? 4 : 3).map(([key]) => key);
-}
-
-function topPanelForMotionKind(kind: UpdateMotionKind): TopPanelKey | null {
-  if (kind === "guidance") return "guidance";
-  if (kind === "blocker") return "blockers";
-  return null;
 }
 
 function requestAnimationEntity(detail: WorkRequestDetail): UpdateAnimationEntity {

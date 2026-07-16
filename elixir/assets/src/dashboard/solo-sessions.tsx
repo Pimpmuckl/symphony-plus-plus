@@ -177,7 +177,7 @@ function SoloSessionCard({
           <p className="truncate text-sm font-semibold">{session.title || session.id}</p>
           <p className="mt-1 truncate text-xs text-muted-foreground">{session.caller_id || "Solo session"}</p>
         </div>
-        <AnimatedBadge label={formatStatus(session.status)} variant={soloSessionStatusVariant(session.status)} className="shrink-0" />
+        <AnimatedBadge active={soloSessionStatusIsRunning(session.status)} label={formatStatus(session.status)} variant={soloSessionStatusVariant(session.status)} className="shrink-0" />
       </div>
 
       <AnimatedCardBody motionKey={bodyMotionKey}>
@@ -206,6 +206,10 @@ function SoloSessionCard({
       </AnimatedCardBody>
     </StateCard>
   );
+}
+
+function soloSessionStatusIsRunning(status?: string | null) {
+  return ["active", "in_progress", "running"].includes(status || "");
 }
 
 function soloSessionGroups(sessions: SoloSession[]) {

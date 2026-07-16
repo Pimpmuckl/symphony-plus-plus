@@ -1,5 +1,5 @@
 import { Children, isValidElement, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps, CSSProperties, ReactNode, RefObject } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -18,24 +18,16 @@ export const UPDATE_ANIMATION_TTL_MS = 4000;
 
 const CARD_BODY_RESIZE_MS = TOP_PANEL_RESIZE_MS;
 const CARD_BODY_CONTENT_MS = TOP_PANEL_SLIDE_MS;
-const BADGE_TEXT_PUSH_MS = 3200;
-const BADGE_RESIZE_MS = 400;
+const STATUS_SCRAMBLE_CHARACTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!?+-*/";
+const STATUS_SCRAMBLE_MIN_MS = 360;
+const STATUS_SCRAMBLE_MAX_MS = 680;
+const STATUS_SCRAMBLE_TEST_MS = 1200;
+const DASHBOARD_ANIMATION_TEST_EVENT = "sympp:test-animations";
 
 export type UpdateMotionKind = "added" | "changed" | "guidance" | "blocker" | "finished" | "removed";
 export type UpdateMotion = { kind: UpdateMotionKind | "settled"; token: number };
 
-type BadgePushPhase = "idle" | "measure" | "resize-first" | "push" | "resize-last";
 type CardBodySizePhase = "idle" | "pre-grow" | "enter" | "pre-shrink" | "post-shrink";
-
-type AnimatedBadgeState = {
-  currentLabel: string;
-  previousLabel: string | null;
-  phase: BadgePushPhase;
-  width: number | null;
-};
-type AnimatedBadgeAction =
-  | { type: "replace"; state: AnimatedBadgeState }
-  | { type: "patch"; state: Partial<AnimatedBadgeState> };
 
 type AnimatedCardBodyState = {
   targetKey: string;
@@ -48,9 +40,8 @@ type AnimatedCardBodyAction =
   | { type: "replace"; state: AnimatedCardBodyState }
   | { type: "patch"; state: Partial<AnimatedCardBodyState> };
 
-export function useCountMotion(value: number, pulseToken = 0) {
+export function useCountMotion(value: number) {
   const currentRef = useRef(value);
-  const pulseRef = useRef(pulseToken);
   const tokenRef = useRef(0);
   const [motion, setMotion] = useState({
     active: false,
@@ -61,23 +52,20 @@ export function useCountMotion(value: number, pulseToken = 0) {
 
   useEffect(() => {
     const previous = currentRef.current;
-    const pulsing = pulseRef.current !== pulseToken;
-    if (previous === value && !pulsing) return;
+    if (previous === value) return;
 
-    pulseRef.current = pulseToken;
     currentRef.current = value;
     const token = (tokenRef.current += 1);
     const direction = value >= previous ? "up" : "down";
-    const displayedPrevious = pulsing && previous === value ? Math.max(0, value - 1) : previous;
 
-    setMotion({ active: true, direction, previous: displayedPrevious, token });
+    setMotion({ active: true, direction, previous, token });
 
     const timer = window.setTimeout(() => {
       setMotion({ active: false, direction: "idle", previous: value, token });
     }, 760);
 
     return () => window.clearTimeout(timer);
-  }, [pulseToken, value]);
+  }, [value]);
 
   return motion;
 }
@@ -118,90 +106,106 @@ export function AnimatedTopGrid({ children, className }: { children: ReactNode; 
 }
 
 export function AnimatedBadge({
+  active = false,
   label,
   variant,
   className,
 }: {
+  active?: boolean;
   label: string;
   variant?: ComponentProps<typeof Badge>["variant"];
   className?: string;
 }) {
-  const [state, dispatch] = useReducer(animatedBadgeReducer, label, initialAnimatedBadgeState);
   const badgeRef = useRef<HTMLDivElement | null>(null);
-  const currentTextRef = useRef<HTMLSpanElement | null>(null);
-  const measureRef = useRef<HTMLSpanElement | null>(null);
-  const timersRef = useRef<number[]>([]);
-  const framesRef = useRef<number[]>([]);
-
-  useEffect(
-    () => () => {
-      clearMotionTimers(timersRef, framesRef);
-    },
-    [],
-  );
-
-  useLayoutEffect(() => {
-    if (label === state.currentLabel) return;
-
-    clearMotionTimers(timersRef, framesRef);
-
-    const oldWidth = measureElementWidth(badgeRef.current);
-    const oldTextWidth = measureElementWidth(currentTextRef.current);
-    const chromeWidth = Math.max(0, oldWidth - oldTextWidth);
-
-    dispatch({ type: "replace", state: { currentLabel: label, previousLabel: state.currentLabel, phase: "measure", width: oldWidth } });
-
-    nextFrame(framesRef, () => {
-      const newTextWidth = measureElementWidth(measureRef.current);
-      const newWidth = Math.ceil(newTextWidth + chromeWidth);
-      const wider = newWidth > oldWidth + 1;
-
-      if (wider) {
-        dispatch({ type: "patch", state: { phase: "resize-first", width: newWidth } });
-
-        later(timersRef, BADGE_RESIZE_MS, () => {
-          dispatch({ type: "patch", state: { phase: "push" } });
-          later(timersRef, BADGE_TEXT_PUSH_MS, () =>
-            dispatch({ type: "patch", state: { previousLabel: null, phase: "idle", width: null } }),
-          );
-        });
-      } else {
-        dispatch({ type: "patch", state: { phase: "push" } });
-
-        later(timersRef, BADGE_TEXT_PUSH_MS, () => {
-          dispatch({ type: "patch", state: { phase: "resize-last", width: newWidth } });
-          later(timersRef, BADGE_RESIZE_MS, () =>
-            dispatch({ type: "patch", state: { previousLabel: null, phase: "idle", width: null } }),
-          );
-        });
-      }
-    });
-  }, [label, state.currentLabel]);
-
-  const renderMeasure = label !== state.currentLabel || state.phase !== "idle";
+  const { displayLabel, testToken } = useScrambledStatus(label, badgeRef);
+  const shimmerDuration = `${Math.max(1.8, label.length * 0.12).toFixed(2)}s`;
+  const textStyle = { "--status-shimmer-duration": shimmerDuration } as CSSProperties;
 
   return (
     <Badge
       ref={badgeRef}
       variant={variant}
-      className={cn("state-update-badge", className)}
-      data-badge-phase={state.phase}
-      data-badge-has-previous={state.previousLabel ? "true" : "false"}
-      style={state.width === null ? undefined : { width: `${Math.max(state.width, 0)}px` }}
+      className={cn("status-text-badge", className)}
+      aria-label={label}
+      data-running={active ? "true" : undefined}
     >
-      {renderMeasure ? (
-        <span ref={measureRef} className="badge-push-measure">
-          {state.currentLabel}
-        </span>
-      ) : null}
-      <span className="badge-push-stack">
-        {state.previousLabel ? <span className="badge-push-old">{state.previousLabel}</span> : null}
-        <span ref={currentTextRef} className="badge-push-new">
-          {state.currentLabel}
-        </span>
+      <span
+        key={`${label}:${testToken}`}
+        className={cn("status-badge-text", active && "status-badge-text-running")}
+        aria-hidden="true"
+        style={textStyle}
+      >
+        {displayLabel}
       </span>
     </Badge>
   );
+}
+
+export function triggerDashboardAnimationTest() {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(DASHBOARD_ANIMATION_TEST_EVENT));
+}
+
+export function scrambleStatusText(from: string, to: string, progress: number, random = Math.random) {
+  if (progress <= 0) return from;
+  if (progress >= 1) return to;
+
+  const revealProgress = Math.max(0, (progress - 0.08) / 0.92);
+  const revealedCharacters = Math.floor(to.length * revealProgress);
+  const width = Math.max(from.length, to.length);
+
+  return Array.from({ length: width }, (_, index) => {
+    const targetCharacter = to[index] || "";
+    if (index < revealedCharacters) return targetCharacter;
+    if (targetCharacter === " ") return " ";
+    if (progress < 0.16 && from[index]) return from[index];
+    return STATUS_SCRAMBLE_CHARACTERS[Math.floor(random() * STATUS_SCRAMBLE_CHARACTERS.length)];
+  }).join("").trimEnd();
+}
+
+function useScrambledStatus(label: string, badgeRef: RefObject<HTMLDivElement | null>) {
+  const [displayLabel, setDisplayLabel] = useState(label);
+  const [testToken, retrigger] = useReducer((token: number) => token + 1, 0);
+  const displayRef = useRef(label);
+  const reducedMotion = dashboardPrefersReducedMotion();
+
+  useEffect(() => {
+    const handleTest = () => {
+      const bounds = badgeRef.current?.getBoundingClientRect();
+      if (bounds && bounds.bottom >= 0 && bounds.top <= window.innerHeight) retrigger();
+    };
+    window.addEventListener(DASHBOARD_ANIMATION_TEST_EVENT, handleTest);
+    return () => window.removeEventListener(DASHBOARD_ANIMATION_TEST_EVENT, handleTest);
+  }, [badgeRef]);
+
+  useEffect(() => {
+    const from = displayRef.current;
+    if (from === label && testToken === 0) return;
+
+    if (reducedMotion) {
+      displayRef.current = label;
+      return;
+    }
+
+    const duration = from === label && testToken > 0
+      ? STATUS_SCRAMBLE_TEST_MS
+      : Math.min(STATUS_SCRAMBLE_MAX_MS, Math.max(STATUS_SCRAMBLE_MIN_MS, label.length * 38));
+    let frame = 0;
+    let startedAt: number | null = null;
+
+    const animate = (time: number) => {
+      startedAt ??= time;
+      const progress = Math.min(1, (time - startedAt) / duration);
+      const nextLabel = scrambleStatusText(from, label, progress);
+      displayRef.current = nextLabel;
+      setDisplayLabel(nextLabel);
+      if (progress < 1) frame = window.requestAnimationFrame(animate);
+    };
+
+    frame = window.requestAnimationFrame(animate);
+    return () => window.cancelAnimationFrame(frame);
+  }, [label, reducedMotion, testToken]);
+
+  return { displayLabel: reducedMotion ? label : displayLabel, testToken };
 }
 
 export function AnimatedCardBody({ motionKey, children }: { motionKey: string; children: ReactNode }) {
@@ -348,25 +352,7 @@ function useFlipList(layoutKey: string) {
   return containerRef;
 }
 
-function initialAnimatedBadgeState(label: string): AnimatedBadgeState {
-  return {
-    currentLabel: label,
-    previousLabel: null,
-    phase: "idle",
-    width: null,
-  };
-}
-
-function animatedBadgeReducer(state: AnimatedBadgeState, action: AnimatedBadgeAction): AnimatedBadgeState {
-  if (action.type === "replace") return action.state;
-  return { ...state, ...action.state };
-}
-
 function animatedCardBodyReducer(state: AnimatedCardBodyState, action: AnimatedCardBodyAction): AnimatedCardBodyState {
   if (action.type === "replace") return action.state;
   return { ...state, ...action.state };
-}
-
-function measureElementWidth(element: HTMLElement | null) {
-  return element?.getBoundingClientRect().width || 0;
 }

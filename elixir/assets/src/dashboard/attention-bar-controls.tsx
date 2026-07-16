@@ -2,7 +2,7 @@ import { AlertTriangle, MessageSquareText } from "lucide-react";
 import type { GuidanceItem } from "@/types/dashboard";
 import { AttentionBarButton } from "./attention-bar-button";
 import type { BlockerItem } from "./dashboard-state";
-import type { DashboardUpdateAnimations, TopPanelKey } from "./runtime";
+import type { TopPanelKey } from "./runtime";
 import type { AttentionButtonConfig } from "./status-rail-types";
 
 export function AttentionBarControls({
@@ -10,19 +10,16 @@ export function AttentionBarControls({
   guidanceItems,
   blockerItems,
   onToggle,
-  updateAnimations,
 }: {
   openPanel: TopPanelKey | null;
   guidanceItems: GuidanceItem[];
   blockerItems: BlockerItem[];
   onToggle: (panel: TopPanelKey | null) => void;
-  updateAnimations: DashboardUpdateAnimations;
 }) {
   const configs: AttentionButtonConfig[] = [
     {
       icon: <MessageSquareText className="size-6" />,
       panel: "guidance",
-      pulseToken: updateAnimations.countPulseFor("guidance"),
       title: "Human Guidance Needed",
       tone: "guidance",
       value: guidanceItems.length,
@@ -30,7 +27,6 @@ export function AttentionBarControls({
     {
       icon: <AlertTriangle className="size-6" />,
       panel: "blockers",
-      pulseToken: updateAnimations.countPulseFor("blockers"),
       title: "Active Blockers",
       tone: blockerItems.length === 0 ? "blocker-clear" : "blocker",
       value: blockerItems.length,

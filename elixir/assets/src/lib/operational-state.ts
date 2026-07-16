@@ -117,6 +117,18 @@ const BOARD_LANES: Record<string, BoardLane> = {
   superseded: "finished",
 };
 
+const RUNNING_STATUSES = new Set([
+  "active",
+  "ci_waiting",
+  "claimed",
+  "implementing",
+  "in_progress",
+  "merging",
+  "merging_into_phase",
+  "planning",
+  "reviewing",
+]);
+
 const REQUEST_LANES: Record<string, RequestLane> = {
   active: "slices",
   abandoned: "finished",
@@ -203,6 +215,10 @@ export function sliceOperationalState(slice: PlannedSlice, pkg?: WorkPackageCard
 
 export function operationalLabel(operational?: WorkPackageCard["operational_state"], fallbackStatus?: string | null) {
   return operational?.label || statusLabel(fallbackStatus);
+}
+
+export function operationalStatusIsRunning(operational?: WorkPackageCard["operational_state"], fallbackStatus?: string | null) {
+  return RUNNING_STATUSES.has(operational?.key || fallbackStatus || "");
 }
 
 function signalToneForBackendTone(tone?: string | null): SignalTone {

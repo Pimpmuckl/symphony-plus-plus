@@ -6,7 +6,6 @@ import type { CardDetailSelect, DashboardUpdateAnimations, TopPanelDirection, To
 export type AttentionButtonConfig = {
   icon: React.ReactNode;
   panel: TopPanelKey;
-  pulseToken: number;
   title: string;
   tone: "guidance" | "blocker" | "blocker-clear";
   value: number;

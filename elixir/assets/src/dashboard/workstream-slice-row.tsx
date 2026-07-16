@@ -1,7 +1,7 @@
 import type { ActiveBlockingEdge, GuidanceItem, PlannedSlice, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import { AlertTriangle, GitBranch, MessageSquareText } from "lucide-react";
 
-import { operationalBadgeVariant, operationalLabel, sliceCardTone, sliceLane, sliceOperationalState } from "@/lib/operational-state";
+import { operationalBadgeVariant, operationalLabel, operationalStatusIsRunning, sliceCardTone, sliceLane, sliceOperationalState } from "@/lib/operational-state";
 import { uniqueNonEmpty } from "@/lib/collections";
 import { updateMotionAttributes } from "@/components/dashboard/motion-utils";
 import type { CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
@@ -90,6 +90,7 @@ export function ProductSliceRow({
   const blockerCount = sliceBlockerCount(slice, pkg, activeBlockerCountBySliceId);
   const guidanceCount = sliceGuidanceCount(slice, pkg);
   const sliceLabel = operationalLabel(operational, rawStatus);
+  const statusActive = operationalStatusIsRunning(operational, rawStatus);
   const progress = sliceProgressPercent(slice, pkg);
   const progressIconState = rowProgressIconState({ blockerCount, guidanceCount, progress, tone });
   const progressAttentionState = rowProgressAttentionState({ blockerCount, guidanceCount, tone });
@@ -126,7 +127,7 @@ export function ProductSliceRow({
         ]}
       />
       <span className="v3-row-status v3-slice-status">
-        <RowBadgeSlot label={sliceLabel} variant={operationalBadgeVariant(operational, rawStatus)} />
+        <RowBadgeSlot active={statusActive} label={sliceLabel} variant={operationalBadgeVariant(operational, rawStatus)} />
       </span>
       <SliceKindSlot detail={detail} slice={slice} pkg={pkg} onSelectCard={onSelectCard} />
     </div>

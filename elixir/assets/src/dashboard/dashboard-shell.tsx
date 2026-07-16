@@ -169,7 +169,7 @@ export function DashboardShell({
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {showUpdateSimulationControls ? <UpdateSimulationControls updateAnimations={updateAnimations} /> : null}
+              {showUpdateSimulationControls ? <UpdateSimulationControls /> : null}
               <LiveLedgerBadge error={error} connectionIssue={connectionIssue} databasePath={dashboard?.ledger?.database} />
               <DashboardSearchControl value={dashboardSearchQuery} onValueChange={onDashboardSearchQueryChange} />
               <AttentionBarControls
@@ -177,7 +177,6 @@ export function DashboardShell({
                 blockerItems={blockerItems}
                 openPanel={visibleTopPanel}
                 onToggle={setOpenTopPanel}
-                updateAnimations={updateAnimations}
               />
               <ThemeToggle theme={theme} onToggle={toggleTheme} />
               <DashboardSettingsDialog

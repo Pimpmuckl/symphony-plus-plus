@@ -65,7 +65,7 @@ function renderSlice(detail: WorkRequestDetail, slice: PlannedSlice, pkg: WorkPa
       guidanceItems={[]}
       onSelectGuidance={() => undefined}
       onSelectCard={() => undefined}
-      updateAnimations={{ countPulseFor: () => 0, motionFor: () => undefined, simulate: () => undefined }}
+      updateAnimations={{ motionFor: () => undefined }}
     />,
   );
 }

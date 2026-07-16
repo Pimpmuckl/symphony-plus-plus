@@ -40,9 +40,7 @@ describe("workstream board removal rendering", () => {
 });
 
 const noUpdateAnimations = {
-  countPulseFor: () => 0,
   motionFor: () => undefined,
-  simulate: () => undefined,
 };
 
 function requestDetail(id: string): WorkRequestDetail {

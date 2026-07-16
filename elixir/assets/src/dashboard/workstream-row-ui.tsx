@@ -301,6 +301,7 @@ export function ProductNodeHeader({
   visibleNodeKind,
   progress,
   statusBadgeVariant,
+  statusActive,
   tone,
   statusLabel,
   guidanceCount,
@@ -317,6 +318,7 @@ export function ProductNodeHeader({
   visibleNodeKind?: string | null;
   progress: number;
   statusBadgeVariant?: ComponentProps<typeof AnimatedBadge>["variant"];
+  statusActive: boolean;
   tone: string;
   statusLabel: string;
   guidanceCount: number;
@@ -368,7 +370,7 @@ export function ProductNodeHeader({
       />
       <span className="v3-row-status">
         <ProgressPill progress={progress} />
-        <RowBadgeSlot label={statusLabel} variant={statusBadgeVariant} />
+        <RowBadgeSlot active={statusActive} label={statusLabel} variant={statusBadgeVariant} />
       </span>
       <EntityKindSlot icon={<Layers3 className="size-3.5" />} title="Product plan node" />
     </div>
@@ -376,15 +378,17 @@ export function ProductNodeHeader({
 }
 
 export function RowBadgeSlot({
+  active = false,
   label,
   variant,
 }: {
+  active?: boolean;
   label: string;
   variant?: ComponentProps<typeof AnimatedBadge>["variant"];
 }) {
   return (
     <span className="v3-row-badge-slot">
-      <AnimatedBadge label={label} variant={variant} className="v3-row-status-badge" />
+      <AnimatedBadge active={active} label={label} variant={variant} className="v3-row-status-badge" />
     </span>
   );
 }

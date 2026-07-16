@@ -283,7 +283,7 @@ function ProductRequestRow({
         <RequestProgressSummary counts={counts} onOpenGuidance={openGuidance} onOpenBlockers={openBlockers} />
         <span className="v3-row-status">
           <ProgressPill progress={progress} />
-          <RowBadgeSlot label={requestLabel} variant={requestState.badgeVariant} />
+          <RowBadgeSlot active={requestState.kind === "active"} label={requestLabel} variant={requestState.badgeVariant} />
         </span>
         <RequestScopeSlot counts={counts} />
       </div>
@@ -493,6 +493,7 @@ function ProductTreeNodeRow({
         visibleNodeKind={nodeState.visibleNodeKind}
         progress={nodeState.progress}
         statusBadgeVariant={nodeState.badgeVariant}
+        statusActive={nodeState.statusKind === "active"}
         tone={nodeState.tone}
         statusLabel={nodeState.statusLabel}
         guidanceCount={nodeState.guidanceCount}

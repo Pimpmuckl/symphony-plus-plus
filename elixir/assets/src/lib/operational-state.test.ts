@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { operationalBadgeVariant, sliceCardTone, sliceLane } from "./operational-state";
+import { operationalBadgeVariant, operationalStatusIsRunning, sliceCardTone, sliceLane } from "./operational-state";
 import type { PlannedSlice } from "@/types/dashboard";
 
 describe("operational state presentation", () => {
@@ -23,6 +23,11 @@ describe("operational state presentation", () => {
 
     expect(sliceCardTone(slice, undefined, sliceLane(slice))).toBe("muted");
     expect(operationalBadgeVariant(slice.operational_state, slice.status)).toBe("secondary");
+  });
+
+  it("animates running labels, not merely records with active runtime metadata", () => {
+    expect(operationalStatusIsRunning({ key: "reviewing", label: "Reviewing" }, "reviewing")).toBe(true);
+    expect(operationalStatusIsRunning({ key: "ready_for_merge", label: "Ready For Merge", has_active_worker: true }, "ready_for_merge")).toBe(false);
   });
 });
 
