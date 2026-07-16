@@ -206,6 +206,12 @@ function Invoke-Cohort([int]$Count, [hashtable]$Environment, [int]$BackendPid) {
   $traceAfter = Get-TraceCounts
   $traceDelta = @{}
   foreach ($name in @($traceAfter.Keys + $traceBefore.Keys | Select-Object -Unique)) { $traceDelta[$name] = [int]$traceAfter[$name] - [int]$traceBefore[$name] }
+  if ($LauncherMode -eq "NodePresent" -and
+      ([int]$traceDelta["node_bridge_selected"] -ne $Count -or
+       [int]$traceDelta["generation_attach_handles_released"] -ne $Count -or
+       [int]$traceDelta["generation_attach_full_validation"] -ne $Count)) {
+    throw "Node warm cohort did not validate identity and release generation watchers before attachment."
+  }
   foreach ($client in $cohort) { Stop-ExactClient $client }
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
   while ((Get-LeaseCount) -gt 1 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
@@ -332,9 +338,39 @@ exit /b %ERRORLEVEL%
     }
   }
 
+  $cacheRelease = [pscustomobject]@{ checked = $false; moved = $null; cleanup_completed = $null }
   $lockRecovery = [pscustomobject]@{ checked = $false; reclaimed = $null }
   $lifecycleRace = [pscustomobject]@{ checked = $false; healthy = $null; backend_reused = $null }
   if ($LauncherMode -eq "NodePresent") {
+    $cacheRelease.checked = $true
+    $cacheProbe = Start-ExactClient $environment
+    Wait-ClientsReady @($cacheProbe) $StartupTimeoutSec
+    $movedPluginRoot = "$pluginRoot.released"
+    $cleanupBefore = [int](Get-TraceCounts)["last_detach_cleanup_completed"]
+    try {
+      Move-Item -LiteralPath $pluginRoot -Destination $movedPluginRoot
+      $cacheRelease.moved = -not (Test-Path -LiteralPath $pluginRoot) -and (Test-Path -LiteralPath $movedPluginRoot)
+      Stop-ExactClient $cold
+      $cold = $null
+      Stop-ExactClient $cacheProbe
+      $cacheProbe = $null
+      $deadline = [DateTime]::UtcNow.AddSeconds(60)
+      do {
+        $cacheRelease.cleanup_completed = [int](Get-TraceCounts)["last_detach_cleanup_completed"] -gt $cleanupBefore
+        if ($cacheRelease.cleanup_completed -and @(Get-ListenerPids $backendPort).Count -eq 0) { break }
+        Start-Sleep -Milliseconds 100
+      } while ([DateTime]::UtcNow -lt $deadline)
+    } finally {
+      if ($cacheProbe) { Stop-ExactClient $cacheProbe }
+      if ((Test-Path -LiteralPath $movedPluginRoot) -and -not (Test-Path -LiteralPath $pluginRoot)) { Move-Item -LiteralPath $movedPluginRoot -Destination $pluginRoot }
+    }
+    if (-not $cacheRelease.moved -or -not $cacheRelease.cleanup_completed) { throw "Retained Node bridge did not release the plugin cache while preserving last-detach cleanup." }
+    $cold = Start-ExactClient $environment
+    Wait-ClientsReady @($cold) $StartupTimeoutSec
+    $runtimeState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json
+    $backend = Get-Process -Id ([int]$runtimeState.backend.pid) -ErrorAction Stop
+    $backendStartTicks = $backend.StartTime.ToUniversalTime().Ticks
+
     $lockRecovery.checked = $true
     $identityDir = Join-Path $environment.SYMPP_HOME "runtime/launcher-validation"
     $generationMarker = @(Get-ChildItem -LiteralPath $identityDir -Filter "*.generation" -File -ErrorAction SilentlyContinue | Select-Object -First 1)
@@ -447,6 +483,7 @@ exit /b %ERRORLEVEL%
     backend_port = $backendPort
     cold = $coldMetrics
     warm = @($warmResults)
+    cache_release = $cacheRelease
     lock_recovery = $lockRecovery
     lifecycle_race = $lifecycleRace
     recovery = $recoveryMetrics

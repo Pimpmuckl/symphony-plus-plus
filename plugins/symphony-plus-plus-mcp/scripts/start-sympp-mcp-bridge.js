@@ -17,9 +17,9 @@ const GENERATION_SETTLE_MS = 100;
 const synchronousWait = new Int32Array(new SharedArrayBuffer(4));
 const agent = new http.Agent({ keepAlive: true });
 const generationWatchers = [];
-let ownedGenerationMarker = null;
 let generationWatchReady = false;
 let generationWatchVersion = 0;
+let generationWatchStartedAtMs = 0;
 let livenessServer = null;
 let livenessPipe = null;
 let livenessToken = null;
@@ -188,23 +188,20 @@ async function enterStartupLock(runtimeFile) {
 }
 
 function closeGenerationWatchers() {
+  const count = generationWatchers.length;
   for (const watcher of generationWatchers.splice(0)) {
     try { watcher.close(); } catch (_) { }
   }
-  if (ownedGenerationMarker) {
-    const marker = readJson(ownedGenerationMarker);
-    if (marker && Number(marker.validator_pid) === process.pid && marker.validator_token === livenessToken) {
-      try { fs.unlinkSync(ownedGenerationMarker); } catch (_) { }
-    }
-    ownedGenerationMarker = null;
-  }
   generationWatchReady = false;
+  generationWatchStartedAtMs = 0;
+  if (count) trace("generation_watchers_closed");
 }
 process.on("exit", closeGenerationWatchers);
 process.on("exit", closeLivenessProbe);
 
 function watchGeneration(paths, markerFile) {
   if (generationWatchers.length) return generationWatchReady;
+  generationWatchStartedAtMs = performance.timeOrigin + performance.now();
   const invalidate = () => {
     generationWatchVersion += 1;
     try { fs.unlinkSync(markerFile); } catch (_) { }
@@ -217,10 +214,14 @@ function watchGeneration(paths, markerFile) {
   return true;
 }
 
-function liveGeneration(markerFile) {
-  const marker = readJson(markerFile);
+function generationFromMarker(marker, watchStartedAtMs) {
+  const validatedAtMs = Number(marker && marker.validated_at_ms);
   return marker && /^[0-9a-f]{64}$/i.test(String(marker.generation_key || "")) &&
-    livenessMatches(marker.validator_pid, marker.validator_pipe, marker.validator_token) ? marker.generation_key : null;
+    Number.isFinite(validatedAtMs) && validatedAtMs >= watchStartedAtMs ? marker.generation_key : null;
+}
+
+function liveGeneration(markerFile) {
+  return generationFromMarker(readJson(markerFile), generationWatchStartedAtMs);
 }
 
 async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, markerFile) {
@@ -263,10 +264,9 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
             continue;
           }
           const temporary = `${markerFile}.${process.pid}.tmp`;
-          fs.writeFileSync(temporary, `${JSON.stringify({ generation_key: generation, validator_pid: process.pid, validator_pipe: livenessPipe, validator_token: livenessToken })}\n`);
+          fs.writeFileSync(temporary, `${JSON.stringify({ generation_key: generation, validated_at_ms: performance.timeOrigin + performance.now() })}\n`);
           try { fs.unlinkSync(markerFile); } catch (_) { }
           fs.renameSync(temporary, markerFile);
-          ownedGenerationMarker = markerFile;
           await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
           if (generationWatchVersion !== watchVersion || liveGeneration(markerFile) !== generation) {
             trace("generation_scan_retry");
@@ -327,6 +327,43 @@ function generationStillValid(identity) {
     liveGeneration(identity.generationMarker) === identity.generationKey;
 }
 
+function prepareCleanupScript(identity) {
+  if (!identity || !/^[0-9a-f]{40}$/i.test(String(identity.revision || "")) ||
+      !/^[0-9a-f]{64}$/i.test(String(identity.generationKey || ""))) return null;
+  try {
+    const names = fs.readdirSync(__dirname).filter((name) => name.toLowerCase().endsWith(".ps1"));
+    const directory = path.join(resolveHome(), "runtime", "launcher-cleanup", `${identity.revision}-${identity.generationKey.slice(0, 12)}`);
+    fs.mkdirSync(directory, { recursive: true });
+    for (const name of names) {
+      const source = path.join(__dirname, name);
+      const destination = path.join(directory, name);
+      try { fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL); } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+      }
+      if (sha256(fs.readFileSync(destination)) !== sha256(fs.readFileSync(source))) return null;
+    }
+    const script = path.join(directory, "start-sympp-mcp.ps1");
+    if (!fs.existsSync(script)) return null;
+    trace("cleanup_scripts_staged");
+    return script;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function generationValidAtAttachment(identity) {
+  if (!generationStillValid(identity)) return false;
+  closeGenerationWatchers();
+  const pluginRoot = identity.pluginRoot;
+  const sourceRoot = identity.sourceRoot;
+  const sourcePluginRoot = path.join(sourceRoot, "plugins", path.basename(path.dirname(pluginRoot)));
+  const generation = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
+  await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
+  const confirmed = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
+  trace("generation_attach_full_validation");
+  return generation === identity.generationKey && confirmed === identity.generationKey;
+}
+
 function trimOrigin(value) {
   return String(value || "").replace(/\/+$/, "");
 }
@@ -355,7 +392,8 @@ function resolveStateIdentity(state, pluginRoot, cachedIdentity) {
   if (!state || !state.backend || !state.frontend || !state.plugin_root) return null;
   if (path.resolve(String(state.plugin_root)).toLowerCase() !== path.resolve(pluginRoot).toLowerCase()) return null;
   const identity = cachedIdentity;
-  if (!identity) return null;
+  const sourceRoot = identity && (identity.source_root || identity.sourceRoot);
+  if (!sourceRoot) return null;
 
   const contract = String(identity.contract_fingerprint || identity.contract).toLowerCase();
   if (String(state.backend.expected_contract_fingerprint || "").toLowerCase() !== contract ||
@@ -378,6 +416,7 @@ function resolveStateIdentity(state, pluginRoot, cachedIdentity) {
   if (String(state.runtime_key || "").toLowerCase() !== key.toLowerCase()) return null;
   return {
     backend, dashboard, contract, runtimeKey: key, revision: identity.revision, headless,
+    pluginRoot: path.resolve(pluginRoot), sourceRoot: path.resolve(String(sourceRoot)),
     generationKey: identity.generation_key || identity.generationKey,
     generationMarker: identity.generation_marker || identity.generationMarker,
     generationWatchVersion: Number(identity.generation_watch_version ?? identity.generationWatchVersion),
@@ -584,19 +623,21 @@ function sameRuntimeNodeLeaseExists(runtimeFile, key) {
   return false;
 }
 
-function cleanupLastDetach(runtimeFile, key) {
+function cleanupLastDetach(runtimeFile, key, cleanupScript) {
   if (sameRuntimeNodeLeaseExists(runtimeFile, key)) return;
-  const script = path.join(__dirname, "start-sympp-mcp.ps1");
+  const script = cleanupScript || path.join(__dirname, "start-sympp-mcp.ps1");
   const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-CleanupRuntimeKey", key];
   let result = spawnSync("pwsh.exe", args, { stdio: ["ignore", "ignore", "inherit"] });
   if (result.error && result.error.code === "ENOENT") result = spawnSync("powershell.exe", args, { stdio: ["ignore", "ignore", "inherit"] });
   if (result.error || result.status !== 0) diagnostic(`Symphony++ last-detach cleanup failed: ${result.error ? result.error.message : `exit ${result.status}`}`);
+  else trace("last_detach_cleanup_completed");
 }
 
 async function bridge(identity, state, runtimeFile) {
   const mcpUrl = `${identity.backend}/mcp`;
   const clientId = `bridge-${process.pid}-${crypto.randomUUID().replace(/-/g, "")}`;
   let localLease = null;
+  let cleanupScript = null;
   let startupLock = null;
   let attached = false;
   let heartbeat = null;
@@ -614,6 +655,11 @@ async function bridge(identity, state, runtimeFile) {
     await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
     if (!generationStillValid(identity)) {
       trace("warm_miss_generation");
+      return false;
+    }
+    cleanupScript = prepareCleanupScript(identity);
+    if (!cleanupScript) {
+      trace("warm_miss_cleanup");
       return false;
     }
     localLease = createLocalLease(runtimeFile, state, identity);
@@ -639,10 +685,11 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_health");
       return false;
     }
-    if (!generationStillValid(identity)) {
+    if (!await generationValidAtAttachment(identity)) {
       trace("warm_miss_generation");
       return false;
     }
+    trace("generation_attach_handles_released");
     fs.closeSync(startupLock);
     startupLock = null;
     const requestedHeartbeat = Math.max(5, Math.min(540, Number(process.env.SYMPP_MCP_CLIENT_HEARTBEAT_SEC || 300))) * 1000;
@@ -690,7 +737,7 @@ async function bridge(identity, state, runtimeFile) {
     if (localLease) { try { fs.unlinkSync(localLease); } catch (_) { } }
     if (attached) await clientLease(mcpUrl, clientId, "detach", false);
     closeGenerationWatchers();
-    cleanupLastDetach(runtimeFile, identity.runtimeKey);
+    cleanupLastDetach(runtimeFile, identity.runtimeKey, cleanupScript);
     closeLivenessProbe();
   }
 }
@@ -720,5 +767,5 @@ if (require.main === module) {
     process.exit(1);
   });
 } else {
-  module.exports = { dashboardHealthy, resolveStateIdentity };
+  module.exports = { dashboardHealthy, generationFromMarker, resolveStateIdentity };
 }

@@ -1,5 +1,6 @@
 @echo off
 setlocal
+cd /d "%SystemRoot%" || exit /b 1
 
 if /I "%SYMPP_NODE_BRIDGE%"=="0" goto :run_pwsh
 set "SYMPP_NODE="
