@@ -2,7 +2,7 @@
 param(
   [string]$MarketplaceSource,
   [string]$MarketplaceRef,
-  [ValidateRange(60, 900)][int]$StartupTimeoutSec = 300
+  [ValidateRange(60, 900)][int]$StartupTimeoutSec = 600
 )
 
 $ErrorActionPreference = "Stop"
