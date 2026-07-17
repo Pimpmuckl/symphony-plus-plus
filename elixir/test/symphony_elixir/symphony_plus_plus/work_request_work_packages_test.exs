@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
+  alias SymphonyElixir.SymphonyPlusPlus.CreateWork
   alias SymphonyElixir.SymphonyPlusPlus.Planning.{Artifact, Finding, PlanNode, ProgressEvent}
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
@@ -62,11 +63,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
   test "rolls back the full slice batch on an invalid package", %{repo: repo} do
     work_request = create_work_request!(repo)
 
-    assert {:error, %Ecto.Changeset{}} =
+    assert {:error, :invalid_work_package} =
              Repository.slice_work_request(repo, work_request.id, [
                package_attrs(id: "wp_valid"),
                package_attrs(id: "wp_invalid", kind: "not_a_kind")
              ])
+
+    assert {:ok, []} = Repository.list_work_packages(repo, work_request.id)
+    assert {:ok, %{status: "ready_for_slicing"}} = Repository.get(repo, work_request.id)
+  end
+
+  test "rejects phase-child packages from WorkRequest slicing", %{repo: repo} do
+    work_request = create_work_request!(repo)
+
+    assert {:error, :invalid_work_package} =
+             Repository.slice_work_request(repo, work_request.id, [package_attrs(kind: "phase_child")])
 
     assert {:ok, []} = Repository.list_work_packages(repo, work_request.id)
     assert {:ok, %{status: "ready_for_slicing"}} = Repository.get(repo, work_request.id)
@@ -153,6 +164,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     assert persisted.status == "planned"
     assert persisted.dispatched_at == nil
     assert Repo.aggregate(AccessGrant, :count) == 0
+  end
+
+  test "activation returns a stale-status error when the planned package changed", %{repo: repo} do
+    work_request = create_work_request!(repo)
+    package = slice_one!(repo, work_request.id)
+
+    assert {:ok, skipped} = WorkPackageRepository.update_status(repo, package.id, "planned", "skipped")
+    assert skipped.status == "skipped"
+    assert {:error, :stale_status} = CreateWork.activate(repo, package)
   end
 
   test "keeps direct phase and delegated WorkPackage creation intact", %{repo: repo} do

@@ -1045,7 +1045,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> Map.put("status", "planned")
       |> Map.put("contract_revision", 1)
 
-    with :ok <- WorkPackageDeliveryScope.validate(repo, work_request, attrs),
+    with :ok <- validate_executable_work_package_kind(attrs),
+         :ok <- WorkPackageDeliveryScope.validate(repo, work_request, attrs),
          :ok <- ScopeConstraints.validate_allowed_file_globs(work_request, Map.get(attrs, "allowed_file_globs", [])),
          :ok <- validate_docs_work_package_scope(attrs),
          :ok <- validate_product_tree_node(repo, work_request.id, Map.get(attrs, "product_tree_node_id")) do
@@ -1058,6 +1059,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   end
 
   defp validate_docs_work_package_scope(_attrs), do: :ok
+
+  defp validate_executable_work_package_kind(%{"kind" => kind}) do
+    if kind in WorkPackage.executable_kinds(), do: :ok, else: {:error, :invalid_work_package}
+  end
 
   defp validate_product_tree_node(_repo, _work_request_id, nil), do: :ok
   defp validate_product_tree_node(_repo, _work_request_id, ""), do: :ok
