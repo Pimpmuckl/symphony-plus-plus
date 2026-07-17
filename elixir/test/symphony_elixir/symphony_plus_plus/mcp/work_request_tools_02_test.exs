@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
 
   test "record_work_package_delivery accepts typed evidence for each outcome and rejects conflicts", %{repo: repo} do
     cases = [
@@ -304,7 +305,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     {work_request, work_package, work_package} =
       linked_delivery_slice!(repo,
         id_suffix: "PLAN-NODE",
-        package_status: "reviewing"
+        package_status: "planned"
       )
 
     {_anchor, session, _grant} =
@@ -331,6 +332,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       })
 
     assert get_in(move_response, ["result", "structuredContent", "work_package_id"]) == work_package.id
+    assert {:ok, _work_package} = WorkPackageRepository.update_status(repo, work_package.id, "planned", "reviewing")
 
     append_active_blocker!(repo, work_package.id, "node-blocker")
 

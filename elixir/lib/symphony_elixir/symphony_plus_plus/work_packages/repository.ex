@@ -106,7 +106,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   end
 
   @spec update_status(repo(), String.t(), String.t(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
-  @spec update_status(repo(), String.t(), String.t(), String.t(), keyword()) :: {:ok, WorkPackage.t()} | {:error, error()}
+  @spec update_status(repo(), String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, WorkPackage.t()} | {:error, error()}
   def update_status(repo, id, current_status, next_status, opts \\ [])
       when is_atom(repo) and is_binary(id) and is_binary(current_status) and is_binary(next_status) and is_list(opts) do
     with :ok <- validate_persisted_status(current_status),
