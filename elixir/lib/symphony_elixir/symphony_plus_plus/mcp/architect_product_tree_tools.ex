@@ -192,7 +192,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, expected_revision} <- optional_positive_integer_argument(arguments, "expected_contract_revision"),
          {:ok, patch} <- required_object(arguments, "patch"),
          :ok <- require_positive_revision(expected_revision),
-         {:ok, work_request, _work_package, _filters, scope} <-
+         {:ok, work_request, work_package, _filters, scope} <-
            WorkRequestScope.authorized_work_package_scope(
              config.repo,
              session,
@@ -202,6 +202,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              tool
            ),
          :ok <- require_work_package_authoring_status(work_request.status),
+         :ok <- require_complete_work_package_contracts([effective_work_package_contract(work_package, patch)]),
          {:ok, work_package} <-
            mutate_product_tree(config.repo, work_request_id, tool, session_claimed_by(session), fn ->
              WorkRequestService.update_work_package(
@@ -603,7 +604,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
       Enum.all?(@required_work_package_array_fields, &string_list?(Map.get(work_package, &1)))
   end
 
-  defp string_list?(values) when is_list(values), do: Enum.all?(values, &is_binary/1)
+  defp effective_work_package_contract(work_package, patch) do
+    %{
+      "title" => work_package.title,
+      "goal" => work_package.goal,
+      "allowed_file_globs" => work_package.allowed_file_globs,
+      "acceptance_criteria" => work_package.acceptance_criteria,
+      "validation_steps" => work_package.validation_steps,
+      "stop_conditions" => work_package.stop_conditions
+    }
+    |> Map.merge(patch)
+  end
+
+  defp string_list?(values) when is_list(values), do: Enum.all?(values, &filled_string?/1)
   defp string_list?(_values), do: false
 
   defp require_positive_revision(revision) when is_integer(revision) and revision > 0, do: :ok

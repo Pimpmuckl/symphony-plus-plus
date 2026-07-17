@@ -371,8 +371,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
           Map.put(contract, "goal", nil),
           Map.put(contract, "goal", "  "),
           Map.put(contract, "allowed_file_globs", nil),
+          Map.put(contract, "allowed_file_globs", ["  "]),
           Map.put(contract, "acceptance_criteria", [nil]),
+          Map.put(contract, "acceptance_criteria", [""]),
           Map.put(contract, "validation_steps", "mix test"),
+          Map.put(contract, "validation_steps", ["  "]),
           Map.put(contract, "stop_conditions", %{})
         ]
 
@@ -416,6 +419,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
 
     grant_work_package_scope!(repo, session, work_package.id)
     remove_grant_scope_type!(repo, session, "repo")
+
+    for patch <- [
+          %{"goal" => nil},
+          %{"goal" => "  "},
+          %{"allowed_file_globs" => [""]},
+          %{"acceptance_criteria" => ["  "]},
+          %{"validation_steps" => nil},
+          %{"stop_conditions" => [nil]}
+        ] do
+      invalid_response =
+        mcp_tool(repo, session, "update_work_package", %{
+          "work_request_id" => work_request.id,
+          "work_package_id" => work_package.id,
+          "expected_contract_revision" => work_package.contract_revision,
+          "patch" => patch
+        })
+
+      assert get_in(invalid_response, ["error", "code"]) == -32_602
+      assert get_in(invalid_response, ["error", "data", "reason"]) == "invalid_work_packages"
+    end
 
     response =
       mcp_tool(repo, session, "update_work_package", %{
