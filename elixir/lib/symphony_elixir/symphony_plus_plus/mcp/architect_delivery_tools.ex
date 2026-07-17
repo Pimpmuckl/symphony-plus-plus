@@ -831,7 +831,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
             filters
           )
         else
-          {:tool_error, reason} -> {:tool_error, reason}
           {:error, :not_found} -> {:tool_error, "successor_work_package_out_of_scope"}
           {:error, reason} -> {:error, reason}
         end

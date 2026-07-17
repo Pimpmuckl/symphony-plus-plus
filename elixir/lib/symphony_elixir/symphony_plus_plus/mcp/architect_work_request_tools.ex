@@ -11,7 +11,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads,
     only: [
-      dispatch_link_recovery_payload: 1,
       dispatch_work_package_result_payload: 2,
       json_safe_payload: 1,
       worktree_lifecycle_payload: 3
@@ -554,29 +553,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     {:error, -32_602, "Invalid params", %{"tool" => "dispatch_work_package", "reason" => "invalid_work_package_status"}}
   end
 
-  defp dispatch_work_package_error({:invalid_work_request_status, _status}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_work_package", "reason" => "invalid_work_request_status"}}
-  end
-
   defp dispatch_work_package_error({:work_package_scope_violation, errors}) do
     invalid_params_error("dispatch_work_package", {:work_package_scope_violation, errors})
   end
 
   defp dispatch_work_package_error({:unsupported_branch_pattern, branch_pattern, reason}) do
     invalid_params_error("dispatch_work_package", {:branch_pattern, branch_pattern, reason})
-  end
-
-  defp dispatch_work_package_error({:kind_not_dispatchable, _kind}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_work_package", "reason" => "kind_not_dispatchable"}}
-  end
-
-  defp dispatch_work_package_error({:dispatch_link_failed, _reason, recovery}) do
-    {:error, -32_000, "Server error",
-     %{
-       "tool" => "dispatch_work_package",
-       "reason" => "dispatch_link_failed",
-       "recovery" => dispatch_link_recovery_payload(recovery)
-     }}
   end
 
   defp dispatch_work_package_error(reason), do: architect_error(reason, "dispatch_work_package")
