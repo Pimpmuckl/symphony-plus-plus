@@ -1,6 +1,26 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
   use ExUnit.Case, async: false
 
+  defmodule ContractUpdateRaceRepo do
+    alias SymphonyElixir.SymphonyPlusPlus.Repo
+
+    @race_key {__MODULE__, :race?}
+
+    def arm, do: Process.put(@race_key, true)
+    def get(schema, id), do: Repo.get(schema, id)
+    def all(query), do: Repo.all(query)
+
+    def update(changeset) do
+      if Process.delete(@race_key) do
+        changeset.data
+        |> Ecto.Changeset.change(status: "ready_for_worker")
+        |> Repo.update!()
+      end
+
+      Repo.update(changeset)
+    end
+  end
+
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.CreateWork
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
@@ -124,6 +144,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
 
     assert {:error, :stale_status} =
              Repository.update_work_package(repo, work_request.id, package.id, 1, %{title: "Stale"})
+  end
+
+  test "rejects a contract update that races with dispatch", %{repo: repo} do
+    work_request = create_work_request!(repo)
+    package = slice_one!(repo, work_request.id)
+    ContractUpdateRaceRepo.arm()
+
+    assert {:error, :stale_status} =
+             Repository.update_work_package(
+               ContractUpdateRaceRepo,
+               work_request.id,
+               package.id,
+               package.contract_revision,
+               %{title: "Racing contract"}
+             )
+
+    assert {:ok, persisted} = WorkPackageRepository.get(repo, package.id)
+    assert persisted.status == "ready_for_worker"
+    assert persisted.title == package.title
+    assert persisted.contract_revision == package.contract_revision
   end
 
   test "keeps updated packages executable and inside an allowed repo scope", %{repo: repo} do

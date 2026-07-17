@@ -1203,6 +1203,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
          :ok <- validate_docs_work_package_scope(effective_contract) do
       work_package
       |> WorkPackage.update_changeset(attrs)
+      |> Ecto.Changeset.optimistic_lock(:status, & &1)
       |> Ecto.Changeset.optimistic_lock(:contract_revision)
       |> repo.update()
     end
