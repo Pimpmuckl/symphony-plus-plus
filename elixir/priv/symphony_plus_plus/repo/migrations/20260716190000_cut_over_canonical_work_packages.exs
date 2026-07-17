@@ -219,7 +219,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
         SELECT 1
         FROM sympp_work_packages AS work_package
         WHERE work_package.work_request_id = sympp_work_requests.id
-          AND work_package.status = 'planned'
+          AND (work_package.status = 'planned' OR work_package.dispatched_at IS NOT NULL)
       )
     """)
   end
@@ -335,7 +335,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
     end
 
     if column_exists?("sympp_progress_events", "payload") do
-      rewrite_blocker_progress_endpoints(id_map)
+      rewrite_progress_references(id_map)
     end
   end
 
@@ -394,15 +394,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
 
   defp rewrite_product_tree_summary(value), do: value
 
-  defp rewrite_blocker_progress_endpoints(id_map) do
-    %{rows: rows} = query!("SELECT id, payload FROM sympp_progress_events WHERE payload IS NOT NULL")
+  defp rewrite_progress_references(id_map) do
+    %{rows: rows} =
+      query!("SELECT id, work_package_id, idempotency_key, payload FROM sympp_progress_events WHERE payload IS NOT NULL")
 
-    for [id, encoded] <- rows,
-        {:ok, payload} <- [Jason.decode(encoded)],
-        rewritten = rewrite_blocker_progress_payload(payload, id_map),
-        rewritten != payload do
-      repo().query!("UPDATE sympp_progress_events SET payload = ? WHERE id = ?", [Jason.encode!(rewritten), id])
-    end
+    Enum.each(rows, fn [id, work_package_id, idempotency_key, encoded] ->
+      with {:ok, payload} <- Jason.decode(encoded) do
+        rewritten_payload = rewrite_progress_payload(payload, id_map)
+        rewritten_key = rewrite_closeout_idempotency_key(idempotency_key, payload, id_map)
+        rewritten_work_package_id = rewrite_closeout_work_package_id(work_package_id, payload, id_map)
+
+        if {rewritten_payload, rewritten_key, rewritten_work_package_id} != {payload, idempotency_key, work_package_id} do
+          repo().query!(
+            "UPDATE sympp_progress_events SET work_package_id = ?, idempotency_key = ?, payload = ? WHERE id = ?",
+            [rewritten_work_package_id, rewritten_key, Jason.encode!(rewritten_payload), id]
+          )
+        end
+      end
+    end)
+  end
+
+  defp rewrite_progress_payload(payload, id_map) do
+    payload
+    |> rewrite_blocker_progress_payload(id_map)
+    |> rewrite_closeout_progress_payload(id_map)
   end
 
   defp rewrite_blocker_progress_payload(%{"type" => "blocker", "source_tool" => source_tool} = payload, id_map)
@@ -413,6 +428,67 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
   end
 
   defp rewrite_blocker_progress_payload(payload, _id_map), do: payload
+
+  defp rewrite_closeout_progress_payload(
+         %{
+           "type" => "work_request_delivery_closeout",
+           "source_tool" => "record_planned_slice_delivery",
+           "planned_slice_id" => planned_slice_id
+         } = payload,
+         id_map
+       ) do
+    case Map.fetch(id_map, planned_slice_id) do
+      {:ok, work_package_id} ->
+        payload
+        |> Map.delete("planned_slice_id")
+        |> Map.put("source_tool", "record_work_package_delivery")
+        |> Map.put("work_package_id", work_package_id)
+        |> move_key("successor_planned_slice_id", "successor_work_package_id", &Map.get(id_map, &1, &1))
+
+      :error ->
+        payload
+    end
+  end
+
+  defp rewrite_closeout_progress_payload(payload, _id_map), do: payload
+
+  defp rewrite_closeout_idempotency_key(
+         idempotency_key,
+         %{
+           "type" => "work_request_delivery_closeout",
+           "source_tool" => "record_planned_slice_delivery",
+           "work_request_id" => work_request_id,
+           "planned_slice_id" => planned_slice_id
+         },
+         id_map
+       )
+       when is_binary(idempotency_key) and is_binary(work_request_id) and is_binary(planned_slice_id) do
+    legacy_prefix = "work_request_delivery_closeout:#{work_request_id}:#{planned_slice_id}:"
+
+    with {:ok, work_package_id} <- Map.fetch(id_map, planned_slice_id),
+         true <- String.starts_with?(idempotency_key, legacy_prefix) do
+      canonical_prefix = "work_request_delivery_closeout:#{work_request_id}:#{work_package_id}:"
+      String.replace_prefix(idempotency_key, legacy_prefix, canonical_prefix)
+    else
+      _unmatched -> idempotency_key
+    end
+  end
+
+  defp rewrite_closeout_idempotency_key(idempotency_key, _payload, _id_map), do: idempotency_key
+
+  defp rewrite_closeout_work_package_id(
+         work_package_id,
+         %{
+           "type" => "work_request_delivery_closeout",
+           "source_tool" => "record_planned_slice_delivery",
+           "planned_slice_id" => planned_slice_id
+         },
+         id_map
+       ) do
+    Map.get(id_map, planned_slice_id, work_package_id)
+  end
+
+  defp rewrite_closeout_work_package_id(work_package_id, _payload, _id_map), do: work_package_id
 
   defp rewrite_blocker_endpoint(%{"kind" => kind, "id" => id} = endpoint, id_map)
        when kind in ["planned_slice", "slice"] and is_binary(id) do

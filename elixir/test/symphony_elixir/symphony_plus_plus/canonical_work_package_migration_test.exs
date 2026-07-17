@@ -10,7 +10,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
   @pre_cutover_version 20_260_714_160_000
 
   test "populated legacy ledger migrates to one canonical WorkPackage identity" do
-    database_path = Path.join(System.tmp_dir!(), "sympp-canonical-work-packages-#{System.unique_integer([:positive])}.sqlite3")
+    database_path =
+      Path.join(
+        System.tmp_dir!(),
+        "sympp-canonical-work-packages-#{System.os_time(:nanosecond)}-#{System.unique_integer([:positive])}.sqlite3"
+      )
+
     {:ok, pid} = Repo.start_link(database: database_path, name: nil, pool_size: 1, log: false)
     original_repo = Repo.put_dynamic_repo(pid)
 
@@ -50,6 +55,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
       refute quarantined_id in ["WRS-UNAPPROVED", generated_id]
 
       assert [["sliced"]] = rows!("SELECT status FROM sympp_work_requests WHERE id = 'WR-CANONICAL-MIGRATION'")
+      assert [["sliced"]] = rows!("SELECT status FROM sympp_work_requests WHERE id = 'WR-DISPATCHED-MIGRATION'")
 
       assert [["WP-DIRECT", nil, "phase_child", "PHASE-DIRECT"]] =
                rows!("SELECT id, work_request_id, kind, phase_id FROM sympp_work_packages WHERE id = 'WP-DIRECT'")
@@ -92,6 +98,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
                "blocked_item" => %{"kind" => "work_package", "id" => ^generated_id},
                "details" => %{"kind" => "planned_slice", "id" => "WRS-LINKED"}
              } = Jason.decode!(encoded_blocker)
+
+      assert [["WP-CLOSEOUT", canonical_closeout_key, encoded_closeout]] =
+               rows!("""
+               SELECT work_package_id, idempotency_key, payload
+               FROM sympp_progress_events
+               WHERE id = 'PROGRESS-LEGACY-CLOSEOUT'
+               """)
+
+      assert canonical_closeout_key ==
+               "work_request_delivery_closeout:WR-CANONICAL-MIGRATION:WP-CLOSEOUT:closeout-delivery"
+
+      decoded_closeout = Jason.decode!(encoded_closeout)
+
+      assert %{
+               "type" => "work_request_delivery_closeout",
+               "source_tool" => "record_work_package_delivery",
+               "work_request_id" => "WR-CANONICAL-MIGRATION",
+               "work_package_id" => "WP-CLOSEOUT",
+               "delivery_id" => "DELIVERY-LEGACY-CLOSEOUT",
+               "outcome" => "superseded",
+               "next_status" => "closed",
+               "successor_work_package_id" => "WP-LINKED"
+             } = decoded_closeout
+
+      refute Map.has_key?(decoded_closeout, "planned_slice_id")
+      refute Map.has_key?(decoded_closeout, "successor_planned_slice_id")
 
       assert [[encoded_snapshot]] =
                rows!("SELECT tree_snapshot FROM sympp_product_tree_revisions WHERE id = 'REVISION-LEGACY-SNAPSHOT'")
@@ -146,6 +178,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
       })
     )
 
+    Repo.insert!(
+      WorkRequest.create_changeset(%{
+        id: "WR-DISPATCHED-MIGRATION",
+        title: "Dispatched canonical migration",
+        repo: "nextide/symphony-plus-plus",
+        base_branch: "main",
+        work_type: "refactor",
+        human_description: "Preserve a dispatched-only request.",
+        constraints: %{},
+        desired_dispatch_shape: "single_package",
+        status: "ready_for_slicing"
+      })
+    )
+
     query!("INSERT INTO sympp_phases (id, title, status, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?)", [
       "PHASE-DIRECT",
       "Direct phase",
@@ -155,6 +201,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
     ])
 
     insert_legacy_work_package!("WP-LINKED", "mcp", nil, "ready_for_worker", now)
+    insert_legacy_work_package!("WP-CLOSEOUT", "mcp", nil, "closed", now)
+    insert_legacy_work_package!("WP-DISPATCHED", "mcp", nil, "ready_for_worker", now)
     insert_legacy_work_package!("WP-DIRECT", "phase_child", "PHASE-DIRECT", "ready_for_worker", now)
 
     query!(
@@ -167,35 +215,64 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
     )
 
     insert_legacy_slice!(
-      "WRS-LINKED",
-      1,
-      "Linked legacy package",
-      "Linked legacy goal",
-      "approved",
-      "WP-LINKED",
-      now,
+      [
+        id: "WRS-LINKED",
+        sequence: 1,
+        title: "Linked legacy package",
+        goal: "Linked legacy goal",
+        status: "approved",
+        work_package_id: "WP-LINKED",
+        dispatched_at: now
+      ],
       now
     )
 
     insert_legacy_slice!(
-      "WRS-UNDISPATCHED",
-      2,
-      "Undispatched legacy package",
-      "Undispatched legacy goal",
-      "approved",
-      nil,
-      nil,
+      [
+        id: "WRS-CLOSEOUT",
+        sequence: 4,
+        title: "Closed legacy package",
+        goal: "Closed legacy goal",
+        status: "dispatched",
+        work_package_id: "WP-CLOSEOUT",
+        dispatched_at: now
+      ],
       now
     )
 
     insert_legacy_slice!(
-      "WRS-UNAPPROVED",
-      3,
-      "Unapproved legacy package",
-      "Unapproved legacy goal",
-      "planned",
-      nil,
-      nil,
+      [
+        id: "WRS-DISPATCHED",
+        work_request_id: "WR-DISPATCHED-MIGRATION",
+        sequence: 1,
+        title: "Dispatched legacy package",
+        goal: "Dispatched legacy goal",
+        status: "dispatched",
+        work_package_id: "WP-DISPATCHED",
+        dispatched_at: now
+      ],
+      now
+    )
+
+    insert_legacy_slice!(
+      [
+        id: "WRS-UNDISPATCHED",
+        sequence: 2,
+        title: "Undispatched legacy package",
+        goal: "Undispatched legacy goal",
+        status: "approved"
+      ],
+      now
+    )
+
+    insert_legacy_slice!(
+      [
+        id: "WRS-UNAPPROVED",
+        sequence: 3,
+        title: "Unapproved legacy package",
+        goal: "Unapproved legacy goal",
+        status: "planned"
+      ],
       now
     )
 
@@ -283,6 +360,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
 
     query!(
       """
+      INSERT INTO sympp_work_request_planned_slice_deliveries
+        (id, work_request_id, planned_slice_id, outcome, idempotency_key, recorded_at,
+         successor_planned_slice_id, superseded_reason, inserted_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      """,
+      [
+        "DELIVERY-LEGACY-CLOSEOUT",
+        "WR-CANONICAL-MIGRATION",
+        "WRS-CLOSEOUT",
+        "superseded",
+        "closeout-delivery",
+        now,
+        "WRS-LINKED",
+        "Legacy closeout",
+        now,
+        now
+      ]
+    )
+
+    query!(
+      """
       INSERT INTO sympp_progress_events
         (id, work_package_id, summary, status, sequence, created_at, inserted_at, updated_at, payload)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -301,6 +399,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
           "kind" => "planned_slice",
           "exact_note" => "WRS-LINKED",
           "note" => "planned slice WRS-LINKED remains prose"
+        })
+      ]
+    )
+
+    query!(
+      """
+      INSERT INTO sympp_progress_events
+        (id, work_package_id, summary, status, sequence, idempotency_key,
+         created_at, inserted_at, updated_at, payload)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      """,
+      [
+        "PROGRESS-LEGACY-CLOSEOUT",
+        "WP-CLOSEOUT",
+        "Legacy delivery closeout",
+        "closed",
+        1,
+        "work_request_delivery_closeout:WR-CANONICAL-MIGRATION:WRS-CLOSEOUT:closeout-delivery",
+        now,
+        now,
+        now,
+        Jason.encode!(%{
+          "type" => "work_request_delivery_closeout",
+          "source_tool" => "record_planned_slice_delivery",
+          "work_request_id" => "WR-CANONICAL-MIGRATION",
+          "planned_slice_id" => "WRS-CLOSEOUT",
+          "delivery_id" => "DELIVERY-LEGACY-CLOSEOUT",
+          "outcome" => "superseded",
+          "next_status" => "closed",
+          "successor_planned_slice_id" => "WRS-LINKED"
         })
       ]
     )
@@ -404,7 +532,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
     )
   end
 
-  defp insert_legacy_slice!(id, sequence, title, goal, status, work_package_id, dispatched_at, now) do
+  defp insert_legacy_slice!(attrs, now) do
     query!(
       """
       INSERT INTO sympp_work_request_planned_slices
@@ -415,11 +543,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       """,
       [
-        id,
-        "WR-CANONICAL-MIGRATION",
-        sequence,
-        title,
-        goal,
+        Keyword.fetch!(attrs, :id),
+        Keyword.get(attrs, :work_request_id, "WR-CANONICAL-MIGRATION"),
+        Keyword.fetch!(attrs, :sequence),
+        Keyword.fetch!(attrs, :title),
+        Keyword.fetch!(attrs, :goal),
         "mcp",
         "main",
         "refactor/canonical-work-packages",
@@ -429,9 +557,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
         ~s(["mix test"]),
         "[]",
         ~s(["Stop on failure"]),
-        status,
-        work_package_id,
-        dispatched_at,
+        Keyword.fetch!(attrs, :status),
+        Keyword.get(attrs, :work_package_id),
+        Keyword.get(attrs, :dispatched_at),
         "nextide/symphony-plus-plus",
         nil,
         now,
