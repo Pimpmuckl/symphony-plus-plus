@@ -1074,9 +1074,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   defp explicit_grant_scope_for_type(type, attrs) when type in [:work_package, "work_package"],
     do: explicit_id_scope(attrs, &AuthScope.work_package/1)
 
-  defp explicit_grant_scope_for_type(type, attrs) when type in [:work_package, "work_package"],
-    do: explicit_id_scope(attrs, &AuthScope.work_package/1)
-
   defp explicit_grant_scope_for_type(_type, _attrs), do: []
 
   defp explicit_repo_scope(attrs) do

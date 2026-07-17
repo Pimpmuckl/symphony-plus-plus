@@ -19,18 +19,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope 
       {nil, _base_branch} ->
         :ok
 
-      {delivery_repo, _base_branch} when delivery_repo == work_request.repo ->
-        :ok
-
       {delivery_repo, base_branch} when is_binary(delivery_repo) and is_binary(base_branch) ->
-        validate_secondary_delivery_scope(ecto_repo, work_request, delivery_repo, base_branch)
+        validate_delivery_scope(ecto_repo, work_request, delivery_repo, base_branch)
 
       {_repo, _base_branch} ->
         :ok
     end
   end
 
-  defp validate_secondary_delivery_scope(ecto_repo, %WorkRequest{} = work_request, delivery_repo, base_branch) do
+  defp validate_delivery_scope(ecto_repo, %WorkRequest{} = work_request, delivery_repo, base_branch) do
     with {:ok, repo_scopes} <- Repository.list_repo_scopes(ecto_repo, work_request.id) do
       if Enum.any?(repo_scopes, &repo_scope_matches_delivery?(&1, delivery_repo, base_branch)) do
         :ok

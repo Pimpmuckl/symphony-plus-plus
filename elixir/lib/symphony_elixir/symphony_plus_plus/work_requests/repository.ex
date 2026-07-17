@@ -969,24 +969,85 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
        ) do
     result =
       from(work_package in WorkPackage,
+        join: work_request in WorkRequest,
+        on: work_request.id == work_package.work_request_id,
         where:
           work_package.id == ^id and work_package.work_request_id == ^work_request_id and
-            work_package.status == ^current_status and work_package.status in ^allowed_current_statuses
+            work_package.status == ^current_status and work_package.status in ^allowed_current_statuses,
+        where: work_request.status in ["ready_for_slicing", "sliced"]
       )
+      |> preserve_sliced_active_work_package(next_status)
       |> repo.update_all(set: [status: next_status, updated_at: now])
 
     case result do
       {1, _rows} -> repo.get!(WorkPackage, id)
-      {0, _rows} -> repo.rollback(work_package_status_error(repo, work_request_id, id, current_status))
+      {0, _rows} -> repo.rollback(work_package_status_error(repo, work_request_id, id, current_status, next_status))
     end
   end
 
-  defp work_package_status_error(repo, work_request_id, id, current_status) do
+  defp preserve_sliced_active_work_package(query, "skipped") do
+    from([work_package, work_request] in query,
+      where:
+        work_request.status != "sliced" or
+          fragment(
+            """
+            EXISTS (
+              SELECT 1
+              FROM sympp_work_packages AS sibling
+              WHERE sibling.work_request_id = ?
+                AND sibling.id != ?
+                AND sibling.status != 'skipped'
+            )
+            """,
+            work_package.work_request_id,
+            work_package.id
+          )
+    )
+  end
+
+  defp preserve_sliced_active_work_package(query, _next_status), do: query
+
+  defp work_package_status_error(repo, work_request_id, id, current_status, next_status) do
     case repo.get(WorkPackage, id) do
-      %WorkPackage{work_request_id: ^work_request_id, status: ^current_status} -> :invalid_status
-      %WorkPackage{work_request_id: ^work_request_id} -> :stale_status
-      _work_package -> :not_found
+      %WorkPackage{work_request_id: ^work_request_id, status: ^current_status} ->
+        parent_work_package_status_error(repo, work_request_id, id, current_status, next_status)
+
+      %WorkPackage{work_request_id: ^work_request_id} ->
+        :stale_status
+
+      _work_package ->
+        :not_found
     end
+  end
+
+  defp parent_work_package_status_error(repo, work_request_id, work_package_id, "planned", "skipped") do
+    case get(repo, work_request_id) do
+      {:ok, %WorkRequest{status: "sliced"}} ->
+        if other_active_work_package?(repo, work_request_id, work_package_id),
+          do: :invalid_status,
+          else: :last_active_work_package
+
+      {:ok, %WorkRequest{}} ->
+        :invalid_status
+
+      {:error, reason} ->
+        reason
+    end
+  end
+
+  defp parent_work_package_status_error(_repo, _work_request_id, _work_package_id, _current_status, _next_status),
+    do: :invalid_status
+
+  defp other_active_work_package?(repo, work_request_id, work_package_id) do
+    repo.exists?(
+      from(work_package in WorkPackage,
+        where:
+          work_package.work_request_id == ^work_request_id and work_package.id != ^work_package_id and
+            work_package.status != "skipped",
+        select: 1,
+        limit: 1
+      )
+    )
   end
 
   defp require_slicing_status(status) when status in ["ready_for_slicing", "sliced"], do: :ok
@@ -1129,7 +1190,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> normalize_keys()
       |> Map.merge(attrs)
 
-    with :ok <- validate_product_tree_node(repo, work_package.work_request_id, Map.get(attrs, "product_tree_node_id")),
+    with :ok <- validate_executable_work_package_kind(effective_contract),
+         :ok <- validate_product_tree_node(repo, work_package.work_request_id, Map.get(attrs, "product_tree_node_id")),
          {:ok, %WorkRequest{} = work_request} <- get(repo, work_package.work_request_id),
          :ok <- WorkPackageDeliveryScope.validate(repo, work_request, effective_contract),
          :ok <- ScopeConstraints.validate_allowed_file_globs(work_request, Map.get(effective_contract, "allowed_file_globs", [])),

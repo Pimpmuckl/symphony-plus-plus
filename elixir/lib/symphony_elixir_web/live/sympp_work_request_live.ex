@@ -1316,11 +1316,11 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive do
   defp action_error_message(:open_questions),
     do: "Close or answer all open questions before marking ready for slicing."
 
-  defp action_error_message(:no_approved_slices),
-    do: "Approve at least one WorkPackage before marking sliced."
+  defp action_error_message(:no_work_packages),
+    do: "Add at least one WorkPackage before marking sliced."
 
-  defp action_error_message(:last_approved_slice),
-    do: "A sliced WorkRequest must keep at least one approved WorkPackage."
+  defp action_error_message(:last_active_work_package),
+    do: "A sliced WorkRequest must keep at least one active WorkPackage."
 
   defp action_error_message(:invalid_status),
     do: "That action is not available from the current status."

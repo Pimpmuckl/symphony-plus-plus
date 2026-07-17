@@ -111,6 +111,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
              Repository.update_work_package(repo, work_request.id, package.id, 1, %{title: "Stale"})
   end
 
+  test "keeps updated packages executable and inside an allowed repo scope", %{repo: repo} do
+    work_request = create_work_request!(repo)
+    package = slice_one!(repo, work_request.id)
+
+    assert {:error, :invalid_work_package} =
+             Repository.update_work_package(repo, work_request.id, package.id, 1, %{kind: "phase_child"})
+
+    assert {:error, :work_package_delivery_scope_out_of_scope} =
+             Repository.update_work_package(repo, work_request.id, package.id, 1, %{base_branch: "release"})
+  end
+
+  test "rejects package creation outside an allowed same-repo base branch", %{repo: repo} do
+    work_request = create_work_request!(repo)
+
+    assert {:error, :work_package_delivery_scope_out_of_scope} =
+             Repository.slice_work_request(repo, work_request.id, [package_attrs(base_branch: "release")])
+
+    assert {:ok, []} = Repository.list_work_packages(repo, work_request.id)
+    assert {:ok, %{status: "ready_for_slicing"}} = Repository.get(repo, work_request.id)
+  end
+
   test "rejects product-tree placement outside the owning WorkRequest", %{repo: repo} do
     owner = create_work_request!(repo, id: "WR-OWNER")
     other = create_work_request!(repo, id: "WR-OTHER")
@@ -120,13 +141,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
              Repository.slice_work_request(repo, owner.id, [package_attrs(product_tree_node_id: foreign_node.id)])
   end
 
-  test "skips only planned packages with stale-status protection", %{repo: repo} do
+  test "keeps one active package in sliced requests and protects stale skips", %{repo: repo} do
     work_request = create_work_request!(repo)
-    package = slice_one!(repo, work_request.id)
+    first_attrs = package_attrs(id: "wp_skip_first")
+    second_attrs = package_attrs(id: "wp_skip_second")
 
-    assert {:ok, skipped} = Repository.skip_work_package(repo, work_request.id, package.id, "planned")
+    assert {:ok, %{work_packages: [first, second]}} =
+             Repository.slice_work_request(repo, work_request.id, [first_attrs, second_attrs])
+
+    assert {:ok, skipped} = Repository.skip_work_package(repo, work_request.id, first.id, "planned")
     assert skipped.status == "skipped"
-    assert {:error, :stale_status} = Repository.skip_work_package(repo, work_request.id, package.id, "planned")
+    assert {:error, :stale_status} = Repository.skip_work_package(repo, work_request.id, first.id, "planned")
+    assert {:error, :last_active_work_package} = Repository.skip_work_package(repo, work_request.id, second.id, "planned")
+    assert {:ok, %{status: "planned"}} = WorkPackageRepository.get(repo, second.id)
   end
 
   test "dispatch activates the canonical package in place", %{repo: repo, database_path: database_path} do

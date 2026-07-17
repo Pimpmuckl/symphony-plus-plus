@@ -85,7 +85,7 @@ $ExpectedTrustedLocalPreClaimReadCalls = @(
     name = "read_plan"
     arguments = @{
       work_request_id = "WR-SMOKE-PRECLAIM-READ"
-      view = "nodes_with_slice_refs"
+      view = "nodes_with_work_package_refs"
     }
     allowedReasons = @("not_found")
   },
