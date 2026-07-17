@@ -129,7 +129,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   def activate(_repo, %WorkPackage{}), do: {:error, :invalid_status}
 
   defp activate_transaction(repo, work_package, policy) do
-    with {:ok, activated} <- WorkPackageRepository.update_status(repo, work_package.id, "planned", "ready_for_worker"),
+    with {:ok, activated} <-
+           WorkPackageRepository.update_status(repo, work_package.id, "planned", "ready_for_worker", expected_contract_revision: work_package.contract_revision),
          {:ok, activated} <- WorkPackageRepository.update(repo, activated.id, %{dispatched_at: DateTime.utc_now(:microsecond)}),
          {:ok, _scope_node} <- append_scope_plan_node(repo, activated),
          {:ok, _review_node} <- append_review_plan_node(repo, activated, policy),

@@ -303,6 +303,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     assert {:error, :stale_status} = CreateWork.activate(repo, package)
   end
 
+  test "activation rejects a contract revision changed after dispatch validation", %{repo: repo} do
+    work_request = create_work_request!(repo)
+    package = slice_one!(repo, work_request.id)
+
+    assert {:ok, updated} =
+             Repository.update_work_package(repo, work_request.id, package.id, package.contract_revision, %{
+               title: "Newer contract"
+             })
+
+    assert updated.contract_revision == package.contract_revision + 1
+    assert {:error, :stale_status} = CreateWork.activate(repo, package)
+
+    assert {:ok, persisted} = WorkPackageRepository.get(repo, package.id)
+    assert persisted.status == "planned"
+    assert persisted.title == "Newer contract"
+    assert Repo.aggregate(AccessGrant, :count) == 0
+  end
+
   test "keeps direct phase and delegated WorkPackage creation intact", %{repo: repo} do
     assert {:ok, parent} =
              WorkPackageRepository.create(repo, %{

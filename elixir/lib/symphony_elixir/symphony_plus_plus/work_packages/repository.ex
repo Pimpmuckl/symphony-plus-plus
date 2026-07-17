@@ -106,11 +106,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   end
 
   @spec update_status(repo(), String.t(), String.t(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
-  def update_status(repo, id, current_status, next_status)
-      when is_atom(repo) and is_binary(id) and is_binary(current_status) and is_binary(next_status) do
+  @spec update_status(repo(), String.t(), String.t(), String.t(), keyword()) :: {:ok, WorkPackage.t()} | {:error, error()}
+  def update_status(repo, id, current_status, next_status, opts \\ [])
+      when is_atom(repo) and is_binary(id) and is_binary(current_status) and is_binary(next_status) and is_list(opts) do
     with :ok <- validate_persisted_status(current_status),
-         :ok <- validate_status(next_status) do
-      update_valid_status(repo, id, current_status, next_status)
+         :ok <- validate_status(next_status),
+         {:ok, expected_contract_revision} <- expected_contract_revision(opts) do
+      update_valid_status(repo, id, current_status, next_status, expected_contract_revision)
       |> notify_dashboard(repo)
     end
   end
@@ -144,12 +146,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp update_valid_status(repo, id, current_status, next_status) do
+  defp update_valid_status(repo, id, current_status, next_status, expected_contract_revision) do
     now = DateTime.utc_now(:microsecond)
 
     repo.transaction(fn ->
       id
-      |> status_update_query(current_status)
+      |> status_update_query(current_status, expected_contract_revision)
       |> repo.update_all(set: [status: next_status, updated_at: now])
       |> case do
         {1, _rows} ->
@@ -193,6 +195,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
 
   defp validate_persisted_status(@legacy_ready_status), do: :ok
   defp validate_persisted_status(status), do: validate_status(status)
+
+  defp expected_contract_revision(opts) do
+    case Keyword.get(opts, :expected_contract_revision) do
+      nil -> {:ok, nil}
+      revision when is_integer(revision) and revision > 0 -> {:ok, revision}
+      _revision -> {:error, :stale_status}
+    end
+  end
 
   defp validate_delivery_closeout_status(status) do
     if status in @delivery_closeout_terminal_statuses do
@@ -352,9 +362,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp status_update_query(id, current_status) do
+  defp status_update_query(id, current_status, nil) do
     from(work_package in WorkPackage,
       where: work_package.id == ^id and work_package.status == ^current_status
+    )
+  end
+
+  defp status_update_query(id, current_status, expected_contract_revision) do
+    from(work_package in WorkPackage,
+      where: work_package.id == ^id and work_package.status == ^current_status,
+      where: work_package.contract_revision == ^expected_contract_revision
     )
   end
 
