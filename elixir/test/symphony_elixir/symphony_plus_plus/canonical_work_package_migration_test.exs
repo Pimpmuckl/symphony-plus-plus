@@ -39,6 +39,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
       assert String.starts_with?(generated_id, "wp_")
       refute generated_id == "WRS-UNDISPATCHED"
 
+      assert [[quarantined_id, "skipped"]] =
+               rows!("""
+               SELECT id, status
+               FROM sympp_work_packages
+               WHERE work_request_id = 'WR-CANONICAL-MIGRATION' AND sequence = 3
+               """)
+
+      assert String.starts_with?(quarantined_id, "wp_")
+      refute quarantined_id in ["WRS-UNAPPROVED", generated_id]
+
       assert [["sliced"]] = rows!("SELECT status FROM sympp_work_requests WHERE id = 'WR-CANONICAL-MIGRATION'")
 
       assert [["WP-DIRECT", nil, "phase_child", "PHASE-DIRECT"]] =
@@ -173,6 +183,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
       "Undispatched legacy package",
       "Undispatched legacy goal",
       "approved",
+      nil,
+      nil,
+      now
+    )
+
+    insert_legacy_slice!(
+      "WRS-UNAPPROVED",
+      3,
+      "Unapproved legacy package",
+      "Unapproved legacy goal",
+      "planned",
       nil,
       nil,
       now

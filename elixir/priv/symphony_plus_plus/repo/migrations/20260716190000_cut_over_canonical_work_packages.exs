@@ -181,7 +181,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CutOverCanonicalWorkPa
       request.human_description,
       slice.goal,
       slice.acceptance_criteria,
-      CASE slice.status WHEN 'skipped' THEN 'skipped' ELSE 'planned' END,
+      CASE slice.status WHEN 'approved' THEN 'planned' ELSE 'skipped' END,
       NULL,
       NULL,
       slice.inserted_at,
