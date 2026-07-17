@@ -361,11 +361,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       "stop_conditions" => ["Stop before dispatch."]
     }
 
-    for field <- ["title", "goal", "allowed_file_globs", "acceptance_criteria", "validation_steps", "stop_conditions"] do
+    required_fields = ["title", "goal", "allowed_file_globs", "acceptance_criteria", "validation_steps", "stop_conditions"]
+
+    invalid_contracts =
+      Enum.map(required_fields, &Map.delete(contract, &1)) ++
+        [
+          Map.put(contract, "title", nil),
+          Map.put(contract, "title", "  "),
+          Map.put(contract, "goal", nil),
+          Map.put(contract, "goal", "  "),
+          Map.put(contract, "allowed_file_globs", nil),
+          Map.put(contract, "acceptance_criteria", [nil]),
+          Map.put(contract, "validation_steps", "mix test"),
+          Map.put(contract, "stop_conditions", %{})
+        ]
+
+    for invalid_contract <- invalid_contracts do
       response =
         mcp_tool(repo, session, "slice_work_request", %{
           "work_request_id" => work_request.id,
-          "work_packages" => [Map.delete(contract, field)]
+          "work_packages" => [invalid_contract]
         })
 
       assert get_in(response, ["error", "code"]) == -32_602

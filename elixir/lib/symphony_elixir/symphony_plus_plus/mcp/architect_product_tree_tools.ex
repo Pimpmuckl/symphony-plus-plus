@@ -47,9 +47,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     "set_plan_node_completion",
     "skip_work_package"
   ]
-  @required_work_package_contract_fields [
-    "title",
-    "goal",
+  @required_work_package_string_fields ["title", "goal"]
+  @required_work_package_array_fields [
     "allowed_file_globs",
     "acceptance_criteria",
     "validation_steps",
@@ -600,8 +599,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   end
 
   defp complete_work_package_contract?(work_package) do
-    Enum.all?(@required_work_package_contract_fields, &Map.has_key?(work_package, &1))
+    Enum.all?(@required_work_package_string_fields, &filled_string?(Map.get(work_package, &1))) and
+      Enum.all?(@required_work_package_array_fields, &string_list?(Map.get(work_package, &1)))
   end
+
+  defp string_list?(values) when is_list(values), do: Enum.all?(values, &is_binary/1)
+  defp string_list?(_values), do: false
 
   defp require_positive_revision(revision) when is_integer(revision) and revision > 0, do: :ok
   defp require_positive_revision(_revision), do: {:tool_error, "invalid_contract_revision"}
