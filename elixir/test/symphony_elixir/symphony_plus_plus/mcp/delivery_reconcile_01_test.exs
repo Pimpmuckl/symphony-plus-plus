@@ -476,9 +476,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
         "claimed_by" => "worker-dispatch-delivery-base"
       })
 
-    delivery_base_payload = get_in(delivery_base_response, ["result", "structuredContent"])
-    assert delivery_base_payload["scope"] == %{"repo" => anchor.repo, "base_branch" => anchor.base_branch}
-    assert delivery_base_payload["work_package"]["status"] == "ready_for_worker"
-    refute Map.has_key?(delivery_base_payload["worker_bootstrap"]["claim"]["arguments"], "base_branch")
+    assert get_in(delivery_base_response, ["error", "code"]) == -32_602
+
+    assert get_in(delivery_base_response, ["error", "data", "reason"]) ==
+             "work_package_delivery_scope_out_of_scope"
+
+    persisted_delivery_base = repo.get!(WorkPackage, approved_delivery_base_slice.id)
+    assert persisted_delivery_base.status == "planned"
+    assert persisted_delivery_base.dispatched_at == nil
   end
 end
