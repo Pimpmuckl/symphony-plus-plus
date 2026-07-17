@@ -47,7 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     |> WorkPackage.create_changeset()
     |> repo.insert()
     |> normalize_insert_result()
-    |> notify_dashboard()
+    |> notify_dashboard(repo)
   rescue
     error in Ecto.ConstraintError -> normalize_constraint_error(error)
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -98,7 +98,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
       work_package
       |> WorkPackage.update_changeset(attrs)
       |> repo.update()
-      |> notify_dashboard()
+      |> notify_dashboard(repo)
     end
   rescue
     error in Ecto.ConstraintError -> normalize_constraint_error(error)
@@ -111,7 +111,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     with :ok <- validate_persisted_status(current_status),
          :ok <- validate_status(next_status) do
       update_valid_status(repo, id, current_status, next_status)
-      |> notify_dashboard()
+      |> notify_dashboard(repo)
     end
   end
 
@@ -176,12 +176,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp notify_dashboard({:ok, %WorkPackage{}} = result) do
-    DashboardPubSub.broadcast_changed()
+  defp notify_dashboard({:ok, %WorkPackage{}} = result, repo) do
+    unless repo.in_transaction?(), do: DashboardPubSub.broadcast_changed()
     result
   end
 
-  defp notify_dashboard(result), do: result
+  defp notify_dashboard(result, _repo), do: result
 
   defp validate_status(status) do
     if status in WorkPackage.statuses() do

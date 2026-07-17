@@ -28,6 +28,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Auth,
@@ -1148,6 +1149,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
       {:error, {:error, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
+    |> DashboardPubSub.broadcast_changed_on_success()
   end
 
   defp rollback_architect_transaction_result(_repo, {:ok, result}), do: result

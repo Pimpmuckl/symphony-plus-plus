@@ -21,6 +21,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardPubSub do
   end
 
   @doc false
+  @spec broadcast_changed_on_success(result) :: result when result: var
+  def broadcast_changed_on_success({:ok, _value} = result) do
+    broadcast_changed()
+    result
+  end
+
+  def broadcast_changed_on_success(result), do: result
+
+  @doc false
   @spec coalesce_changed((-> result)) :: {result, boolean()} when result: var
   def coalesce_changed(fun) when is_function(fun, 0) do
     previous_suppressed = Process.put(@suppressed_key, true)

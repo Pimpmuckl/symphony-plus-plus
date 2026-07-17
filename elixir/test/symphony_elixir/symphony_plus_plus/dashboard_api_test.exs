@@ -4587,6 +4587,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     refute_receive :operator_dashboard_changed, 50
   end
 
+  test "rolled-back WorkPackage writes do not invalidate the dashboard", %{repo: repo} do
+    work_package = create_work_package!(repo, id: "SYMPP-DASHBOARD-PACKAGE-ROLLBACK")
+    assert :ok = DashboardPubSub.subscribe()
+
+    assert {:error, :forced_rollback} =
+             repo.transaction(fn ->
+               assert {:ok, _work_package} =
+                        WorkPackageRepository.update(repo, work_package.id, %{title: "Rolled back title"})
+
+               repo.rollback(:forced_rollback)
+             end)
+
+    refute_receive :operator_dashboard_changed, 50
+    assert {:ok, persisted} = WorkPackageRepository.get(repo, work_package.id)
+    assert persisted.title == work_package.title
+  end
+
   test "local operator dashboard projects persisted local path repos through their git origin", %{repo: repo} do
     repo_path =
       TestSupport.git_repo_with_origin_fixture!(

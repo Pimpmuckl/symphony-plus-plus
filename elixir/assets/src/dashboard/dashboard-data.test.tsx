@@ -221,6 +221,19 @@ describe("dashboard data helpers", () => {
     expect(repos[0]).toMatchObject({ repo: "primary-repo", baseBranches: ["main"], packages: [linkedPackage] });
   });
 
+  it("counts canonical packages once when board and WorkRequest detail overlap", () => {
+    const request: WorkRequestCard = { id: "wr-canonical", repo: "canonical-repo", base_branch: "main" };
+    const pkg: WorkPackageCard = { id: "pkg-canonical", title: "Canonical package", status: "implementing" };
+    const detail: WorkRequestDetail = {
+      work_request: request,
+      work_packages: [{ id: pkg.id, work_request_id: request.id, work_package_id: pkg.id, status: pkg.status }],
+    };
+
+    const [repo] = repoSummaries([pkg], [request], [], [], [detail]);
+
+    expect(repo?.implementing).toBe(1);
+  });
+
   it("hides zero plan and attention plates from repo summaries", () => {
     const repo = repoSummary({ guidanceCount: 0, blockerCount: 0 });
     const html = renderToStaticMarkup(<RepoSummaryStrip repo={repo} categoryCounts={{ requests: 1, planNodes: 0, slices: 2 }} />);

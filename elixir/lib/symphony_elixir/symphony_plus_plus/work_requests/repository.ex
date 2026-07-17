@@ -1162,11 +1162,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   defp require_contract_revision(%WorkPackage{contract_revision: revision}, revision), do: :ok
   defp require_contract_revision(%WorkPackage{}, _expected_revision), do: {:error, :stale_status}
 
-  defp require_mutable_contract(%WorkPackage{status: status})
-       when status in ["skipped", "merged", "merged_into_phase", "closed", "abandoned"],
-       do: {:error, :invalid_status}
-
-  defp require_mutable_contract(%WorkPackage{}), do: :ok
+  defp require_mutable_contract(%WorkPackage{status: "planned"}), do: :ok
+  defp require_mutable_contract(%WorkPackage{}), do: {:error, :invalid_status}
 
   defp update_contract(repo, %WorkPackage{} = work_package, attrs) do
     attrs =

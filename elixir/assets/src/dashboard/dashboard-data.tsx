@@ -413,6 +413,7 @@ export function repoSummaries(
   details.forEach((detail) => {
     const summary = ensure(detail.work_request);
     (detail.work_packages || []).forEach((slice) => {
+      if (slice.work_package_id && packageById.has(slice.work_package_id)) return;
       const lane = sliceLane(slice, slice.work_package_id ? packageById.get(slice.work_package_id) : undefined);
       if (lane === "slices") summary.active += 1;
       if (lane === "implementing") summary.implementing += 1;

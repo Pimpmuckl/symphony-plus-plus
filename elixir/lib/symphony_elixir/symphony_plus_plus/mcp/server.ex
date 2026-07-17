@@ -32,6 +32,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     ArchitectDeliveryTools,
@@ -1369,6 +1370,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:error, {:error, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
+    |> DashboardPubSub.broadcast_changed_on_success()
   end
 
   defp approve_scope_expansion_result(

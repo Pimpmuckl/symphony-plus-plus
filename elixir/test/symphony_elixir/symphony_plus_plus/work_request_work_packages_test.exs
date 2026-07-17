@@ -3,6 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
 
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.CreateWork
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Planning.{Artifact, Finding, PlanNode, ProgressEvent}
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
@@ -207,6 +208,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
   test "dispatch activates the canonical package in place", %{repo: repo, database_path: database_path} do
     work_request = create_work_request!(repo)
     package = slice_one!(repo, work_request.id)
+    assert :ok = DashboardPubSub.subscribe()
 
     assert {:ok, dispatch} =
              WorkPackageDispatch.dispatch(repo, work_request.id, package.id,
@@ -223,6 +225,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
              %{kind: "work_package", work_package_id: package.id}
 
     assert Repo.aggregate(WorkPackage, :count) == 1
+    assert_receive :operator_dashboard_changed
+    refute_receive :operator_dashboard_changed, 50
+
+    assert {:error, :invalid_status} =
+             Repository.update_work_package(repo, work_request.id, package.id, package.contract_revision, %{
+               title: "Mutated after dispatch"
+             })
+
+    assert {:ok, persisted} = WorkPackageRepository.get(repo, package.id)
+    assert persisted.title == package.title
+    assert persisted.contract_revision == package.contract_revision
   end
 
   test "dispatch enforces the effective package policy before activation", %{repo: repo, database_path: database_path} do

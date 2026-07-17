@@ -8,6 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Id
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
 
@@ -494,6 +495,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
       {:error, {:error, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
+    |> DashboardPubSub.broadcast_changed_on_success()
   end
 
   defp create_child_work_package_or_rollback(repo, %Session{} = session, package) do
@@ -1260,6 +1262,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
       {:error, {:error, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
+    |> DashboardPubSub.broadcast_changed_on_success()
   end
 
   defp rollback_architect_transaction_result(_repo, {:ok, result}), do: result

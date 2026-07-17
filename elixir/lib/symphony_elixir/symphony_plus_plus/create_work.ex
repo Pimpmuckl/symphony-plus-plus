@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
@@ -121,6 +122,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
         {:ok, creation} -> {:ok, creation}
         {:error, reason} -> {:error, reason}
       end
+      |> DashboardPubSub.broadcast_changed_on_success()
     end
   end
 
@@ -188,6 +190,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
         {:error, reason} -> repo.rollback(reason)
       end
     end)
+    |> DashboardPubSub.broadcast_changed_on_success()
   end
 
   @doc false
