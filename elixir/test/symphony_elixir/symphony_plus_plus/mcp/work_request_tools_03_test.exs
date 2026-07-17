@@ -335,6 +335,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert {:ok, []} = WorkRequestRepository.list_work_packages(repo, work_request.id)
   end
 
+  test "slice_work_request rejects incomplete WorkPackage contracts after authorization", %{repo: repo} do
+    {anchor, session, _grant} =
+      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-SLICE-CONTRACT", [
+        "write:work_request"
+      ])
+
+    work_request =
+      create_work_request!(repo,
+        id: "WR-MCP-WR-SLICE-CONTRACT",
+        repo: anchor.repo,
+        base_branch: anchor.base_branch,
+        status: "ready_for_slicing"
+      )
+
+    grant_work_request_scope!(repo, session, work_request.id)
+
+    contract = %{
+      "title" => "Complete contract",
+      "goal" => "Reject every omitted required contract field.",
+      "kind" => "mcp",
+      "allowed_file_globs" => ["elixir/lib/**"],
+      "acceptance_criteria" => ["Incomplete contracts are rejected."],
+      "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
+      "stop_conditions" => ["Stop before dispatch."]
+    }
+
+    for field <- ["title", "goal", "allowed_file_globs", "acceptance_criteria", "validation_steps", "stop_conditions"] do
+      response =
+        mcp_tool(repo, session, "slice_work_request", %{
+          "work_request_id" => work_request.id,
+          "work_packages" => [Map.delete(contract, field)]
+        })
+
+      assert get_in(response, ["error", "code"]) == -32_602
+      assert get_in(response, ["error", "data", "reason"]) == "invalid_work_packages"
+    end
+
+    assert {:ok, []} = WorkRequestRepository.list_work_packages(repo, work_request.id)
+  end
+
   test "WorkRequest MCP work-package writes honor work-package scope without parent WorkRequest scope", %{repo: repo} do
     {anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-SLICE-EXPLICIT", [

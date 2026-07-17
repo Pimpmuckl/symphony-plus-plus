@@ -47,6 +47,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     "set_plan_node_completion",
     "skip_work_package"
   ]
+  @required_work_package_contract_fields [
+    "title",
+    "goal",
+    "allowed_file_globs",
+    "acceptance_criteria",
+    "validation_steps",
+    "stop_conditions"
+  ]
   @terminal_product_tree_completion_marks ["done", "deferred"]
 
   @spec tools() :: [String.t()]
@@ -153,6 +161,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          :ok <- require_work_package_batch(work_packages),
          {:ok, _work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_package_create, tool),
+         :ok <- require_complete_work_package_contracts(work_packages),
          {:ok, result} <-
            mutate_product_tree(
              config.repo,
@@ -581,6 +590,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   end
 
   defp require_work_package_batch(_work_packages), do: {:tool_error, "invalid_work_packages"}
+
+  defp require_complete_work_package_contracts(work_packages) do
+    if Enum.all?(work_packages, &complete_work_package_contract?/1) do
+      :ok
+    else
+      {:tool_error, "invalid_work_packages"}
+    end
+  end
+
+  defp complete_work_package_contract?(work_package) do
+    Enum.all?(@required_work_package_contract_fields, &Map.has_key?(work_package, &1))
+  end
 
   defp require_positive_revision(revision) when is_integer(revision) and revision > 0, do: :ok
   defp require_positive_revision(_revision), do: {:tool_error, "invalid_contract_revision"}

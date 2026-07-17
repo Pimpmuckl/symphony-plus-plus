@@ -37,6 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service, as: SoloSessionsService
@@ -1207,6 +1208,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         constraints: %{"token" => "raw-secret-value", "safe" => "visible"}
       )
 
+    assert {:ok, product_node} =
+             ProductTree.create_node(repo, %{
+               id: "PTN-DASH-DETAIL",
+               work_request_id: work_request.id,
+               title: "Dashboard detail node"
+             })
+
     assert {:ok, second_question} =
              WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-DETAIL-B", question: "Second?"))
 
@@ -1244,7 +1252,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_package_attrs(id: "WRS-DETAIL-A", title: "Slice with ghp_secret123")
+               work_package_attrs(
+                 id: "WRS-DETAIL-A",
+                 title: "Slice with ghp_secret123",
+                 product_tree_node_id: product_node.id
+               )
              )
 
     secret = create_architect_grant_secret(repo, anchor.id)
@@ -1261,6 +1273,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert Enum.at(payload["decision_logs"], 1)["decision"] == "[REDACTED]"
     assert Enum.map(payload["work_packages"], & &1["id"]) == [second_slice.id, first_slice.id]
     assert Enum.at(payload["work_packages"], 1)["title"] == "[REDACTED]"
+
+    work_packages_by_id = Map.new(payload["work_packages"], &{&1["id"], &1})
+    assert work_packages_by_id[first_slice.id]["product_tree_node_id"] == product_node.id
+    assert payload["product_tree"]["root_work_package_ids"] == [second_slice.id]
+
+    product_node_id = product_node.id
+    first_slice_id = first_slice.id
+    assert [%{"id" => ^product_node_id, "work_package_ids" => [^first_slice_id]}] = payload["product_tree"]["nodes"]
 
     assert payload["summary"] == %{
              "open_question_count" => 1,

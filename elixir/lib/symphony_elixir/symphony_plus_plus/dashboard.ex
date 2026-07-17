@@ -1390,6 +1390,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     %{
       id: work_package.id,
       work_request_id: work_package.work_request_id,
+      product_tree_node_id: work_package.product_tree_node_id,
       sequence: work_package.sequence,
       title: redacted_text(work_package.title),
       goal: redacted_text(work_package.goal),
