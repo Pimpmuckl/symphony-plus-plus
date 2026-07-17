@@ -1,5 +1,5 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Server, ToolCatalog}
 
@@ -27,6 +27,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
           assert MapSet.equal?(names, MapSet.new(["sympp.health", "release_current_assignment" | ToolCatalog.solo_tools()]))
       end
     end
+  end
+
+  test "handle state outlives the caller that first creates it" do
+    agent = Module.concat(Server, HandleState)
+    if pid = Process.whereis(agent), do: Agent.stop(pid)
+    parent = self()
+
+    {caller, caller_ref} =
+      spawn_monitor(fn ->
+        _tools = listed_tools(:worker)
+        send(parent, {:handle_state_started, self()})
+
+        receive do
+          :stop -> exit(:shutdown)
+        end
+      end)
+
+    assert_receive {:handle_state_started, ^caller}
+    agent_pid = Process.whereis(agent)
+    agent_ref = Process.monitor(agent_pid)
+    send(caller, :stop)
+
+    assert_receive {:DOWN, ^caller_ref, :process, ^caller, :shutdown}
+    refute_receive {:DOWN, ^agent_ref, :process, ^agent_pid, _reason}, 50
+    assert Process.alive?(agent_pid)
   end
 
   test "role profiles are complete without a tools/list refresh" do
