@@ -1,4 +1,4 @@
-defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkPackageActivity do
+defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
@@ -11,7 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkPackageActivity do
 
   @active_grant_roles ["worker", "architect"]
   @terminal_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
-  @recycle_source_tools ["claim_local_assignment", "revoke_child_worker_key", "revoke_planned_slice_worker_key", "cleanup_work_request_planned_slice_runtime"]
+  @recycle_source_tools ["claim_local_assignment", "revoke_child_worker_key", "revoke_work_package_worker_key", "cleanup_work_request_work_package_runtime"]
   @stale_heartbeat_after_seconds 300
 
   @spec blocker_event_payload?(map()) :: boolean()

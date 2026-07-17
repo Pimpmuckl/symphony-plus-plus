@@ -53,10 +53,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
           "Decisions are rationale",
           "Delivery closeout records lifecycle truth",
           "read_delivery_board",
-          "record_planned_slice_delivery",
+          "record_work_package_delivery",
           "reconcile_work_request",
           "PR-size or line-budget",
-          "cleanup_work_request_planned_slice_runtime"
+          "cleanup_work_request_work_package_runtime"
         ] do
       assert architect_skill =~ marker
     end
@@ -70,7 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
 
     for marker <- [
           "read_delivery_board(work_request_id)",
-          "record_planned_slice_delivery(work_request_id, planned_slice_id, outcome, idempotency_key, evidence)",
+          "record_work_package_delivery(work_request_id, work_package_id, outcome, idempotency_key, evidence)",
           "`completed_no_pr`",
           "`evidence.completed_no_pr`",
           "`superseded`",
@@ -82,7 +82,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
       assert skill_contract =~ marker
     end
 
-    for marker <- ["Delivery closeout", "stale dispatched slice", "`ready_for_worker`"] do
+    for marker <- ["Delivery closeout", "stale `ready_for_worker` package", "`ready_for_worker`"] do
       assert dashboard_spec =~ marker
     end
 
@@ -91,7 +91,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
           "`ready_for_worker`",
           "Expected projection before closeout",
           "Expected projection after closeout",
-          "record_planned_slice_delivery"
+          "record_work_package_delivery"
         ] do
       assert closeout_runbook =~ marker
     end

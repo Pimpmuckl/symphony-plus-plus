@@ -37,11 +37,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedCommentToolsTest do
     assert {:ok, package} =
              WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-MCP-LOCAL-OPERATOR-COMMENT-LIST", kind: "mcp"))
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(id: "WRS-MCP-LOCAL-OPERATOR-COMMENT-LIST", target_base_branch: work_request.base_branch)
+               work_request_work_package_attrs(id: "WRS-MCP-LOCAL-OPERATOR-COMMENT-LIST", base_branch: work_request.base_branch)
              )
 
     assert {:ok, package_comment} =
@@ -53,11 +53,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedCommentToolsTest do
                "author_name" => "operator"
              })
 
-    assert {:ok, planned_slice_comment} =
+    assert {:ok, work_package_comment} =
              CommentService.create(repo, %{
-               "target_kind" => "planned_slice",
-               "target_id" => planned_slice.id,
-               "body" => "Planned slice note",
+               "target_kind" => "work_package",
+               "target_id" => work_package.id,
+               "body" => "WorkPackage note",
                "source_type" => "operator",
                "author_name" => "operator"
              })
@@ -95,22 +95,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedCommentToolsTest do
     assert [%{"id" => package_comment_id}] = get_in(package_list_response, ["result", "structuredContent", "comments"])
     assert package_comment_id == package_comment.id
 
-    planned_slice_list_response =
+    work_package_list_response =
       Server.handle(
         %{
           "jsonrpc" => "2.0",
-          "id" => "local-operator-list-planned-slice-comments",
+          "id" => "local-operator-list-work-package-comments",
           "method" => "tools/call",
           "params" => %{
             "name" => "list_comments",
-            "arguments" => %{"target_kind" => "planned_slice", "target_id" => planned_slice.id}
+            "arguments" => %{"target_kind" => "work_package", "target_id" => work_package.id}
           }
         },
         note_server
       )
 
-    assert [%{"id" => planned_slice_comment_id}] = get_in(planned_slice_list_response, ["result", "structuredContent", "comments"])
-    assert planned_slice_comment_id == planned_slice_comment.id
+    assert [%{"id" => work_package_comment_id}] = get_in(work_package_list_response, ["result", "structuredContent", "comments"])
+    assert work_package_comment_id == work_package_comment.id
 
     missing_list_response =
       Server.handle(

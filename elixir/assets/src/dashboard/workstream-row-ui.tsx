@@ -1,4 +1,4 @@
-import type { CopyArchitectHandoff, PlannedSlice, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
+import type { CopyArchitectHandoff, WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import type { ProductTreeNode } from "@/types/product-tree";
 import { AlertTriangle, CheckCircle2, ChevronRight, CircleAlert, CircleDashed, CircleHelp, Circle, ClipboardCopy, Info, Layers3, MessageSquareText, Package, Split } from "lucide-react";
 import type { ComponentProps, CSSProperties, ReactNode } from "react";
@@ -266,7 +266,7 @@ export function SliceKindSlot({
   onSelectCard,
 }: {
   detail: WorkRequestDetail;
-  slice: PlannedSlice;
+  slice: WorkRequestPackage;
   pkg?: WorkPackageCard;
   onSelectCard: CardDetailSelect;
 }) {

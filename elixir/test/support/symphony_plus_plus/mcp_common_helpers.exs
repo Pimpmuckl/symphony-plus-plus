@@ -282,14 +282,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
     Enum.into(overrides, defaults)
   end
 
-  def work_request_planned_slice_attrs(overrides) do
+  def work_request_work_package_attrs(overrides) do
     defaults = %{
       title: "Add WorkRequest MCP reads",
       goal: "Expose scoped read-only WorkRequest MCP payloads.",
-      work_package_kind: "mcp",
-      target_base_branch: "symphony-plus-plus/beta",
+      kind: "mcp",
+      base_branch: "symphony-plus-plus/beta",
       branch_pattern: "agent/SYMPP-V2-WR-013/workrequest-read-mcp-tools",
-      owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
+      allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
       forbidden_file_globs: ["elixir/lib/symphony_elixir_web/live/**"],
       acceptance_criteria: ["WorkRequest MCP reads are scoped and redacted."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],

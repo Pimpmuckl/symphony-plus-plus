@@ -512,7 +512,7 @@ Architect agents use the plugin-installed
 `symphony-plus-plus-mcp:symphony-architect` skill before worker dispatch. That skill
 is for WorkRequest-led orchestration: read current WorkRequest or architect
 package context, ask and record product clarification, record decisions and
-assumptions, author/approve planned slices, dispatch approved slices, route
+assumptions, author/approve WorkPackages, dispatch approved slices, route
 package guidance, and stop instead of inventing product behavior.
 For higher-impact human choices, architects should include the existing
 `decision_prompt` structure so the cockpit can show a TL;DR, details, bounded

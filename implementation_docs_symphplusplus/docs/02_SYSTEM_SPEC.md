@@ -7,21 +7,21 @@
 A WorkRequest is the top-level product intent and default cockpit row. It
 captures the human's intended project or repo, base branch, work type,
 description, constraints, desired dispatch shape, clarification history,
-decisions, optional product plan tree, and planned slices.
+decisions, optional product plan tree, and WorkPackages.
 
 WorkRequests are persisted in the Symphony++ runtime ledger. The local operator
 dashboard can list, create, inspect, clarify, and prepare architect handoff for
 WorkRequests, while scoped board views can create and manage WorkRequests only
 inside their frozen repo/base-branch scope. Architect MCP sessions with explicit
 WorkRequest capabilities can read, clarify, record decisions, author planned
-slices, and dispatch approved planned slices through the normal ledger-backed
+slices, and dispatch approved WorkPackages through the normal ledger-backed
 local assignment flow.
 
 Architect MCP sessions can mutate the optional product tree with
 `upsert_plan_node`,
 `move_plan_node`,
 `set_plan_node_completion`, and
-`move_slice_to_plan_node` while the WorkRequest is in an
+`update_work_package` while the WorkRequest is in an
 authoring status. Copied-ledger preview and migration flows may still seed plan
 nodes through helpers, but helper seeding is not the normal architect authoring
 path. Automatic question generation, automatic slicing/planning, live Linear
@@ -51,9 +51,9 @@ created_at
 updated_at
 ```
 
-### PlannedSlice
+### WorkPackage
 
-The architect-to-worker execution unit. A planned slice belongs to one
+The architect-to-worker execution unit. A WorkPackage belongs to one
 WorkRequest and may link to one product plan node or sit directly under the
 WorkRequest. Approved slices can dispatch into WorkPackages.
 
@@ -277,9 +277,9 @@ Codex/Symphony
 ## WorkRequest Product-Tree Boundary
 
 A clarified WorkRequest may have no extra product structure, or it may become
-an optional nested product plan tree plus one or more planned slices. Approved
+an optional nested product plan tree plus one or more WorkPackages. Approved
 slices can then be dispatched into WorkPackages through the local operator
-dashboard, the planned-slice dispatch CLI, or the architect MCP dispatch tool
+dashboard, the work-package dispatch CLI, or the architect MCP dispatch tool
 when the session has explicit dispatch scope. Existing WorkPackage status,
 grants, virtual planning resources, readiness gates, review evidence, and
 human merge rules remain authoritative after packages are created.

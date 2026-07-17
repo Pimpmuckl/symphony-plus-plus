@@ -1,9 +1,8 @@
 Code.require_file("../../support/mcp_harness.exs", __DIR__)
 
-defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
+defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
   use ExUnit.Case, async: false
 
-  alias Ecto.Adapters.SQL
   alias SymphonyElixir.MCPHarness
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.GrantScope
@@ -20,7 +19,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{ArchitectHandoff, PlannedSlice, PlannedSliceDelivery, WorkRequest}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{ArchitectHandoff, WorkRequest}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.WorkPackageFactory
 
@@ -39,8 +39,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
     schemas =
       [
         ProgressEvent,
-        PlannedSliceDelivery,
-        PlannedSlice,
+        WorkPackageDelivery,
+        WorkPackage,
         SessionBinding,
         AgentRun,
         ClaimLease,
@@ -58,24 +58,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
     :ok
   end
 
-  test "architect recycles in-progress planned-slice worker authority before superseded closeout", %{repo: repo} do
-    {work_request, planned_slice, linked_package} = linked_slice!(repo, "implementing")
-    successor_slice = create_planned_slice!(repo, work_request, "WRS-MCP-DELIVERY-IN-PROGRESS-SUCCESSOR")
+  test "architect recycles in-progress work-package worker authority before superseded closeout", %{repo: repo} do
+    {work_request, work_package, linked_package} = linked_slice!(repo, "implementing")
+    successor_slice = create_work_package!(repo, work_request, "WRS-MCP-DELIVERY-IN-PROGRESS-SUCCESSOR")
     session = create_work_request_architect_session(repo, work_request)
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
     assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "active-worker")
 
-    closeout_args = superseded_args(work_request, planned_slice, successor_slice.id)
+    closeout_args = superseded_args(work_request, work_package, successor_slice.id)
 
-    active_response = mcp_tool(repo, session, "record_planned_slice_delivery", closeout_args)
+    active_response = mcp_tool(repo, session, "record_work_package_delivery", closeout_args)
     assert get_in(active_response, ["error", "data", "reason"]) == "active_runtime"
     assert get_in(active_response, ["error", "data", "next_action"]) == "release_worker_or_retry_after_stale"
 
     revoke_response =
-      mcp_tool(repo, session, "revoke_planned_slice_worker_key", %{
+      mcp_tool(repo, session, "revoke_work_package_worker_key", %{
         "work_request_id" => work_request.id,
-        "planned_slice_id" => planned_slice.id,
+        "work_package_id" => work_package.id,
         "grant_id" => minted.grant.id,
         "reason" => "Worker is being recut and the old runtime authority must be recycled."
       })
@@ -84,11 +84,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
     assert revoke_payload["work_package"]["id"] == linked_package.id
     assert revoke_payload["work_package"]["status"] == "blocked"
     assert revoke_payload["revoked_worker_grant"]["id"] == minted.grant.id
-    assert revoke_payload["next_action"] == "retry_record_planned_slice_delivery"
+    assert revoke_payload["next_action"] == "retry_record_work_package_delivery"
 
     assert revoke_payload["closeout_affordance"]["reason_codes"] == [
              "worker_recycled",
-             "planned_slice_worker_key_revoked",
+             "work_package_worker_key_revoked",
              "work_package_blocked_for_recycle"
            ]
 
@@ -99,15 +99,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
     assert repo.get!(AccessGrant, minted.grant.id).revoked_at
     assert repo.get!(WorkPackage, linked_package.id).status == "blocked"
 
-    closeout_response = mcp_tool(repo, session, "record_planned_slice_delivery", closeout_args)
+    closeout_response = mcp_tool(repo, session, "record_work_package_delivery", closeout_args)
 
-    assert get_in(closeout_response, ["result", "structuredContent", "planned_slice_delivery", "outcome"]) == "superseded"
+    assert get_in(closeout_response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "superseded"
     assert repo.get!(WorkPackage, linked_package.id).status == "closed"
   end
 
   test "architect cleanup recycles linked worker grant claim lease and recoverable MCP binding before superseded closeout", %{repo: repo} do
-    {work_request, planned_slice, linked_package} = linked_slice!(repo, "implementing")
-    successor_slice = create_planned_slice!(repo, work_request, "WRS-MCP-DELIVERY-RUNTIME-CLEANUP-SUCCESSOR")
+    {work_request, work_package, linked_package} = linked_slice!(repo, "implementing")
+    successor_slice = create_work_package!(repo, work_request, "WRS-MCP-DELIVERY-RUNTIME-CLEANUP-SUCCESSOR")
     session = create_work_request_architect_session(repo, work_request)
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
@@ -131,14 +131,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
 
     other_binding = insert_recoverable_session_binding!(repo, "WP-OUTSIDE-RUNTIME-CLEANUP", minted.grant.id, claim_lease)
 
-    closeout_args = superseded_args(work_request, planned_slice, successor_slice.id)
+    closeout_args = superseded_args(work_request, work_package, successor_slice.id)
 
-    active_response = mcp_tool(repo, session, "record_planned_slice_delivery", closeout_args)
+    active_response = mcp_tool(repo, session, "record_work_package_delivery", closeout_args)
     assert get_in(active_response, ["error", "data", "reason"]) == "active_runtime"
     assert get_in(active_response, ["error", "data", "next_action"]) == "release_worker_or_retry_after_stale"
 
     cleanup_response =
-      mcp_tool(repo, session, "cleanup_work_request_planned_slice_runtime", cleanup_args(work_request, planned_slice, successor_slice.id))
+      mcp_tool(repo, session, "cleanup_work_request_work_package_runtime", cleanup_args(work_request, work_package, successor_slice.id))
 
     cleanup_payload = get_in(cleanup_response, ["result", "structuredContent"])
     assert cleanup_payload["work_package"]["id"] == linked_package.id
@@ -162,81 +162,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
     event_payload =
       repo.all(ProgressEvent)
       |> Enum.map(& &1.payload)
-      |> Enum.find(&(&1["source_tool"] == "cleanup_work_request_planned_slice_runtime"))
+      |> Enum.find(&(&1["source_tool"] == "cleanup_work_request_work_package_runtime"))
 
-    assert event_payload["source_tool"] == "cleanup_work_request_planned_slice_runtime"
+    assert event_payload["source_tool"] == "cleanup_work_request_work_package_runtime"
     assert event_payload["work_request_id"] == work_request.id
-    assert event_payload["planned_slice_id"] == planned_slice.id
+    assert event_payload["work_package_id"] == work_package.id
     assert get_in(event_payload, ["delivery_evidence", "outcome"]) == "superseded"
-    assert get_in(event_payload, ["delivery_evidence", "successor_planned_slice_id"]) == successor_slice.id
+    assert get_in(event_payload, ["delivery_evidence", "successor_work_package_id"]) == successor_slice.id
 
-    closeout_response = mcp_tool(repo, session, "record_planned_slice_delivery", closeout_args)
+    closeout_response = mcp_tool(repo, session, "record_work_package_delivery", closeout_args)
 
-    assert get_in(closeout_response, ["result", "structuredContent", "planned_slice_delivery", "outcome"]) == "superseded"
+    assert get_in(closeout_response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "superseded"
     assert repo.get!(WorkPackage, linked_package.id).status == "closed"
   end
 
-  test "architect cleanup and revoke fail closed when package link is duplicated", %{repo: repo} do
-    {work_request, planned_slice, linked_package} = linked_slice!(repo, "implementing")
-    successor_slice = create_planned_slice!(repo, work_request, "WRS-MCP-DELIVERY-DUPLICATE-CLEANUP-SUCCESSOR")
-    other_work_request = create_work_request!(repo, "WR-MCP-DELIVERY-DUPLICATE-CLEANUP-OTHER")
-    other_slice = create_planned_slice!(repo, other_work_request, "WRS-MCP-DELIVERY-DUPLICATE-CLEANUP-OTHER")
-    session = create_work_request_architect_session(repo, work_request)
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "active-worker")
-
-    assert {:ok, _claim_lease} =
-             ClaimLeaseService.claim(repo, linked_package.id, local_worker_actor("active-worker"),
-               access_grant_id: minted.grant.id,
-               stale_after_ms: 60_000
-             )
-
-    drop_planned_slice_work_package_unique_index!(repo)
-
-    try do
-      repo.update!(
-        Ecto.Changeset.change(other_slice,
-          status: "dispatched",
-          work_package_id: linked_package.id,
-          dispatched_at: DateTime.utc_now(:microsecond)
-        )
-      )
-
-      blocked_response =
-        mcp_tool(
-          repo,
-          session,
-          "cleanup_work_request_planned_slice_runtime",
-          cleanup_args(work_request, planned_slice, successor_slice.id)
-        )
-
-      assert get_in(blocked_response, ["error", "data", "reason"]) == "ambiguous_planned_slice_link"
-
-      revoke_blocked_response =
-        mcp_tool(repo, session, "revoke_planned_slice_worker_key", %{
-          "work_request_id" => work_request.id,
-          "planned_slice_id" => planned_slice.id,
-          "grant_id" => minted.grant.id,
-          "reason" => "Worker runtime owner is ambiguous without an explicit package guard."
-        })
-
-      assert get_in(revoke_blocked_response, ["error", "data", "reason"]) == "ambiguous_planned_slice_link"
-
-      refute repo.get!(AccessGrant, minted.grant.id).revoked_at
-    after
-      SQL.query!(
-        repo,
-        "UPDATE sympp_work_request_planned_slices SET work_package_id = NULL, dispatched_at = NULL WHERE id = ?",
-        [other_slice.id]
-      )
-
-      create_planned_slice_work_package_unique_index!(repo)
-    end
-  end
-
   test "architect cleanup allows abandoned no-code closeout after claimed runtime is recycled", %{repo: repo} do
-    {work_request, planned_slice, linked_package} = linked_slice!(repo, "ready_for_worker")
+    {work_request, work_package, linked_package} = linked_slice!(repo, "ready_for_worker")
     session = create_work_request_architect_session(repo, work_request)
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
@@ -249,14 +190,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
              )
 
     cleanup_response =
-      mcp_tool(repo, session, "cleanup_work_request_planned_slice_runtime", abandoned_cleanup_args(work_request, planned_slice))
+      mcp_tool(repo, session, "cleanup_work_request_work_package_runtime", abandoned_cleanup_args(work_request, work_package))
 
     assert get_in(cleanup_response, ["result", "structuredContent", "runtime_cleanup", "status"]) == "cleaned"
 
     abandoned_response =
-      mcp_tool(repo, session, "record_planned_slice_delivery", %{
+      mcp_tool(repo, session, "record_work_package_delivery", %{
         "work_request_id" => work_request.id,
-        "planned_slice_id" => planned_slice.id,
+        "work_package_id" => work_package.id,
         "outcome" => "abandoned",
         "idempotency_key" => "delivery-abandoned-after-runtime-cleanup",
         "evidence" => %{
@@ -264,49 +205,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
         }
       })
 
-    assert get_in(abandoned_response, ["result", "structuredContent", "planned_slice_delivery", "outcome"]) == "abandoned"
+    assert get_in(abandoned_response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "abandoned"
     assert repo.get!(WorkPackage, linked_package.id).status == "abandoned"
   end
 
   test "architect cleanup rejects missing delivery evidence without mutating runtime", %{repo: repo} do
-    {work_request, planned_slice, linked_package} = linked_slice!(repo, "implementing")
+    {work_request, work_package, linked_package} = linked_slice!(repo, "implementing")
     session = create_work_request_architect_session(repo, work_request)
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
     assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "active-worker")
 
     response =
-      mcp_tool(repo, session, "cleanup_work_request_planned_slice_runtime", %{
+      mcp_tool(repo, session, "cleanup_work_request_work_package_runtime", %{
         "work_request_id" => work_request.id,
-        "planned_slice_id" => planned_slice.id,
+        "work_package_id" => work_package.id,
         "reason" => "No terminal delivery evidence is attached."
       })
 
     assert get_in(response, ["error", "code"]) == -32_602
     assert get_in(response, ["error", "data", "reason"]) == "missing_outcome"
     refute repo.get!(AccessGrant, minted.grant.id).revoked_at
-    refute Enum.any?(repo.all(ProgressEvent), &(&1.payload["source_tool"] == "cleanup_work_request_planned_slice_runtime"))
+    refute Enum.any?(repo.all(ProgressEvent), &(&1.payload["source_tool"] == "cleanup_work_request_work_package_runtime"))
   end
 
   test "architect cleanup rejects abandoned evidence for an implementing package without mutating runtime", %{repo: repo} do
-    {work_request, planned_slice, linked_package} = linked_slice!(repo, "implementing")
+    {work_request, work_package, linked_package} = linked_slice!(repo, "implementing")
     session = create_work_request_architect_session(repo, work_request)
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
     assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "active-worker")
 
     response =
-      mcp_tool(repo, session, "cleanup_work_request_planned_slice_runtime", abandoned_cleanup_args(work_request, planned_slice))
+      mcp_tool(repo, session, "cleanup_work_request_work_package_runtime", abandoned_cleanup_args(work_request, work_package))
 
     assert get_in(response, ["error", "code"]) == -32_602
     assert get_in(response, ["error", "data", "reason"]) == "work_package_not_abandonable"
     refute repo.get!(AccessGrant, minted.grant.id).revoked_at
-    refute Enum.any?(repo.all(ProgressEvent), &(&1.payload["source_tool"] == "cleanup_work_request_planned_slice_runtime"))
+    refute Enum.any?(repo.all(ProgressEvent), &(&1.payload["source_tool"] == "cleanup_work_request_work_package_runtime"))
   end
 
   test "architect cleanup rejects paused claim leases without mutating runtime", %{repo: repo} do
-    {work_request, planned_slice, linked_package} = linked_slice!(repo, "implementing")
-    successor_slice = create_planned_slice!(repo, work_request, "WRS-MCP-DELIVERY-PAUSED-SUCCESSOR")
+    {work_request, work_package, linked_package} = linked_slice!(repo, "implementing")
+    successor_slice = create_work_package!(repo, work_request, "WRS-MCP-DELIVERY-PAUSED-SUCCESSOR")
     session = create_work_request_architect_session(repo, work_request)
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
@@ -320,18 +261,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
 
     assert {:ok, paused_lease} = ClaimLeaseService.pause(repo, claim_lease.id, local_worker_actor("architect"), reason: "operator pause")
 
-    response = mcp_tool(repo, session, "cleanup_work_request_planned_slice_runtime", cleanup_args(work_request, planned_slice, successor_slice.id))
+    response = mcp_tool(repo, session, "cleanup_work_request_work_package_runtime", cleanup_args(work_request, work_package, successor_slice.id))
 
     assert get_in(response, ["error", "code"]) == -32_009
     assert get_in(response, ["error", "data", "reason"]) == "active_runtime"
     refute repo.get!(AccessGrant, minted.grant.id).revoked_at
     assert %ClaimLease{status: "paused"} = repo.get!(ClaimLease, paused_lease.id)
-    refute Enum.any?(repo.all(ProgressEvent), &(&1.payload["source_tool"] == "cleanup_work_request_planned_slice_runtime"))
+    refute Enum.any?(repo.all(ProgressEvent), &(&1.payload["source_tool"] == "cleanup_work_request_work_package_runtime"))
   end
 
   test "architect cleanup rejects fresh active AgentRun evidence without mutating runtime", %{repo: repo} do
-    {work_request, planned_slice, linked_package} = linked_slice!(repo, "implementing")
-    successor_slice = create_planned_slice!(repo, work_request, "WRS-MCP-DELIVERY-AGENT-RUN-SUCCESSOR")
+    {work_request, work_package, linked_package} = linked_slice!(repo, "implementing")
+    successor_slice = create_work_package!(repo, work_request, "WRS-MCP-DELIVERY-AGENT-RUN-SUCCESSOR")
     session = create_work_request_architect_session(repo, work_request)
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
@@ -343,38 +284,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
                actor_id: "active-agent"
              })
 
-    response = mcp_tool(repo, session, "cleanup_work_request_planned_slice_runtime", cleanup_args(work_request, planned_slice, successor_slice.id))
+    response = mcp_tool(repo, session, "cleanup_work_request_work_package_runtime", cleanup_args(work_request, work_package, successor_slice.id))
 
     assert get_in(response, ["error", "code"]) == -32_009
     assert get_in(response, ["error", "data", "reason"]) == "active_runtime"
     refute repo.get!(AccessGrant, minted.grant.id).revoked_at
-    refute Enum.any?(repo.all(ProgressEvent), &(&1.payload["source_tool"] == "cleanup_work_request_planned_slice_runtime"))
+    refute Enum.any?(repo.all(ProgressEvent), &(&1.payload["source_tool"] == "cleanup_work_request_work_package_runtime"))
   end
 
-  test "architect cleanup rejects linked package repo or base branch mismatches", %{repo: repo} do
-    {work_request, planned_slice, linked_package} = linked_slice!(repo, "implementing")
-    successor_slice = create_planned_slice!(repo, work_request, "WRS-MCP-DELIVERY-SCOPE-SUCCESSOR")
-    session = create_work_request_architect_session(repo, work_request)
-
-    linked_package
-    |> Ecto.Changeset.change(%{base_branch: "not-main"})
-    |> repo.update!()
-
-    response = mcp_tool(repo, session, "cleanup_work_request_planned_slice_runtime", cleanup_args(work_request, planned_slice, successor_slice.id))
-
-    assert get_in(response, ["error", "code"]) == -32_003
-    assert get_in(response, ["error", "data", "reason"]) == "outside_session_scope"
-  end
-
-  test "architect cleanup rejects planned slices outside the WorkRequest scope", %{repo: repo} do
-    {work_request, _planned_slice, _linked_package} = linked_slice!(repo, "implementing")
-    {other_work_request, other_planned_slice, _other_package} = linked_slice!(repo, "implementing", "OTHER")
+  test "architect cleanup rejects WorkPackages outside the WorkRequest scope", %{repo: repo} do
+    {work_request, _work_package, _linked_package} = linked_slice!(repo, "implementing")
+    {other_work_request, other_work_package, _other_package} = linked_slice!(repo, "implementing", "OTHER")
     session = create_work_request_architect_session(repo, work_request)
 
     response =
-      mcp_tool(repo, session, "cleanup_work_request_planned_slice_runtime", %{
+      mcp_tool(repo, session, "cleanup_work_request_work_package_runtime", %{
         "work_request_id" => work_request.id,
-        "planned_slice_id" => other_planned_slice.id,
+        "work_package_id" => other_work_package.id,
         "outcome" => "abandoned",
         "abandoned_rationale" => "Attempted abandoned cleanup outside the scoped WorkRequest.",
         "reason" => "Attempted cleanup for a slice from #{other_work_request.id}."
@@ -390,8 +316,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
 
   defp linked_slice!(repo, status, suffix) do
     work_request = create_work_request!(repo, suffix)
-    planned_slice = create_planned_slice!(repo, work_request, "WRS-MCP-DELIVERY-IN-PROGRESS-#{suffix}")
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+    work_package = create_work_package!(repo, work_request, "WRS-MCP-DELIVERY-IN-PROGRESS-#{suffix}")
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
     linked_package =
       create_matching_work_package!(repo, work_request, approved_slice,
@@ -399,7 +325,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
         status: status
       )
 
-    assert {:ok, dispatched_slice} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", linked_package.id)
+    assert {:ok, dispatched_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", linked_package.id)
 
     {work_request, dispatched_slice, linked_package}
   end
@@ -407,7 +333,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
   defp create_work_request!(repo, suffix) do
     attrs = %{
       id: "WR-MCP-DELIVERY-IN-PROGRESS-#{suffix}",
-      title: "Recycle planned-slice workers",
+      title: "Recycle work-package workers",
       repo: "nextide/example",
       base_branch: "main",
       work_type: "feature",
@@ -421,55 +347,43 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
     work_request
   end
 
-  defp create_planned_slice!(repo, work_request, id) do
+  defp create_work_package!(repo, work_request, id) do
     attrs = %{
       id: id,
       title: "Delivery MCP slice",
-      goal: "Close delivered planned slices through MCP.",
-      work_package_kind: "mcp",
-      target_base_branch: "main",
+      goal: "Close delivered WorkPackages through MCP.",
+      kind: "mcp",
+      base_branch: "main",
       branch_pattern: "feat/mcp-delivery",
-      owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
+      allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
       forbidden_file_globs: ["elixir/assets/**"],
       acceptance_criteria: ["Delivery MCP tools are scoped."],
-      validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/planned_slice_worker_revoke_test.exs"],
+      validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/work_package_worker_revoke_test.exs"],
       review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
       stop_conditions: ["Do not expose broad package visibility."]
     }
 
-    assert {:ok, planned_slice} = WorkRequestRepository.add_planned_slice(repo, work_request.id, attrs)
-    planned_slice
+    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, attrs)
+    work_package
   end
 
-  defp create_matching_work_package!(repo, work_request, planned_slice, overrides) do
+  defp create_matching_work_package!(repo, work_request, work_package, overrides) do
     attrs =
       [
-        kind: planned_slice.work_package_kind,
-        title: planned_slice.title,
+        kind: work_package.kind,
+        title: work_package.title,
         repo: work_request.repo,
-        base_branch: planned_slice.target_base_branch,
-        branch_pattern: planned_slice.branch_pattern,
+        base_branch: work_package.base_branch,
+        branch_pattern: work_package.branch_pattern,
         product_description: work_request.human_description,
-        allowed_file_globs: planned_slice.owned_file_globs,
-        acceptance_criteria: planned_slice.acceptance_criteria
+        allowed_file_globs: work_package.allowed_file_globs,
+        acceptance_criteria: work_package.acceptance_criteria
       ]
       |> Keyword.merge(overrides)
       |> WorkPackageFactory.attrs()
 
     assert {:ok, work_package} = WorkPackageRepository.create(repo, attrs)
     work_package
-  end
-
-  defp drop_planned_slice_work_package_unique_index!(repo) do
-    SQL.query!(repo, "DROP INDEX IF EXISTS sympp_work_request_planned_slices_work_package_id_unique_index")
-  end
-
-  defp create_planned_slice_work_package_unique_index!(repo) do
-    SQL.query!(repo, """
-    CREATE UNIQUE INDEX IF NOT EXISTS sympp_work_request_planned_slices_work_package_id_unique_index
-    ON sympp_work_request_planned_slices (work_package_id)
-    WHERE work_package_id IS NOT NULL
-    """)
   end
 
   defp create_work_request_architect_session(repo, %WorkRequest{} = work_request) do
@@ -504,36 +418,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlannedSliceWorkerRevokeTest do
     MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
   end
 
-  defp superseded_args(work_request, planned_slice, successor_planned_slice_id) do
+  defp superseded_args(work_request, work_package, successor_work_package_id) do
     %{
       "work_request_id" => work_request.id,
-      "planned_slice_id" => planned_slice.id,
+      "work_package_id" => work_package.id,
       "outcome" => "superseded",
       "idempotency_key" => "delivery-mcp-in-progress-recut-after-recycle",
       "evidence" => %{
         "superseded" => %{
           "superseded_reason" => "Recut after the old worker authority was explicitly recycled.",
-          "successor_planned_slice_id" => successor_planned_slice_id
+          "successor_work_package_id" => successor_work_package_id
         }
       }
     }
   end
 
-  defp cleanup_args(work_request, planned_slice, successor_planned_slice_id) do
+  defp cleanup_args(work_request, work_package, successor_work_package_id) do
     %{
       "work_request_id" => work_request.id,
-      "planned_slice_id" => planned_slice.id,
+      "work_package_id" => work_package.id,
       "outcome" => "superseded",
-      "successor_planned_slice_id" => successor_planned_slice_id,
+      "successor_work_package_id" => successor_work_package_id,
       "superseded_reason" => "Recut after the old worker authority was explicitly recycled.",
       "reason" => "The linked worker runtime was superseded by established WorkRequest delivery truth."
     }
   end
 
-  defp abandoned_cleanup_args(work_request, planned_slice) do
+  defp abandoned_cleanup_args(work_request, work_package) do
     %{
       "work_request_id" => work_request.id,
-      "planned_slice_id" => planned_slice.id,
+      "work_package_id" => work_package.id,
       "outcome" => "abandoned",
       "abandoned_rationale" => "The original no-code dispatch was replaced before implementation started.",
       "reason" => "The linked no-code worker runtime is abandoned by established WorkRequest delivery truth."

@@ -29,19 +29,19 @@ describe("package detail blocker modal", () => {
     expect(scopedBlockerDetailPayload(selection, detailPayload)).toBeNull();
   });
 
-  it("does not use blocker source packages as clear targets", () => {
+  it("uses the blocked WorkPackage rather than the blocker source as the clear target", () => {
     const selection: Extract<CardDetailSelection, { kind: "blocker" }> = {
       kind: "blocker",
       blocker: {
         id: "edge-source-only",
         blocker_id: "shared-blocker",
         from: { kind: "work_package", id: "pkg-source" },
-        to: { kind: "slice", id: "slice-blocked" },
+        to: { kind: "work_package", id: "pkg-blocked" },
         summary: "Selected blocker",
       },
     };
 
-    expect(blockerDetailWorkPackageId(selection, null)).toBeNull();
+    expect(blockerDetailWorkPackageId(selection, null)).toBe("pkg-blocked");
   });
 
   it("hides blocker clearing outside local operator mode", () => {

@@ -141,7 +141,7 @@ describe("dashboard runtime mutation helpers", () => {
       archived_work_requests: { work_requests: [{ id: "wr-old", title: "Archived" }], total_count: 1 },
       deferred: { dashboard_sections: false },
       solo_sessions: { solo_sessions: [{ id: "solo-1" }], total_count: 1 },
-      work_request_details: [{ work_request: { id: "wr-1", title: "Hydrated" }, planned_slices: [{ id: "slice-1", work_request_id: "wr-1" }] }],
+      work_request_details: [{ work_request: { id: "wr-1", title: "Hydrated" }, work_packages: [{ id: "slice-1", work_request_id: "wr-1" }] }],
     });
 
     expect(merged?.work_requests).toBe(dashboard.work_requests);
@@ -149,7 +149,7 @@ describe("dashboard runtime mutation helpers", () => {
       archived_work_requests: { work_requests: [{ id: "wr-old" }] },
       deferred: { dashboard_sections: false },
       solo_sessions: { solo_sessions: [{ id: "solo-1" }] },
-      work_request_details: [{ planned_slices: [{ id: "slice-1" }] }],
+      work_request_details: [{ work_packages: [{ id: "slice-1" }] }],
     });
   });
 

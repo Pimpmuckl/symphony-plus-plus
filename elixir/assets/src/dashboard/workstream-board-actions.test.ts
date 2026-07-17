@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ActiveBlockingEdge, GuidanceItem, PlannedSlice, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
+import type { ActiveBlockingEdge, GuidanceItem, WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import type { CardDetailSelection } from "./runtime";
 import { openBlockersForRequest, openBlockersForSlices, openGuidanceForSlice } from "./workstream-board-actions";
 
@@ -29,7 +29,6 @@ describe("workstream board action routing", () => {
       from: { kind: "work_package", id: "pkg-1" },
       to: { kind: "work_package", id: "pkg-other" },
       work_package_id: "pkg-1",
-      planned_slice_id: slice.id,
       work_request_id: "wr-1",
     };
 
@@ -41,7 +40,6 @@ describe("workstream board action routing", () => {
   it("keeps slice blocker clicks scoped to the selected slice package", () => {
     const selections: CardDetailSelection[] = [];
     const detail = requestDetail("wr-1");
-    const sliceOne = plannedSlice("slice-1", "pkg-1");
     const sliceTwo = plannedSlice("slice-2", "pkg-2");
     const pkgOne: WorkPackageCard = { id: "pkg-1", status: "blocked" };
     const pkgTwo: WorkPackageCard = {
@@ -56,7 +54,6 @@ describe("workstream board action routing", () => {
       from: { kind: "work_package", id: "pkg-1" },
       to: { kind: "work_package", id: "pkg-other" },
       work_package_id: "pkg-1",
-      planned_slice_id: sliceOne.id,
       work_request_id: "wr-1",
     };
 
@@ -78,7 +75,6 @@ describe("workstream board action routing", () => {
         blocker: expect.objectContaining({
           blocker_id: "blocker-2",
           work_package_id: "pkg-2",
-          planned_slice_id: "slice-2",
         }),
         pkg: pkgTwo,
         detail,
@@ -96,9 +92,8 @@ describe("workstream board action routing", () => {
     const edge: ActiveBlockingEdge = {
       id: "edge-blocked",
       blocker_id: "blocker-blocked",
-      from: { kind: "slice", id: sourceSlice.id },
-      to: { kind: "slice", id: blockedSlice.id },
-      planned_slice_id: blockedSlice.id,
+      from: { kind: "work_package", id: sourceSlice.work_package_id! },
+      to: { kind: "work_package", id: blockedSlice.work_package_id! },
       work_package_id: blockedSlice.work_package_id,
       work_request_id: "wr-1",
     };
@@ -135,7 +130,6 @@ describe("workstream board action routing", () => {
           blocker_id: "blocker-1",
           summary: "Scope permission needed",
           work_package_id: "pkg-1",
-          planned_slice_id: "slice-1",
         }),
         pkg,
         detail,
@@ -161,7 +155,7 @@ function requestDetail(id: string): WorkRequestDetail {
   };
 }
 
-function plannedSlice(id: string, workPackageId?: string): PlannedSlice {
+function plannedSlice(id: string, workPackageId?: string): WorkRequestPackage {
   return {
     id,
     title: id,

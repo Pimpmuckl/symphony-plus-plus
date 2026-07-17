@@ -1,4 +1,4 @@
-defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.DeliverySliceProjection do
+defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.DeliveryWorkPackageProjection do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Sanitizer
@@ -14,57 +14,57 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.DeliverySliceProjection do
     :latest_merge_at
   ]
 
-  @spec slices_by_id(term()) :: map()
-  def slices_by_id(nil), do: %{}
+  @spec work_packages_by_id(term()) :: map()
+  def work_packages_by_id(nil), do: %{}
 
-  def slices_by_id(%{} = delivery_board) do
+  def work_packages_by_id(%{} = delivery_board) do
     delivery_board
-    |> map_value("slices")
+    |> map_value("work_packages")
     |> List.wrap()
     |> Enum.flat_map(fn
-      %{} = delivery_slice ->
-        case map_value(delivery_slice, "id") do
-          id when is_binary(id) and id != "" -> [{id, delivery_slice}]
+      %{} = work_package ->
+        case map_value(work_package, "id") do
+          id when is_binary(id) and id != "" -> [{id, work_package}]
           _id -> []
         end
 
-      _delivery_slice ->
+      _work_package ->
         []
     end)
     |> Map.new()
   end
 
-  def slices_by_id(_delivery_board), do: %{}
+  def work_packages_by_id(_delivery_board), do: %{}
 
   @spec primary_operational_state(term(), keyword()) :: map() | nil
-  def primary_operational_state(%{} = delivery_slice, opts) do
-    operational_state = map_value(delivery_slice, "operational_state")
+  def primary_operational_state(%{} = work_package, opts) do
+    operational_state = map_value(work_package, "operational_state")
 
-    if primary_state?(delivery_slice, operational_state) do
+    if primary_state?(work_package, operational_state) do
       operational_state_payload(operational_state, opts)
     end
   end
 
-  def primary_operational_state(_delivery_slice, _opts), do: nil
+  def primary_operational_state(_work_package, _opts), do: nil
 
-  @spec put_delivery_slice(map(), term(), keyword()) :: map()
-  def put_delivery_slice(payload, nil, _opts), do: payload
+  @spec put_delivery_work_package(map(), term(), keyword()) :: map()
+  def put_delivery_work_package(payload, nil, _opts), do: payload
 
-  def put_delivery_slice(payload, %{} = delivery_slice, opts) do
-    payload = Map.put(payload, :attention_reason_codes, map_value(delivery_slice, "attention_reason_codes") || [])
+  def put_delivery_work_package(payload, %{} = work_package, opts) do
+    payload = Map.put(payload, :attention_reason_codes, map_value(work_package, "attention_reason_codes") || [])
 
     if Keyword.get(opts, :include_delivery_data?, true) do
       payload
-      |> Map.put(:delivery, Sanitizer.redacted_json(map_value(delivery_slice, "delivery")))
-      |> Map.put(:successor, Sanitizer.redacted_json(map_value(delivery_slice, "successor")))
+      |> Map.put(:delivery, Sanitizer.redacted_json(map_value(work_package, "delivery")))
+      |> Map.put(:successor, Sanitizer.redacted_json(map_value(work_package, "successor")))
     else
       payload
     end
   end
 
   @spec put_delivery_operational_state(map(), term()) :: map()
-  def put_delivery_operational_state(payload, delivery_slice) do
-    case primary_operational_state(delivery_slice, include_package_fields?: false) do
+  def put_delivery_operational_state(payload, work_package) do
+    case primary_operational_state(work_package, include_package_fields?: false) do
       nil -> payload
       operational_state -> Map.put(payload, :operational_state, operational_state)
     end
@@ -84,18 +84,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.DeliverySliceProjection do
     end
   end
 
-  defp primary_state?(%{} = delivery_slice, %{} = operational_state) do
-    delivery_outcome = map_value(delivery_slice, "delivery_outcome") || map_value(operational_state, "delivery_outcome")
+  defp primary_state?(%{} = work_package, %{} = operational_state) do
+    delivery_outcome = map_value(work_package, "delivery_outcome") || map_value(operational_state, "delivery_outcome")
     key = map_value(operational_state, "key")
     attention_reason_codes = map_value(operational_state, "attention_reason_codes") || []
 
     is_binary(delivery_outcome) or
-      "ambiguous_linked_work_package" in attention_reason_codes or
       (key == "needs_closeout" and "pr_merged_without_delivery_outcome" in attention_reason_codes) or
       terminal_without_delivery_state?(key, attention_reason_codes)
   end
 
-  defp primary_state?(_delivery_slice, _operational_state), do: false
+  defp primary_state?(_work_package, _operational_state), do: false
 
   defp terminal_without_delivery_state?(key, attention_reason_codes) do
     "terminal_package_without_delivery_outcome" in attention_reason_codes and key in ["needs_closeout", "merged", "closed", "abandoned"]

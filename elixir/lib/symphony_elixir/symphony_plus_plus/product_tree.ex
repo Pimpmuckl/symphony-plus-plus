@@ -13,12 +13,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree do
   @spec upsert_node(module(), map()) :: {:ok, term()} | {:error, term()}
   defdelegate upsert_node(repo, attrs), to: Repository
 
-  @spec create_slice_link(module(), map()) :: {:ok, term()} | {:error, term()}
-  defdelegate create_slice_link(repo, attrs), to: Repository
-
-  @spec move_slice_link(module(), map()) :: {:ok, term() | nil} | {:error, term()}
-  defdelegate move_slice_link(repo, attrs), to: Repository
-
   @spec create_dependency_edge(module(), map()) :: {:ok, term()} | {:error, term()}
   defdelegate create_dependency_edge(repo, attrs), to: Repository
 
@@ -26,5 +20,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree do
   defdelegate record_revision(repo, work_request_id, attrs), to: Repository
 
   @spec project(module(), String.t(), [map()], keyword()) :: map()
-  defdelegate project(repo, work_request_id, planned_slice_payloads, opts \\ []), to: Projection
+  defdelegate project(repo, work_request_id, work_package_payloads, opts \\ []), to: Projection
 end

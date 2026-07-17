@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
@@ -40,6 +41,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
           | :invalid_kind
           | :invalid_policy_template
           | :invalid_request
+          | :invalid_status
           | :invalid_review_requirement
           | :sensitive_review_requirement
           | :invalid_work_package_id
@@ -106,6 +108,45 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
     end
   end
 
+  @spec activate(module(), WorkPackage.t()) :: {:ok, creation()} | {:error, error()}
+  def activate(repo, %WorkPackage{status: "planned"} = work_package) when is_atom(repo) do
+    with {:ok, policy} <- Templates.expand(work_package.policy_template || work_package.kind),
+         policy = effective_policy(policy, work_package.review_requirement),
+         {:ok, acceptance_criteria} <- normalize_acceptance_criteria(work_package.acceptance_criteria),
+         {:ok, allowed_file_globs} <- normalize_allowed_file_globs(work_package.allowed_file_globs),
+         :ok <- require_acceptance_criteria(policy, acceptance_criteria),
+         :ok <- require_scope_guard_constraints(policy, allowed_file_globs),
+         :ok <- require_docs_scope(work_package.kind, allowed_file_globs) do
+      repo.transaction(fn -> activate_transaction(repo, work_package, policy) end)
+      |> case do
+        {:ok, creation} -> {:ok, creation}
+        {:error, reason} -> {:error, reason}
+      end
+      |> DashboardPubSub.broadcast_changed_on_success()
+    end
+  end
+
+  def activate(_repo, %WorkPackage{}), do: {:error, :invalid_status}
+
+  defp activate_transaction(repo, work_package, policy) do
+    with {:ok, activated} <-
+           WorkPackageRepository.update_status(repo, work_package.id, "planned", "ready_for_worker", expected_contract_revision: work_package.contract_revision),
+         {:ok, activated} <- WorkPackageRepository.update(repo, activated.id, %{dispatched_at: DateTime.utc_now(:microsecond)}),
+         {:ok, _scope_node} <- append_scope_plan_node(repo, activated),
+         {:ok, _review_node} <- append_review_plan_node(repo, activated, policy),
+         {:ok, minted} <- mint_worker_grant(repo, activated.id, policy),
+         {:ok, virtual_files} <- Renderer.render_all(repo, activated.id) do
+      %{
+        work_package: activated,
+        worker_grant: worker_grant_payload(minted),
+        virtual_files: virtual_files,
+        policy: policy
+      }
+    else
+      {:error, reason} -> repo.rollback(reason)
+    end
+  end
+
   @spec response_payload(creation(), keyword()) :: map()
   def response_payload(%{work_package: work_package, worker_grant: worker_grant, virtual_files: virtual_files, policy: policy}, opts \\ []) do
     worker_bootstrap = Keyword.get(opts, :worker_bootstrap)
@@ -150,6 +191,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
         {:error, reason} -> repo.rollback(reason)
       end
     end)
+    |> DashboardPubSub.broadcast_changed_on_success()
   end
 
   @doc false
@@ -393,7 +435,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
 
   defp default_kind(policy_templates) do
     with {:ok, policy_key, policy} <- default_policy_key(policy_templates),
-         {:ok, kind} <- Templates.work_package_kind(policy_key),
+         {:ok, kind} <- Templates.kind(policy_key),
          :ok <- reject_phase_child_policy(policy) do
       {:ok, kind}
     end
@@ -477,7 +519,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   defp exact_policy_key_with_kind_aliases(exact_keys) do
     candidates =
       Enum.filter(exact_keys, fn policy_key ->
-        case Templates.work_package_kind(policy_key) do
+        case Templates.kind(policy_key) do
           {:ok, kind} -> Enum.all?(exact_keys -- [policy_key], &(&1 == kind))
           {:error, _reason} -> false
         end
@@ -563,7 +605,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   defp require_docs_scope("docs", []), do: {:error, :missing_allowed_file_globs}
 
   defp require_docs_scope("docs", allowed_file_globs) do
-    case ScopeConstraints.validate_docs_owned_file_globs(allowed_file_globs) do
+    case ScopeConstraints.validate_docs_allowed_file_globs(allowed_file_globs) do
       :ok -> :ok
       {:error, _errors} -> {:error, :non_documentation_allowed_file_globs}
     end

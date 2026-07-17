@@ -1,4 +1,4 @@
-import type { ContextComment, PackageAlertIndicator, PackageOperationalAttention, PlannedSlice, WorkPackageCard, WorkPackageDetailPayload, WorkRequestDetail } from "@/types/dashboard";
+import type { ContextComment, PackageAlertIndicator, PackageOperationalAttention, WorkRequestPackage, WorkPackageCard, WorkPackageDetailPayload, WorkRequestDetail } from "@/types/dashboard";
 import { attentionTone, operationalLabel } from "@/lib/operational-state";
 import { formatStatus, statusLabel } from "@/lib/status-labels";
 import { packageReviewLabel, planProgressLabel } from "@/lib/review-signals";
@@ -36,13 +36,12 @@ export function requestOpenQuestions(detail: WorkRequestDetail) {
 
 export function requestSliceCounts(detail: WorkRequestDetail) {
   const summary = detail.summary || {};
-  const planned = summary.planned_slice_count ?? detail.work_request.planned_slice_count ?? 0;
-  const approved = summary.approved_slice_count ?? detail.work_request.approved_slice_count ?? 0;
-  const dispatched = summary.dispatched_slice_count ?? detail.work_request.dispatched_slice_count ?? 0;
-  const skipped = summary.skipped_slice_count ?? detail.work_request.skipped_slice_count ?? 0;
-  const total = Math.max(detail.planned_slices?.length || 0, planned + approved + dispatched + skipped);
+  const planned = summary.planned_work_package_count ?? detail.work_request.planned_work_package_count ?? 0;
+  const dispatched = summary.dispatched_work_package_count ?? detail.work_request.dispatched_work_package_count ?? 0;
+  const skipped = summary.skipped_work_package_count ?? detail.work_request.skipped_work_package_count ?? 0;
+  const total = summary.work_package_count ?? detail.work_request.work_package_count ?? detail.work_packages?.length ?? 0;
 
-  return { planned, approved, dispatched, skipped, total };
+  return { planned, dispatched, skipped, total };
 }
 
 export function commentStatLabel(openCount?: number | null, totalCount?: number | null) {
@@ -82,7 +81,7 @@ export function targetCommentStats(
 }
 
 export function requestCommentStats(detail: WorkRequestDetail, requestComments: ContextComment[]): CommentStats {
-  const sliceComments = (detail.planned_slices || []).flatMap((slice) => slice.comments || []);
+  const sliceComments = (detail.work_packages || []).flatMap((slice) => slice.comments || []);
   const base = serverCommentStats(detail.summary || detail.work_request, [...(detail.comments || []), ...sliceComments]);
   const initialRequestStats = commentStats(detail.comments || []);
   const currentRequestStats = commentStats(requestComments);
@@ -126,24 +125,20 @@ function requestSlicesProgressText(
   if (request.status !== "sliced" && slices.total === 0) return null;
 
   const state = operational?.key && operational.key !== request.status ? `${operational.label || statusLabel(operational.key)}. ` : "";
-  return `${state}${slices.total} slice${slices.total === 1 ? "" : "s"} recorded: ${slices.approved} approved, ${slices.dispatched} dispatched, ${slices.skipped} skipped.`;
+  return `${state}${slices.total} WorkPackage${slices.total === 1 ? "" : "s"} recorded: ${slices.planned} planned, ${slices.dispatched} dispatched, ${slices.skipped} skipped.`;
 }
 
 function requestStatusProgressText(status?: string | null) {
-  if (status === "ready_for_slicing") return "Ready for an architecture agent to plan execution slices.";
+  if (status === "ready_for_slicing") return "Ready for an architecture agent to plan execution WorkPackages.";
   if (status === "clarifying" || status === "ready_for_clarification") return "Architecture intake is still clarifying the request.";
   return `Current request state: ${formatStatus(status)}.`;
 }
 
-export function sliceProgressText(slice: PlannedSlice, pkg?: WorkPackageCard) {
+export function sliceProgressText(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
   if (pkg) {
     const progress = planProgressLabel(pkg.plan);
     const label = operationalLabel(pkg.operational_state || null, pkg.status);
-    return progress ? `Linked work package is ${label} with ${progress.toLowerCase()}.` : `Linked work package is ${label}.`;
-  }
-
-  if (slice.status === "approved") {
-    return "Approved and ready to dispatch into a worker-owned package.";
+    return progress ? `WorkPackage is ${label} with ${progress.toLowerCase()}.` : `WorkPackage is ${label}.`;
   }
 
   if (slice.status === "planned") {
@@ -154,10 +149,10 @@ export function sliceProgressText(slice: PlannedSlice, pkg?: WorkPackageCard) {
     return "Skipped by architecture and not expected to move forward.";
   }
 
-  return `Current slice state: ${formatStatus(slice.status)}.`;
+  return `Current WorkPackage state: ${formatStatus(slice.status)}.`;
 }
 
-export function sliceDeliverySummary(slice: PlannedSlice, operational: WorkPackageCard["operational_state"]) {
+export function sliceDeliverySummary(slice: WorkRequestPackage, operational: WorkPackageCard["operational_state"]) {
   const closeoutSummary = sliceCloseoutSummary(operational);
   if (closeoutSummary) return closeoutSummary;
 
@@ -180,17 +175,17 @@ function sliceCloseoutSummary(operational: WorkPackageCard["operational_state"])
   return operational.attention_items?.[0]?.reason || operational.reason || "Delivery closeout is not recorded.";
 }
 
-function supersededDeliverySummary(slice: PlannedSlice) {
+function supersededDeliverySummary(slice: WorkRequestPackage) {
   const successor = sliceSuccessorLabel(slice);
   if (slice.delivery?.superseded_reason) return slice.delivery.superseded_reason;
   return successor ? `Successor: ${successor}.` : "Superseded.";
 }
 
-export function sliceDeliveryFacts(slice: PlannedSlice): Array<[string, string | null | undefined]> {
+export function sliceDeliveryFacts(slice: WorkRequestPackage): Array<[string, string | null | undefined]> {
   return presentDetailFacts([...deliveryFacts(slice.delivery), ...successorDeliveryFacts(slice), attentionReasonCodesFact(slice.attention_reason_codes)]);
 }
 
-function deliveryFacts(delivery: PlannedSlice["delivery"]) {
+function deliveryFacts(delivery: WorkRequestPackage["delivery"]) {
   if (!delivery) return [];
 
   return presentDetailFacts([
@@ -202,10 +197,9 @@ function deliveryFacts(delivery: PlannedSlice["delivery"]) {
   ]);
 }
 
-function successorDeliveryFacts(slice: PlannedSlice) {
+function successorDeliveryFacts(slice: WorkRequestPackage) {
   return presentDetailFacts([
-    ["Successor Slice", slice.successor?.planned_slice_id || slice.delivery?.successor_planned_slice_id],
-    ["Successor Package", slice.successor?.work_package_id || slice.delivery?.successor_work_package_id],
+    ["Successor WorkPackage", slice.successor?.work_package_id || slice.delivery?.successor_work_package_id],
   ]);
 }
 

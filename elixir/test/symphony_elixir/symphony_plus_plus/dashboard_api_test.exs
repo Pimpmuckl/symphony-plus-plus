@@ -37,6 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service, as: SoloSessionsService
@@ -44,10 +45,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -125,8 +125,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       "sympp_work_requests",
       "sympp_work_request_clarification_questions",
       "sympp_work_request_decision_logs",
-      "sympp_work_request_planned_slices",
-      "sympp_work_request_planned_slice_deliveries",
+      "sympp_work_packages",
+      "sympp_work_package_deliveries",
       "sympp_comments"
     ]
 
@@ -243,8 +243,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     repo.delete_all(GuidanceRequest)
     repo.delete_all(Comment)
     repo.delete_all(AccessGrant)
-    repo.delete_all(PlannedSliceDelivery)
-    repo.delete_all(PlannedSlice)
+    repo.delete_all(WorkPackageDelivery)
+    repo.delete_all(WorkPackage)
     repo.delete_all(WorkPackage)
     repo.delete_all(Phase)
     repo.delete_all(DecisionLogEntry)
@@ -1078,16 +1078,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert {:ok, _closed} = WorkRequestRepository.close_question(repo, closed_question.id, "open")
 
     assert {:ok, _decision} = WorkRequestRepository.record_decision(repo, in_scope.id, decision_attrs(id: "WRD-DASH-1"))
-    assert {:ok, planned} = WorkRequestRepository.add_planned_slice(repo, in_scope.id, planned_slice_attrs(id: "WRS-DASH-PLANNED"))
-    assert {:ok, approved} = WorkRequestRepository.add_planned_slice(repo, in_scope.id, planned_slice_attrs(id: "WRS-DASH-APPROVED"))
-    assert {:ok, dispatched} = WorkRequestRepository.add_planned_slice(repo, in_scope.id, planned_slice_attrs(id: "WRS-DASH-DISPATCHED"))
-    assert {:ok, skipped} = WorkRequestRepository.add_planned_slice(repo, in_scope.id, planned_slice_attrs(id: "WRS-DASH-SKIPPED"))
+    assert {:ok, planned} = CanonicalWorkPackageFixtures.add_work_package(repo, in_scope.id, work_package_attrs(id: "WRS-DASH-PLANNED"))
+    assert {:ok, approved} = CanonicalWorkPackageFixtures.add_work_package(repo, in_scope.id, work_package_attrs(id: "WRS-DASH-APPROVED"))
+    assert {:ok, dispatched} = CanonicalWorkPackageFixtures.add_work_package(repo, in_scope.id, work_package_attrs(id: "WRS-DASH-DISPATCHED"))
+    assert {:ok, skipped} = CanonicalWorkPackageFixtures.add_work_package(repo, in_scope.id, work_package_attrs(id: "WRS-DASH-SKIPPED"))
 
     assert planned.status == "planned"
-    repo.update!(Ecto.Changeset.change(approved, status: "approved"))
-    repo.update!(Ecto.Changeset.change(dispatched, status: "dispatched"))
+    repo.update!(Ecto.Changeset.change(approved, status: "planned"))
+
+    repo.update!(
+      Ecto.Changeset.change(dispatched,
+        status: "ready_for_worker",
+        dispatched_at: DateTime.utc_now(:microsecond)
+      )
+    )
+
     repo.update!(Ecto.Changeset.change(skipped, status: "skipped"))
-    mark_non_scratch_skipped_slice!(repo, skipped.id)
 
     secret = create_architect_grant_secret(repo, anchor.id)
     payload = json_response(get(auth_conn(secret), "/api/v1/sympp/work-requests"), 200)
@@ -1107,10 +1113,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                "answered_question_count" => 1,
                "closed_question_count" => 1,
                "decision_count" => 1,
-               "planned_slice_count" => 1,
-               "approved_slice_count" => 1,
-               "dispatched_slice_count" => 1,
-               "skipped_slice_count" => 1
+               "work_package_count" => 4,
+               "planned_work_package_count" => 2,
+               "dispatched_work_package_count" => 1,
+               "skipped_work_package_count" => 1
              }
            ] = payload["work_requests"]
   end
@@ -1121,7 +1127,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     assert {:ok, _question} = WorkRequestRepository.ask_question(repo, first.id, question_attrs(id: "WRQ-DASH-BATCH-1"))
     assert {:ok, _decision} = WorkRequestRepository.record_decision(repo, second.id, decision_attrs(id: "WRD-DASH-BATCH-1"))
-    assert {:ok, _slice} = WorkRequestRepository.add_planned_slice(repo, second.id, planned_slice_attrs(id: "WRS-DASH-BATCH-1"))
+    assert {:ok, _slice} = CanonicalWorkPackageFixtures.add_work_package(repo, second.id, work_package_attrs(id: "WRS-DASH-BATCH-1"))
 
     {:ok, counter} = Agent.start_link(fn -> %{} end)
     WorkRequestCardCountingRepo.counter(counter)
@@ -1143,8 +1149,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                "sympp_work_requests" => 1,
                "sympp_work_request_clarification_questions" => 1,
                "sympp_work_request_decision_logs" => 1,
-               "sympp_work_request_planned_slices" => 1,
-               "sympp_work_request_planned_slice_deliveries" => 1,
+               "sympp_work_packages" => 1,
+               "sympp_work_package_deliveries" => 1,
                "sympp_comments" => 1
              }
     after
@@ -1202,6 +1208,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         constraints: %{"token" => "raw-secret-value", "safe" => "visible"}
       )
 
+    assert {:ok, product_node} =
+             ProductTree.create_node(repo, %{
+               id: "PTN-DASH-DETAIL",
+               work_request_id: work_request.id,
+               title: "Dashboard detail node"
+             })
+
     assert {:ok, second_question} =
              WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-DETAIL-B", question: "Second?"))
 
@@ -1229,17 +1242,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              )
 
     assert {:ok, second_slice} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-DETAIL-B", title: "Second slice")
+               work_package_attrs(id: "WRS-DETAIL-B", title: "Second slice")
              )
 
     assert {:ok, first_slice} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-DETAIL-A", title: "Slice with ghp_secret123")
+               work_package_attrs(
+                 id: "WRS-DETAIL-A",
+                 title: "Slice with ghp_secret123",
+                 product_tree_node_id: product_node.id
+               )
              )
 
     secret = create_architect_grant_secret(repo, anchor.id)
@@ -1254,8 +1271,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert Enum.at(payload["clarification_questions"], 1)["answer"] == "[REDACTED]"
     assert Enum.map(payload["decision_logs"], & &1["id"]) == [second_decision.id, first_decision.id]
     assert Enum.at(payload["decision_logs"], 1)["decision"] == "[REDACTED]"
-    assert Enum.map(payload["planned_slices"], & &1["id"]) == [second_slice.id, first_slice.id]
-    assert Enum.at(payload["planned_slices"], 1)["title"] == "[REDACTED]"
+    assert Enum.map(payload["work_packages"], & &1["id"]) == [second_slice.id, first_slice.id]
+    assert Enum.at(payload["work_packages"], 1)["title"] == "[REDACTED]"
+
+    work_packages_by_id = Map.new(payload["work_packages"], &{&1["id"], &1})
+    assert work_packages_by_id[first_slice.id]["product_tree_node_id"] == product_node.id
+    assert payload["product_tree"]["root_work_package_ids"] == [second_slice.id]
+
+    product_node_id = product_node.id
+    first_slice_id = first_slice.id
+    assert [%{"id" => ^product_node_id, "work_package_ids" => [^first_slice_id]}] = payload["product_tree"]["nodes"]
 
     assert payload["summary"] == %{
              "open_question_count" => 1,
@@ -1264,14 +1289,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              "decision_count" => 2,
              "comment_count" => 0,
              "open_comment_count" => 0,
-             "planned_slice_count" => 2,
-             "approved_slice_count" => 0,
-             "dispatched_slice_count" => 0,
-             "skipped_slice_count" => 0
+             "work_package_count" => 2,
+             "planned_work_package_count" => 2,
+             "dispatched_work_package_count" => 0,
+             "skipped_work_package_count" => 0
            }
   end
 
-  test "dashboard WorkRequest detail keeps skipped planned slices visible", %{repo: repo} do
+  test "dashboard WorkRequest detail keeps skipped WorkPackages visible", %{repo: repo} do
     assert {:ok, anchor} =
              WorkPackageRepository.create(
                repo,
@@ -1294,24 +1319,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       )
 
     assert {:ok, visible_slice} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-DASH-SCRATCH-VISIBLE")
+               work_package_attrs(id: "WRS-DASH-SCRATCH-VISIBLE")
              )
 
     assert {:ok, scratch_slice} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-DASH-SCRATCH-HIDDEN")
+               work_package_attrs(id: "WRS-DASH-SCRATCH-HIDDEN")
              )
 
-    assert {:ok, scratch_slice} = WorkRequestRepository.skip_planned_slice(repo, work_request.id, scratch_slice.id, "planned")
+    assert {:ok, scratch_slice} = WorkRequestRepository.skip_work_package(repo, work_request.id, scratch_slice.id, "planned")
 
     assert {:ok, scratch_comment} =
              CommentService.create(repo, %{
-               target_kind: "planned_slice",
+               target_kind: "work_package",
                target_id: scratch_slice.id,
                body: "Scratch planning note",
                source_type: "architect",
@@ -1319,16 +1344,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              })
 
     assert {:ok, delivered_slice} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-DASH-SCRATCH-DELIVERY")
+               work_package_attrs(id: "WRS-DASH-SCRATCH-DELIVERY")
              )
 
-    assert {:ok, delivered_slice} = WorkRequestRepository.skip_planned_slice(repo, work_request.id, delivered_slice.id, "planned")
+    assert {:ok, delivered_slice} = WorkRequestRepository.skip_work_package(repo, work_request.id, delivered_slice.id, "planned")
 
     assert {:ok, _delivery} =
-             WorkRequestRepository.record_planned_slice_delivery(
+             WorkRequestRepository.record_work_package_delivery(
                repo,
                work_request.id,
                delivered_slice.id,
@@ -1342,13 +1367,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     secret = create_architect_grant_secret(repo, anchor.id)
     default_payload = json_response(get(auth_conn(secret), "/api/v1/sympp/work-requests/#{work_request.id}"), 200)
 
-    assert Enum.map(default_payload["planned_slices"], & &1["id"]) == [visible_slice.id, scratch_slice.id, delivered_slice.id]
-    assert default_payload["summary"]["planned_slice_count"] == 1
-    assert default_payload["summary"]["skipped_slice_count"] == 2
+    assert Enum.map(default_payload["work_packages"], & &1["id"]) == [visible_slice.id, scratch_slice.id, delivered_slice.id]
+    assert default_payload["summary"]["work_package_count"] == 3
+    assert default_payload["summary"]["planned_work_package_count"] == 1
+    assert default_payload["summary"]["skipped_work_package_count"] == 2
     assert default_payload["work_request"]["comment_count"] == 1
     assert default_payload["summary"]["comment_count"] == 1
 
-    included_by_id = Map.new(default_payload["planned_slices"], &{&1["id"], &1})
+    included_by_id = Map.new(default_payload["work_packages"], &{&1["id"], &1})
     assert get_in(included_by_id, [scratch_slice.id, "comment_count"]) == 1
     assert [%{"id" => scratch_comment_id}] = get_in(included_by_id, [scratch_slice.id, "comments"])
     assert scratch_comment_id == scratch_comment.id
@@ -1376,10 +1402,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       )
 
     assert {:ok, slice} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-DASH-COMMENTS")
+               work_package_attrs(id: "WRS-DASH-COMMENTS")
              )
 
     assert {:ok, request_comment} =
@@ -1393,7 +1419,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     assert {:ok, slice_comment} =
              CommentService.create(repo, %{
-               target_kind: "planned_slice",
+               target_kind: "work_package",
                target_id: slice.id,
                body: "Slice note",
                source_type: "architect",
@@ -1420,7 +1446,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     assert [%{"id" => ^request_comment_id, "body" => "Request note includes [REDACTED]", "status" => "open"}] = payload["comments"]
 
-    assert [slice_payload] = payload["planned_slices"]
+    assert [slice_payload] = payload["work_packages"]
     assert slice_payload["comment_count"] == 1
     assert slice_payload["open_comment_count"] == 0
     assert [%{"id" => ^slice_comment_id, "status" => "resolved", "resolution_note" => "Closed"}] = slice_payload["comments"]
@@ -1448,10 +1474,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       )
 
     assert {:ok, slice} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-DASH-COMMENT-CAP")
+               work_package_attrs(id: "WRS-DASH-COMMENT-CAP")
              )
 
     Enum.each(1..105, fn index ->
@@ -1466,7 +1492,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       create_comment_at!(repo, index, %{
         id: numbered_comment_id("comment-slice", index),
-        target_kind: "planned_slice",
+        target_kind: "work_package",
         target_id: slice.id,
         body: "Slice comment #{index}",
         source_type: "operator",
@@ -1487,45 +1513,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert payload["summary"]["comment_count"] == 210
     assert Enum.map(payload["comments"], & &1["id"]) == expected_request_ids
 
-    assert [slice_payload] = payload["planned_slices"]
+    assert [slice_payload] = payload["work_packages"]
     assert Enum.map(slice_payload["comments"], & &1["id"]) == expected_slice_ids
   end
 
-  test "local WorkRequest detail includes planned-slice operational state from linked package activity", %{repo: repo} do
+  test "local WorkRequest detail includes work-package operational state from linked package activity", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-DASH-OP-SLICES", status: "ready_for_slicing")
 
     assert {:ok, approved_ready} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-OP-READY"))
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-OP-READY"))
 
-    assert {:ok, _approved_ready} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, approved_ready.id, "planned")
+    set_canonical_package_status!(repo, approved_ready, "ready_for_worker")
 
     assert {:ok, approved_idle_linked} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-OP-IDLE-LINKED"))
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-OP-IDLE-LINKED"))
 
-    assert {:ok, approved_idle_linked} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, approved_idle_linked.id, "planned")
-
-    idle_package =
-      create_matching_work_package!(repo, work_request, approved_idle_linked,
-        id: "SYMPP-OP-IDLE-LINKED",
-        status: "ready_for_worker"
-      )
-
-    assert {:ok, dispatched_idle} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_idle_linked.id, "approved", idle_package.id)
-
-    repo.update!(Ecto.Changeset.change(dispatched_idle, status: "approved"))
+    set_canonical_package_status!(repo, approved_idle_linked, "ready_for_worker")
 
     assert {:ok, approved_prepared_linked} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-OP-PREPARED-LINKED"))
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-OP-PREPARED-LINKED"))
 
-    assert {:ok, approved_prepared_linked} =
-             WorkRequestRepository.approve_planned_slice(repo, work_request.id, approved_prepared_linked.id, "planned")
-
-    prepared_package =
-      create_matching_work_package!(repo, work_request, approved_prepared_linked,
-        id: "SYMPP-OP-PREPARED-LINKED",
-        status: "ready_for_worker"
-      )
+    prepared_package = set_canonical_package_status!(repo, approved_prepared_linked, "ready_for_worker")
 
     assert {:ok, _prepared_progress} =
              PlanningRepository.append_progress_event(repo, %{
@@ -1542,68 +1550,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                created_at: ~U[2026-05-05 00:00:00Z]
              })
 
-    assert {:ok, dispatched_prepared} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_prepared_linked.id, "approved", prepared_package.id)
-
-    repo.update!(Ecto.Changeset.change(dispatched_prepared, status: "approved"))
-
     assert {:ok, approved_linked} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-OP-LINKED"))
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-OP-LINKED"))
 
-    assert {:ok, approved_linked} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, approved_linked.id, "planned")
-
-    linked_package =
-      create_matching_work_package!(repo, work_request, approved_linked,
-        id: "SYMPP-OP-LINKED",
-        status: "implementing"
-      )
-
-    assert {:ok, dispatched} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_linked.id, "approved", linked_package.id)
-
-    repo.update!(Ecto.Changeset.change(dispatched, status: "approved"))
+    set_canonical_package_status!(repo, approved_linked, "implementing")
 
     assert {:ok, approved_terminal} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-OP-TERMINAL"))
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-OP-TERMINAL"))
 
-    assert {:ok, approved_terminal} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, approved_terminal.id, "planned")
-
-    terminal_package =
-      create_matching_work_package!(repo, work_request, approved_terminal,
-        id: "SYMPP-OP-TERMINAL",
-        status: "abandoned"
-      )
-
-    assert {:ok, dispatched_terminal} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_terminal.id, "approved", terminal_package.id)
-
-    repo.update!(Ecto.Changeset.change(dispatched_terminal, status: "approved"))
+    set_canonical_package_status!(repo, approved_terminal, "abandoned")
 
     assert {:ok, payload} = Dashboard.work_request_detail(repo, work_request.id)
-    slices_by_id = Map.new(payload.planned_slices, &{&1.id, &1})
+    slices_by_id = Map.new(payload.work_packages, &{&1.id, &1})
 
     assert get_in(slices_by_id, ["WRS-OP-READY", :operational_state, :key]) == "ready_for_worker"
-    assert get_in(slices_by_id, ["WRS-OP-READY", :operational_state, :raw_status]) == "approved"
+    assert get_in(slices_by_id, ["WRS-OP-READY", :operational_state, :raw_status]) == "ready_for_worker"
     assert get_in(slices_by_id, ["WRS-OP-IDLE-LINKED", :operational_state, :key]) == "ready_for_worker"
 
     prepared_linked_slice = Map.fetch!(slices_by_id, "WRS-OP-PREPARED-LINKED")
     assert prepared_linked_slice.work_package_status == "ready_for_worker"
     assert prepared_linked_slice.operational_state.key == "prepared"
-    assert prepared_linked_slice.operational_state.raw_status == "approved"
+    assert prepared_linked_slice.operational_state.raw_status == "ready_for_worker"
     assert prepared_linked_slice.operational_state.has_started == false
     assert prepared_linked_slice.operational_state.has_prepared_worktree == true
     refute Enum.any?(prepared_linked_slice.operational_state.attention_items, &(&1.key == "linked_package_started_while_slice_idle"))
 
     linked_slice = Map.fetch!(slices_by_id, "WRS-OP-LINKED")
-    assert linked_slice.work_package_id == linked_package.id
     assert linked_slice.work_package_status == "implementing"
     assert linked_slice.operational_state.key == "started_paused"
-    assert linked_slice.operational_state.raw_status == "approved"
-
-    assert Enum.any?(
-             linked_slice.operational_state.attention_items,
-             &(&1.key == "linked_package_started_while_slice_idle")
-           )
+    assert linked_slice.operational_state.raw_status == "implementing"
 
     terminal_slice = Map.fetch!(slices_by_id, "WRS-OP-TERMINAL")
     assert terminal_slice.work_package_status == "abandoned"
@@ -1615,9 +1590,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     work_request = create_work_request!(repo, id: "WR-DASH-OP-REQUEST", status: "ready_for_slicing")
 
     assert {:ok, active_slice} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-OP-REQUEST-ACTIVE"))
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-OP-REQUEST-ACTIVE"))
 
-    assert {:ok, active_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, active_slice.id, "planned")
+    assert {:ok, active_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, active_slice.id, "planned")
 
     active_package =
       create_matching_work_package!(repo, work_request, active_slice,
@@ -1634,12 +1609,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              })
 
     assert {:ok, _dispatched_active} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, active_slice.id, "approved", active_package.id)
+             CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, active_slice.id, "approved", active_package.id)
 
     assert {:ok, merged_slice} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-OP-REQUEST-MERGED"))
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-OP-REQUEST-MERGED"))
 
-    assert {:ok, merged_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, merged_slice.id, "planned")
+    assert {:ok, merged_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, merged_slice.id, "planned")
 
     merged_package =
       create_matching_work_package!(repo, work_request, merged_slice,
@@ -1648,25 +1623,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       )
 
     assert {:ok, _dispatched_merged} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, merged_slice.id, "approved", merged_package.id)
+             CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, merged_slice.id, "approved", merged_package.id)
 
     assert {:ok, payload} = Dashboard.work_requests(repo)
     request_card = Enum.find(payload.work_requests, &(&1.id == work_request.id))
 
-    assert request_card.status == "ready_for_slicing"
-    assert request_card.dispatched_slice_count == 2
+    assert request_card.status == "sliced"
+    assert request_card.dispatched_work_package_count == 2
     assert request_card.operational_state.key == "active"
     assert request_card.operational_state.label == "Active"
-    assert request_card.operational_state.raw_status == "ready_for_slicing"
+    assert request_card.operational_state.raw_status == "sliced"
     assert request_card.operational_state.has_started == true
     assert request_card.operational_state.has_active_worker == true
 
     prepared_request = create_work_request!(repo, id: "WR-DASH-OP-REQUEST-PREPARED", status: "ready_for_slicing")
 
     assert {:ok, prepared_slice} =
-             WorkRequestRepository.add_planned_slice(repo, prepared_request.id, planned_slice_attrs(id: "WRS-OP-REQUEST-PREPARED"))
+             CanonicalWorkPackageFixtures.add_work_package(repo, prepared_request.id, work_package_attrs(id: "WRS-OP-REQUEST-PREPARED"))
 
-    assert {:ok, prepared_slice} = WorkRequestRepository.approve_planned_slice(repo, prepared_request.id, prepared_slice.id, "planned")
+    assert {:ok, prepared_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, prepared_request.id, prepared_slice.id, "planned")
 
     prepared_package =
       create_matching_work_package!(repo, prepared_request, prepared_slice,
@@ -1690,24 +1665,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              })
 
     assert {:ok, _dispatched_prepared} =
-             WorkRequestRepository.dispatch_planned_slice(repo, prepared_request.id, prepared_slice.id, "approved", prepared_package.id)
+             CanonicalWorkPackageFixtures.dispatch_work_package(repo, prepared_request.id, prepared_slice.id, "approved", prepared_package.id)
 
     assert {:ok, prepared_payload} = Dashboard.work_requests(repo)
     prepared_request_card = Enum.find(prepared_payload.work_requests, &(&1.id == prepared_request.id))
 
     assert prepared_request_card.operational_state.key == "prepared"
     assert prepared_request_card.operational_state.label == "Prepared"
-    assert prepared_request_card.operational_state.raw_status == "ready_for_slicing"
+    assert prepared_request_card.operational_state.raw_status == "sliced"
     assert prepared_request_card.operational_state.has_prepared_worktree == true
   end
 
   test "WorkRequest completion shows needs closeout while dispatched slice preserves merged package truth", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-DASH-OP-MERGED", status: "ready_for_slicing")
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-OP-MERGED"))
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-OP-MERGED"))
 
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
     merged_package =
       create_matching_work_package!(repo, work_request, approved_slice,
@@ -1716,36 +1691,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       )
 
     assert {:ok, dispatched_slice} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", merged_package.id)
+             CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", merged_package.id)
 
-    assert dispatched_slice.status == "dispatched"
+    assert dispatched_slice.status == "merged"
 
     assert {:ok, payload} = Dashboard.work_request_detail(repo, work_request.id)
-    assert payload.work_request.status == "ready_for_slicing"
+    assert payload.work_request.status == "sliced"
     assert payload.work_request.completed_at != nil
     assert payload.work_request.archived_at == nil
     assert payload.work_request.operational_state.key == "needs_closeout"
     assert payload.work_request.operational_state.label == "Needs Closeout"
-    assert payload.work_request.operational_state.raw_status == "ready_for_slicing"
+    assert payload.work_request.operational_state.raw_status == "sliced"
 
     assert {:ok, read_request} = WorkRequestRepository.get(repo, work_request.id)
     assert read_request.completed_at == nil
 
-    [slice] = payload.planned_slices
-    assert slice.status == "dispatched"
+    [slice] = payload.work_packages
+    assert slice.status == "merged"
     assert slice.work_package_status == "merged"
     assert slice.operational_state.key == "needs_closeout"
-    assert slice.operational_state.raw_status == "dispatched"
+    assert slice.operational_state.raw_status == "merged"
     assert slice.attention_reason_codes == ["terminal_package_without_delivery_outcome"]
   end
 
   test "WorkRequest delivery truth stays primary over lifecycle gates", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-DASH-OP-GATED-DELIVERY", status: "ready_for_slicing")
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-OP-GATED-DELIVERY"))
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-OP-GATED-DELIVERY"))
 
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
     work_package =
       create_matching_work_package!(repo, work_request, approved_slice,
@@ -1754,13 +1729,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       )
 
     assert {:ok, _dispatched_slice} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", work_package.id)
+             CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", work_package.id)
 
     assert {:ok, _delivery} =
-             WorkRequestRepository.record_planned_slice_delivery(
+             WorkRequestRepository.record_work_package_delivery(
                repo,
                work_request.id,
-               approved_slice.id,
+               work_package.id,
                delivery_attrs(%{
                  outcome: "pr_merged",
                  idempotency_key: "dashboard-gated-delivery",
@@ -1784,7 +1759,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert detail.work_request.operational_state.key == "delivered"
     assert detail.work_request.operational_state.raw_status == "human_info_needed"
 
-    [slice] = detail.planned_slices
+    [slice] = detail.work_packages
     assert slice.operational_state.key == "delivered"
   end
 
@@ -1810,11 +1785,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   test "derived completed WorkRequest stays completed over clarification gates", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-DASH-DERIVED-COMPLETED-GATED", status: "ready_for_slicing")
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-DERIVED-COMPLETED-GATED"))
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-DERIVED-COMPLETED-GATED"))
 
-    assert {:ok, _skipped_slice} = WorkRequestRepository.skip_planned_slice(repo, work_request.id, planned_slice.id, "planned")
-    mark_non_scratch_skipped_slice!(repo, planned_slice.id)
+    assert {:ok, _skipped_slice} = WorkRequestRepository.skip_work_package(repo, work_request.id, work_package.id, "planned")
+    mark_non_scratch_skipped_slice!(repo, work_package.id)
 
     work_request
     |> Ecto.Changeset.change(status: "clarifying")
@@ -1834,10 +1809,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   test "archived WorkRequest lifecycle stays primary over delivery promotion", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-DASH-OP-ARCHIVED-DELIVERY", status: "ready_for_slicing")
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-OP-ARCHIVED-DELIVERY"))
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-OP-ARCHIVED-DELIVERY"))
 
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
     work_package =
       create_matching_work_package!(repo, work_request, approved_slice,
@@ -1846,13 +1821,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       )
 
     assert {:ok, _dispatched_slice} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", work_package.id)
+             CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", work_package.id)
 
     assert {:ok, _delivery} =
-             WorkRequestRepository.record_planned_slice_delivery(
+             WorkRequestRepository.record_work_package_delivery(
                repo,
                work_request.id,
-               approved_slice.id,
+               work_package.id,
                delivery_attrs(%{
                  outcome: "pr_merged",
                  idempotency_key: "dashboard-archived-delivery",
@@ -1871,11 +1846,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert {:ok, detail} = Dashboard.work_request_detail(repo, work_request.id)
     assert detail.work_request.operational_state.key == "completed"
 
-    [slice] = detail.planned_slices
+    [slice] = detail.work_packages
     assert slice.operational_state.key == "delivered"
   end
 
-  test "grant WorkRequest list and detail promote scoped linked packages consistently", %{repo: repo} do
+  test "grant WorkRequest list and detail promote scoped packages consistently", %{repo: repo} do
     assert {:ok, anchor} =
              WorkPackageRepository.create(
                repo,
@@ -1897,14 +1872,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         base_branch: anchor.base_branch
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-OP-GRANT-MERGED", target_base_branch: anchor.base_branch)
+               work_package_attrs(id: "WRS-OP-GRANT-MERGED", base_branch: anchor.base_branch)
              )
 
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
     merged_package =
       create_matching_work_package!(repo, work_request, approved_slice,
@@ -1913,13 +1888,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       )
 
     assert {:ok, _dispatched_slice} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", merged_package.id)
+             CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", merged_package.id)
 
     assert {:ok, _delivery} =
-             WorkRequestRepository.record_planned_slice_delivery(
+             WorkRequestRepository.record_work_package_delivery(
                repo,
                work_request.id,
-               approved_slice.id,
+               merged_package.id,
                delivery_attrs(%{
                  outcome: "pr_merged",
                  idempotency_key: "grant-dashboard-delivery-merged",
@@ -1930,13 +1905,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              )
 
     assert {:ok, terminal_slice} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-OP-GRANT-TERMINAL", target_base_branch: anchor.base_branch)
+               work_package_attrs(id: "WRS-OP-GRANT-TERMINAL", base_branch: anchor.base_branch)
              )
 
-    assert {:ok, terminal_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, terminal_slice.id, "planned")
+    assert {:ok, terminal_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, terminal_slice.id, "planned")
 
     terminal_package =
       create_matching_work_package!(repo, work_request, terminal_slice,
@@ -1945,7 +1920,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       )
 
     assert {:ok, _terminal_dispatched_slice} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, terminal_slice.id, "approved", terminal_package.id)
+             CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, terminal_slice.id, "approved", terminal_package.id)
 
     secret = create_architect_grant_secret(repo, anchor.id)
     list_payload = json_response(get(auth_conn(secret), "/api/v1/sympp/work-requests"), 200)
@@ -1953,12 +1928,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     [card] = Enum.filter(list_payload["work_requests"], &(&1["id"] == work_request.id))
 
-    assert card["status"] == "ready_for_slicing"
+    assert card["status"] == "sliced"
     assert card["completed_at"] != nil
     assert card["archived_at"] == nil
     assert card["operational_state"]["key"] == "needs_closeout"
     assert card["operational_state"]["label"] == "Needs Closeout"
-    assert card["operational_state"]["raw_status"] == "ready_for_slicing"
+    assert card["operational_state"]["raw_status"] == "sliced"
     refute Map.has_key?(card["operational_state"], "reason")
     refute Map.has_key?(card["operational_state"], "work_package_status")
     refute Enum.any?(card["operational_state"]["attention_items"] || [], &Map.has_key?(&1, "reason"))
@@ -1977,26 +1952,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     refute Map.has_key?(detail_payload["work_request"]["operational_state"], "last_activity_at")
     refute Map.has_key?(detail_payload["work_request"]["operational_state"], "is_stale")
 
-    grant_slices = Map.new(detail_payload["planned_slices"], &{&1["id"], &1})
+    grant_packages = Map.new(detail_payload["work_packages"], &{&1["id"], &1})
 
-    assert %{"status" => "dispatched"} = grant_slice = Map.fetch!(grant_slices, approved_slice.id)
-    assert get_in(grant_slice, ["operational_state", "key"]) == "delivered"
-    refute Map.has_key?(grant_slice, "delivery")
-    refute Map.has_key?(grant_slice, "successor")
-    refute Map.has_key?(grant_slice, "work_package_status")
-    refute Map.has_key?(grant_slice["operational_state"], "reason")
-    refute Map.has_key?(grant_slice["operational_state"], "work_package_status")
-    refute Enum.any?(grant_slice["operational_state"]["attention_items"] || [], &Map.has_key?(&1, "reason"))
+    assert %{"status" => "merged"} = grant_package = Map.fetch!(grant_packages, merged_package.id)
+    assert get_in(grant_package, ["operational_state", "key"]) == "delivered"
+    refute Map.has_key?(grant_package, "delivery")
+    refute Map.has_key?(grant_package, "successor")
+    refute Map.has_key?(grant_package, "work_package_status")
+    refute Map.has_key?(grant_package["operational_state"], "reason")
+    refute Map.has_key?(grant_package["operational_state"], "work_package_status")
+    refute Enum.any?(grant_package["operational_state"]["attention_items"] || [], &Map.has_key?(&1, "reason"))
 
-    assert %{"status" => "dispatched"} = terminal_grant_slice = Map.fetch!(grant_slices, terminal_slice.id)
-    assert get_in(terminal_grant_slice, ["operational_state", "key"]) == "needs_closeout"
-    assert terminal_grant_slice["attention_reason_codes"] == ["terminal_package_without_delivery_outcome"]
-    refute Map.has_key?(terminal_grant_slice, "delivery")
-    refute Map.has_key?(terminal_grant_slice, "successor")
-    refute Map.has_key?(terminal_grant_slice, "work_package_status")
-    refute Map.has_key?(terminal_grant_slice["operational_state"], "reason")
-    refute Map.has_key?(terminal_grant_slice["operational_state"], "work_package_status")
-    refute Enum.any?(terminal_grant_slice["operational_state"]["attention_items"] || [], &Map.has_key?(&1, "reason"))
+    assert %{"status" => "merged"} = terminal_grant_package = Map.fetch!(grant_packages, terminal_package.id)
+    assert get_in(terminal_grant_package, ["operational_state", "key"]) == "needs_closeout"
+    assert terminal_grant_package["attention_reason_codes"] == ["terminal_package_without_delivery_outcome"]
+    refute Map.has_key?(terminal_grant_package, "delivery")
+    refute Map.has_key?(terminal_grant_package, "successor")
+    refute Map.has_key?(terminal_grant_package, "work_package_status")
+    refute Map.has_key?(terminal_grant_package["operational_state"], "reason")
+    refute Map.has_key?(terminal_grant_package["operational_state"], "work_package_status")
+    refute Enum.any?(terminal_grant_package["operational_state"]["attention_items"] || [], &Map.has_key?(&1, "reason"))
     refute Map.has_key?(detail_payload, "delivery_board")
   end
 
@@ -2476,17 +2451,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     work_request = create_work_request!(repo, id: "WR-DASH-FAST-READY", status: "ready_for_slicing")
 
     assert {:ok, planned} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               planned_slice_attrs(
+               work_package_attrs(
                  id: "WRS-DASH-FAST-READY",
                  title: "Generic review dashboard readiness",
                  review_requirement: review
                )
              )
 
-    assert {:ok, approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned.id, "planned")
+    assert {:ok, approved} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, planned.id, "planned")
 
     work_package =
       create_matching_work_package!(repo, work_request, approved,
@@ -2495,7 +2470,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         policy_template: "mcp"
       )
 
-    assert {:ok, _linked} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", work_package.id)
+    assert {:ok, _linked} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", work_package.id)
 
     secret = create_architect_grant_secret(repo, work_package.id)
     append_ready_evidence_with_review_artifacts(repo, work_package, ["review-fast-log.txt"])
@@ -2521,69 +2496,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     assert missing["active"] == false
     refute "review_complete" in missing["missing"]
-  end
-
-  test "work request detail marks duplicate linked planned slices for repair", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-DASH-DUPLICATE-LINK-READY", status: "ready_for_slicing")
-
-    assert {:ok, first_planned} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               planned_slice_attrs(id: "WRS-DASH-DUPLICATE-LINK-A")
-             )
-
-    assert {:ok, first_approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, first_planned.id, "planned")
-
-    assert {:ok, second_planned} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               planned_slice_attrs(id: "WRS-DASH-DUPLICATE-LINK-B")
-             )
-
-    work_package =
-      create_matching_work_package!(repo, work_request, first_approved,
-        id: "SYMPP-DASH-DUPLICATE-LINK-READY",
-        status: "ready_for_merge",
-        policy_template: "mcp"
-      )
-
-    assert {:ok, _linked} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, first_approved.id, "approved", work_package.id)
-
-    append_ready_evidence_with_review_artifacts(repo, work_package, ["review-fast-log.txt"])
-
-    drop_planned_slice_work_package_unique_index!(repo)
-
-    try do
-      repo.query!(
-        "UPDATE sympp_work_request_planned_slices SET work_package_id = ? WHERE id = ?",
-        [work_package.id, second_planned.id]
-      )
-
-      assert {:ok, payload} = Dashboard.work_request_detail(repo, work_request.id)
-      [first_slice, second_slice] = payload.planned_slices
-
-      assert first_slice.operational_state.key == "needs_repair"
-      assert second_slice.operational_state.key == "needs_repair"
-
-      assert Enum.any?(
-               first_slice.operational_state.attention_items,
-               &(&1.key == "ambiguous_linked_work_package")
-             )
-
-      assert Enum.any?(
-               second_slice.operational_state.attention_items,
-               &(&1.key == "ambiguous_linked_work_package")
-             )
-    after
-      repo.query!(
-        "UPDATE sympp_work_request_planned_slices SET work_package_id = NULL WHERE id = ?",
-        [second_planned.id]
-      )
-
-      create_planned_slice_work_package_unique_index!(repo)
-    end
   end
 
   test "ready packages with in-progress plan nodes flag missing plan evidence", %{repo: repo} do
@@ -4212,8 +4124,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  status: "ready_for_slicing"
                })
 
-      assert {:ok, slice} = WorkRequestRepository.add_planned_slice(repo, archived_request.id, planned_slice_attrs(id: "WRS-OPERATOR-ARCHIVE"))
-      assert {:ok, _skipped} = WorkRequestRepository.skip_planned_slice(repo, archived_request.id, slice.id, "planned")
+      assert {:ok, slice} = CanonicalWorkPackageFixtures.add_work_package(repo, archived_request.id, work_package_attrs(id: "WRS-OPERATOR-ARCHIVE"))
+      assert {:ok, _skipped} = WorkRequestRepository.skip_work_package(repo, archived_request.id, slice.id, "planned")
       mark_non_scratch_skipped_slice!(repo, slice.id)
 
       archived_request
@@ -4318,20 +4230,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, _decision} =
                WorkRequestRepository.record_decision(repo, work_request.id, decision_attrs(id: "WRD-LOCAL-COMPACT-DETAIL"))
 
-      assert {:ok, planned_slice} =
-               WorkRequestRepository.add_planned_slice(
+      assert {:ok, work_package} =
+               CanonicalWorkPackageFixtures.add_work_package(
                  repo,
                  work_request.id,
-                 planned_slice_attrs(
+                 work_package_attrs(
                    id: "WRS-LOCAL-COMPACT-DETAIL",
                    acceptance_criteria: ["Large acceptance text"],
                    validation_steps: ["Large validation text"],
-                   owned_file_globs: ["large/**"],
+                   allowed_file_globs: ["large/**"],
                    stop_conditions: ["Large stop condition"]
                  )
                )
 
-      assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+      assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
       work_package =
         create_matching_work_package!(repo, work_request, approved_slice,
@@ -4340,13 +4252,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         )
 
       assert {:ok, _dispatched_slice} =
-               WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", work_package.id)
+               CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", work_package.id)
 
       assert {:ok, _delivery} =
-               WorkRequestRepository.record_planned_slice_delivery(
+               WorkRequestRepository.record_work_package_delivery(
                  repo,
                  work_request.id,
-                 approved_slice.id,
+                 work_package.id,
                  delivery_attrs(%{
                    outcome: "completed_no_pr",
                    idempotency_key: "local-operator-compact-detail",
@@ -4365,7 +4277,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       dashboard = local_operator_dashboard_payload()
       compact_detail = work_request_detail(dashboard, work_request.id)
-      [compact_slice] = compact_detail["planned_slices"]
+      [compact_slice] = compact_detail["work_packages"]
 
       refute Map.has_key?(compact_detail, "decision_logs")
       refute Map.has_key?(compact_detail, "comments")
@@ -4373,7 +4285,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       refute Map.has_key?(compact_detail["work_request"], "constraints")
       refute Map.has_key?(compact_slice, "acceptance_criteria")
       refute Map.has_key?(compact_slice, "validation_steps")
-      refute Map.has_key?(compact_slice, "owned_file_globs")
+      refute Map.has_key?(compact_slice, "allowed_file_globs")
       refute Map.has_key?(compact_slice, "stop_conditions")
       refute Map.has_key?(compact_slice["delivery"], "no_pr_evidence")
       assert compact_slice["operational_state"]["key"] == "completed_no_pr"
@@ -4387,10 +4299,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert [%{"body" => "Full comment should stay lazy."}] = full_detail["comments"]
       assert full_detail["work_request"]["human_description"] == "Full operator detail should stay lazy."
       assert full_detail["work_request"]["constraints"] == %{"heavy" => "constraint"}
-      assert [full_slice] = full_detail["planned_slices"]
+      assert [full_slice] = full_detail["work_packages"]
       assert full_slice["acceptance_criteria"] == ["Large acceptance text"]
       assert full_slice["validation_steps"] == ["Large validation text"]
-      assert full_slice["owned_file_globs"] == ["large/**"]
+      assert full_slice["allowed_file_globs"] == ["large/**"]
       assert full_slice["stop_conditions"] == ["Large stop condition"]
       assert full_slice["delivery"]["no_pr_evidence"] == "Full delivery evidence should stay lazy."
     end)
@@ -4400,10 +4312,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-LOCAL-DELIVERY", status: "ready_for_slicing")
 
-      assert {:ok, planned_slice} =
-               WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-LOCAL-DELIVERY-MERGED"))
+      assert {:ok, work_package} =
+               CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-DELIVERY-MERGED"))
 
-      assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+      assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
       work_package =
         create_matching_work_package!(repo, work_request, approved_slice,
@@ -4420,13 +4332,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                })
 
       assert {:ok, _dispatched_slice} =
-               WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", work_package.id)
+               CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", work_package.id)
 
       assert {:ok, _delivery} =
-               WorkRequestRepository.record_planned_slice_delivery(
+               WorkRequestRepository.record_work_package_delivery(
                  repo,
                  work_request.id,
-                 approved_slice.id,
+                 work_package.id,
                  delivery_attrs(%{
                    outcome: "pr_merged",
                    idempotency_key: "local-operator-dashboard-delivery-merged",
@@ -4438,7 +4350,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       payload = local_operator_dashboard_payload()
       detail = work_request_detail(payload, work_request.id)
-      [slice] = detail["planned_slices"]
+      [slice] = detail["work_packages"]
       [card] = Enum.filter(payload["work_requests"]["work_requests"], &(&1["id"] == work_request.id))
 
       assert card["operational_state"]["key"] == "delivered"
@@ -4451,11 +4363,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert get_in(detail, ["work_request", "operational_state", "is_stale"]) == true
       assert get_in(slice, ["operational_state", "key"]) == "delivered"
       assert get_in(slice, ["operational_state", "label"]) == "Delivered"
-      assert get_in(slice, ["operational_state", "raw_status"]) == "dispatched"
+      assert get_in(slice, ["operational_state", "raw_status"]) == "ready_for_worker"
       assert get_in(slice, ["operational_state", "work_package_status"]) == "ready_for_worker"
       assert get_in(slice, ["delivery", "outcome"]) == "pr_merged"
-      assert "linked_package_status_stale_after_delivery" in slice["attention_reason_codes"]
-      assert get_in(detail, ["delivery_board", "slices", Access.at(0), "operational_state", "key"]) == "delivered"
+      assert "work_package_status_stale_after_delivery" in slice["attention_reason_codes"]
+      assert get_in(detail, ["delivery_board", "work_packages", Access.at(0), "operational_state", "key"]) == "delivered"
     end)
   end
 
@@ -4576,7 +4488,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "local operator dashboard invalidates after MCP-side planned slice writes", %{repo: repo} do
+  test "local operator dashboard invalidates after MCP-side WorkPackage writes", %{repo: repo} do
     work_request =
       create_work_request!(repo,
         id: "WR-DASHBOARD-INVALIDATE",
@@ -4588,10 +4500,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert :ok = DashboardPubSub.subscribe()
 
     assert {:ok, _slice} =
-             WorkRequestService.add_planned_slice_for_authoring(
+             CanonicalWorkPackageFixtures.add_work_package_for_authoring(
                repo,
                work_request.id,
-               planned_slice_attrs(id: "WRS-DASHBOARD-INVALIDATE", title: "Refresh dashboard")
+               work_package_attrs(id: "WRS-DASHBOARD-INVALIDATE", title: "Refresh dashboard")
              )
 
     assert_receive :operator_dashboard_changed
@@ -4673,6 +4585,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert {:ok, _work_package} = WorkPackageRepository.update_status(repo, work_package.id, "claimed", "planning")
     assert_receive :operator_dashboard_changed
     refute_receive :operator_dashboard_changed, 50
+  end
+
+  test "rolled-back WorkPackage writes do not invalidate the dashboard", %{repo: repo} do
+    work_package = create_work_package!(repo, id: "SYMPP-DASHBOARD-PACKAGE-ROLLBACK")
+    assert :ok = DashboardPubSub.subscribe()
+
+    assert {:error, :forced_rollback} =
+             repo.transaction(fn ->
+               assert {:ok, _work_package} =
+                        WorkPackageRepository.update(repo, work_package.id, %{title: "Rolled back title"})
+
+               repo.rollback(:forced_rollback)
+             end)
+
+    refute_receive :operator_dashboard_changed, 50
+    assert {:ok, persisted} = WorkPackageRepository.get(repo, work_package.id)
+    assert persisted.title == work_package.title
   end
 
   test "local operator dashboard projects persisted local path repos through their git origin", %{repo: repo} do
@@ -4971,15 +4900,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           base_branch: "main"
         )
 
-      assert {:ok, planned_slice} =
-               WorkRequestRepository.add_planned_slice(
+      assert {:ok, work_package} =
+               CanonicalWorkPackageFixtures.add_work_package(
                  repo,
                  work_request.id,
-                 planned_slice_attrs(id: "WRS-ACTIVE-BLOCKING-EDGES")
+                 work_package_attrs(id: "WRS-ACTIVE-BLOCKING-EDGES")
                )
 
       assert {:ok, approved_slice} =
-               WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+               CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
       linked_package =
         create_matching_work_package!(
@@ -4991,7 +4920,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         )
 
       assert {:ok, _dispatched_slice} =
-               WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", linked_package.id)
+               CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", linked_package.id)
 
       unlinked_package =
         create_work_package!(
@@ -5030,10 +4959,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       refute Enum.any?(edges, &(&1["blocker_id"] == "blocker-resolved"))
 
       assert [linked_edge, unlinked_edge] = edges
-      assert linked_edge["from"] == %{"kind" => "slice", "id" => approved_slice.id}
+      assert linked_edge["from"] == %{"kind" => "work_package", "id" => linked_package.id}
       assert linked_edge["to"] == %{"kind" => "work_package", "id" => linked_package.id}
       assert linked_edge["work_request_id"] == work_request.id
-      assert linked_edge["planned_slice_id"] == approved_slice.id
       assert linked_edge["work_package_id"] == linked_package.id
       assert linked_edge["summary"] == "[REDACTED]"
       assert linked_edge["body"] == "[REDACTED]"
@@ -5041,7 +4969,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert unlinked_edge["from"] == %{"kind" => "work_package", "id" => unlinked_package.id}
       assert unlinked_edge["to"] == %{"kind" => "work_package", "id" => unlinked_package.id}
       assert unlinked_edge["work_package_id"] == unlinked_package.id
-      refute Map.has_key?(unlinked_edge, "planned_slice_id")
 
       linked_card =
         payload["board"]["groups"]["planning"]
@@ -5734,13 +5661,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       linked_expired = create_work_request!(repo, id: "WR-LOCAL-DELETE-LINKED", status: "ready_for_slicing")
 
       assert {:ok, linked_slice} =
-               WorkRequestRepository.add_planned_slice(
+               CanonicalWorkPackageFixtures.add_work_package(
                  repo,
                  linked_expired.id,
-                 planned_slice_attrs(id: "WRS-LOCAL-DELETE-LINKED", target_base_branch: linked_expired.base_branch)
+                 work_package_attrs(id: "WRS-LOCAL-DELETE-LINKED", base_branch: linked_expired.base_branch)
                )
 
-      assert {:ok, linked_slice} = WorkRequestRepository.approve_planned_slice(repo, linked_expired.id, linked_slice.id, "planned")
+      assert {:ok, linked_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, linked_expired.id, linked_slice.id, "planned")
 
       linked_package =
         create_matching_work_package!(repo, linked_expired, linked_slice,
@@ -5750,7 +5677,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> set_work_package_updated_at!(repo, fresh_at)
 
       assert {:ok, _dispatched} =
-               WorkRequestRepository.dispatch_planned_slice(repo, linked_expired.id, linked_slice.id, "approved", linked_package.id)
+               CanonicalWorkPackageFixtures.dispatch_work_package(repo, linked_expired.id, linked_slice.id, "approved", linked_package.id)
 
       linked_expired =
         linked_expired
@@ -5774,7 +5701,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, slice_comment} =
                CommentService.create(repo, %{
                  id: "comment-local-delete-slice",
-                 target_kind: "planned_slice",
+                 target_kind: "work_package",
                  target_id: expired_slice_id,
                  body: "Remove with archived slice",
                  source_type: "operator",
@@ -5962,13 +5889,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         )
 
       assert {:ok, slice} =
-               WorkRequestRepository.add_planned_slice(
+               CanonicalWorkPackageFixtures.add_work_package(
                  repo,
                  work_request.id,
-                 planned_slice_attrs(id: "WRS-LOCAL-RETENTION-LINKED", target_base_branch: work_request.base_branch)
+                 work_package_attrs(id: "WRS-LOCAL-RETENTION-LINKED", base_branch: work_request.base_branch)
                )
 
-      assert {:ok, approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, slice.id, "planned")
+      assert {:ok, approved} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, slice.id, "planned")
 
       linked_terminal_package =
         create_matching_work_package!(repo, work_request, approved,
@@ -5978,7 +5905,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> set_work_package_updated_at!(repo, stale_at)
 
       assert {:ok, _dispatched} =
-               WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", linked_terminal_package.id)
+               CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", linked_terminal_package.id)
 
       assert {:ok, _settings} =
                OperatorSettingsRepository.update(repo, %{
@@ -6000,7 +5927,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert terminal_parent_package.id in package_ids
       assert child_package.id in package_ids
       assert linked_terminal_package.id in package_ids
-      assert linked_terminal_package.id in payload["linked_work_package_ids"]
+      assert linked_terminal_package.id in payload["work_request_work_package_ids"]
     end)
   end
 
@@ -6028,15 +5955,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       delivered = create_work_request!(repo, id: "WR-LOCAL-MANUAL-ARCHIVE-DELIVERED", status: "ready_for_slicing")
 
       assert {:ok, delivered_slice} =
-               WorkRequestRepository.add_planned_slice(repo, delivered.id, planned_slice_attrs(id: "WRS-LOCAL-MANUAL-ARCHIVE-DELIVERED"))
+               CanonicalWorkPackageFixtures.add_work_package(repo, delivered.id, work_package_attrs(id: "WRS-LOCAL-MANUAL-ARCHIVE-DELIVERED"))
 
-      assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, delivered.id, delivered_slice.id, "planned")
+      assert {:ok, _approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, delivered.id, delivered_slice.id, "planned")
 
       assert {:ok, _delivery} =
-               WorkRequestRepository.record_planned_slice_delivery(
+               WorkRequestRepository.record_work_package_delivery(
                  repo,
                  delivered.id,
-                 approved_slice.id,
+                 delivered_slice.id,
                  delivery_attrs(%{
                    outcome: "completed_no_pr",
                    idempotency_key: "local-manual-archive-delivered",
@@ -6075,9 +6002,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       work_request = create_work_request!(repo, id: "WR-LOCAL-MARK-PACKAGE-MERGED", status: "ready_for_slicing")
 
       assert {:ok, slice} =
-               WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-LOCAL-MARK-PACKAGE-MERGED"))
+               CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-MARK-PACKAGE-MERGED"))
 
-      assert {:ok, approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, slice.id, "planned")
+      assert {:ok, approved} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, slice.id, "planned")
 
       work_package =
         create_matching_work_package!(repo, work_request, approved,
@@ -6085,7 +6012,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           status: "implementing"
         )
 
-      assert {:ok, _dispatched} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", work_package.id)
+      assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", work_package.id)
 
       payload =
         local_operator_csrf_conn()
@@ -6109,9 +6036,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       work_request = create_work_request!(repo, id: "WR-LOCAL-CLEAR-BLOCKER", status: "ready_for_slicing")
 
       assert {:ok, slice} =
-               WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-LOCAL-CLEAR-BLOCKER"))
+               CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-CLEAR-BLOCKER"))
 
-      assert {:ok, approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, slice.id, "planned")
+      assert {:ok, approved} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, slice.id, "planned")
 
       work_package =
         create_matching_work_package!(repo, work_request, approved,
@@ -6119,7 +6046,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           status: "implementing"
         )
 
-      assert {:ok, _dispatched} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", work_package.id)
+      assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", work_package.id)
 
       assert {:ok, _blocker} =
                PlanningRepository.append_progress_event(repo, %{
@@ -6178,9 +6105,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       work_request = create_work_request!(repo, id: "WR-LOCAL-CLEAR-BLOCKER-STALE-DASHBOARD", status: "ready_for_slicing")
 
       assert {:ok, slice} =
-               WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-LOCAL-CLEAR-BLOCKER-STALE-DASHBOARD"))
+               CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-CLEAR-BLOCKER-STALE-DASHBOARD"))
 
-      assert {:ok, approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, slice.id, "planned")
+      assert {:ok, approved} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, slice.id, "planned")
 
       work_package =
         create_matching_work_package!(repo, work_request, approved,
@@ -6196,7 +6123,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           base_branch: work_package.base_branch
         )
 
-      assert {:ok, _dispatched} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", work_package.id)
+      assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", work_package.id)
 
       assert {:ok, _blocker} =
                PlanningRepository.append_progress_event(repo, %{
@@ -6255,9 +6182,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       work_request = create_work_request!(repo, id: "WR-LOCAL-NO-PR", status: "ready_for_slicing")
 
       assert {:ok, slice} =
-               WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-LOCAL-NO-PR"))
+               CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-NO-PR"))
 
-      assert {:ok, approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, slice.id, "planned")
+      assert {:ok, approved} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, slice.id, "planned")
 
       work_package =
         create_matching_work_package!(repo, work_request, approved,
@@ -6265,7 +6192,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           status: "reviewing"
         )
 
-      assert {:ok, _dispatched} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", work_package.id)
+      assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", work_package.id)
 
       payload =
         local_operator_csrf_conn()
@@ -6275,9 +6202,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         })
         |> json_response(200)
 
-      assert [%PlannedSliceDelivery{} = delivery] = repo.all(PlannedSliceDelivery)
+      assert [%WorkPackageDelivery{} = delivery] = repo.all(WorkPackageDelivery)
       assert delivery.outcome == "completed_no_pr"
-      assert delivery.idempotency_key == "local-operator-completed-no-pr:#{approved.id}"
+      assert delivery.idempotency_key == "local-operator-completed-no-pr:#{work_package.id}"
       assert delivery.no_pr_evidence == "Operator confirmed the exploratory work landed without a PR."
 
       assert {:ok, persisted_package} = WorkPackageRepository.get(repo, work_package.id)
@@ -6288,7 +6215,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       dashboard_payload = local_operator_dashboard_payload()
 
       detail = work_request_detail(dashboard_payload, work_request.id)
-      assert get_in(detail, ["planned_slices", Access.at(0), "delivery", "outcome"]) == "completed_no_pr"
+      assert get_in(detail, ["work_packages", Access.at(0), "delivery", "outcome"]) == "completed_no_pr"
     end)
   end
 
@@ -6297,9 +6224,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       work_request = create_work_request!(repo, id: "WR-LOCAL-NO-PR-ACTIVE-RUNTIME", status: "ready_for_slicing")
 
       assert {:ok, slice} =
-               WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-LOCAL-NO-PR-ACTIVE-RUNTIME"))
+               CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-NO-PR-ACTIVE-RUNTIME"))
 
-      assert {:ok, approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, slice.id, "planned")
+      assert {:ok, approved} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, slice.id, "planned")
 
       work_package =
         create_matching_work_package!(repo, work_request, approved,
@@ -6307,7 +6234,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           status: "ready_for_merge"
         )
 
-      assert {:ok, _dispatched} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", work_package.id)
+      assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", work_package.id)
 
       assert {:ok, _claim_lease} =
                ClaimLeaseService.claim(
@@ -6327,7 +6254,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert error["error"]["code"] == "active_runtime"
       refute error["error"]["message"] == "Dashboard API unavailable"
-      assert [] = repo.all(PlannedSliceDelivery)
+      assert [] = repo.all(WorkPackageDelivery)
     end)
   end
 
@@ -6336,9 +6263,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       work_request = create_work_request!(repo, id: "WR-LOCAL-NO-PR-TERMINAL", status: "ready_for_slicing")
 
       assert {:ok, slice} =
-               WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-LOCAL-NO-PR-TERMINAL"))
+               CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-NO-PR-TERMINAL"))
 
-      assert {:ok, approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, slice.id, "planned")
+      assert {:ok, approved} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, slice.id, "planned")
 
       work_package =
         create_matching_work_package!(repo, work_request, approved,
@@ -6346,7 +6273,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           status: "merged"
         )
 
-      assert {:ok, _dispatched} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", work_package.id)
+      assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", work_package.id)
 
       error =
         local_operator_csrf_conn()
@@ -6357,7 +6284,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> json_response(422)
 
       assert error["error"]["code"] == "invalid_status"
-      assert [] = repo.all(PlannedSliceDelivery)
+      assert [] = repo.all(WorkPackageDelivery)
     end)
   end
 
@@ -6426,9 +6353,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       work_request = create_work_request!(repo, id: "WR-LOCAL-ARCHIVE-LINKED", status: "ready_for_slicing")
 
       assert {:ok, slice} =
-               WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-LOCAL-ARCHIVE-LINKED"))
+               CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-ARCHIVE-LINKED"))
 
-      assert {:ok, approved} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, slice.id, "planned")
+      assert {:ok, approved} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, slice.id, "planned")
 
       linked_package =
         create_matching_work_package!(repo, work_request, approved,
@@ -6436,14 +6363,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           status: "merged"
         )
 
-      assert {:ok, _dispatched} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved.id, "approved", linked_package.id)
+      assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", linked_package.id)
 
       linked_error =
         local_operator_csrf_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{linked_package.id}/archive", %{})
         |> json_response(422)
 
-      assert linked_error["error"]["code"] == "linked_work_package"
+      assert linked_error["error"]["code"] == "work_request_package"
     end)
   end
 
@@ -6468,8 +6395,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-LOCAL-COMPLETE-STATE", status: "ready_for_slicing")
 
-      assert {:ok, planned_slice} =
-               WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-LOCAL-COMPLETE-STATE"))
+      assert {:ok, work_package} =
+               CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-COMPLETE-STATE"))
 
       assert {:ok, open_question} =
                WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-LOCAL-COMPLETE-STATE"))
@@ -6498,8 +6425,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert %DateTime{} = persisted_request.completed_at
       assert persisted_request.completion_source == "operator"
 
-      assert {:ok, [persisted_slice]} = WorkRequestRepository.list_planned_slices(repo, work_request.id)
-      assert persisted_slice.id == planned_slice.id
+      assert {:ok, [persisted_slice]} = WorkRequestRepository.list_work_packages(repo, work_request.id)
+      assert persisted_slice.id == work_package.id
       assert persisted_slice.status == "planned"
 
       assert {:ok, [persisted_question]} = WorkRequestRepository.list_questions(repo, work_request.id)
@@ -6530,19 +6457,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-LOCAL-DELETE-DIRECT", status: "ready_for_slicing")
 
-      assert {:ok, planned_slice} =
-               WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-LOCAL-DELETE-DIRECT"))
+      assert {:ok, work_package} =
+               CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-DELETE-DIRECT"))
 
-      assert {:ok, planned_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+      assert {:ok, work_package} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
       assert {:ok, _open_question} = WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-LOCAL-DELETE-DIRECT"))
 
       linked_package =
-        create_matching_work_package!(repo, work_request, planned_slice,
+        create_matching_work_package!(repo, work_request, work_package,
           id: "WP-LOCAL-DELETE-DIRECT",
           status: "claimed"
         )
 
-      assert {:ok, _dispatched} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, planned_slice.id, "approved", linked_package.id)
+      assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, work_package.id, "approved", linked_package.id)
 
       assert {:ok, request_comment} =
                CommentService.create(repo, %{
@@ -7180,11 +7107,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   defp create_completed_skipped_work_request!(repo, id, completed_at) do
     work_request = create_work_request!(repo, id: id, status: "ready_for_slicing")
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(id: "WRS-#{id}"))
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-#{id}"))
 
-    assert {:ok, _skipped} = WorkRequestRepository.skip_planned_slice(repo, work_request.id, planned_slice.id, "planned")
-    mark_non_scratch_skipped_slice!(repo, planned_slice.id)
+    assert {:ok, _skipped} = WorkRequestRepository.skip_work_package(repo, work_request.id, work_package.id, "planned")
+    mark_non_scratch_skipped_slice!(repo, work_package.id)
     assert {:ok, completed} = WorkRequestService.refresh_completion(repo, work_request.id)
 
     completed
@@ -7192,10 +7119,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     |> repo.update!()
   end
 
-  defp mark_non_scratch_skipped_slice!(repo, planned_slice_id) do
-    planned_slice = repo.get!(PlannedSlice, planned_slice_id)
+  defp mark_non_scratch_skipped_slice!(repo, work_package_id) do
+    work_package = repo.get!(WorkPackage, work_package_id)
 
-    planned_slice
+    work_package
     |> Ecto.Changeset.change(dispatched_at: DateTime.utc_now(:microsecond))
     |> repo.update!()
   end
@@ -7261,34 +7188,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
   defp numbered_comment_id(prefix, index), do: "#{prefix}-#{String.pad_leading(Integer.to_string(index), 3, "0")}"
 
-  defp create_matching_work_package!(repo, work_request, planned_slice, overrides) do
+  defp create_matching_work_package!(repo, work_request, work_package, overrides) do
     attrs =
       [
-        kind: planned_slice.work_package_kind,
-        title: planned_slice.title,
+        kind: work_package.kind,
+        title: work_package.title,
         repo: work_request.repo,
-        base_branch: planned_slice.target_base_branch,
-        branch_pattern: planned_slice.branch_pattern,
+        base_branch: work_package.base_branch,
+        branch_pattern: work_package.branch_pattern,
         product_description: work_request.human_description,
-        allowed_file_globs: planned_slice.owned_file_globs,
-        acceptance_criteria: planned_slice.acceptance_criteria,
-        review_requirement: planned_slice.review_requirement
+        allowed_file_globs: work_package.allowed_file_globs,
+        acceptance_criteria: work_package.acceptance_criteria,
+        review_requirement: work_package.review_requirement
       ]
       |> Keyword.merge(overrides)
 
     create_work_package!(repo, attrs)
   end
 
-  defp drop_planned_slice_work_package_unique_index!(repo) do
-    repo.query!("DROP INDEX IF EXISTS sympp_work_request_planned_slices_work_package_id_unique_index")
-  end
-
-  defp create_planned_slice_work_package_unique_index!(repo) do
-    repo.query!("""
-    CREATE UNIQUE INDEX IF NOT EXISTS sympp_work_request_planned_slices_work_package_id_unique_index
-    ON sympp_work_request_planned_slices (work_package_id)
-    WHERE work_package_id IS NOT NULL
-    """)
+  defp set_canonical_package_status!(repo, work_package, status) do
+    repo.update!(
+      Ecto.Changeset.change(work_package,
+        status: status,
+        dispatched_at: DateTime.utc_now(:microsecond)
+      )
+    )
   end
 
   defp append_blocker_event!(repo, work_package_id, blocker_id, active, overrides) do
@@ -7352,14 +7276,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     Enum.into(overrides, defaults)
   end
 
-  defp planned_slice_attrs(overrides) do
+  defp work_package_attrs(overrides) do
     defaults = %{
       title: "Add WorkRequest dashboard API",
       goal: "Expose read-only dashboard view models.",
-      work_package_kind: "mcp",
-      target_base_branch: "main",
+      kind: "mcp",
+      base_branch: "main",
       branch_pattern: "agent/SYMPP-V2-WR-004/workrequest-read-api",
-      owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/dashboard.ex"],
+      allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/dashboard.ex"],
       forbidden_file_globs: ["elixir/lib/symphony_elixir_web/live/**"],
       acceptance_criteria: ["WorkRequest dashboard API reads are scoped and redacted."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/dashboard_api_test.exs"],

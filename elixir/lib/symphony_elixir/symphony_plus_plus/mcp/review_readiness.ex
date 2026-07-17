@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   import Ecto.Query, only: [from: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
@@ -318,6 +319,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {:error, {:mcp_error, code, message, data}} -> {:error, code, message, data}
       {:error, reason} -> {:error, reason}
     end
+    |> DashboardPubSub.broadcast_changed_on_success()
   end
 
   defp complete_review_transaction_body(repo, %Session{} = session, reference, note) do
@@ -1093,6 +1095,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {:error, {:error, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
+    |> DashboardPubSub.broadcast_changed_on_success()
   end
 
   defp rollback_worker_transaction_result(_repo, {:ok, result}), do: result

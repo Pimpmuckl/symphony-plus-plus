@@ -37,10 +37,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.PolicyTest do
 
   test "worker package scope does not allow dispatch or dangerous actions" do
     actor = Actor.new(:worker, scopes: [Scope.work_package("wp-1")])
-    target = Target.planned_slice("wrs-1", "wr-1", work_package_id: "wp-1")
+    target = Target.work_package("wrs-1", "wr-1", work_package_id: "wp-1")
 
     assert %Decision{allowed?: false, reason_code: "insufficient_role"} =
-             Policy.decide(actor, :planned_slice_dispatch, target)
+             Policy.decide(actor, :work_package_dispatch, target)
 
     assert %Decision{allowed?: false, reason_code: "dangerous_action_requires_operator"} =
              Policy.decide(actor, :dangerous_delete, Target.ledger())
@@ -49,12 +49,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.PolicyTest do
   test "architect can read scoped operational state but writes only claimed work request lineage" do
     actor = architect([Scope.work_request("wr-1"), Scope.repo("nextide/symphony-plus-plus", "main")])
     sibling_target = Target.work_request("wr-2", repo: "nextide/symphony-plus-plus", base_branch: "main")
-    child_target = Target.planned_slice("wrs-1", "wr-1", work_package_id: "wp-1")
+    child_target = Target.work_package("wrs-1", "wr-1", work_package_id: "wp-1")
 
     assert %Decision{allowed?: true} = Policy.decide(actor, :work_request_read, sibling_target)
 
     assert %Decision{allowed?: true, matched_scope: %Scope{type: :work_request, id: "wr-1"}} =
-             Policy.decide(actor, :planned_slice_update, child_target)
+             Policy.decide(actor, :work_package_update, child_target)
 
     assert %Decision{allowed?: false, reason_code: "scope_mismatch", legacy_reason: "outside_session_scope"} =
              Policy.decide(actor, :work_request_update, sibling_target)
@@ -170,12 +170,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.PolicyTest do
              Policy.decide(architect([Scope.repo("service-b", "release")]), :work_request_update, target)
   end
 
-  test "explicit planned slice scope authorizes planned slice actions only" do
-    actor = architect([Scope.planned_slice("wrs-1")])
-    target = Target.planned_slice("wrs-1", "wr-1")
+  test "explicit WorkPackage scope authorizes WorkPackage actions only" do
+    actor = architect([Scope.work_package("wrs-1")])
+    target = Target.work_package("wrs-1", "wr-1")
 
-    assert %Decision{allowed?: true, matched_scope: %Scope{type: :planned_slice, id: "wrs-1"}} =
-             Policy.decide(actor, :planned_slice_update, target)
+    assert %Decision{allowed?: true, matched_scope: %Scope{type: :work_package, id: "wrs-1"}} =
+             Policy.decide(actor, :work_package_update, target)
 
     assert %Decision{allowed?: false, reason_code: "scope_mismatch"} =
              Policy.decide(actor, :work_request_update, Target.work_request("wr-1"))
@@ -204,7 +204,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.PolicyTest do
     dispatch_actor = architect([Scope.work_request("wr-1")], ["write:work_request"])
 
     assert %Decision{allowed?: false, reason_code: "insufficient_capability"} =
-             Policy.decide(dispatch_actor, :planned_slice_dispatch, Target.planned_slice("wrs-1", "wr-1"))
+             Policy.decide(dispatch_actor, :work_package_dispatch, Target.work_package("wrs-1", "wr-1"))
   end
 
   test "phase scope authorizes read discovery but not WorkRequest writes" do
@@ -220,8 +220,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.PolicyTest do
     assert %Decision{allowed?: false, reason_code: "scope_mismatch", legacy_reason: "outside_session_scope"} =
              Policy.decide(
                actor,
-               :planned_slice_dispatch,
-               Target.planned_slice("wrs-1", "wr-1", phase_id: "phase-1", repo: "nextide/symphony-plus-plus", base_branch: "main")
+               :work_package_dispatch,
+               Target.work_package("wrs-1", "wr-1", phase_id: "phase-1", repo: "nextide/symphony-plus-plus", base_branch: "main")
              )
   end
 

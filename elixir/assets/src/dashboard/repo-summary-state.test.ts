@@ -28,7 +28,7 @@ describe("repo summary state", () => {
     expect(repoSummaryMetrics(repo, categoryCounts).map((metric) => `${metric.value} ${metric.label}`)).toEqual([
       "3 Requests",
       "12 Plan Nodes",
-      "46 Slices",
+      "46 WorkPackages",
       "2 Guidance Needed",
       "1 Active Blockers",
     ]);

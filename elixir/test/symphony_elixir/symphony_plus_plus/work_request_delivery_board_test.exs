@@ -1,19 +1,14 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   use ExUnit.Case, async: false
 
-  alias Ecto.Adapters.SQL
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.DeliverySliceProjection
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
-  alias SymphonyElixir.WorkPackageFactory
 
   setup_all do
     database_path = database_path()
@@ -28,8 +23,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
 
   setup %{repo: repo} do
     repo.delete_all(ProgressEvent)
-    repo.delete_all(PlannedSliceDelivery)
-    repo.delete_all(PlannedSlice)
+    repo.delete_all(WorkPackageDelivery)
     repo.delete_all(WorkPackage)
     repo.delete_all(WorkRequest)
     :ok
@@ -49,36 +43,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-SUCCESSOR",
         work_package_id: "WP-BOARD-SUCCESSOR",
-        work_package_kind: "docs",
+        kind: "docs",
         status: "ready_for_worker"
       )
 
     assert {:ok, _delivery} =
-             Repository.record_planned_slice_delivery(
+             Repository.record_work_package_delivery(
                repo,
                work_request.id,
                superseded_slice.id,
                delivery_attrs(%{
                  outcome: "superseded",
                  idempotency_key: "delivery-board-superseded",
-                 successor_planned_slice_id: successor_slice.id,
                  successor_work_package_id: successor_package.id,
                  superseded_reason: "Recut with narrower files."
                })
              )
 
     assert {:ok, board} = DeliveryBoard.project(repo, work_request.id)
-    assert Enum.map(board.slices, & &1.id) == [superseded_slice.id, successor_slice.id]
+    assert Enum.map(board.work_packages, & &1.id) == [superseded_slice.id, successor_slice.id]
 
-    [superseded, successor] = board.slices
-    assert superseded.raw_status == "dispatched"
+    [superseded, successor] = board.work_packages
+    assert superseded.raw_status == "implementing"
     assert superseded.delivery_outcome == "superseded"
     assert superseded.work_package.id == superseded_package.id
     assert superseded.work_package.raw_status == "implementing"
     assert superseded.operational_state.key == "superseded"
-    assert superseded.operational_state.raw_status == "dispatched"
-    assert "linked_package_status_stale_after_delivery" in superseded.attention_reason_codes
-    assert superseded.successor.planned_slice.id == successor_slice.id
+    assert superseded.operational_state.raw_status == "implementing"
+    assert "work_package_status_stale_after_delivery" in superseded.attention_reason_codes
+    assert superseded.successor.work_package.id == successor_slice.id
     assert superseded.successor.work_package.id == successor_package.id
     assert successor.work_package.kind == "docs"
     assert successor.delivery_outcome == nil
@@ -87,7 +80,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   test "terminal delivery outcome overrides stale blocked package truth while preserving raw detail", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-STALE")
 
-    {planned_slice, linked_package} =
+    {work_package, linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-STALE",
         work_package_id: "WP-BOARD-STALE",
@@ -104,10 +97,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
              })
 
     assert {:ok, _delivery} =
-             Repository.record_planned_slice_delivery(
+             Repository.record_work_package_delivery(
                repo,
                work_request.id,
-               planned_slice.id,
+               work_package.id,
                delivery_attrs(%{
                  outcome: "pr_merged",
                  idempotency_key: "delivery-board-pr-merged",
@@ -119,18 +112,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                })
              )
 
-    assert {:ok, %{slices: [slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert slice.operational_state.key == "delivered"
-    assert slice.operational_state.raw_status == "dispatched"
+    assert slice.operational_state.raw_status == "blocked"
     assert slice.work_package.raw_status == "blocked"
-    assert "linked_package_blocked_after_delivery" in slice.attention_reason_codes
-    assert "linked_package_status_stale_after_delivery" in slice.attention_reason_codes
+    assert "work_package_blocked_after_delivery" in slice.attention_reason_codes
+    assert "work_package_status_stale_after_delivery" in slice.attention_reason_codes
   end
 
   test "merged PR metadata without delivery outcome projects as needs closeout", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-NEEDS-CLOSEOUT")
 
-    {_planned_slice, linked_package} =
+    {_work_package, linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-NEEDS-CLOSEOUT",
         work_package_id: "WP-BOARD-NEEDS-CLOSEOUT",
@@ -159,7 +152,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                }
              })
 
-    assert {:ok, %{slices: [slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert slice.delivery_outcome == nil
     assert slice.operational_state.key == "needs_closeout"
     assert slice.operational_state.label == "Needs Closeout"
@@ -169,7 +162,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   test "stale merged PR metadata does not project needs closeout", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-STALE-PR")
 
-    {_planned_slice, linked_package} =
+    {_work_package, linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-STALE-PR",
         work_package_id: "WP-BOARD-STALE-PR",
@@ -199,7 +192,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                }
              })
 
-    assert {:ok, %{slices: [slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert slice.delivery_outcome == nil
     assert slice.operational_state.key == "merge_ready"
     assert slice.attention_reason_codes == []
@@ -208,7 +201,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   test "legacy stored merge-ready status projects with current visible label", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-LEGACY-READY")
 
-    {_planned_slice, linked_package} =
+    {_work_package, linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-LEGACY-READY",
         work_package_id: "WP-BOARD-LEGACY-READY",
@@ -217,7 +210,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
 
     repo.query!("UPDATE sympp_work_packages SET status = ? WHERE id = ?", ["ready_for_human_merge", linked_package.id])
 
-    assert {:ok, %{slices: [slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert slice.work_package.raw_status == "ready_for_human_merge"
     assert slice.operational_state.key == "merge_ready"
     assert slice.operational_state.label == "Ready"
@@ -226,7 +219,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   test "newer PR attachments replace older merged sync metadata", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-REATTACHED-PR")
 
-    {_planned_slice, linked_package} =
+    {_work_package, linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-REATTACHED-PR",
         work_package_id: "WP-BOARD-REATTACHED-PR",
@@ -249,7 +242,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                payload: %{type: "pr", source_tool: "attach_pr", url: "https://github.com/nextide/symphony-plus-plus/pull/905", head_sha: "new-head"}
              })
 
-    assert {:ok, %{slices: [slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert slice.work_package.pr.url == "https://github.com/nextide/symphony-plus-plus/pull/905"
     assert slice.operational_state.key == "merge_ready"
     assert slice.attention_reason_codes == []
@@ -258,7 +251,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   test "review package payloads project as bounded summaries", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-REVIEW-PACKAGE")
 
-    {_planned_slice, linked_package} =
+    {_work_package, linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-REVIEW-PACKAGE",
         work_package_id: "WP-BOARD-REVIEW-PACKAGE",
@@ -285,7 +278,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                }
              })
 
-    assert {:ok, %{slices: [slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert package = slice.work_package.review.package
     assert package.artifacts == ["review.txt", "notes.md"]
     assert package.head_sha == "review-head"
@@ -298,7 +291,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   test "progress metadata projects as allowlisted summaries", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-PROGRESS-SUMMARIES")
 
-    {_planned_slice, linked_package} =
+    {_work_package, linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-PROGRESS-SUMMARIES",
         work_package_id: "WP-BOARD-PROGRESS-SUMMARIES",
@@ -369,7 +362,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                }
              })
 
-    assert {:ok, %{slices: [slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
 
     assert slice.work_package.branch == %{
              type: "branch",
@@ -395,7 +388,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
       |> Ecto.Changeset.change(review_requirement: %{"type" => "automated"})
       |> repo.update!()
 
-    assert {:ok, %{slices: [changed_slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert {:ok, %{work_packages: [changed_slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert changed_slice.work_package.review.completion == nil
 
     changed_package
@@ -415,14 +408,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                }
              })
 
-    assert {:ok, %{slices: [advanced_slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert {:ok, %{work_packages: [advanced_slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert advanced_slice.work_package.review.completion == nil
   end
 
   test "preloaded dashboard metadata is used before progress fallback", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-PRELOADED-METADATA")
 
-    {_planned_slice, linked_package} =
+    {_work_package, linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-PRELOADED-METADATA",
         work_package_id: "WP-BOARD-PRELOADED-METADATA",
@@ -456,7 +449,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
       }
     }
 
-    assert {:ok, %{slices: [slice]}} =
+    assert {:ok, %{work_packages: [slice]}} =
              DeliveryBoard.project(repo, work_request.id, work_package_contexts: work_package_contexts)
 
     assert slice.work_package.branch.branch == "feat/from-dashboard"
@@ -471,7 +464,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   test "empty preloaded metadata falls back to progress events", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-EMPTY-METADATA")
 
-    {_planned_slice, linked_package} =
+    {_work_package, linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-EMPTY-METADATA",
         work_package_id: "WP-BOARD-EMPTY-METADATA",
@@ -498,7 +491,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
       }
     }
 
-    assert {:ok, %{slices: [slice]}} =
+    assert {:ok, %{work_packages: [slice]}} =
              DeliveryBoard.project(repo, work_request.id, work_package_contexts: work_package_contexts)
 
     assert slice.work_package.pr.url == "https://github.com/nextide/symphony-plus-plus/pull/908"
@@ -508,133 +501,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   test "scoped projection treats filtered linked packages as hidden instead of missing", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-HIDDEN-PACKAGE")
 
-    {_planned_slice, _linked_package} =
+    {_work_package, _linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-HIDDEN-PACKAGE",
         work_package_id: "WP-BOARD-HIDDEN-PACKAGE",
         status: "ready_for_merge"
       )
 
-    assert {:ok, %{slices: [slice]}} = DeliveryBoard.project(repo, work_request.id, visible_work_package_ids: [])
+    assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id, visible_work_package_ids: [])
     assert slice.work_package == nil
     assert slice.work_package_hidden? == true
     assert slice.operational_state.key == "dispatched"
     assert slice.attention_reason_codes == []
   end
 
-  test "projection marks duplicate planned-slice package links as repair-needed", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-BOARD-AMBIGUOUS-PACKAGE")
-    other_work_request = create_work_request!(repo, id: "WR-BOARD-AMBIGUOUS-PACKAGE-OTHER")
-    first = create_planned_slice!(repo, work_request, id: "WRS-BOARD-AMBIGUOUS-A")
-    second = create_planned_slice!(repo, other_work_request, id: "WRS-BOARD-AMBIGUOUS-B")
-
-    work_package =
-      create_matching_work_package!(repo, work_request, first,
-        id: "WP-BOARD-AMBIGUOUS-PACKAGE",
-        status: "ready_for_merge"
-      )
-
-    drop_planned_slice_work_package_unique_index!(repo)
-
-    try do
-      now = DateTime.utc_now(:microsecond)
-
-      repo.update!(Ecto.Changeset.change(first, status: "dispatched", work_package_id: work_package.id, dispatched_at: now))
-      repo.update!(Ecto.Changeset.change(second, status: "dispatched", work_package_id: work_package.id, dispatched_at: now))
-
-      assert {:ok, board} = DeliveryBoard.project(repo, work_request.id)
-      slices_by_id = Map.new(board.slices, &{&1.id, &1})
-
-      projected = Map.fetch!(slices_by_id, first.id)
-      assert projected.work_package == nil
-      assert projected.work_package_ambiguous? == true
-      assert projected.operational_state.key == "needs_repair"
-      assert projected.attention_reason_codes == ["ambiguous_linked_work_package"]
-
-      assert {:ok, scoped_board} = DeliveryBoard.project(repo, work_request.id, visible_work_package_ids: [])
-      scoped_projected = scoped_board.slices |> Map.new(&{&1.id, &1}) |> Map.fetch!(first.id)
-
-      assert scoped_projected.work_package == nil
-      assert scoped_projected.work_package_hidden? == true
-      assert scoped_projected.work_package_ambiguous? == false
-      assert scoped_projected.operational_state.key == "dispatched"
-      refute "ambiguous_linked_work_package" in scoped_projected.attention_reason_codes
-
-      assert DeliverySliceProjection.primary_operational_state(projected, []) == %{
-               attention_items: [
-                 %{
-                   key: "ambiguous_linked_work_package",
-                   label: "Ambiguous Package",
-                   reason: "Multiple planned slices point at the same WorkPackage.",
-                   tone: "warning"
-                 }
-               ],
-               attention_reason_codes: ["ambiguous_linked_work_package"],
-               delivery_outcome: nil,
-               key: "needs_repair",
-               label: "Needs Repair",
-               raw_status: "dispatched",
-               reason: "Multiple planned slices point at the same WorkPackage.",
-               tone: "warning",
-               work_package_status: nil
-             }
-
-      assert {:ok, _delivery} =
-               Repository.record_planned_slice_delivery(
-                 repo,
-                 work_request.id,
-                 first.id,
-                 delivery_attrs(%{
-                   outcome: "pr_merged",
-                   idempotency_key: "delivery-board-ambiguous-pr-merged",
-                   pr_url: "https://github.com/nextide/symphony-plus-plus/pull/902",
-                   pr_number: 902,
-                   pr_repository: "nextide/symphony-plus-plus",
-                   pr_merged_at: ~U[2026-05-24 12:00:00.000000Z],
-                   merge_commit_sha: "abc902"
-                 })
-               )
-
-      assert {:ok, delivered_board} = DeliveryBoard.project(repo, work_request.id)
-      delivered = delivered_board.slices |> Map.new(&{&1.id, &1}) |> Map.fetch!(first.id)
-
-      assert delivered.work_package == nil
-      assert delivered.work_package_ambiguous? == true
-      assert delivered.operational_state.key == "delivered"
-      assert "ambiguous_linked_work_package" in delivered.attention_reason_codes
-    after
-      SQL.query!(
-        repo,
-        "UPDATE sympp_work_request_planned_slices SET work_package_id = NULL, dispatched_at = NULL WHERE id IN (?, ?)",
-        [first.id, second.id]
-      )
-
-      create_planned_slice_work_package_unique_index!(repo)
-    end
-  end
-
-  test "keeps skipped planned slices visible on the delivery board", %{repo: repo} do
+  test "keeps skipped WorkPackages visible on the delivery board", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-SKIPPED-SCRATCH")
-    visible_slice = create_planned_slice!(repo, work_request, id: "WRS-BOARD-VISIBLE-PLANNED")
+    visible_slice = create_work_package!(repo, work_request, id: "WRS-BOARD-VISIBLE-PLANNED")
 
     scratch_slice =
       repo
-      |> create_planned_slice!(work_request, id: "WRS-BOARD-SKIPPED-SCRATCH")
-      |> then(fn planned_slice ->
-        assert {:ok, skipped} = Repository.skip_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+      |> create_work_package!(work_request, id: "WRS-BOARD-SKIPPED-SCRATCH")
+      |> then(fn work_package ->
+        assert {:ok, skipped} = Repository.skip_work_package(repo, work_request.id, work_package.id, "planned")
         skipped
       end)
 
     delivered_slice =
       repo
-      |> create_planned_slice!(work_request, id: "WRS-BOARD-SKIPPED-DELIVERY")
-      |> then(fn planned_slice ->
-        assert {:ok, skipped} = Repository.skip_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+      |> create_work_package!(work_request, id: "WRS-BOARD-SKIPPED-DELIVERY")
+      |> then(fn work_package ->
+        assert {:ok, skipped} = Repository.skip_work_package(repo, work_request.id, work_package.id, "planned")
         skipped
       end)
 
     assert {:ok, _delivery} =
-             Repository.record_planned_slice_delivery(
+             Repository.record_work_package_delivery(
                repo,
                work_request.id,
                delivered_slice.id,
@@ -645,43 +547,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                })
              )
 
-    linked_skipped_slice =
-      repo
-      |> create_planned_slice!(work_request, id: "WRS-BOARD-SKIPPED-LINKED")
-      |> then(fn planned_slice ->
-        assert {:ok, skipped} = Repository.skip_planned_slice(repo, work_request.id, planned_slice.id, "planned")
-        skipped
-      end)
-
-    linked_package =
-      create_matching_work_package!(repo, work_request, linked_skipped_slice,
-        id: "WP-BOARD-SKIPPED-LINKED",
-        status: "closed"
-      )
-
-    dispatched_at = DateTime.utc_now(:microsecond)
-
-    linked_skipped_slice =
-      repo.update!(
-        Ecto.Changeset.change(linked_skipped_slice,
-          work_package_id: linked_package.id,
-          dispatched_at: dispatched_at
-        )
-      )
-
     assert {:ok, board} = DeliveryBoard.project(repo, work_request.id)
-    assert Enum.map(board.slices, & &1.id) == [visible_slice.id, scratch_slice.id, delivered_slice.id, linked_skipped_slice.id]
+    assert Enum.map(board.work_packages, & &1.id) == [visible_slice.id, scratch_slice.id, delivered_slice.id]
 
-    by_id = Map.new(board.slices, &{&1.id, &1})
+    by_id = Map.new(board.work_packages, &{&1.id, &1})
     assert by_id[scratch_slice.id].raw_status == "skipped"
     assert by_id[delivered_slice.id].raw_status == "skipped"
-    assert by_id[linked_skipped_slice.id].raw_status == "skipped"
   end
 
   test "preloaded blocked raw state does not imply active blocker evidence", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-RESOLVED-BLOCKER")
 
-    {_planned_slice, linked_package} =
+    {_work_package, linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-RESOLVED-BLOCKER",
         work_package_id: "WP-BOARD-RESOLVED-BLOCKER",
@@ -695,7 +572,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
       }
     }
 
-    assert {:ok, %{slices: [slice]}} =
+    assert {:ok, %{work_packages: [slice]}} =
              DeliveryBoard.project(repo, work_request.id, work_package_contexts: work_package_contexts)
 
     assert slice.operational_state.key == "blocked"
@@ -719,10 +596,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
         status: "closed"
       )
 
-    successor_slice = create_planned_slice!(repo, work_request, id: "WRS-BOARD-DISTINCT-SUCCESSOR")
+    successor_slice = create_work_package!(repo, work_request, id: "WRS-BOARD-DISTINCT-SUCCESSOR")
 
     assert {:ok, _no_pr_delivery} =
-             Repository.record_planned_slice_delivery(
+             Repository.record_work_package_delivery(
                repo,
                work_request.id,
                no_pr_slice.id,
@@ -734,30 +611,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
              )
 
     assert {:ok, _superseded_delivery} =
-             Repository.record_planned_slice_delivery(
+             Repository.record_work_package_delivery(
                repo,
                work_request.id,
                superseded_slice.id,
                delivery_attrs(%{
                  outcome: "superseded",
                  idempotency_key: "delivery-board-distinct-superseded",
-                 successor_planned_slice_id: successor_slice.id,
+                 successor_work_package_id: successor_slice.id,
                  superseded_reason: "Replaced by a smaller follow-up."
                })
              )
 
     assert {:ok, board} = DeliveryBoard.project(repo, work_request.id)
-    slices_by_id = Map.new(board.slices, &{&1.id, &1})
+    slices_by_id = Map.new(board.work_packages, &{&1.id, &1})
 
     assert get_in(slices_by_id, [no_pr_slice.id, :operational_state, :key]) == "completed_no_pr"
     assert get_in(slices_by_id, [superseded_slice.id, :operational_state, :key]) == "superseded"
-    assert get_in(slices_by_id, [superseded_slice.id, :successor, :planned_slice_id]) == successor_slice.id
+    assert get_in(slices_by_id, [superseded_slice.id, :successor, :work_package_id]) == successor_slice.id
   end
 
   test "delivery summary bounds freeform evidence", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-BOUNDED-DELIVERY")
 
-    {planned_slice, _linked_package} =
+    {work_package, _linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-BOUNDED-DELIVERY",
         work_package_id: "WP-BOARD-BOUNDED-DELIVERY",
@@ -765,10 +642,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
       )
 
     assert {:ok, _delivery} =
-             Repository.record_planned_slice_delivery(
+             Repository.record_work_package_delivery(
                repo,
                work_request.id,
-               planned_slice.id,
+               work_package.id,
                delivery_attrs(%{
                  outcome: "completed_no_pr",
                  idempotency_key: "delivery-board-bounded-evidence",
@@ -776,7 +653,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                })
              )
 
-    assert {:ok, %{slices: [slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert String.length(slice.delivery.no_pr_evidence) == 240
   end
 
@@ -784,18 +661,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     work_package_id = Keyword.fetch!(overrides, :work_package_id)
     status = Keyword.get(overrides, :status, "ready_for_worker")
 
-    planned_slice = create_planned_slice!(repo, work_request, Keyword.drop(overrides, [:work_package_id, :status]))
-    assert {:ok, approved_slice} = Repository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
-
     work_package =
-      create_matching_work_package!(repo, work_request, approved_slice,
-        id: work_package_id,
-        status: status
+      create_work_package!(
+        repo,
+        work_request,
+        overrides
+        |> Keyword.drop([:work_package_id])
+        |> Keyword.put(:id, work_package_id)
+        |> Keyword.put(:status, status)
+        |> Keyword.put(:dispatched_at, DateTime.utc_now(:microsecond))
       )
 
-    assert {:ok, dispatched_slice} = Repository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", work_package.id)
-
-    {dispatched_slice, work_package}
+    {work_package, work_package}
   end
 
   defp create_work_request!(repo, overrides) do
@@ -803,28 +680,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     work_request
   end
 
-  defp create_planned_slice!(repo, work_request, overrides) do
-    assert {:ok, planned_slice} = Repository.add_planned_slice(repo, work_request.id, planned_slice_attrs(overrides))
-    planned_slice
-  end
-
-  defp create_matching_work_package!(repo, work_request, planned_slice, overrides) do
-    attrs =
-      [
-        kind: planned_slice.work_package_kind,
-        title: planned_slice.title,
-        repo: work_request.repo,
-        base_branch: planned_slice.target_base_branch,
-        branch_pattern: planned_slice.branch_pattern,
-        product_description: work_request.human_description,
-        allowed_file_globs: planned_slice.owned_file_globs,
-        acceptance_criteria: planned_slice.acceptance_criteria,
-        review_requirement: planned_slice.review_requirement
-      ]
-      |> Keyword.merge(overrides)
-      |> WorkPackageFactory.attrs()
-
-    assert {:ok, work_package} = WorkPackageRepository.create(repo, attrs)
+  defp create_work_package!(repo, work_request, overrides) do
+    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(overrides))
     work_package
   end
 
@@ -844,15 +701,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     Enum.into(overrides, defaults)
   end
 
-  defp planned_slice_attrs(overrides) do
+  defp work_package_attrs(overrides) do
     defaults = %{
       id: "WRS-BOARD-#{System.unique_integer([:positive])}",
       title: "Add delivery-board projection",
       goal: "Project slice delivery state.",
-      work_package_kind: "mcp",
-      target_base_branch: "main",
+      kind: "mcp",
+      base_branch: "main",
       branch_pattern: "feat/delivery-board",
-      owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
+      allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
       forbidden_file_globs: ["elixir/assets/**"],
       acceptance_criteria: ["Projection is shared."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/work_request_delivery_board_test.exs"],
@@ -870,18 +727,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     }
 
     Enum.into(overrides, defaults)
-  end
-
-  defp drop_planned_slice_work_package_unique_index!(repo) do
-    SQL.query!(repo, "DROP INDEX IF EXISTS sympp_work_request_planned_slices_work_package_id_unique_index")
-  end
-
-  defp create_planned_slice_work_package_unique_index!(repo) do
-    SQL.query!(repo, """
-    CREATE UNIQUE INDEX IF NOT EXISTS sympp_work_request_planned_slices_work_package_id_unique_index
-    ON sympp_work_request_planned_slices (work_package_id)
-    WHERE work_package_id IS NOT NULL
-    """)
   end
 
   defp database_path do

@@ -48,7 +48,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
   @type error ::
           :invalid_transition
           | :unknown_lifecycle_status
-          | :unsupported_work_package_kind
+          | :unsupported_kind
           | :worker_cannot_mark_merged
           | :worker_cannot_advance_phase_state
           | :actor_scope_mismatch
@@ -86,7 +86,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
 
   defp validate_lifecycle_shape(%WorkPackage{} = work_package, next_status) do
     cond do
-      not lifecycle_kind?(work_package.kind) -> {:error, :unsupported_work_package_kind}
+      not lifecycle_kind?(work_package.kind) -> {:error, :unsupported_kind}
       work_package.status not in WorkPackage.persisted_statuses() -> {:error, :unknown_lifecycle_status}
       next_status not in WorkPackage.statuses() -> {:error, :unknown_lifecycle_status}
       not current_status_supported?(work_package) -> {:error, :unknown_lifecycle_status}

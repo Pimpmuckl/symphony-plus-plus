@@ -8,18 +8,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   import Ecto.Query
 
   @default_recorded_by "work_request_delivery_reconciler"
   @terminal_without_pr_reason "no_structured_pr_merge_evidence"
-  @blocker_closeout_repair_tools ["record_planned_slice_delivery", "reconcile_work_request"]
+  @blocker_closeout_repair_tools ["record_work_package_delivery", "reconcile_work_request"]
 
   @type mode :: :dry_run | :apply
   @type result :: map()
@@ -28,14 +27,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
   def reconcile(repo, work_request_id, opts \\ []) when is_atom(repo) and is_binary(work_request_id) and is_list(opts) do
     with {:ok, mode} <- mode(Keyword.get(opts, :mode, :dry_run)),
          {:ok, work_request} <- work_request(repo, work_request_id, opts),
-         {:ok, planned_slices} <- planned_slices(repo, work_request_id, opts),
-         {:ok, delivery_outcomes} <- delivery_outcomes(repo, planned_slices) do
-      results = Enum.map(planned_slices, &reconcile_slice(repo, work_request, &1, delivery_outcomes, mode, opts))
+         {:ok, work_packages} <- work_packages(repo, work_request_id, opts),
+         {:ok, delivery_outcomes} <- delivery_outcomes(repo, work_packages) do
+      results = Enum.map(work_packages, &reconcile_slice(repo, work_request, &1, delivery_outcomes, mode, opts))
 
-      with {:ok, final_planned_slices} <-
-             final_board_planned_slices(repo, work_request_id, planned_slices, mode),
+      with {:ok, final_work_packages} <-
+             final_board_work_packages(repo, work_request_id, work_packages, mode),
            {:ok, final_board} <-
-             delivery_board(repo, work_request, final_planned_slices, final_board_opts(mode, opts)) do
+             delivery_board(repo, work_request, final_work_packages, final_board_opts(mode, opts)) do
         {:ok, summary(work_request.id, mode, results, final_board)}
       end
     end
@@ -44,15 +43,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
   @spec reconcile_work_package(module(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def reconcile_work_package(repo, work_package_id, opts \\ [])
       when is_atom(repo) and is_binary(work_package_id) and is_list(opts) do
-    case repo.one(from(planned_slice in PlannedSlice, where: planned_slice.work_package_id == ^work_package_id, limit: 1)) do
+    case repo.one(from(work_package in WorkPackage, where: work_package.id == ^work_package_id, limit: 1)) do
       nil ->
         {:ok, %{status: "not_linked", work_package_id: work_package_id}}
 
-      %PlannedSlice{} = planned_slice ->
-        opts = opts |> Keyword.put(:mode, :apply) |> Keyword.put(:planned_slices, [planned_slice])
+      %WorkPackage{work_request_id: nil} ->
+        {:ok, %{status: "not_linked", work_package_id: work_package_id}}
+
+      %WorkPackage{} = work_package ->
+        opts = opts |> Keyword.put(:mode, :apply) |> Keyword.put(:work_packages, [work_package])
 
         repo
-        |> reconcile(planned_slice.work_request_id, opts)
+        |> reconcile(work_package.work_request_id, opts)
         |> require_successful_reconciliation()
     end
   end
@@ -76,8 +78,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
   defp final_board_opts(:apply, opts), do: Keyword.delete(opts, :work_package_contexts)
   defp final_board_opts(:dry_run, opts), do: opts
 
-  defp final_board_planned_slices(repo, work_request_id, _planned_slices, :apply), do: WorkRequestService.list_planned_slices(repo, work_request_id)
-  defp final_board_planned_slices(_repo, _work_request_id, planned_slices, :dry_run), do: {:ok, planned_slices}
+  defp final_board_work_packages(repo, work_request_id, _work_packages, :apply), do: WorkRequestService.list_work_packages(repo, work_request_id)
+  defp final_board_work_packages(_repo, _work_request_id, work_packages, :dry_run), do: {:ok, work_packages}
 
   defp work_request(repo, work_request_id, opts) do
     case Keyword.get(opts, :work_request) do
@@ -87,27 +89,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
     end
   end
 
-  defp planned_slices(repo, work_request_id, opts) do
-    case Keyword.get(opts, :planned_slices) do
-      planned_slices when is_list(planned_slices) ->
-        if Enum.all?(planned_slices, &(&1.work_request_id == work_request_id)) do
-          {:ok, planned_slices}
+  defp work_packages(repo, work_request_id, opts) do
+    case Keyword.get(opts, :work_packages) do
+      work_packages when is_list(work_packages) ->
+        if Enum.all?(work_packages, &(&1.work_request_id == work_request_id)) do
+          {:ok, work_packages}
         else
           {:error, :not_found}
         end
 
       nil ->
-        WorkRequestService.list_planned_slices(repo, work_request_id)
+        WorkRequestService.list_work_packages(repo, work_request_id)
 
-      _planned_slices ->
+      _work_packages ->
         {:error, :not_found}
     end
   end
 
-  defp delivery_board(repo, %WorkRequest{} = work_request, planned_slices, opts) do
+  defp delivery_board(repo, %WorkRequest{} = work_request, work_packages, opts) do
     DeliveryBoard.project(repo, work_request.id,
       work_request: work_request,
-      planned_slices: planned_slices,
+      work_packages: work_packages,
       visible_work_package_ids: Keyword.get(opts, :visible_work_package_ids, :all),
       work_package_contexts: Keyword.get(opts, :work_package_contexts, %{})
     )
@@ -115,14 +117,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
 
   defp delivery_outcomes(_repo, []), do: {:ok, %{}}
 
-  defp delivery_outcomes(repo, planned_slices) do
-    planned_slice_ids = Enum.map(planned_slices, & &1.id)
+  defp delivery_outcomes(repo, work_packages) do
+    work_package_ids = Enum.map(work_packages, & &1.id)
 
     outcomes =
       repo.all(
-        from(delivery in PlannedSliceDelivery,
-          where: delivery.planned_slice_id in ^planned_slice_ids,
-          select: {delivery.planned_slice_id, delivery.outcome}
+        from(delivery in WorkPackageDelivery,
+          where: delivery.work_package_id in ^work_package_ids,
+          select: {delivery.work_package_id, delivery.outcome}
         )
       )
       |> Map.new()
@@ -130,60 +132,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
     {:ok, outcomes}
   end
 
-  defp reconcile_slice(repo, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, delivery_outcomes, mode, opts) do
-    case Map.fetch(delivery_outcomes, planned_slice.id) do
+  defp reconcile_slice(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, delivery_outcomes, mode, opts) do
+    case Map.fetch(delivery_outcomes, work_package.id) do
       {:ok, delivery_outcome} ->
-        reconcile_already_closed_slice(repo, planned_slice, delivery_outcome, mode, opts)
+        reconcile_already_closed_slice(repo, work_package, delivery_outcome, mode, opts)
 
       :error ->
         cond do
-          planned_slice.status != "dispatched" ->
-            skipped_result(planned_slice, nil, "not_dispatched")
+          work_package.status in ["planned", "skipped"] ->
+            skipped_result(work_package, "not_dispatched")
 
-          not filled_string?(planned_slice.work_package_id) ->
-            skipped_result(planned_slice, nil, "missing_linked_work_package")
-
-          not visible_work_package?(planned_slice.work_package_id, Keyword.get(opts, :visible_work_package_ids, :all)) ->
-            skipped_result(planned_slice, nil, "work_package_out_of_scope")
+          not visible_work_package?(work_package.id, Keyword.get(opts, :visible_work_package_ids, :all)) ->
+            skipped_result(work_package, "work_package_out_of_scope")
 
           true ->
-            reconcile_dispatched_slice(repo, work_request, planned_slice, mode, opts)
+            reconcile_dispatched_slice(repo, work_request, work_package, mode, opts)
         end
     end
   end
 
-  defp reconcile_already_closed_slice(repo, %PlannedSlice{} = planned_slice, delivery_outcome, :apply, opts) do
-    cond do
-      not filled_string?(planned_slice.work_package_id) ->
-        already_closeout_result(planned_slice, nil, delivery_outcome)
-
-      not visible_work_package?(planned_slice.work_package_id, Keyword.get(opts, :visible_work_package_ids, :all)) ->
-        already_closeout_result(planned_slice, nil, delivery_outcome)
-
-      true ->
-        repair_already_closed_blocker_closeout(repo, planned_slice, delivery_outcome, opts)
+  defp reconcile_already_closed_slice(repo, %WorkPackage{} = work_package, delivery_outcome, :apply, opts) do
+    if visible_work_package?(work_package.id, Keyword.get(opts, :visible_work_package_ids, :all)) do
+      repair_already_closed_blocker_closeout(repo, work_package, delivery_outcome, opts)
+    else
+      already_closeout_result(work_package, delivery_outcome)
     end
   end
 
-  defp reconcile_already_closed_slice(repo, %PlannedSlice{} = planned_slice, delivery_outcome, :dry_run, opts) do
-    cond do
-      not filled_string?(planned_slice.work_package_id) ->
-        already_closeout_result(planned_slice, nil, delivery_outcome)
-
-      not visible_work_package?(planned_slice.work_package_id, Keyword.get(opts, :visible_work_package_ids, :all)) ->
-        already_closeout_result(planned_slice, nil, delivery_outcome)
-
-      true ->
-        preview_already_closed_blocker_closeout(repo, planned_slice, delivery_outcome, opts)
+  defp reconcile_already_closed_slice(repo, %WorkPackage{} = work_package, delivery_outcome, :dry_run, opts) do
+    if visible_work_package?(work_package.id, Keyword.get(opts, :visible_work_package_ids, :all)) do
+      preview_already_closed_blocker_closeout(repo, work_package, delivery_outcome, opts)
+    else
+      already_closeout_result(work_package, delivery_outcome)
     end
   end
 
-  defp repair_already_closed_blocker_closeout(repo, %PlannedSlice{} = planned_slice, delivery_outcome, opts) do
-    case load_already_closed_blocker_closeout_repair(repo, planned_slice, delivery_outcome) do
+  defp repair_already_closed_blocker_closeout(repo, %WorkPackage{} = work_package, delivery_outcome, opts) do
+    case load_already_closed_blocker_closeout_repair(repo, work_package, delivery_outcome) do
       {:ok, work_package, missing_blockers} ->
         append_missing_reconcile_blocker_closeout_events(
           repo,
-          planned_slice,
           work_package,
           delivery_outcome,
           missing_blockers,
@@ -191,42 +179,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
         )
 
       :skip ->
-        already_closeout_result(planned_slice, nil, delivery_outcome)
+        already_closeout_result(work_package, delivery_outcome)
 
       {:error, reason} ->
-        error_result(planned_slice, nil, reason)
+        error_result(work_package, reason)
     end
   end
 
-  defp preview_already_closed_blocker_closeout(repo, %PlannedSlice{} = planned_slice, delivery_outcome, _opts) do
-    case load_already_closed_blocker_closeout_repair(repo, planned_slice, delivery_outcome) do
+  defp preview_already_closed_blocker_closeout(repo, %WorkPackage{} = work_package, delivery_outcome, _opts) do
+    case load_already_closed_blocker_closeout_repair(repo, work_package, delivery_outcome) do
       {:ok, work_package, []} ->
-        already_closeout_result(planned_slice, work_package, delivery_outcome)
+        already_closeout_result(work_package, delivery_outcome)
 
       {:ok, work_package, missing_blockers} ->
         closeout = reconcile_still_active_blocker_closeout(missing_blockers, delivery_outcome)
 
-        planned_slice
-        |> base_result(work_package)
+        work_package
+        |> base_result()
         |> Map.merge(%{
           status: "proposed",
           reason: "already_closeout_blocker_closeout_repair",
-          action: already_closed_action_payload(planned_slice, delivery_outcome, closeout),
+          action: already_closed_action_payload(work_package, delivery_outcome, closeout),
           delivery_outcome: delivery_outcome
         })
 
       :skip ->
-        already_closeout_result(planned_slice, nil, delivery_outcome)
+        already_closeout_result(work_package, delivery_outcome)
 
       {:error, reason} ->
-        error_result(planned_slice, nil, reason)
+        error_result(work_package, reason)
     end
   end
 
-  defp load_already_closed_blocker_closeout_repair(repo, %PlannedSlice{} = planned_slice, delivery_outcome) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, planned_slice.work_package_id),
+  defp load_already_closed_blocker_closeout_repair(repo, %WorkPackage{} = work_package, delivery_outcome) do
+    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package.id),
          {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package.id),
-         {:ok, closeout_event} <- delivery_closeout_event(progress_events, planned_slice, delivery_outcome) do
+         {:ok, closeout_event} <- delivery_closeout_event(progress_events, work_package, delivery_outcome) do
       missing_blockers =
         progress_events
         |> closeout_blockers(closeout_event)
@@ -241,30 +229,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
 
   defp append_missing_reconcile_blocker_closeout_events(
          _repo,
-         %PlannedSlice{} = planned_slice,
-         work_package,
+         %WorkPackage{} = work_package,
          delivery_outcome,
          [],
          _opts
        ) do
-    already_closeout_result(planned_slice, work_package, delivery_outcome)
+    already_closeout_result(work_package, delivery_outcome)
   end
 
   defp append_missing_reconcile_blocker_closeout_events(
          repo,
-         %PlannedSlice{} = planned_slice,
-         work_package,
+         %WorkPackage{} = work_package,
          delivery_outcome,
          missing_blockers,
          opts
        ) do
     closeout = reconcile_still_active_blocker_closeout(missing_blockers, delivery_outcome)
-    action_payload = already_closed_action_payload(planned_slice, delivery_outcome, closeout)
+    action_payload = already_closed_action_payload(work_package, delivery_outcome, closeout)
 
     case append_reconcile_blocker_closeout_events_for_blockers(repo, missing_blockers, closeout, opts) do
       {:ok, event_ids} ->
-        planned_slice
-        |> base_result(work_package)
+        work_package
+        |> base_result()
         |> Map.merge(%{
           status: "applied",
           reason: "already_closeout_blocker_closeout_repaired",
@@ -274,8 +260,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
         |> maybe_put_blocker_closeout_event_ids(event_ids)
 
       {:partial, event_ids, reason} ->
-        planned_slice
-        |> base_result(work_package)
+        work_package
+        |> base_result()
         |> Map.merge(%{
           status: "applied",
           reason: "already_closeout_blocker_closeout_repaired",
@@ -286,18 +272,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
         |> maybe_put_blocker_closeout_repair(%{status: "deferred", reason: reason_text(reason)})
 
       {:error, reason} ->
-        error_result(planned_slice, work_package, reason, action_payload)
+        error_result(work_package, reason, action_payload)
     end
   end
 
-  defp already_closeout_result(%PlannedSlice{} = planned_slice, work_package, delivery_outcome) do
-    skipped_result(planned_slice, work_package, "already_closeout", delivery_outcome: delivery_outcome)
+  defp already_closeout_result(%WorkPackage{} = work_package, delivery_outcome) do
+    skipped_result(work_package, "already_closeout", delivery_outcome: delivery_outcome)
   end
 
-  defp already_closed_action_payload(%PlannedSlice{} = planned_slice, delivery_outcome, closeout) do
+  defp already_closed_action_payload(%WorkPackage{} = work_package, delivery_outcome, closeout) do
     %{
-      work_request_id: planned_slice.work_request_id,
-      planned_slice_id: planned_slice.id,
+      work_request_id: work_package.work_request_id,
+      work_package_id: work_package.id,
       outcome: delivery_outcome,
       blocker_closeout: closeout
     }
@@ -313,7 +299,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
 
   defp delivery_outcome_label("pr_merged"), do: "merged PR"
   defp delivery_outcome_label(outcome) when is_binary(outcome), do: String.replace(outcome, "_", " ")
-  defp delivery_outcome_label(_outcome), do: "planned-slice"
+  defp delivery_outcome_label(_outcome), do: "work-package"
 
   defp missing_reconcile_blocker_closeout_blockers(repo, blockers) do
     Enum.reject(blockers, fn blocker ->
@@ -333,22 +319,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
     )
   end
 
-  defp delivery_closeout_event(progress_events, %PlannedSlice{} = planned_slice, delivery_outcome) do
+  defp delivery_closeout_event(progress_events, %WorkPackage{} = work_package, delivery_outcome) do
     progress_events
     |> Enum.reverse()
-    |> Enum.find(&delivery_closeout_event?(&1, planned_slice.id, delivery_outcome))
+    |> Enum.find(&delivery_closeout_event?(&1, work_package.id, delivery_outcome))
     |> case do
       %ProgressEvent{} = event -> {:ok, event}
       nil -> {:error, :not_found}
     end
   end
 
-  defp delivery_closeout_event?(%ProgressEvent{} = event, planned_slice_id, delivery_outcome) do
+  defp delivery_closeout_event?(%ProgressEvent{} = event, work_package_id, delivery_outcome) do
     payload = event.payload || %{}
 
     Map.get(payload, "type") == "work_request_delivery_closeout" and
-      Map.get(payload, "source_tool") == "record_planned_slice_delivery" and
-      Map.get(payload, "planned_slice_id") == planned_slice_id and
+      Map.get(payload, "source_tool") == "record_work_package_delivery" and
+      Map.get(payload, "work_package_id") == work_package_id and
       Map.get(payload, "outcome") == delivery_outcome
   end
 
@@ -379,22 +365,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
 
   defp progress_event_observed_by?(%ProgressEvent{}, %ProgressEvent{}), do: false
 
-  defp reconcile_dispatched_slice(repo, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, mode, opts) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, planned_slice.work_package_id),
-         {:ok, action} <- closeout_action(repo, work_request, planned_slice, work_package, opts) do
-      maybe_apply_action(repo, work_request, planned_slice, work_package, action, mode, opts)
+  defp reconcile_dispatched_slice(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, mode, opts) do
+    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package.id),
+         {:ok, action} <- closeout_action(repo, work_request, work_package, opts) do
+      maybe_apply_action(repo, work_request, work_package, action, mode, opts)
     else
-      {:skip, reason, extras} -> skipped_result(planned_slice, nil, reason, extras)
-      {:error, :not_found} -> skipped_result(planned_slice, nil, "missing_linked_work_package")
-      {:error, reason} -> error_result(planned_slice, nil, reason)
+      {:skip, reason, extras} -> skipped_result(work_package, reason, extras)
+      {:error, :not_found} -> skipped_result(work_package, "work_package_not_found")
+      {:error, reason} -> error_result(work_package, reason)
     end
   end
 
-  defp closeout_action(repo, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, %WorkPackage{} = work_package, opts) do
+  defp closeout_action(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, opts) do
     with {:ok, events} <- PlanningRepository.list_progress_events(repo, work_package.id),
          {:ok, evidence} <- merged_pr_evidence(events),
          :ok <- validate_repository(work_package, evidence),
-         :ok <- validate_base_branch(planned_slice, work_package, evidence),
+         :ok <- validate_base_branch(work_package, evidence),
          :ok <- validate_head(events, evidence),
          {:ok, merged_at} <- required_merged_at(evidence),
          {:ok, merge_commit_sha} <- required_merge_commit_sha(evidence) do
@@ -404,7 +390,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
          reason: "github_pr_merged",
          attrs: %{
            outcome: "pr_merged",
-           idempotency_key: idempotency_key(work_request, planned_slice, evidence, merge_commit_sha),
+           idempotency_key: idempotency_key(work_request, work_package, evidence, merge_commit_sha),
            recorded_by: Keyword.get(opts, :recorded_by, @default_recorded_by),
            pr_url: evidence.url,
            pr_number: evidence.number,
@@ -427,11 +413,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
     end
   end
 
-  defp maybe_apply_action(repo, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, %WorkPackage{} = work_package, action, :dry_run, _opts) do
-    action_payload = action_payload(repo, work_request, planned_slice, work_package, action)
+  defp maybe_apply_action(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, action, :dry_run, _opts) do
+    action_payload = action_payload(repo, work_request, work_package, action)
 
-    planned_slice
-    |> base_result(work_package)
+    work_package
+    |> base_result()
     |> Map.merge(%{
       status: "proposed",
       reason: action.reason,
@@ -440,22 +426,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
     })
   end
 
-  defp maybe_apply_action(repo, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, %WorkPackage{} = work_package, action, :apply, opts) do
-    action_payload = action_payload(repo, work_request, planned_slice, work_package, action)
+  defp maybe_apply_action(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, action, :apply, opts) do
+    action_payload = action_payload(repo, work_request, work_package, action)
     delivery_attrs = delivery_attrs(repo, work_package, action)
 
     case record_reconciled_delivery(
            repo,
            work_request,
-           planned_slice,
            work_package,
            delivery_attrs,
            action_payload,
            opts
          ) do
       {:ok, delivery, blocker_closeout_event_ids, blocker_closeout_repair} ->
-        planned_slice
-        |> base_result(work_package)
+        work_package
+        |> base_result()
         |> Map.merge(%{
           status: "applied",
           reason: action.reason,
@@ -467,7 +452,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
         |> maybe_put_blocker_closeout_repair(blocker_closeout_repair)
 
       {:error, reason} ->
-        error_result(planned_slice, work_package, reason, action_payload)
+        error_result(work_package, reason, action_payload)
     end
   end
 
@@ -576,8 +561,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
     end
   end
 
-  defp validate_base_branch(%PlannedSlice{} = planned_slice, %WorkPackage{}, evidence) do
-    expected = clean_string(planned_slice.target_base_branch)
+  defp validate_base_branch(%WorkPackage{} = work_package, evidence) do
+    expected = clean_string(work_package.base_branch)
     actual = clean_string(evidence.base_branch)
 
     cond do
@@ -637,10 +622,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
 
   defp merge_reconciliation_payload?(_payload), do: false
 
-  defp action_payload(repo, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, %WorkPackage{} = work_package, action) do
+  defp action_payload(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, action) do
     %{
       work_request_id: work_request.id,
-      planned_slice_id: planned_slice.id,
+      work_package_id: work_package.id,
       outcome: action.attrs.outcome,
       idempotency_key: action.attrs.idempotency_key,
       recorded_by: action.attrs.recorded_by,
@@ -746,14 +731,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
   defp record_reconciled_delivery(
          repo,
          %WorkRequest{} = work_request,
-         %PlannedSlice{} = planned_slice,
          %WorkPackage{} = work_package,
          delivery_attrs,
          action_payload,
          opts
        ) do
     with {:ok, delivery} <-
-           record_planned_slice_delivery(repo, work_request, planned_slice, delivery_attrs, opts) do
+           record_work_package_delivery(repo, work_request, work_package, delivery_attrs, opts) do
       case append_reconcile_blocker_closeout_events(repo, work_package, action_payload, opts) do
         {:ok, blocker_closeout_event_ids} ->
           {:ok, delivery, blocker_closeout_event_ids, nil}
@@ -767,10 +751,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
     end
   end
 
-  defp record_planned_slice_delivery(repo, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, attrs, opts) do
-    case Keyword.get(opts, :record_planned_slice_delivery) do
-      fun when is_function(fun, 4) -> fun.(repo, work_request.id, planned_slice.id, attrs)
-      _missing -> WorkRequestService.record_planned_slice_delivery(repo, work_request.id, planned_slice.id, attrs)
+  defp record_work_package_delivery(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, attrs, opts) do
+    case Keyword.get(opts, :record_work_package_delivery) do
+      fun when is_function(fun, 4) -> fun.(repo, work_request.id, work_package.id, attrs)
+      _missing -> WorkRequestService.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
     end
   end
 
@@ -820,38 +804,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
   defp maybe_put_blocker_closeout_repair(result, nil), do: result
   defp maybe_put_blocker_closeout_repair(result, repair), do: Map.put(result, :blocker_closeout_repair, repair)
 
-  defp idempotency_key(%WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, evidence, merge_commit_sha) do
-    material = [work_request.id, planned_slice.id, evidence.url, evidence.head_sha, merge_commit_sha] |> Enum.join(":")
+  defp idempotency_key(%WorkRequest{} = work_request, %WorkPackage{} = work_package, evidence, merge_commit_sha) do
+    material = [work_request.id, work_package.id, evidence.url, evidence.head_sha, merge_commit_sha] |> Enum.join(":")
     "delivery_reconciler:" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
   end
 
-  defp base_result(%PlannedSlice{} = planned_slice, %WorkPackage{} = work_package) do
+  defp base_result(%WorkPackage{} = work_package) do
     %{
-      work_request_id: planned_slice.work_request_id,
-      planned_slice_id: planned_slice.id,
-      work_package_id: planned_slice.work_package_id,
+      work_request_id: work_package.work_request_id,
+      work_package_id: work_package.id,
       work_package_status: work_package.status
     }
   end
 
-  defp base_result(%PlannedSlice{} = planned_slice, _work_package) do
-    %{
-      work_request_id: planned_slice.work_request_id,
-      planned_slice_id: planned_slice.id,
-      work_package_id: planned_slice.work_package_id
-    }
-  end
-
-  defp skipped_result(%PlannedSlice{} = planned_slice, work_package, reason, extras \\ %{}) do
-    planned_slice
-    |> base_result(work_package)
+  defp skipped_result(%WorkPackage{} = work_package, reason, extras \\ %{}) do
+    work_package
+    |> base_result()
     |> Map.merge(%{status: "skipped", reason: reason})
     |> Map.merge(Map.new(extras))
   end
 
-  defp error_result(%PlannedSlice{} = planned_slice, work_package, reason, action \\ nil) do
-    planned_slice
-    |> base_result(work_package)
+  defp error_result(%WorkPackage{} = work_package, reason, action \\ nil) do
+    work_package
+    |> base_result()
     |> Map.merge(%{status: "error", reason: reason_text(reason), action: action})
   end
 
@@ -904,8 +879,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
   end
 
   defp clean_string(_value), do: nil
-
-  defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
 
   defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_text({reason, _detail}) when is_atom(reason), do: Atom.to_string(reason)

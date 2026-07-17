@@ -18,7 +18,7 @@ roadmap.
 - `docs` uses light planning for docs-only work. Owned globs must stay under documentation roots or target documentation-file globs. Readiness requires docs validation without forcing branch, PR, findings, or recommendation artifacts.
 - `investigation` records findings and a canonical recommendation artifact. New `request_scope_expansion` recommendations persist `recommendation.md`; stored legacy recommendation events do not satisfy readiness unless that canonical artifact already exists.
 
-Review is independent of the policy template. A planned slice may declare one
+Review is independent of the policy template. A WorkPackage may declare one
 provider-agnostic review requirement; when absent, no review is required.
 
 Default quick-work grants do not expire by clock. Authority ends through explicit

@@ -46,7 +46,7 @@ compact successful cleanup result and leaves audit detail in
 
 ## Dispatch
 
-`dispatch_slice(work_request_id, planned_slice_id,
+`dispatch_work_package(work_request_id, work_package_id,
 claimed_by?)` returns a `worker_bootstrap` payload for
 `claim_local_assignment`. Workers should not need repository root, helper
 script, private file, or raw secret metadata.
@@ -71,17 +71,15 @@ blockers must be resolved or kept active as part of a finish transition.
 
 After `claim_local_architect_assignment`, planning writes that only target the
 claimed current WorkRequest may omit `work_request_id`:
-`plan_slice`, `upsert_plan_node`,
+`slice_work_request`, `update_work_package`, `upsert_plan_node`,
 `move_plan_node`,
 `set_plan_node_completion`,
-`move_slice_to_plan_node`,
-`approve_slice`, `skip_slice`, and
-`finish_slicing`. Reads, lists, delivery closeout, dispatch,
+and `skip_work_package`. Reads, lists, delivery closeout, dispatch,
 status/question tools, durable decision tools, and package tools still require
 their explicit target ids.
 
-For ordinary PR-backed work, `plan_slice` defaults
-`work_package_kind` to `standard_pr`, delivery repo and target base branch to
+For ordinary PR-backed work, each package in `slice_work_request` defaults
+`kind` to `standard_pr`, delivery repo and target base branch to
 the selected WorkRequest's primary repo scope. Review is omitted unless the
 architect supplies one opaque `review` requirement. Pass the target base branch
 when selecting a secondary delivery repo. Branch pattern and forbidden globs may also be omitted. Title, goal,
@@ -98,17 +96,17 @@ Architect delivery closeout uses:
 
 ```text
 read_delivery_board(work_request_id)
-cleanup_work_request_planned_slice_runtime(work_request_id, planned_slice_id, outcome, reason, ...)
-record_planned_slice_delivery(work_request_id, planned_slice_id, outcome, idempotency_key, evidence)
+cleanup_work_request_work_package_runtime(work_request_id, work_package_id, outcome, reason, ...)
+record_work_package_delivery(work_request_id, work_package_id, outcome, idempotency_key, evidence)
 reconcile_work_request
 ```
 
 Closeout outcomes include `pr_merged`, `completed_no_pr`, `superseded`, and
-`abandoned`. `record_planned_slice_delivery` groups proof under one typed
+`abandoned`. `record_work_package_delivery` groups proof under one typed
 `evidence` object matching `outcome`: `evidence.pr_merged`,
 `evidence.completed_no_pr`, `evidence.superseded`, or `evidence.abandoned`.
 PR/GitHub evidence may also drive deterministic closeout repairs through
-`reconcile_work_request`. Use `cleanup_work_request_planned_slice_runtime`
+`reconcile_work_request`. Use `cleanup_work_request_work_package_runtime`
 before closeout when stale linked worker grants, local claim leases, or
 recoverable worker MCP session bindings are the remaining runtime blocker;
 cleanup keeps the flat superseded or abandoned fields that authorize cleanup

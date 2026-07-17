@@ -13,7 +13,7 @@ exercise branch, review, and merge mechanics without product or runtime risk.
 | Item | Value |
 | --- | --- |
 | WorkRequest | `SYMPP-V2-DOGFOOD-002-WR` |
-| Planned slice | `SYMPP-V2-DOGFOOD-002-SLICE-A` |
+| WorkPackage | `SYMPP-V2-DOGFOOD-002-SLICE-A` |
 | Dispatched WorkPackage | `wp_ZtFeuFtbjHyAXvNY2jllEA` |
 | Branch | `feat/sympp-v2-dogfood-002-child-a` |
 | Owned file | `implementation_docs_symphplusplus/dogfood/SYMPP-V2-DOGFOOD-002-child-a-naming.md` |

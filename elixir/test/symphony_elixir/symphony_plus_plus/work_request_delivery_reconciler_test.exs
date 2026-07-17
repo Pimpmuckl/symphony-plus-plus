@@ -22,11 +22,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -46,8 +45,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   setup %{repo: repo} do
     for schema <- [
           ProgressEvent,
-          PlannedSliceDelivery,
-          PlannedSlice,
+          WorkPackageDelivery,
+          WorkPackage,
           DecisionLogEntry,
           AgentRun,
           ClaimLease,
@@ -63,7 +62,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   end
 
   test "dry-run proposes and apply records merged PR closeout through delivery service", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-RECONCILE-PR-MERGED",
         work_package_id: "WP-RECONCILE-PR-MERGED",
@@ -82,22 +81,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
              %{
                status: "proposed",
                reason: "github_pr_merged",
-               planned_slice_id: planned_slice_id,
                work_package_id: work_package_id,
                action: action
              }
            ] = dry_run.results
 
-    assert planned_slice_id == planned_slice.id
+    assert work_package_id == work_package.id
     assert work_package_id == linked_package.id
     assert action.work_request_id == work_request.id
-    assert action.planned_slice_id == planned_slice.id
+    assert action.work_package_id == work_package.id
     assert action.outcome == "pr_merged"
     assert action.recorded_by == "reconciler-test"
     assert action.evidence.pr_merged.pr_number == 902
     assert action.evidence.pr_merged.merge_commit_sha == "merge-sha-902"
     refute Map.has_key?(action, :pr_url)
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert repo.get!(WorkPackage, linked_package.id).status == "ready_for_merge"
 
     assert {:ok, applied} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply, recorded_by: "reconciler-test")
@@ -106,15 +104,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert [%{status: "applied", reason: "github_pr_merged", delivery_id: delivery_id}] = applied.results
     assert is_binary(delivery_id)
 
-    assert [delivery] = repo.all(PlannedSliceDelivery)
+    assert [delivery] = repo.all(WorkPackageDelivery)
     assert delivery.outcome == "pr_merged"
-    assert delivery.planned_slice_id == planned_slice.id
+    assert delivery.work_package_id == work_package.id
     assert delivery.recorded_by == "reconciler-test"
     assert repo.get!(WorkPackage, linked_package.id).status == "merged"
   end
 
   test "apply records merged PR closeout when only stale agent runtime evidence remains", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-RECONCILE-STALE-AGENT-RUN",
         work_package_id: "WP-RECONCILE-STALE-AGENT-RUN",
@@ -133,13 +131,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert {:ok, applied} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply, recorded_by: "reconciler-test")
 
     assert applied.applied_count == 1
-    assert [%{status: "applied", planned_slice_id: planned_slice_id, work_package_id: work_package_id}] = applied.results
-    assert planned_slice_id == planned_slice.id
+    assert [%{status: "applied", work_package_id: work_package_id}] = applied.results
+    assert work_package_id == work_package.id
     assert work_package_id == linked_package.id
     assert applied.delivery_board.counts["delivered"] == 1
     assert Map.get(applied.delivery_board.counts, "needs_closeout", 0) == 0
 
-    assert [delivery] = repo.all(PlannedSliceDelivery)
+    assert [delivery] = repo.all(WorkPackageDelivery)
     assert delivery.outcome == "pr_merged"
     assert repo.get!(WorkPackage, linked_package.id).status == "merged"
 
@@ -149,7 +147,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   end
 
   test "apply records merged PR closeout for stale package and retires worker authority", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-RECONCILE-STALE-PR-MERGED",
         work_package_id: "WP-RECONCILE-STALE-PR-MERGED",
@@ -172,12 +170,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert {:ok, applied} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply, recorded_by: "reconciler-test")
 
     assert applied.applied_count == 1
-    assert [%{status: "applied", planned_slice_id: planned_slice_id, work_package_id: work_package_id}] = applied.results
-    assert planned_slice_id == planned_slice.id
+    assert [%{status: "applied", work_package_id: work_package_id}] = applied.results
+    assert work_package_id == work_package.id
     assert work_package_id == linked_package.id
     assert applied.delivery_board.counts["delivered"] == 1
 
-    assert [delivery] = repo.all(PlannedSliceDelivery)
+    assert [delivery] = repo.all(WorkPackageDelivery)
     assert delivery.outcome == "pr_merged"
     assert repo.get!(WorkPackage, linked_package.id).status == "merged"
     assert %AccessGrant{revoked_at: %DateTime{}} = repo.get!(AccessGrant, minted.grant.id)
@@ -185,7 +183,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   end
 
   test "MCP reconcile_work_request dry-run reports proposed closeout without write capability", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-RECONCILE-MCP-DRY-RUN",
@@ -204,20 +202,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert [result] = payload["results"]
     assert result["status"] == "proposed"
     assert result["reason"] == "github_pr_merged"
-    assert result["planned_slice_id"] == planned_slice.id
+    assert result["work_package_id"] == work_package.id
     assert get_in(result, ["action", "work_request_id"]) == work_request.id
-    assert get_in(result, ["action", "planned_slice_id"]) == planned_slice.id
+    assert get_in(result, ["action", "work_package_id"]) == work_package.id
     assert get_in(result, ["action", "outcome"]) == "pr_merged"
     assert get_in(result, ["action", "evidence", "pr_merged", "pr_number"]) == 903
     assert get_in(result, ["action", "evidence", "pr_merged", "merge_commit_sha"]) == "merge-sha-903"
     refute Map.has_key?(result["action"], "pr_url")
     assert get_in(response, ["result", "structuredContent", "delivery_board", "counts", "needs_closeout"]) == 1
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert repo.get!(WorkPackage, linked_package.id).status == "ready_for_merge"
   end
 
-  test "MCP reconcile_work_request dry-run action replays through record_planned_slice_delivery", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+  test "MCP reconcile_work_request dry-run action replays through record_work_package_delivery", %{repo: repo} do
+    {work_request, _work_package, linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-RECONCILE-MCP-REPLAY",
@@ -237,14 +235,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert [result] = get_in(response, ["result", "structuredContent", "reconciliation", "results"])
     assert get_in(result, ["action", "recorded_by"]) == "manual-reconciler"
 
-    record_response = mcp_tool(repo, session, "record_planned_slice_delivery", result["action"])
-    assert get_in(record_response, ["result", "structuredContent", "planned_slice_delivery", "outcome"]) == "pr_merged"
-    assert get_in(record_response, ["result", "structuredContent", "planned_slice_delivery", "recorded_by"]) == "manual-reconciler"
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 1
+    record_response = mcp_tool(repo, session, "record_work_package_delivery", result["action"])
+    assert get_in(record_response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "pr_merged"
+    assert get_in(record_response, ["result", "structuredContent", "work_package_delivery", "recorded_by"]) == "manual-reconciler"
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
   end
 
   test "MCP reconcile_work_request dry-run action preserves active blockers when replayed", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-RECONCILE-MCP-BLOCKER-REPLAY",
@@ -261,10 +259,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert get_in(result, ["action", "blocker_closeout", "decision"]) == "still_active"
     assert get_in(result, ["action", "blocker_closeout", "blocker_ids"]) == ["replay-blocker"]
 
-    record_response = mcp_tool(repo, session, "record_planned_slice_delivery", result["action"])
-    assert get_in(record_response, ["result", "structuredContent", "planned_slice_delivery", "outcome"]) == "pr_merged"
+    record_response = mcp_tool(repo, session, "record_work_package_delivery", result["action"])
+    assert get_in(record_response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "pr_merged"
     assert get_in(record_response, ["result", "structuredContent", "blocker_closeout", "decision"]) == "still_active"
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 1
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
 
     assert {:ok, replay} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply)
 
@@ -274,7 +272,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   end
 
   test "MCP reconcile_work_request apply preserves active blockers", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-RECONCILE-MCP-BLOCKER-APPLY",
@@ -295,7 +293,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert get_in(result, ["action", "blocker_closeout", "decision"]) == "still_active"
     assert get_in(result, ["action", "blocker_closeout", "blocker_ids"]) == ["apply-blocker"]
     assert [event_id] = result["blocker_closeout_event_ids"]
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 1
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
 
     blocker_closeout_event = repo.get!(ProgressEvent, event_id)
     assert blocker_closeout_event.work_package_id == linked_package.id
@@ -322,7 +320,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   end
 
   test "apply does not append blocker preservation events when delivery recording fails", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-RECONCILE-BLOCKER-DELIVERY-FAILS",
@@ -334,12 +332,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     append_active_blocker!(repo, linked_package.id, "delivery-failure-blocker")
     test_pid = self()
 
-    record_delivery = fn callback_repo, callback_work_request_id, callback_planned_slice_id, attrs ->
+    record_delivery = fn callback_repo, callback_work_request_id, callback_work_package_id, attrs ->
       send(test_pid, {
         :record_delivery_called,
         callback_repo,
         callback_work_request_id,
-        callback_planned_slice_id,
+        callback_work_package_id,
         attrs
       })
 
@@ -349,19 +347,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert {:ok, result} =
              DeliveryReconciler.reconcile(repo, work_request.id,
                mode: :apply,
-               record_planned_slice_delivery: record_delivery
+               record_work_package_delivery: record_delivery
              )
 
     assert_received {
       :record_delivery_called,
       ^repo,
       callback_work_request_id,
-      callback_planned_slice_id,
+      callback_work_package_id,
       attrs
     }
 
     assert callback_work_request_id == work_request.id
-    assert callback_planned_slice_id == planned_slice.id
+    assert callback_work_package_id == work_package.id
     assert attrs.outcome == "pr_merged"
     assert attrs["allow_active_blocker_closeout"] == true
 
@@ -369,7 +367,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert result.error_count == 1
     assert [%{status: "error", reason: "concurrent_closeout", action: action}] = result.results
     assert action.blocker_closeout.blocker_ids == ["delivery-failure-blocker"]
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
 
     refute Enum.any?(repo.all(ProgressEvent), fn event ->
              event.work_package_id == linked_package.id and
@@ -378,11 +376,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
            end)
 
     assert {:error, {:delivery_reconciliation_failed, "concurrent_closeout"}} =
-             DeliveryReconciler.reconcile_work_package(repo, linked_package.id, record_planned_slice_delivery: record_delivery)
+             DeliveryReconciler.reconcile_work_package(repo, linked_package.id, record_work_package_delivery: record_delivery)
   end
 
   test "apply defers blocker preservation repair when append fails after delivery records", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-RECONCILE-BLOCKER-APPEND-FAILS",
@@ -412,7 +410,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
              }
            ] = result.results
 
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 1
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
     assert reconcile_blocker_closeout_events(repo, linked_package.id) == []
 
     assert {:ok, retry} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply)
@@ -433,7 +431,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   end
 
   test "apply repairs missing blocker preservation events for already closed deliveries", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-RECONCILE-BLOCKER-REPAIR",
@@ -445,10 +443,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     append_active_blocker!(repo, linked_package.id, "repair-blocker")
 
     assert {:ok, _delivery} =
-             WorkRequestService.record_planned_slice_delivery(
+             WorkRequestService.record_work_package_delivery(
                repo,
                work_request.id,
-               planned_slice.id,
+               work_package.id,
                merged_pr_delivery_attrs(920, %{"allow_active_blocker_closeout" => true})
              )
 
@@ -460,7 +458,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
 
     assert scoped_dry_run.proposed_count == 0
     assert [%{status: "skipped", reason: "already_closeout", delivery_outcome: "pr_merged"} = scoped_result] = scoped_dry_run.results
-    refute Map.has_key?(scoped_result, :work_package_status)
+    assert scoped_result.work_package_status == "merged"
 
     assert {:ok, dry_run} = DeliveryReconciler.reconcile(repo, work_request.id)
     assert dry_run.proposed_count == 1
@@ -502,7 +500,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   end
 
   test "already closed blocker repair summary names non-PR delivery outcomes", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-RECONCILE-NO-PR-BLOCKER-REPAIR",
@@ -513,10 +511,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     append_active_blocker!(repo, linked_package.id, "no-pr-repair-blocker")
 
     assert {:ok, _delivery} =
-             WorkRequestService.record_planned_slice_delivery(
+             WorkRequestService.record_work_package_delivery(
                repo,
                work_request.id,
-               planned_slice.id,
+               work_package.id,
                no_pr_delivery_attrs("no-pr-repair", %{"allow_active_blocker_closeout" => true})
              )
 
@@ -544,7 +542,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   end
 
   test "already closed repair defers remaining blocker events after partial append", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-RECONCILE-BLOCKER-PARTIAL-REPAIR",
@@ -557,10 +555,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     append_active_blocker!(repo, linked_package.id, "partial-repair-b")
 
     assert {:ok, _delivery} =
-             WorkRequestService.record_planned_slice_delivery(
+             WorkRequestService.record_work_package_delivery(
                repo,
                work_request.id,
-               planned_slice.id,
+               work_package.id,
                merged_pr_delivery_attrs(922, %{"allow_active_blocker_closeout" => true})
              )
 
@@ -598,7 +596,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   end
 
   test "MCP reconcile_work_request apply keys blocker preservation by active blocker event", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-RECONCILE-MCP-RERAISED-BLOCKER",
@@ -663,7 +661,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   end
 
   test "MCP reconcile_work_request apply returns fresh post-closeout delivery board", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-RECONCILE-MCP-APPLY",
@@ -680,7 +678,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert payload["applied_count"] == 1
     counts = get_in(response, ["result", "structuredContent", "delivery_board", "counts"])
     assert Map.get(counts, "needs_closeout", 0) == 0
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 1
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
     assert repo.get!(WorkPackage, linked_package.id).status == "merged"
   end
 
@@ -692,7 +690,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     ]
 
     for {reason, evidence_opts} <- cases do
-      {work_request, _planned_slice, linked_package} =
+      {work_request, _work_package, linked_package} =
         linked_slice!(repo,
           work_request_id: "WR-RECONCILE-#{String.upcase(reason)}",
           work_package_id: "WP-RECONCILE-#{String.upcase(reason)}",
@@ -705,32 +703,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
 
       assert result.applied_count == 0
       assert [%{status: "skipped", reason: ^reason}] = result.results
-      assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+      assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
       assert repo.get!(WorkPackage, linked_package.id).status == "ready_for_merge"
     end
   end
 
-  test "blank planned-slice base branch is skipped with a clear reason", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+  test "blank work-package base branch is skipped with a clear reason", %{repo: repo} do
+    {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-RECONCILE-BLANK-SLICE-BASE",
         work_package_id: "WP-RECONCILE-BLANK-SLICE-BASE",
         status: "ready_for_merge"
       )
 
-    repo.update_all(from(slice in PlannedSlice, where: slice.id == ^planned_slice.id), set: [target_base_branch: ""])
+    repo.update_all(from(slice in WorkPackage, where: slice.id == ^work_package.id), set: [base_branch: ""])
     append_merged_pr_evidence!(repo, linked_package, 905, "head-905", base_branch: "main")
 
     assert {:ok, result} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply)
 
     assert result.applied_count == 0
     assert [%{status: "skipped", reason: "missing_base_branch", actual_base_branch: "main"}] = result.results
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert repo.get!(WorkPackage, linked_package.id).status == "ready_for_merge"
   end
 
   test "historical sync PR evidence can use merge reconciliation strong fields", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-RECONCILE-HISTORICAL-MERGE",
         work_package_id: "WP-RECONCILE-HISTORICAL-MERGE",
@@ -745,13 +743,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert [%{status: "applied", reason: "github_pr_merged", action: action}] = result.results
     assert action.evidence.pr_merged.merge_commit_sha == "merge-sha-906"
 
-    assert [delivery] = repo.all(PlannedSliceDelivery)
+    assert [delivery] = repo.all(WorkPackageDelivery)
     assert DateTime.compare(delivery.pr_merged_at, ~U[2026-05-24 12:00:00Z]) == :eq
     assert delivery.merge_commit_sha == "merge-sha-906"
   end
 
   test "repaired sync PR evidence can drive merged delivery reconciliation", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-RECONCILE-REPAIRED-SYNC-MERGE",
         work_package_id: "WP-RECONCILE-REPAIRED-SYNC-MERGE",
@@ -768,7 +766,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   end
 
   test "later sync for a replaced PR does not become the active closeout PR", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-RECONCILE-REPLACED-PR",
         work_package_id: "WP-RECONCILE-REPLACED-PR",
@@ -781,12 +779,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
 
     assert result.applied_count == 0
     assert [%{status: "skipped", reason: "no_structured_pr_merge_evidence"}] = result.results
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert repo.get!(WorkPackage, linked_package.id).status == "ready_for_merge"
   end
 
   test "decision-log prose and terminal package status do not infer no-PR completion", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-RECONCILE-NO-PR-PROSE",
         work_package_id: "WP-RECONCILE-NO-PR-PROSE",
@@ -806,12 +804,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
 
     assert result.applied_count == 0
     assert [%{status: "skipped", reason: "no_structured_pr_merge_evidence"}] = result.results
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert repo.get!(WorkPackage, linked_package.id).status == "closed"
   end
 
   test "already closed-out slices are skipped without duplicate deliveries", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-RECONCILE-ALREADY-CLOSED",
         work_package_id: "WP-RECONCILE-ALREADY-CLOSED",
@@ -822,17 +820,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
 
     assert {:ok, first} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply)
     assert [%{status: "applied"}] = first.results
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 1
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
 
     assert {:ok, second} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply)
 
     assert second.applied_count == 0
     assert [%{status: "skipped", reason: "already_closeout", delivery_outcome: "pr_merged"}] = second.results
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 1
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
   end
 
   test "merged PR evidence without strong merge fields is skipped before apply", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-RECONCILE-WEAK-PR",
         work_package_id: "WP-RECONCILE-WEAK-PR",
@@ -845,7 +843,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
 
     assert result.applied_count == 0
     assert [%{status: "skipped", reason: "missing_strong_pr_evidence", missing: "merge_commit_sha"}] = result.results
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert repo.get!(WorkPackage, linked_package.id).status == "ready_for_merge"
   end
 
@@ -854,10 +852,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     work_package_id = Keyword.fetch!(overrides, :work_package_id)
     status = Keyword.get(overrides, :status, "reviewing")
     work_request = create_work_request!(repo, id: request_id, status: "ready_for_slicing")
-    planned_slice = create_planned_slice!(repo, work_request, id: "WRS-#{request_id}")
+    work_package = create_work_package!(repo, work_request, id: "WRS-#{request_id}")
 
     assert {:ok, approved_slice} =
-             WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+             CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
     work_package =
       create_matching_work_package!(
@@ -869,7 +867,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
       )
 
     assert {:ok, dispatched_slice} =
-             WorkRequestRepository.dispatch_planned_slice(
+             CanonicalWorkPackageFixtures.dispatch_work_package(
                repo,
                work_request.id,
                approved_slice.id,
@@ -885,22 +883,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     work_request
   end
 
-  defp create_planned_slice!(repo, work_request, overrides) do
-    assert {:ok, planned_slice} = WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(overrides))
-    planned_slice
+  defp create_work_package!(repo, work_request, overrides) do
+    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(overrides))
+    work_package
   end
 
-  defp create_matching_work_package!(repo, work_request, planned_slice, overrides) do
+  defp create_matching_work_package!(repo, work_request, work_package, overrides) do
     attrs =
       [
-        kind: planned_slice.work_package_kind,
-        title: planned_slice.title,
+        kind: work_package.kind,
+        title: work_package.title,
         repo: work_request.repo,
-        base_branch: planned_slice.target_base_branch,
-        branch_pattern: planned_slice.branch_pattern,
+        base_branch: work_package.base_branch,
+        branch_pattern: work_package.branch_pattern,
         product_description: work_request.human_description,
-        allowed_file_globs: planned_slice.owned_file_globs,
-        acceptance_criteria: planned_slice.acceptance_criteria
+        allowed_file_globs: work_package.allowed_file_globs,
+        acceptance_criteria: work_package.acceptance_criteria
       ]
       |> Keyword.merge(overrides)
       |> WorkPackageFactory.attrs()
@@ -1257,14 +1255,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     Enum.into(overrides, defaults)
   end
 
-  defp planned_slice_attrs(overrides) do
+  defp work_package_attrs(overrides) do
     defaults = %{
       title: "Reconcile delivered slice",
       goal: "Record terminal delivery state.",
-      work_package_kind: "mcp",
-      target_base_branch: "main",
+      kind: "mcp",
+      base_branch: "main",
       branch_pattern: "feat/delivery-reconciler",
-      owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
+      allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
       forbidden_file_globs: ["elixir/assets/**"],
       acceptance_criteria: ["Delivery reconciler is deterministic."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/work_request_delivery_reconciler_test.exs"],

@@ -342,24 +342,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
     |> ClaimLease.update_changeset(%{last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -6, :minute)})
     |> repo.update!()
 
-    assert {:ok, linked_slice} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               work_request_planned_slice_attrs(
-                 id: "WRS-MCP-LOCAL-ARCHITECT-RECOVERED-AUDIT-FAILS",
-                 target_base_branch: work_request.base_branch
-               )
-             )
-
-    repo.update!(
-      Ecto.Changeset.change(linked_slice,
-        status: "dispatched",
-        work_package_id: handoff.anchor_package.id,
-        dispatched_at: DateTime.utc_now(:microsecond)
-      )
-    )
-
     completed_at = ~U[2026-06-01 12:00:00.000000Z]
 
     repo.update!(

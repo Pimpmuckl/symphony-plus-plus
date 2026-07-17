@@ -838,8 +838,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
 
     assert get_in(tools_by_name, ["read_plan", "inputSchema", "properties", "view", "enum"]) == [
              "nodes_only",
-             "nodes_with_slice_refs",
-             "nodes_with_slices"
+             "nodes_with_work_package_refs",
+             "nodes_with_work_packages"
            ]
 
     refute Map.has_key?(get_in(tools_by_name, ["read_plan", "inputSchema", "properties"]), "include_planning_scratch")
@@ -852,15 +852,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert get_in(tools_by_name, ["reconcile_work_request", "inputSchema", "required"]) == ["work_request_id"]
     assert get_in(tools_by_name, ["reconcile_work_request", "inputSchema", "properties", "apply", "type"]) == "boolean"
 
-    cleanup_schema = get_in(tools_by_name, ["cleanup_work_request_planned_slice_runtime", "inputSchema"])
-    delivery_schema = get_in(tools_by_name, ["record_planned_slice_delivery", "inputSchema"])
-    revoke_schema = get_in(tools_by_name, ["revoke_planned_slice_worker_key", "inputSchema"])
+    cleanup_schema = get_in(tools_by_name, ["cleanup_work_request_work_package_runtime", "inputSchema"])
+    delivery_schema = get_in(tools_by_name, ["record_work_package_delivery", "inputSchema"])
+    revoke_schema = get_in(tools_by_name, ["revoke_work_package_worker_key", "inputSchema"])
 
-    assert cleanup_schema["required"] == ["work_request_id", "planned_slice_id", "outcome", "reason"]
+    assert cleanup_schema["required"] == ["work_request_id", "work_package_id", "outcome", "reason"]
     assert get_in(cleanup_schema, ["properties", "outcome", "enum"]) == ["superseded", "abandoned"]
     assert get_in(cleanup_schema, ["properties", "reason", "description"]) =~ "audit reason"
 
-    assert delivery_schema["required"] == ["work_request_id", "planned_slice_id", "outcome", "idempotency_key", "evidence"]
+    assert delivery_schema["required"] == ["work_request_id", "work_package_id", "outcome", "idempotency_key", "evidence"]
     assert get_in(delivery_schema, ["properties", "outcome", "enum"]) == ["pr_merged", "completed_no_pr", "superseded", "abandoned"]
     assert get_in(delivery_schema, ["properties", "idempotency_key", "description"]) =~ "Reusing the same key"
     refute Map.has_key?(delivery_schema["properties"], "merge_commit_sha")
@@ -873,7 +873,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              %{"required" => ["abandoned"]}
            ]
 
-    assert revoke_schema["required"] == ["work_request_id", "planned_slice_id", "grant_id", "reason"]
+    assert revoke_schema["required"] == ["work_request_id", "work_package_id", "grant_id", "reason"]
     assert get_in(revoke_schema, ["properties", "grant_id", "description"]) =~ "Raw worker secrets are never accepted or returned"
 
     assert get_in(tools_by_name, ["set_work_request_status", "inputSchema", "required"]) == ["work_request_id", "current_status", "next_status"]
@@ -913,56 +913,51 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert get_in(tools_by_name, ["record_decision", "inputSchema", "properties", "source_id", "type"]) == "string"
     assert get_in(tools_by_name, ["record_decision", "inputSchema", "properties", "source_type", "enum"]) == DecisionLogEntry.source_types()
 
-    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "required"]) == [
-             "work_request_id",
+    assert get_in(tools_by_name, ["slice_work_request", "inputSchema", "required"]) == ["work_request_id", "work_packages"]
+
+    package_schema = get_in(tools_by_name, ["slice_work_request", "inputSchema", "properties", "work_packages", "items"])
+
+    assert package_schema["required"] == [
              "title",
              "goal",
-             "owned_file_globs",
+             "allowed_file_globs",
              "acceptance_criteria",
              "validation_steps",
              "stop_conditions"
            ]
 
-    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "review", "type"]) == "object"
-    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "review", "required"]) == ["type"]
-    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "review", "properties", "args", "type"]) == "object"
+    assert get_in(package_schema, ["properties", "review", "type"]) == "object"
+    assert get_in(package_schema, ["properties", "review", "required"]) == ["type"]
+    assert get_in(package_schema, ["properties", "review", "properties", "args", "type"]) == "object"
+    assert get_in(package_schema, ["properties", "allowed_file_globs", "type"]) == "array"
+    assert get_in(package_schema, ["properties", "allowed_file_globs", "description"]) =~ "Repo-relative"
 
-    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "work_request_id", "description"]) =~
-             "Required WorkRequest id"
+    executable_kinds = get_in(package_schema, ["properties", "kind", "enum"])
+    assert executable_kinds == WorkPackage.executable_kinds()
+    assert "standard_pr" in executable_kinds
+    assert "docs" in executable_kinds
 
-    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "owned_file_globs", "type"]) == "array"
+    refute Map.has_key?(get_in(package_schema, ["properties", "forbidden_file_globs"]), "minItems")
+    assert get_in(package_schema, ["properties", "branch_pattern", "type"]) == "string"
 
-    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "owned_file_globs", "description"]) =~
-             "`**` must be a complete path segment"
-
-    planned_slice_kinds = get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "work_package_kind", "enum"])
-    assert planned_slice_kinds == WorkPackage.planned_slice_kinds()
-    assert "standard_pr" in planned_slice_kinds
-    assert "docs" in planned_slice_kinds
-
-    refute Map.has_key?(get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "forbidden_file_globs"]), "minItems")
-    assert get_in(tools_by_name, ["plan_slice", "inputSchema", "properties", "branch_pattern", "type"]) == "string"
-
-    assert get_in(tools_by_name, ["approve_slice", "inputSchema", "required"]) == [
+    assert get_in(tools_by_name, ["update_work_package", "inputSchema", "required"]) == [
              "work_request_id",
-             "planned_slice_id",
+             "work_package_id",
+             "expected_contract_revision",
+             "patch"
+           ]
+
+    assert get_in(tools_by_name, ["update_work_package", "inputSchema", "properties", "patch", "minProperties"]) == 1
+
+    assert get_in(tools_by_name, ["skip_work_package", "inputSchema", "required"]) == [
+             "work_request_id",
+             "work_package_id",
              "current_status"
            ]
 
-    assert get_in(tools_by_name, ["skip_slice", "inputSchema", "required"]) == [
-             "work_request_id",
-             "planned_slice_id",
-             "current_status"
-           ]
+    assert get_in(tools_by_name, ["dispatch_work_package", "inputSchema", "required"]) == ["work_request_id", "work_package_id"]
 
-    assert get_in(tools_by_name, ["finish_slicing", "inputSchema", "required"]) == ["work_request_id", "current_status"]
-
-    assert get_in(tools_by_name, ["dispatch_slice", "inputSchema", "required"]) == [
-             "work_request_id",
-             "planned_slice_id"
-           ]
-
-    dispatch_properties = get_in(tools_by_name, ["dispatch_slice", "inputSchema", "properties"])
+    dispatch_properties = get_in(tools_by_name, ["dispatch_work_package", "inputSchema", "properties"])
     assert get_in(dispatch_properties, ["claimed_by", "type"]) == "string"
     refute Map.has_key?(dispatch_properties, "secret_handoff")
     refute Map.has_key?(dispatch_properties, "secret_store_dir")
@@ -1002,7 +997,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert get_in(tools_by_name, ["merge_child_into_phase", "inputSchema", "properties", "merge_artifact", "required"]) == ["status", "uri"]
   end
 
-  test "tools list advertises planned-slice dispatch even when repo_root is not configured", %{repo: repo} do
+  test "tools list advertises work-package dispatch even when repo_root is not configured", %{repo: repo} do
     {_anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-DISPATCH-TOOLS-NO-ROOT", [
         "read:work_request",
@@ -1022,11 +1017,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
       |> Map.new(&{&1["name"], &1})
 
     assert Map.has_key?(tools_by_name, "list_work_requests")
-    assert Map.has_key?(tools_by_name, "plan_slice")
-    assert Map.has_key?(tools_by_name, "dispatch_slice")
+    assert Map.has_key?(tools_by_name, "slice_work_request")
+    assert Map.has_key?(tools_by_name, "dispatch_work_package")
   end
 
-  test "tools list advertises planned-slice dispatch when the ledger cannot be handed off", %{repo: repo} do
+  test "tools list advertises work-package dispatch when the ledger cannot be handed off", %{repo: repo} do
     {_anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-DISPATCH-TOOLS-MEMORY-DB", [
         "read:work_request",
@@ -1046,8 +1041,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
       |> Map.new(&{&1["name"], &1})
 
     assert Map.has_key?(tools_by_name, "list_work_requests")
-    assert Map.has_key?(tools_by_name, "plan_slice")
-    assert Map.has_key?(tools_by_name, "dispatch_slice")
+    assert Map.has_key?(tools_by_name, "slice_work_request")
+    assert Map.has_key?(tools_by_name, "dispatch_work_package")
   end
 
   test "tools list cannot receive legacy WorkRequest architect sessions from grant creation", %{repo: repo} do
@@ -1218,18 +1213,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
         status: "ready_for_slicing"
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               work_request_planned_slice_attrs(
-                 id: "WRS-#{id}",
-                 target_base_branch: package.base_branch,
-                 branch_pattern: package.branch_pattern
-               )
-             )
+    contract =
+      work_request_work_package_attrs(
+        base_branch: package.base_branch,
+        branch_pattern: package.branch_pattern
+      )
 
-    repo.update!(Ecto.Changeset.change(planned_slice, status: "dispatched", work_package_id: package.id))
+    package =
+      repo.update!(
+        Ecto.Changeset.change(
+          package,
+          Map.merge(contract, %{
+            work_request_id: work_request.id,
+            sequence: 1,
+            status: "ready_for_worker",
+            dispatched_at: DateTime.utc_now(:microsecond)
+          })
+        )
+      )
+
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
     {claim_response, claimed_server} =

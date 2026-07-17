@@ -32,6 +32,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     ArchitectDeliveryTools,
@@ -70,8 +71,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceLinkage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -1236,9 +1235,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_tool(name, arguments, %__MODULE__{config: config, session: session})
        when name in [
               "reconcile_work_request",
-              "record_planned_slice_delivery",
-              "cleanup_work_request_planned_slice_runtime",
-              "revoke_planned_slice_worker_key"
+              "record_work_package_delivery",
+              "cleanup_work_request_work_package_runtime",
+              "revoke_work_package_worker_key"
             ],
        do: ArchitectDeliveryTools.call(name, config, session, arguments)
 
@@ -1298,10 +1297,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   end
 
   defp session_claimed_by(%Session{}), do: "architect"
-
-  defp linked_planned_slice_work_request_for_work_package(repo, work_package_id) do
-    PlannedSliceLinkage.linked_work_request_for_work_package(repo, work_package_id)
-  end
 
   defp put_optional_handoff_opt(opts, _key, nil), do: opts
   defp put_optional_handoff_opt(opts, _key, value) when is_binary(value) and value == "", do: opts
@@ -1375,6 +1370,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:error, {:error, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
+    |> DashboardPubSub.broadcast_changed_on_success()
   end
 
   defp approve_scope_expansion_result(
@@ -1640,20 +1636,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp approve_scope_expansion_work_package(repo, %Session{} = session, work_package_id) do
     if Session.work_package_id(session) == work_package_id do
       with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
-           {:ok, work_request} <- optional_scope_expansion_linked_work_request(repo, work_package_id),
+           {:ok, work_request} <- optional_scope_expansion_work_request(repo, work_package),
            :ok <- require_current_scope_expansion_work_request_scope(session, work_request) do
         {:ok, work_package, work_request}
       end
     else
-      approve_scope_expansion_linked_work_package(repo, session, work_package_id)
+      approve_scope_expansion_scoped_work_package(repo, session, work_package_id)
     end
   end
 
-  defp approve_scope_expansion_linked_work_package(repo, %Session{} = session, work_package_id) do
+  defp approve_scope_expansion_scoped_work_package(repo, %Session{} = session, work_package_id) do
     with :ok <- require_scope_expansion_handoff_package_scope(repo, session),
          {:ok, work_package, _scope} <-
            ArchitectWorkRequestTools.scoped_worktree_work_package(repo, session, work_package_id),
-         {:ok, work_request} <- optional_scope_expansion_linked_work_request(repo, work_package_id) do
+         {:ok, work_request} <- optional_scope_expansion_work_request(repo, work_package) do
       {:ok, work_package, work_request}
     else
       {:error, :not_found} -> {:error, :phase_scope_not_available}
@@ -1673,11 +1669,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp optional_scope_expansion_linked_work_request(repo, work_package_id) do
-    case linked_planned_slice_work_request_for_work_package(repo, work_package_id) do
-      {:ok, {%PlannedSlice{}, %WorkRequest{} = work_request}} -> {:ok, work_request}
-      {:error, :not_found} -> {:ok, nil}
-      {:error, reason} -> {:error, reason}
+  defp optional_scope_expansion_work_request(_repo, %WorkPackage{work_request_id: nil}), do: {:ok, nil}
+
+  defp optional_scope_expansion_work_request(repo, %WorkPackage{work_request_id: work_request_id}) do
+    case repo.get(WorkRequest, work_request_id) do
+      %WorkRequest{} = work_request -> {:ok, work_request}
+      nil -> {:error, :not_found}
     end
   end
 
@@ -1693,7 +1690,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp require_scope_expansion_work_request_scope(nil, _allowed_file_globs), do: :ok
 
   defp require_scope_expansion_work_request_scope(%WorkRequest{} = work_request, allowed_file_globs) do
-    case ScopeConstraints.validate_owned_file_globs(work_request, allowed_file_globs) do
+    case ScopeConstraints.validate_allowed_file_globs(work_request, allowed_file_globs) do
       :ok -> :ok
       {:error, _errors} -> {:tool_error, "scope_expansion_outside_work_request"}
     end
@@ -1704,7 +1701,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp scope_expansion_effective_work_request_globs(%WorkRequest{} = work_request, effective_globs) do
     scoped_globs =
       Enum.filter(effective_globs, fn glob ->
-        ScopeConstraints.validate_owned_file_globs(work_request, [glob]) == :ok
+        ScopeConstraints.validate_allowed_file_globs(work_request, [glob]) == :ok
       end)
 
     {:ok, scoped_globs}
@@ -1738,7 +1735,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_tool_capability("read_delivery_board"), do: "read:work_request"
   defp architect_tool_capability("reconcile_work_request"), do: "read:work_request"
 
-  defp architect_tool_capability(tool) when tool in ["cleanup_work_request_planned_slice_runtime", "record_planned_slice_delivery", "revoke_planned_slice_worker_key"],
+  defp architect_tool_capability(tool) when tool in ["cleanup_work_request_work_package_runtime", "record_work_package_delivery", "revoke_work_package_worker_key"],
     do: "write:work_request"
 
   defp architect_tool_capability("list_guidance_requests"), do: "read:guidance_request"
@@ -1751,15 +1748,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_tool_capability("answer_question_and_record_decision"), do: "write:work_request"
   defp architect_tool_capability("close_question"), do: "write:work_request"
   defp architect_tool_capability("record_decision"), do: "write:work_request"
-  defp architect_tool_capability("plan_slice"), do: "write:work_request"
+  defp architect_tool_capability("slice_work_request"), do: "write:work_request"
+  defp architect_tool_capability("update_work_package"), do: "write:work_request"
   defp architect_tool_capability("upsert_plan_node"), do: "write:work_request"
   defp architect_tool_capability("move_plan_node"), do: "write:work_request"
   defp architect_tool_capability("set_plan_node_completion"), do: "write:work_request"
-  defp architect_tool_capability("move_slice_to_plan_node"), do: "write:work_request"
-  defp architect_tool_capability("approve_slice"), do: "write:work_request"
-  defp architect_tool_capability("skip_slice"), do: "write:work_request"
-  defp architect_tool_capability("finish_slicing"), do: "write:work_request"
-  defp architect_tool_capability("dispatch_slice"), do: "dispatch:work_request"
+  defp architect_tool_capability("skip_work_package"), do: "write:work_request"
+  defp architect_tool_capability("dispatch_work_package"), do: "dispatch:work_request"
   defp architect_tool_capability("prepare_work_package_worktree"), do: "dispatch:work_request"
   defp architect_tool_capability("cleanup_work_package_worktree"), do: "dispatch:work_request"
   defp architect_tool_capability("read_phase_board"), do: "read:phase"
@@ -1841,8 +1836,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
 
-  defp architect_error({:planned_slice_scope_violation, errors}, tool) do
-    invalid_params_error(tool, {:planned_slice_scope_violation, errors})
+  defp architect_error({:work_package_scope_violation, errors}, tool) do
+    invalid_params_error(tool, {:work_package_scope_violation, errors})
   end
 
   defp architect_error(:open_questions, tool) do
@@ -1850,7 +1845,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
      %{
        "tool" => tool,
        "reason" => "open_questions",
-       "message" => "Answer or close all open clarification questions before adding planned slices."
+       "message" => "Answer or close all open clarification questions before adding WorkPackages."
      }}
   end
 
@@ -1873,11 +1868,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp architect_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
-  defp invalid_params_error(tool, {:planned_slice_scope_violation, errors}) do
+  defp invalid_params_error(tool, {:work_package_scope_violation, errors}) do
     {:error, -32_602, "Invalid params",
      %{
        "tool" => tool,
-       "reason" => "planned_slice_scope_violation",
+       "reason" => "work_package_scope_violation",
        "validation_errors" => scope_validation_details(errors)
      }}
   end
@@ -1934,8 +1929,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     %{"field" => Atom.to_string(field), "reason" => "invalid_constraints"}
   end
 
-  defp scope_validation_detail({:invalid_owned_file_globs, field}) do
-    %{"field" => Atom.to_string(field), "reason" => "invalid_owned_file_globs"}
+  defp scope_validation_detail({:invalid_allowed_file_globs, field}) do
+    %{"field" => Atom.to_string(field), "reason" => "invalid_allowed_file_globs"}
   end
 
   defp scope_validation_detail({:invalid_path, field, value, reason}) do
@@ -1948,7 +1943,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp scope_validation_detail({:non_documentation_owned_glob, value}) do
     %{
-      "field" => "owned_file_globs",
+      "field" => "allowed_file_globs",
       "value" => value,
       "reason" => "non_documentation_owned_glob"
     }
@@ -1956,7 +1951,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp scope_validation_detail({:outside_allowed_paths, value, allowed_paths}) do
     %{
-      "field" => "owned_file_globs",
+      "field" => "allowed_file_globs",
       "value" => value,
       "reason" => "outside_allowed_paths",
       "allowed_paths" => allowed_paths
@@ -1965,7 +1960,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp scope_validation_detail({:forbidden_path_overlap, value, forbidden_path}) do
     %{
-      "field" => "owned_file_globs",
+      "field" => "allowed_file_globs",
       "value" => value,
       "reason" => "forbidden_path_overlap",
       "forbidden_path" => forbidden_path

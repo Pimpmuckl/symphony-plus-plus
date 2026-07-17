@@ -1,4 +1,4 @@
-import type { ActiveBlockingEdge, GuidanceItem, PlannedSlice, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
+import type { ActiveBlockingEdge, GuidanceItem, WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import type { ProductTreeNode } from "@/types/product-tree";
 import type { CardDetailSelect } from "./runtime";
 import { activePackageBlockers, packageBlockerEdge, pendingPackageBlockerEdge } from "./blocker-selection";
@@ -14,7 +14,7 @@ export function requestGuidanceItem(detail: WorkRequestDetail, guidanceItems: Gu
 
 export function openGuidanceForSlices(
   detail: WorkRequestDetail,
-  slices: PlannedSlice[],
+  slices: WorkRequestPackage[],
   packageById: Map<string, WorkPackageCard>,
   guidanceItems: GuidanceItem[],
   onSelectGuidance: (item: GuidanceItem) => void,
@@ -37,7 +37,7 @@ export function openGuidanceForSlices(
 
 export function openGuidanceForSlice(
   detail: WorkRequestDetail,
-  slice: PlannedSlice,
+  slice: WorkRequestPackage,
   pkg: WorkPackageCard | undefined,
   guidanceItems: GuidanceItem[],
   onSelectGuidance: (item: GuidanceItem) => void,
@@ -54,7 +54,7 @@ export function openGuidanceForSlice(
 
 export function openBlockersForRequest(
   detail: WorkRequestDetail,
-  slices: PlannedSlice[],
+  slices: WorkRequestPackage[],
   packageById: Map<string, WorkPackageCard>,
   activeBlockerCountBySliceId: Map<string, number>,
   activeBlockingEdges: ActiveBlockingEdge[],
@@ -77,7 +77,7 @@ export function openBlockersForRequest(
 
 export function openBlockersForSlices(
   detail: WorkRequestDetail,
-  slices: PlannedSlice[],
+  slices: WorkRequestPackage[],
   packageById: Map<string, WorkPackageCard>,
   activeBlockerCountBySliceId: Map<string, number>,
   activeBlockingEdges: ActiveBlockingEdge[],
@@ -101,13 +101,13 @@ export function openBlockersForSlices(
 export function productNodeSubtreeSlices(
   node: ProductTreeNode,
   treeIndex: TreeIndex,
-  slicesById: Map<string, PlannedSlice>,
+  slicesById: Map<string, WorkRequestPackage>,
   visited = new Set<string>(),
-): PlannedSlice[] {
+): WorkRequestPackage[] {
   if (visited.has(node.id)) return [];
   visited.add(node.id);
 
-  const slices = (node.slice_ids ?? []).map((sliceId) => slicesById.get(sliceId)).filter((slice): slice is PlannedSlice => Boolean(slice));
+  const slices = (node.work_package_ids ?? []).map((sliceId) => slicesById.get(sliceId)).filter((slice): slice is WorkRequestPackage => Boolean(slice));
   for (const child of treeIndex.childrenByParent.get(node.id) ?? []) {
     slices.push(...productNodeSubtreeSlices(child, treeIndex, slicesById, visited));
   }
@@ -121,7 +121,7 @@ function packageGuidanceItem(pkg: WorkPackageCard | undefined, guidanceItems: Gu
 }
 
 function blockedSlice(
-  slices: PlannedSlice[],
+  slices: WorkRequestPackage[],
   packageById: Map<string, WorkPackageCard>,
   activeBlockerCountBySliceId: Map<string, number>,
 ) {
@@ -130,7 +130,7 @@ function blockedSlice(
 
 function openSliceBlocker(
   detail: WorkRequestDetail,
-  slice: PlannedSlice,
+  slice: WorkRequestPackage,
   packageById: Map<string, WorkPackageCard>,
   onSelectCard: CardDetailSelect,
 ) {
@@ -148,13 +148,13 @@ function openSliceBlocker(
 
 function openBlockerEdge(
   detail: WorkRequestDetail,
-  slices: PlannedSlice[],
+  slices: WorkRequestPackage[],
   packageById: Map<string, WorkPackageCard>,
   edge: ActiveBlockingEdge,
   onSelectCard: CardDetailSelect,
 ) {
   const slice = edgeSlice(edge, slices);
-  const packageId = edge.work_package_id || endpointId(edge.to, "work_package") || slice?.work_package_id || "";
+  const packageId = edge.work_package_id || edge.to.id || slice?.work_package_id || "";
   const pkg = packageById.get(packageId);
 
   onSelectCard({ kind: "blocker", blocker: edge, detail, slice, pkg });
@@ -162,7 +162,7 @@ function openBlockerEdge(
 
 function requestBlockerEdge(
   detail: WorkRequestDetail,
-  slices: PlannedSlice[],
+  slices: WorkRequestPackage[],
   activeBlockingEdges: ActiveBlockingEdge[],
 ): ActiveBlockingEdge | null {
   const requestId = detail.work_request.id;
@@ -178,34 +178,24 @@ function requestBlockerEdge(
 }
 
 function blockerEdgeForSlices(
-  slices: PlannedSlice[],
+  slices: WorkRequestPackage[],
   packageById: Map<string, WorkPackageCard>,
   activeBlockingEdges: ActiveBlockingEdge[],
 ) {
   return activeBlockingEdges.find((edge) => edgeMatchesAnySlice(edge, slices, packageById)) ?? null;
 }
 
-function edgeMatchesAnySlice(edge: ActiveBlockingEdge, slices: PlannedSlice[], packageById: Map<string, WorkPackageCard>) {
+function edgeMatchesAnySlice(edge: ActiveBlockingEdge, slices: WorkRequestPackage[], packageById: Map<string, WorkPackageCard>) {
   return slices.some((slice) => {
     const pkg = packageById.get(slice.work_package_id || "");
-    return (
-      edge.planned_slice_id === slice.id ||
-      endpointId(edge.to, "slice") === slice.id ||
-      Boolean(pkg && (edge.work_package_id === pkg.id || endpointId(edge.to, "work_package") === pkg.id))
-    );
+    const workPackageId = pkg?.id || slice.work_package_id || slice.id;
+    return edge.work_package_id === workPackageId || edge.to.id === workPackageId;
   });
 }
 
-function edgeSlice(edge: ActiveBlockingEdge, slices: PlannedSlice[]) {
-  const sliceId = edge.planned_slice_id || endpointId(edge.to, "slice");
-  if (sliceId) return slices.find((candidate) => candidate.id === sliceId);
-
-  const packageId = edge.work_package_id || endpointId(edge.to, "work_package");
-  return slices.find((candidate) => candidate.work_package_id === packageId);
-}
-
-function endpointId(endpoint: ActiveBlockingEdge["from"], kind: ActiveBlockingEdge["from"]["kind"]) {
-  return endpoint.kind === kind ? endpoint.id : null;
+function edgeSlice(edge: ActiveBlockingEdge, slices: WorkRequestPackage[]) {
+  const workPackageId = edge.work_package_id || edge.to.id;
+  return slices.find((candidate) => candidate.id === workPackageId || candidate.work_package_id === workPackageId);
 }
 
 function edgeMatchesRequest(
@@ -216,17 +206,17 @@ function edgeMatchesRequest(
 ) {
   return (
     edge.work_request_id === requestId ||
-    Boolean(edge.planned_slice_id && sliceIds.has(edge.planned_slice_id)) ||
+    Boolean(edge.work_package_id && sliceIds.has(edge.work_package_id)) ||
     Boolean(edge.work_package_id && packageIds.has(edge.work_package_id)) ||
     endpointMatches(edge.to, sliceIds, packageIds)
   );
 }
 
 function endpointMatches(endpoint: ActiveBlockingEdge["from"], sliceIds: Set<string>, packageIds: Set<string>) {
-  return endpoint.kind === "slice" ? sliceIds.has(endpoint.id) : packageIds.has(endpoint.id);
+  return packageIds.has(endpoint.id) || sliceIds.has(endpoint.id);
 }
 
-function guidanceItemForSlices(slices: PlannedSlice[], packageById: Map<string, WorkPackageCard>, guidanceItems: GuidanceItem[]) {
+function guidanceItemForSlices(slices: WorkRequestPackage[], packageById: Map<string, WorkPackageCard>, guidanceItems: GuidanceItem[]) {
   for (const slice of slices) {
     const item = packageGuidanceItem(packageById.get(slice.work_package_id || ""), guidanceItems);
     if (item) return item;

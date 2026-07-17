@@ -5,8 +5,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
 
   @moduletag :ci_slow
 
-  test "WorkPackage worktree MCP tools fail closed outside linked WorkRequest scope", %{repo: repo} do
-    {anchor, session, _grant} =
+  test "WorkPackage worktree MCP tools fail closed for direct phase packages", %{repo: repo} do
+    {_anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WORKTREE-SCOPE", [
         "dispatch:work_request"
       ])
@@ -34,71 +34,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
 
     assert get_in(cleanup_response, ["error", "code"]) == -32_004
     assert get_in(cleanup_response, ["error", "data", "reason"]) == "not_found"
-
-    work_request =
-      create_work_request!(repo,
-        id: "WR-MCP-WORKTREE-PACKAGE-SCOPE",
-        repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "sliced"
-      )
-
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               work_request_planned_slice_attrs(
-                 id: "WRS-MCP-WORKTREE-PACKAGE-SCOPE",
-                 title: "Out-of-scope worktree package",
-                 target_base_branch: anchor.base_branch,
-                 branch_pattern: "feat/worktree",
-                 owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_packages/**"],
-                 acceptance_criteria: ["Keep worktree operations scoped."]
-               )
-             )
-
-    assert {:ok, stale_package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-WORKTREE-STALE-SCOPE",
-                 kind: planned_slice.work_package_kind,
-                 title: planned_slice.title,
-                 repo: anchor.repo,
-                 base_branch: anchor.base_branch,
-                 branch_pattern: planned_slice.branch_pattern,
-                 product_description: work_request.human_description,
-                 allowed_file_globs: planned_slice.owned_file_globs,
-                 acceptance_criteria: planned_slice.acceptance_criteria,
-                 status: "ready_for_worker"
-               )
-             )
-
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
-
-    assert {:ok, _linked_slice} =
-             WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", stale_package.id)
-
-    assert {:ok, _drifted_package} =
-             WorkPackageRepository.update(repo, stale_package.id, %{base_branch: "#{anchor.base_branch}-stale"})
-
-    stale_prepare_response =
-      mcp_tool(repo, session, "prepare_work_package_worktree", %{
-        "work_package_id" => stale_package.id,
-        "target_repo_root" => test_repo_root()
-      })
-
-    assert get_in(stale_prepare_response, ["error", "code"]) == -32_004
-    assert get_in(stale_prepare_response, ["error", "data", "reason"]) == "not_found"
-
-    stale_cleanup_response =
-      mcp_tool(repo, session, "cleanup_work_package_worktree", %{
-        "work_package_id" => stale_package.id,
-        "target_repo_root" => test_repo_root()
-      })
-
-    assert get_in(stale_cleanup_response, ["error", "code"]) == -32_004
-    assert get_in(stale_cleanup_response, ["error", "data", "reason"]) == "not_found"
   end
 
   test "WorkPackage worktree MCP prepare accepts linked package delivery base different from WorkRequest base", %{repo: repo} do
@@ -124,16 +59,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
         repo_scopes: [%{repo: fixture.origin, base_branch: delivery_base}]
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-WORKTREE-DELIVERY-BASE",
                  title: "Prepare integration delivery-base worktree",
-                 target_base_branch: delivery_base,
+                 base_branch: delivery_base,
                  branch_pattern: "feat/delivery-base-worktree",
-                 owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_packages/**"],
+                 allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_packages/**"],
                  acceptance_criteria: ["Prepare from the package delivery base."]
                )
              )
@@ -143,20 +78,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-WORKTREE-DELIVERY-BASE",
-                 kind: planned_slice.work_package_kind,
-                 title: planned_slice.title,
+                 kind: work_package.kind,
+                 title: work_package.title,
                  repo: work_request.repo,
-                 base_branch: planned_slice.target_base_branch,
-                 branch_pattern: planned_slice.branch_pattern,
+                 base_branch: work_package.base_branch,
+                 branch_pattern: work_package.branch_pattern,
                  product_description: work_request.human_description,
-                 allowed_file_globs: planned_slice.owned_file_globs,
-                 acceptance_criteria: planned_slice.acceptance_criteria,
+                 allowed_file_globs: work_package.allowed_file_globs,
+                 acceptance_criteria: work_package.acceptance_criteria,
                  status: "ready_for_worker"
                )
              )
 
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
-    assert {:ok, _linked_slice} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", package.id)
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
+    assert {:ok, _linked_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", package.id)
 
     {_delivery_anchor, delivery_scoped_session, _grant} =
       create_phase_architect_session(
@@ -263,16 +198,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
         status: "sliced"
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-WORKTREE-TEMPLATE",
                  title: "Prepare templated branch worktree",
-                 target_base_branch: anchor.base_branch,
+                 base_branch: anchor.base_branch,
                  branch_pattern: "agent/{{work_package_id}}/{{slug}}",
-                 owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
+                 allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
                  acceptance_criteria: ["Keep worktree branches inside the template scope."]
                )
              )
@@ -282,20 +217,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-WORKTREE-TEMPLATE",
-                 kind: planned_slice.work_package_kind,
-                 title: planned_slice.title,
+                 kind: work_package.kind,
+                 title: work_package.title,
                  repo: work_request.repo,
-                 base_branch: planned_slice.target_base_branch,
-                 branch_pattern: planned_slice.branch_pattern,
+                 base_branch: work_package.base_branch,
+                 branch_pattern: work_package.branch_pattern,
                  product_description: work_request.human_description,
-                 allowed_file_globs: planned_slice.owned_file_globs,
-                 acceptance_criteria: planned_slice.acceptance_criteria,
+                 allowed_file_globs: work_package.allowed_file_globs,
+                 acceptance_criteria: work_package.acceptance_criteria,
                  status: "ready_for_worker"
                )
              )
 
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
-    assert {:ok, _linked_slice} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", package.id)
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
+    assert {:ok, _linked_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", package.id)
 
     previous_codex_home = System.get_env("CODEX_HOME")
 
@@ -374,16 +309,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
         status: "sliced"
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-WORKTREE-BARE-REPO",
                  title: "Prepare owner-scoped package worktree",
-                 target_base_branch: anchor.base_branch,
+                 base_branch: anchor.base_branch,
                  branch_pattern: "feat/bare-repo-worktree",
-                 owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
+                 allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
                  acceptance_criteria: ["Reject same-name owner conflicts."]
                )
              )
@@ -393,20 +328,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-WORKTREE-BARE-REPO",
-                 kind: planned_slice.work_package_kind,
-                 title: planned_slice.title,
+                 kind: work_package.kind,
+                 title: work_package.title,
                  repo: work_request.repo,
-                 base_branch: planned_slice.target_base_branch,
-                 branch_pattern: planned_slice.branch_pattern,
+                 base_branch: work_package.base_branch,
+                 branch_pattern: work_package.branch_pattern,
                  product_description: work_request.human_description,
-                 allowed_file_globs: planned_slice.owned_file_globs,
-                 acceptance_criteria: planned_slice.acceptance_criteria,
+                 allowed_file_globs: work_package.allowed_file_globs,
+                 acceptance_criteria: work_package.acceptance_criteria,
                  status: "ready_for_worker"
                )
              )
 
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
-    assert {:ok, _linked_slice} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", package.id)
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
+    assert {:ok, _linked_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", package.id)
 
     try do
       Application.put_env(:symphony_elixir, :sympp_repo_identity_trusted_remotes, ["Pimpmuckl/frontend"])
@@ -458,16 +393,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
         status: "sliced"
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-WORKTREE-HOST-CONFLICT",
                  title: "Prepare bare repo target without host conflicts",
-                 target_base_branch: anchor.base_branch,
+                 base_branch: anchor.base_branch,
                  branch_pattern: "feat/bare-host-conflict-worktree",
-                 owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
+                 allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"],
                  acceptance_criteria: ["Do not let the MCP host checkout affect target repo scope."]
                )
              )
@@ -477,20 +412,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-WORKTREE-HOST-CONFLICT",
-                 kind: planned_slice.work_package_kind,
-                 title: planned_slice.title,
+                 kind: work_package.kind,
+                 title: work_package.title,
                  repo: work_request.repo,
-                 base_branch: planned_slice.target_base_branch,
-                 branch_pattern: planned_slice.branch_pattern,
+                 base_branch: work_package.base_branch,
+                 branch_pattern: work_package.branch_pattern,
                  product_description: work_request.human_description,
-                 allowed_file_globs: planned_slice.owned_file_globs,
-                 acceptance_criteria: planned_slice.acceptance_criteria,
+                 allowed_file_globs: work_package.allowed_file_globs,
+                 acceptance_criteria: work_package.acceptance_criteria,
                  status: "ready_for_worker"
                )
              )
 
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
-    assert {:ok, _linked_slice} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", package.id)
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
+    assert {:ok, _linked_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", package.id)
 
     previous_codex_home = System.get_env("CODEX_HOME")
 

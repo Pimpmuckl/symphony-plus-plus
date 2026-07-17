@@ -10,4 +10,4 @@ Current contract:
 
 Do not use the old Topic/CapabilityItem model as implementation guidance.
 Current V3 uses optional nested product plan nodes under a WorkRequest, with
-planned slices attached to nodes or directly to the WorkRequest.
+WorkPackages attached to nodes or directly to the WorkRequest.

@@ -5,9 +5,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @completion_terminal_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
@@ -48,6 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     |> WorkPackage.create_changeset()
     |> repo.insert()
     |> normalize_insert_result()
+    |> notify_dashboard(repo)
   rescue
     error in Ecto.ConstraintError -> normalize_constraint_error(error)
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -98,6 +98,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
       work_package
       |> WorkPackage.update_changeset(attrs)
       |> repo.update()
+      |> notify_dashboard(repo)
     end
   rescue
     error in Ecto.ConstraintError -> normalize_constraint_error(error)
@@ -105,57 +106,53 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   end
 
   @spec update_status(repo(), String.t(), String.t(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
-  def update_status(repo, id, current_status, next_status)
-      when is_atom(repo) and is_binary(id) and is_binary(current_status) and is_binary(next_status) do
+  @spec update_status(repo(), String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, WorkPackage.t()} | {:error, error()}
+  def update_status(repo, id, current_status, next_status, opts \\ [])
+      when is_atom(repo) and is_binary(id) and is_binary(current_status) and is_binary(next_status) and is_list(opts) do
     with :ok <- validate_persisted_status(current_status),
-         :ok <- validate_status(next_status) do
-      update_valid_status(repo, id, current_status, next_status)
-      |> notify_dashboard()
+         :ok <- validate_status(next_status),
+         {:ok, expected_contract_revision} <- expected_contract_revision(opts) do
+      update_valid_status(repo, id, current_status, next_status, expected_contract_revision)
+      |> notify_dashboard(repo)
     end
   end
 
   @doc false
-  @spec close_compatible_linked_delivery_package(repo(), WorkRequest.t(), PlannedSlice.t(), String.t()) ::
+  @spec close_delivery_work_package(repo(), WorkRequest.t(), WorkPackage.t(), String.t()) ::
           {:ok, map() | nil} | {:error, error()}
-  @spec close_compatible_linked_delivery_package(repo(), WorkRequest.t(), PlannedSlice.t(), String.t(), keyword()) ::
+  @spec close_delivery_work_package(repo(), WorkRequest.t(), WorkPackage.t(), String.t(), keyword()) ::
           {:ok, map() | nil} | {:error, error()}
-  def close_compatible_linked_delivery_package(repo, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, next_status, opts \\ [])
+  def close_delivery_work_package(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, next_status, opts \\ [])
       when is_atom(repo) and is_binary(next_status) and is_list(opts) do
-    case linked_work_package_id(planned_slice) do
-      {:ok, nil} ->
-        {:ok, nil}
-
-      {:ok, work_package_id} ->
-        close_linked_delivery_package(repo, work_request, planned_slice, work_package_id, next_status, opts)
-    end
+    close_delivery_package(repo, work_request, work_package, next_status, opts)
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp close_linked_delivery_package(repo, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, work_package_id, next_status, opts) do
+  defp close_delivery_package(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, next_status, opts) do
     with :ok <- validate_delivery_closeout_status(next_status),
-         {:ok, work_package} <- get(repo, work_package_id),
-         :ok <- validate_delivery_closeout_package(work_package, work_request, planned_slice, next_status) do
-      update_compatible_delivery_package(repo, work_package, work_request, planned_slice, next_status, opts)
+         :ok <- validate_delivery_closeout_package(work_package, work_request, next_status) do
+      update_delivery_package(repo, work_package, work_request, next_status, opts)
     end
   end
 
-  defp update_compatible_delivery_package(repo, %WorkPackage{status: next_status} = work_package, work_request, planned_slice, next_status, _opts) do
-    update_delivery_closeout_status(repo, work_package, work_request, planned_slice, next_status)
+  defp update_delivery_package(repo, %WorkPackage{status: next_status} = work_package, work_request, next_status, _opts) do
+    update_delivery_closeout_status(repo, work_package, work_request, next_status)
   end
 
-  defp update_compatible_delivery_package(repo, %WorkPackage{} = work_package, work_request, planned_slice, next_status, opts) do
+  defp update_delivery_package(repo, %WorkPackage{} = work_package, work_request, next_status, opts) do
     with :ok <- reject_active_delivery_closeout_context(repo, work_package.id, opts) do
-      update_delivery_closeout_status(repo, work_package, work_request, planned_slice, next_status)
+      update_delivery_closeout_status(repo, work_package, work_request, next_status)
     end
   end
 
-  defp update_valid_status(repo, id, current_status, next_status) do
+  defp update_valid_status(repo, id, current_status, next_status, expected_contract_revision) do
     now = DateTime.utc_now(:microsecond)
 
     repo.transaction(fn ->
       id
-      |> status_update_query(current_status)
+      |> status_update_query(current_status, expected_contract_revision)
       |> repo.update_all(set: [status: next_status, updated_at: now])
       |> case do
         {1, _rows} ->
@@ -182,12 +179,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp notify_dashboard({:ok, %WorkPackage{}} = result) do
-    DashboardPubSub.broadcast_changed()
+  defp notify_dashboard({:ok, %WorkPackage{}} = result, repo) do
+    unless repo.in_transaction?(), do: DashboardPubSub.broadcast_changed()
     result
   end
 
-  defp notify_dashboard(result), do: result
+  defp notify_dashboard(result, _repo), do: result
 
   defp validate_status(status) do
     if status in WorkPackage.statuses() do
@@ -200,6 +197,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   defp validate_persisted_status(@legacy_ready_status), do: :ok
   defp validate_persisted_status(status), do: validate_status(status)
 
+  defp expected_contract_revision(opts) do
+    case Keyword.get(opts, :expected_contract_revision) do
+      nil -> {:ok, nil}
+      revision when is_integer(revision) and revision > 0 -> {:ok, revision}
+      _revision -> {:error, :stale_status}
+    end
+  end
+
   defp validate_delivery_closeout_status(status) do
     if status in @delivery_closeout_terminal_statuses do
       :ok
@@ -208,16 +213,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp linked_work_package_id(%PlannedSlice{work_package_id: work_package_id}) do
-    case normalize_string(work_package_id) do
-      nil -> {:ok, nil}
-      work_package_id -> {:ok, work_package_id}
-    end
-  end
-
-  defp validate_delivery_closeout_package(%WorkPackage{} = work_package, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, next_status) do
+  defp validate_delivery_closeout_package(%WorkPackage{} = work_package, %WorkRequest{} = work_request, next_status) do
     with :ok <- validate_phase_child_delivery_closeout(work_package, next_status),
-         :ok <- validate_delivery_package_compatibility(work_package, work_request, planned_slice) do
+         :ok <- validate_delivery_package_compatibility(work_package, work_request) do
       validate_delivery_terminal_status_compatibility(work_package, next_status)
     end
   end
@@ -230,8 +228,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
 
   defp validate_phase_child_delivery_closeout(%WorkPackage{}, _next_status), do: :ok
 
-  defp validate_delivery_package_compatibility(%WorkPackage{} = work_package, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice) do
-    if compatible_delivery_package?(work_package, work_request, planned_slice) do
+  defp validate_delivery_package_compatibility(%WorkPackage{} = work_package, %WorkRequest{} = work_request) do
+    if work_package.work_request_id == work_request.id do
       :ok
     else
       {:error, :work_package_mismatch}
@@ -247,16 +245,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
 
   defp validate_delivery_terminal_status_compatibility(%WorkPackage{}, _next_status), do: :ok
 
-  defp update_delivery_closeout_status(_repo, %WorkPackage{kind: @phase_child_kind, status: "merged_into_phase"} = work_package, _work_request, _planned_slice, "merged") do
+  defp update_delivery_closeout_status(_repo, %WorkPackage{kind: @phase_child_kind, status: "merged_into_phase"} = work_package, _work_request, "merged") do
     {:ok, %{work_package: work_package, previous_status: work_package.status, next_status: work_package.status, changed?: false}}
   end
 
-  defp update_delivery_closeout_status(repo, %WorkPackage{} = work_package, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, next_status) do
+  defp update_delivery_closeout_status(repo, %WorkPackage{} = work_package, %WorkRequest{} = work_request, next_status) do
     now = DateTime.utc_now(:microsecond)
     previous_status = work_package.status
 
     repo.update_all(
-      delivery_closeout_update_query(work_package, work_request, planned_slice),
+      delivery_closeout_update_query(work_package, work_request),
       set: [status: next_status, updated_at: now]
     )
     |> case do
@@ -274,20 +272,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp delivery_closeout_update_query(%WorkPackage{} = work_package, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice) do
-    delivery_repo = PlannedSlice.delivery_repo(work_request, planned_slice)
-
+  defp delivery_closeout_update_query(%WorkPackage{} = work_package, %WorkRequest{} = work_request) do
     from(package in WorkPackage,
       where: package.id == ^work_package.id,
       where: package.status == ^work_package.status,
-      where: package.repo == ^delivery_repo,
-      where: package.base_branch == ^planned_slice.target_base_branch,
-      where: package.kind == ^planned_slice.work_package_kind,
-      where: package.title == ^planned_slice.title,
-      where: package.product_description == ^work_request.human_description,
-      where: package.allowed_file_globs == ^planned_slice.owned_file_globs,
-      where: package.acceptance_criteria == ^planned_slice.acceptance_criteria,
-      where: fragment("COALESCE(?, '') = COALESCE(?, '')", package.branch_pattern, ^planned_slice.branch_pattern)
+      where: package.work_request_id == ^work_request.id
     )
   end
 
@@ -322,17 +311,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp compatible_delivery_package?(%WorkPackage{} = work_package, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice) do
-    work_package.repo == PlannedSlice.delivery_repo(work_request, planned_slice) and
-      work_package.base_branch == planned_slice.target_base_branch and
-      work_package.kind == planned_slice.work_package_kind and
-      work_package.title == planned_slice.title and
-      work_package.product_description == work_request.human_description and
-      work_package.allowed_file_globs == planned_slice.owned_file_globs and
-      work_package.acceptance_criteria == planned_slice.acceptance_criteria and
-      normalize_string(work_package.branch_pattern) == normalize_string(planned_slice.branch_pattern)
-  end
-
   defp reject_active_delivery_closeout_context(repo, work_package_id, opts) do
     context = WorkPackageActivity.context(repo, work_package_id)
     allow_active_blockers? = Keyword.get(opts, :allow_active_blockers?, false)
@@ -343,13 +321,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
       true -> :ok
     end
   end
-
-  defp normalize_string(value) when is_binary(value) do
-    value = String.trim(value)
-    if value == "", do: nil, else: value
-  end
-
-  defp normalize_string(_value), do: nil
 
   defp normalize_insert_result({:ok, work_package}), do: {:ok, work_package}
 
@@ -392,9 +363,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp status_update_query(id, current_status) do
+  defp status_update_query(id, current_status, nil) do
     from(work_package in WorkPackage,
       where: work_package.id == ^id and work_package.status == ^current_status
+    )
+  end
+
+  defp status_update_query(id, current_status, expected_contract_revision) do
+    from(work_package in WorkPackage,
+      where: work_package.id == ^id and work_package.status == ^current_status,
+      where: work_package.contract_revision == ^expected_contract_revision
     )
   end
 

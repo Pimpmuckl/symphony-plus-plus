@@ -417,6 +417,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
       "string" -> validate_required_architect_string_argument(key, value)
       "object" -> validate_required_architect_object_argument(key, value)
       "array" -> validate_required_architect_array_argument_value(properties, key, value)
+      "integer" -> validate_required_architect_integer_argument(properties, key, value)
       _type -> {:error, "invalid_#{key}"}
     end
   end
@@ -429,6 +430,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
 
   defp validate_required_architect_object_argument(_key, value) when is_map(value), do: :ok
   defp validate_required_architect_object_argument(key, _value), do: {:error, "invalid_#{key}"}
+
+  defp validate_required_architect_integer_argument(properties, key, value) when is_integer(value) do
+    minimum = properties |> Map.get(key, %{}) |> Map.get("minimum")
+
+    if is_integer(minimum) and value < minimum, do: {:error, "invalid_#{key}"}, else: :ok
+  end
+
+  defp validate_required_architect_integer_argument(_properties, key, _value), do: {:error, "invalid_#{key}"}
 
   defp validate_required_architect_array_argument_value(properties, key, values) when is_list(values) do
     validate_required_architect_array_argument(properties, key, values)

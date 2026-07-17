@@ -1,6 +1,6 @@
 # Review Contract
 
-A planned slice may declare one optional review requirement:
+A WorkPackage may declare one optional review requirement:
 
 ```json
 {"type":"review-suite","args":{"mode":"normal"}}

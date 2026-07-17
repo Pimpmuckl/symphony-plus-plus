@@ -65,7 +65,7 @@ If the default ports are busy, the launcher records the actual URLs here:
 
 - Solo Sessions: lightweight local planning memory for normal single-agent
   work.
-- WorkRequests: product-facing work with decisions, comments, planned slices,
+- WorkRequests: product-facing work with decisions, comments, WorkPackages,
   and delivery status.
 - WorkPackages: scoped execution records for agents, including branch, PR,
   validation, blocker, review, and readiness evidence.

@@ -216,7 +216,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalArchitectGrantClaim do
   end
 
   defp validate_allowed_file_globs(constraints, allowed_file_globs) do
-    case ScopeConstraints.validate_owned_file_globs(constraints, allowed_file_globs) do
+    case ScopeConstraints.validate_allowed_file_globs(constraints, allowed_file_globs) do
       :ok -> {:ok, allowed_file_globs}
       {:error, _errors} -> {:error, :invalid_scope}
     end

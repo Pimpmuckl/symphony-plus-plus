@@ -102,8 +102,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers do
     grant_scope!(repo, session, Scope.work_request(work_request_id), "work_request", work_request_id)
   end
 
-  def grant_planned_slice_scope!(repo, %Session{} = session, planned_slice_id) do
-    grant_scope!(repo, session, Scope.planned_slice(planned_slice_id), "planned_slice", planned_slice_id)
+  def grant_work_package_scope!(repo, %Session{} = session, work_package_id) do
+    grant_scope!(repo, session, Scope.work_package(work_package_id), "work_package", work_package_id)
   end
 
   def grant_scope!(repo, %Session{} = session, %Scope{} = scope, scope_type, scope_id) do

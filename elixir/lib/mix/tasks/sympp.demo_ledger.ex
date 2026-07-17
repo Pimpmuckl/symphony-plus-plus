@@ -27,7 +27,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.Workflow
@@ -206,7 +205,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       with {:ok, work_requests} <- seed_work_requests(),
            {:ok, work_packages} <- seed_work_packages(),
            {:ok, guidance_requests} <- seed_human_decision_prompts(),
-           {:ok, planned_slices} <- seed_planned_slices(),
            {:ok, comments} <- seed_comments(),
            {:ok, _evidence} <- seed_work_package_evidence(),
            {:ok, solo_sessions} <- seed_solo_sessions(),
@@ -218,7 +216,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
           "seed" => %{
             "work_requests" => Enum.map(work_requests, & &1.id),
             "guidance_requests" => Enum.map(guidance_requests, & &1.id),
-            "planned_slices" => Enum.map(planned_slices, & &1.id),
             "work_packages" => Enum.map(work_packages, & &1.id),
             "comments" => Enum.map(comments, & &1.id),
             "solo_sessions" => Enum.map(solo_sessions, & &1.id)
@@ -235,8 +232,8 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       work_request_attrs("SYMPP-DEMO-WR-CLARIFY", "Clarify cockpit onboarding copy", "clarifying", "docs", "single_package"),
       work_request_attrs("SYMPP-DEMO-WR-HUMAN", "Resolve package ownership question", "human_info_needed", "feature", "architect_led_feature_branch"),
       work_request_attrs("SYMPP-DEMO-WR-SLICING", "Plan dashboard visual QA sweep", "ready_for_slicing", "investigation", "investigation_first"),
-      work_request_attrs("SYMPP-DEMO-WR-SLICED", "Ship operator cockpit polish", "ready_for_slicing", "feature", "architect_led_feature_branch"),
-      work_request_attrs("SYMPP-DEMO-WR-LIFECYCLE", "Coordinate package-to-merge lifecycle", "ready_for_slicing", "feature", "architect_led_feature_branch")
+      work_request_attrs("SYMPP-DEMO-WR-SLICED", "Ship operator cockpit polish", "sliced", "feature", "architect_led_feature_branch"),
+      work_request_attrs("SYMPP-DEMO-WR-LIFECYCLE", "Coordinate package-to-merge lifecycle", "sliced", "feature", "architect_led_feature_branch")
     ]
     |> insert_all(&WorkRequestRepository.create(Repo, &1))
   end
@@ -262,17 +259,19 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
 
   defp seed_work_packages do
     [
-      work_package_attrs("SYMPP-DEMO-WP-ACTIVE", "Implement cockpit status filters", "implementing", work_package_kind("SYMPP-DEMO-WP-ACTIVE")),
-      work_package_attrs("SYMPP-DEMO-WP-QUEUED", "Prepare worker handoff slice", "ready_for_worker", work_package_kind("SYMPP-DEMO-WP-QUEUED")),
-      work_package_attrs("SYMPP-DEMO-WP-PLANNING", "Plan API bridge smoke coverage", "planning", work_package_kind("SYMPP-DEMO-WP-PLANNING")),
-      work_package_attrs("SYMPP-DEMO-WP-REVIEW", "Review local operator handoff copy", "reviewing", work_package_kind("SYMPP-DEMO-WP-REVIEW")),
-      work_package_attrs("SYMPP-DEMO-WP-CI", "Wait for cockpit CI package", "ci_waiting", work_package_kind("SYMPP-DEMO-WP-CI")),
-      work_package_attrs("SYMPP-DEMO-WP-READY", "Ready merge evidence package", "ready_for_merge", work_package_kind("SYMPP-DEMO-WP-READY")),
-      work_package_attrs("SYMPP-DEMO-WP-ARCH-READY", "Architect merge approval package", "ready_for_architect_merge", work_package_kind("SYMPP-DEMO-WP-ARCH-READY")),
-      work_package_attrs("SYMPP-DEMO-WP-BLOCKED", "Blocked product decision package", "blocked", work_package_kind("SYMPP-DEMO-WP-BLOCKED")),
-      work_package_attrs("SYMPP-DEMO-WP-MERGED", "Merged demo cleanup package", "merged", work_package_kind("SYMPP-DEMO-WP-MERGED")),
-      work_package_attrs("SYMPP-DEMO-WP-MERGED-DOCS", "Merged operator docs package", "merged", work_package_kind("SYMPP-DEMO-WP-MERGED-DOCS")),
-      work_package_attrs("SYMPP-DEMO-WP-CLOSED-SPIKE", "Closed duplicate telemetry spike", "closed", work_package_kind("SYMPP-DEMO-WP-CLOSED-SPIKE"))
+      work_package_attrs("SYMPP-DEMO-WP-PLANNED", "Planned cockpit filter package", "planned", "mcp"),
+      work_package_attrs("SYMPP-DEMO-WP-SKIPPED", "Skipped broad redesign package", "skipped", "mcp"),
+      work_package_attrs("SYMPP-DEMO-WP-ACTIVE", "Implement cockpit status filters", "implementing", kind("SYMPP-DEMO-WP-ACTIVE")),
+      work_package_attrs("SYMPP-DEMO-WP-QUEUED", "Prepare worker handoff slice", "ready_for_worker", kind("SYMPP-DEMO-WP-QUEUED")),
+      work_package_attrs("SYMPP-DEMO-WP-PLANNING", "Plan API bridge smoke coverage", "planning", kind("SYMPP-DEMO-WP-PLANNING")),
+      work_package_attrs("SYMPP-DEMO-WP-REVIEW", "Review local operator handoff copy", "reviewing", kind("SYMPP-DEMO-WP-REVIEW")),
+      work_package_attrs("SYMPP-DEMO-WP-CI", "Wait for cockpit CI package", "ci_waiting", kind("SYMPP-DEMO-WP-CI")),
+      work_package_attrs("SYMPP-DEMO-WP-READY", "Ready merge evidence package", "ready_for_merge", kind("SYMPP-DEMO-WP-READY")),
+      work_package_attrs("SYMPP-DEMO-WP-ARCH-READY", "Architect merge approval package", "ready_for_architect_merge", kind("SYMPP-DEMO-WP-ARCH-READY")),
+      work_package_attrs("SYMPP-DEMO-WP-BLOCKED", "Blocked product decision package", "blocked", kind("SYMPP-DEMO-WP-BLOCKED")),
+      work_package_attrs("SYMPP-DEMO-WP-MERGED", "Merged demo cleanup package", "merged", kind("SYMPP-DEMO-WP-MERGED")),
+      work_package_attrs("SYMPP-DEMO-WP-MERGED-DOCS", "Merged operator docs package", "merged", kind("SYMPP-DEMO-WP-MERGED-DOCS")),
+      work_package_attrs("SYMPP-DEMO-WP-CLOSED-SPIKE", "Closed duplicate telemetry spike", "closed", kind("SYMPP-DEMO-WP-CLOSED-SPIKE"))
     ]
     |> insert_all(&WorkPackageRepository.create(Repo, &1))
   end
@@ -284,12 +283,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
         "work_request",
         "SYMPP-DEMO-WR-SLICED",
         "Demo unresolved comment on the WorkRequest card action row."
-      ),
-      demo_comment_attrs(
-        "SYMPP-DEMO-COMMENT-SLICE-DISPATCHED",
-        "planned_slice",
-        "SYMPP-DEMO-SLICE-DISPATCHED",
-        "Demo unresolved comment on a planned-slice card."
       ),
       demo_comment_attrs(
         "SYMPP-DEMO-COMMENT-WP-ACTIVE",
@@ -315,8 +308,11 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   defp work_package_attrs(id, title, status, kind) do
     %{
       id: id,
+      work_request_id: work_request_id(id),
+      sequence: work_package_sequence(id),
       kind: kind,
       title: title,
+      goal: "#{title}. Synthetic WorkPackage for demo ledger visual QA.",
       repo: @demo_repo,
       base_branch: @demo_base_branch,
       branch_pattern: branch_pattern(id),
@@ -326,6 +322,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       review_requirement: review_requirement(id),
       acceptance_criteria: acceptance_criteria(title),
       status: status,
+      dispatched_at: if(status in ["planned", "skipped"], do: nil, else: @demo_now),
       parent_id: nil,
       phase_id: nil,
       owner_id: "local-demo-worker"
@@ -333,6 +330,32 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   end
 
   defp work_request_description(title), do: "#{title}. Synthetic local demo data only."
+
+  defp work_request_id(id) when id in ["SYMPP-DEMO-WP-PLANNED", "SYMPP-DEMO-WP-SKIPPED"], do: "SYMPP-DEMO-WR-SLICING"
+  defp work_request_id("SYMPP-DEMO-WP-ACTIVE"), do: "SYMPP-DEMO-WR-SLICED"
+  defp work_request_id("SYMPP-DEMO-WP-BLOCKED"), do: "SYMPP-DEMO-WR-HUMAN"
+  defp work_request_id(_id), do: "SYMPP-DEMO-WR-LIFECYCLE"
+
+  defp work_package_sequence("SYMPP-DEMO-WP-PLANNED"), do: 1
+  defp work_package_sequence("SYMPP-DEMO-WP-SKIPPED"), do: 2
+  defp work_package_sequence("SYMPP-DEMO-WP-ACTIVE"), do: 1
+  defp work_package_sequence("SYMPP-DEMO-WP-BLOCKED"), do: 1
+
+  defp work_package_sequence(id) do
+    [
+      "SYMPP-DEMO-WP-QUEUED",
+      "SYMPP-DEMO-WP-PLANNING",
+      "SYMPP-DEMO-WP-REVIEW",
+      "SYMPP-DEMO-WP-CI",
+      "SYMPP-DEMO-WP-READY",
+      "SYMPP-DEMO-WP-ARCH-READY",
+      "SYMPP-DEMO-WP-MERGED",
+      "SYMPP-DEMO-WP-MERGED-DOCS",
+      "SYMPP-DEMO-WP-CLOSED-SPIKE"
+    ]
+    |> Enum.find_index(&(&1 == id))
+    |> then(&(&1 + 1))
+  end
 
   defp product_description("SYMPP-DEMO-WP-ACTIVE"), do: work_request_description("Ship operator cockpit polish")
   defp product_description("SYMPP-DEMO-WP-BLOCKED"), do: work_request_description("Resolve package ownership question")
@@ -353,17 +376,17 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
 
   defp product_description(_id), do: "Synthetic package for local cockpit visual QA."
 
-  defp work_package_kind("SYMPP-DEMO-WP-ACTIVE"), do: "mcp"
-  defp work_package_kind("SYMPP-DEMO-WP-QUEUED"), do: "mcp"
-  defp work_package_kind("SYMPP-DEMO-WP-PLANNING"), do: "mcp"
-  defp work_package_kind("SYMPP-DEMO-WP-REVIEW"), do: "docs"
-  defp work_package_kind("SYMPP-DEMO-WP-CI"), do: "mcp"
-  defp work_package_kind("SYMPP-DEMO-WP-READY"), do: "mcp"
-  defp work_package_kind("SYMPP-DEMO-WP-ARCH-READY"), do: "mcp"
-  defp work_package_kind("SYMPP-DEMO-WP-BLOCKED"), do: "investigation"
-  defp work_package_kind("SYMPP-DEMO-WP-MERGED"), do: "mcp"
-  defp work_package_kind("SYMPP-DEMO-WP-MERGED-DOCS"), do: "docs"
-  defp work_package_kind("SYMPP-DEMO-WP-CLOSED-SPIKE"), do: "investigation"
+  defp kind("SYMPP-DEMO-WP-ACTIVE"), do: "mcp"
+  defp kind("SYMPP-DEMO-WP-QUEUED"), do: "mcp"
+  defp kind("SYMPP-DEMO-WP-PLANNING"), do: "mcp"
+  defp kind("SYMPP-DEMO-WP-REVIEW"), do: "docs"
+  defp kind("SYMPP-DEMO-WP-CI"), do: "mcp"
+  defp kind("SYMPP-DEMO-WP-READY"), do: "mcp"
+  defp kind("SYMPP-DEMO-WP-ARCH-READY"), do: "mcp"
+  defp kind("SYMPP-DEMO-WP-BLOCKED"), do: "investigation"
+  defp kind("SYMPP-DEMO-WP-MERGED"), do: "mcp"
+  defp kind("SYMPP-DEMO-WP-MERGED-DOCS"), do: "docs"
+  defp kind("SYMPP-DEMO-WP-CLOSED-SPIKE"), do: "investigation"
 
   defp review_requirement(id) when id in ["SYMPP-DEMO-WP-BLOCKED", "SYMPP-DEMO-WP-CLOSED-SPIKE"], do: nil
   defp review_requirement(_id), do: %{"type" => "review-suite", "args" => %{"mode" => "normal"}}
@@ -471,92 +494,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
     }
   end
 
-  defp seed_planned_slices do
-    with {:ok, planned} <- add_slice("SYMPP-DEMO-WR-SLICING", planned_slice_attrs("SYMPP-DEMO-SLICE-APPROVED", 1, "Approved cockpit filter slice")),
-         {:ok, approved} <- WorkRequestRepository.approve_planned_slice(Repo, "SYMPP-DEMO-WR-SLICING", planned.id, "planned"),
-         {:ok, skipped} <- add_skipped_slice(),
-         {:ok, dispatched} <- add_dispatched_slice(),
-         {:ok, _sliced_wr} <- WorkRequestRepository.mark_sliced(Repo, "SYMPP-DEMO-WR-SLICED", "ready_for_slicing"),
-         {:ok, lifecycle_slices} <- add_lifecycle_slices(),
-         {:ok, _lifecycle_wr} <- WorkRequestRepository.mark_sliced(Repo, "SYMPP-DEMO-WR-LIFECYCLE", "ready_for_slicing") do
-      {:ok, [approved, skipped, dispatched | lifecycle_slices]}
-    end
-  end
-
-  defp add_skipped_slice do
-    with {:ok, planned} <- add_slice("SYMPP-DEMO-WR-SLICING", planned_slice_attrs("SYMPP-DEMO-SLICE-SKIPPED", 2, "Skipped broad redesign slice")) do
-      WorkRequestRepository.skip_planned_slice(Repo, "SYMPP-DEMO-WR-SLICING", planned.id, "planned")
-    end
-  end
-
-  defp add_dispatched_slice do
-    dispatch_demo_slice("SYMPP-DEMO-WR-SLICED", "SYMPP-DEMO-SLICE-DISPATCHED", 1, "SYMPP-DEMO-WP-ACTIVE", "Implement cockpit status filters")
-  end
-
-  defp add_lifecycle_slices do
-    [
-      {"SYMPP-DEMO-SLICE-QUEUED", 1, "SYMPP-DEMO-WP-QUEUED", "Prepare worker handoff slice"},
-      {"SYMPP-DEMO-SLICE-PLANNING", 2, "SYMPP-DEMO-WP-PLANNING", "Plan API bridge smoke coverage"},
-      {"SYMPP-DEMO-SLICE-REVIEW", 3, "SYMPP-DEMO-WP-REVIEW", "Review local operator handoff copy"},
-      {"SYMPP-DEMO-SLICE-CI", 4, "SYMPP-DEMO-WP-CI", "Wait for cockpit CI package"},
-      {"SYMPP-DEMO-SLICE-READY", 5, "SYMPP-DEMO-WP-READY", "Ready merge evidence package"},
-      {"SYMPP-DEMO-SLICE-ARCH-READY", 6, "SYMPP-DEMO-WP-ARCH-READY", "Architect merge approval package"},
-      {"SYMPP-DEMO-SLICE-MERGED", 7, "SYMPP-DEMO-WP-MERGED", "Merged demo cleanup package"},
-      {"SYMPP-DEMO-SLICE-MERGED-DOCS", 8, "SYMPP-DEMO-WP-MERGED-DOCS", "Merged operator docs package"},
-      {"SYMPP-DEMO-SLICE-CLOSED-SPIKE", 9, "SYMPP-DEMO-WP-CLOSED-SPIKE", "Closed duplicate telemetry spike"}
-    ]
-    |> Enum.reduce_while({:ok, []}, fn {slice_id, sequence, package_id, title}, {:ok, acc} ->
-      case dispatch_demo_slice("SYMPP-DEMO-WR-LIFECYCLE", slice_id, sequence, package_id, title) do
-        {:ok, slice} -> {:cont, {:ok, [slice | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, slices} -> {:ok, Enum.reverse(slices)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp dispatch_demo_slice(work_request_id, slice_id, sequence, work_package_id, title) do
-    with {:ok, planned} <-
-           add_slice(
-             work_request_id,
-             dispatchable_slice_attrs(slice_id, sequence, work_package_id, title)
-           ),
-         {:ok, approved} <- WorkRequestRepository.approve_planned_slice(Repo, work_request_id, planned.id, "planned") do
-      WorkRequestRepository.dispatch_planned_slice(Repo, work_request_id, approved.id, "approved", work_package_id)
-    end
-  end
-
-  defp add_slice(work_request_id, attrs), do: WorkRequestRepository.add_planned_slice(Repo, work_request_id, attrs)
-
-  defp dispatchable_slice_attrs(id, sequence_hint, work_package_id, title) do
-    planned_slice_attrs(id, sequence_hint, title)
-    |> Map.merge(%{
-      work_package_kind: work_package_kind(work_package_id),
-      branch_pattern: branch_pattern(work_package_id),
-      owned_file_globs: allowed_file_globs(work_package_id),
-      acceptance_criteria: acceptance_criteria(title)
-    })
-  end
-
-  defp planned_slice_attrs(id, sequence_hint, title) do
-    %{
-      id: id,
-      title: title,
-      goal: "#{title}. Synthetic planned slice for demo ledger visual QA.",
-      work_package_kind: "mcp",
-      target_base_branch: @demo_base_branch,
-      branch_pattern: "feat/#{String.downcase(id)}/demo",
-      owned_file_globs: ["elixir/lib/symphony_elixir_web/live/sympp_*"],
-      forbidden_file_globs: ["config/runtime.exs", ".env"],
-      acceptance_criteria: ["Slice #{sequence_hint} is visible with deterministic content."],
-      validation_steps: ["mix test test/mix/tasks/sympp_demo_ledger_test.exs"],
-      review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
-      stop_conditions: ["Stop before runtime defaults or auth changes."]
-    }
-  end
-
   defp seed_work_package_evidence do
     work_package_evidence()
     |> Enum.reduce_while({:ok, []}, fn {work_package_id, evidence}, {:ok, acc} ->
@@ -594,9 +531,9 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
               "source_tool" => "report_blocker",
               "blocker_id" => "demo-slice-sequencing-dependency",
               "active" => true,
-              "blocked_by" => %{"kind" => "slice", "id" => "SYMPP-DEMO-SLICE-QUEUED"},
-              "blocked_item" => %{"kind" => "slice", "id" => "SYMPP-DEMO-SLICE-PLANNING"},
-              "summary" => "Plan API bridge smoke coverage after the worker handoff slice is ready."
+              "blocked_by" => %{"kind" => "work_package", "id" => "SYMPP-DEMO-WP-QUEUED"},
+              "blocked_item" => %{"kind" => "work_package", "id" => "SYMPP-DEMO-WP-PLANNING"},
+              "summary" => "Plan API bridge smoke coverage after the worker handoff package is ready."
             }}
          ],
          findings: [{"API bridge path remains local-only", "info"}],
@@ -805,14 +742,19 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   end
 
   defp normalize_demo_timestamps do
-    Enum.each([AccessGrant, GuidanceRequest, WorkRequest, WorkPackage, ClarificationQuestion, PlannedSlice, Comment, SoloSession], fn schema ->
-      Repo.update_all(schema, set: [inserted_at: @demo_now, updated_at: @demo_now])
-    end)
+    Enum.each(
+      [AccessGrant, GuidanceRequest, WorkRequest, WorkPackage, ClarificationQuestion, Comment, SoloSession],
+      fn schema -> Repo.update_all(schema, set: [inserted_at: @demo_now, updated_at: @demo_now]) end
+    )
 
     Enum.each([PlanNode, ProgressEvent, Finding, Artifact], &normalize_ordered_timestamps/1)
 
     Repo.update_all(SoloSessionEntry, set: [created_at: @demo_now, updated_at: @demo_now])
-    Repo.update_all(from(slice in PlannedSlice, where: slice.status == "dispatched"), set: [dispatched_at: @demo_now])
+
+    Repo.update_all(
+      from(work_package in WorkPackage, where: not is_nil(work_package.dispatched_at)),
+      set: [dispatched_at: @demo_now]
+    )
   end
 
   defp normalize_ordered_timestamps(schema) do

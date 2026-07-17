@@ -11,11 +11,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkPackageActivity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
-  @source_tool "cleanup_work_request_planned_slice_runtime"
+  @source_tool "cleanup_work_request_work_package_runtime"
   @release_reason "work_request_runtime_cleanup"
 
   @type cleanup_result :: %{
@@ -27,9 +27,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup do
   @spec source_tool() :: String.t()
   def source_tool, do: @source_tool
 
-  @spec cleanup(module(), WorkRequest.t(), PlannedSlice.t(), WorkPackage.t(), Assignment.t(), keyword()) ::
+  @spec cleanup(module(), WorkRequest.t(), WorkPackage.t(), Assignment.t(), keyword()) ::
           {:ok, cleanup_result()} | {:error, term()}
-  def cleanup(repo, %WorkRequest{} = work_request, %PlannedSlice{} = planned_slice, %WorkPackage{} = work_package, %Assignment{} = assignment, opts \\ [])
+  def cleanup(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, %Assignment{} = assignment, opts \\ [])
       when is_atom(repo) and is_list(opts) do
     now = DateTime.utc_now(:microsecond)
     reason = opts |> Keyword.get(:reason, "") |> redacted_reason()
@@ -44,7 +44,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup do
          payload <-
            runtime_cleanup_payload(%{
              work_request: work_request,
-             planned_slice: planned_slice,
              work_package: work_package,
              reason: reason,
              delivery_evidence: delivery_evidence,
@@ -201,8 +200,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup do
 
   defp append_runtime_cleanup_event(repo, %Assignment{} = assignment, work_package_id, payload, reason) do
     PlanningRepository.append_audit_progress_event_for_work_package(repo, assignment, work_package_id, %{
-      "summary" => "WorkRequest planned-slice runtime cleaned up",
-      "body" => "Cleanup reason: #{reason}; WorkRequest: #{payload["work_request_id"]}; planned slice: #{payload["planned_slice_id"]}",
+      "summary" => "WorkRequest work-package runtime cleaned up",
+      "body" => "Cleanup reason: #{reason}; WorkRequest: #{payload["work_request_id"]}; WorkPackage: #{payload["work_package_id"]}",
       "status" => "work_request_runtime_cleanup",
       "idempotency_key" => metadata_idempotency_key(payload),
       "payload" => payload
@@ -211,7 +210,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup do
 
   defp runtime_cleanup_payload(context) do
     %WorkRequest{} = work_request = Map.fetch!(context, :work_request)
-    %PlannedSlice{} = planned_slice = Map.fetch!(context, :planned_slice)
     %WorkPackage{} = work_package = Map.fetch!(context, :work_package)
     %DateTime{} = now = Map.fetch!(context, :cleaned_at)
     before_context = Map.fetch!(context, :before_context)
@@ -222,10 +220,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup do
     revoked_worker_grants = Map.fetch!(context, :revoked_worker_grants)
 
     %{
-      "type" => "work_request_planned_slice_runtime_cleanup",
+      "type" => "work_request_work_package_runtime_cleanup",
       "source_tool" => @source_tool,
       "work_request_id" => work_request.id,
-      "planned_slice_id" => planned_slice.id,
       "work_package_id" => work_package.id,
       "reason" => reason,
       "cleaned_at" => timestamp(now),
@@ -278,7 +275,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup do
         "type",
         "source_tool",
         "work_request_id",
-        "planned_slice_id",
+        "work_package_id",
         "work_package_id",
         "reason",
         "revoked_worker_grant_ids",
@@ -301,7 +298,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup do
     delivery_evidence
     |> Map.take([
       "outcome",
-      "successor_planned_slice_id",
+      "successor_work_package_id",
       "successor_work_package_id",
       "superseded_reason",
       "abandoned_rationale"

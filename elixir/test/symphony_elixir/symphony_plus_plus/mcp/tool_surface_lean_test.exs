@@ -1,5 +1,5 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Server, ToolCatalog}
 
@@ -29,6 +29,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
     end
   end
 
+  test "handle state outlives the caller that first creates it" do
+    agent = Module.concat(Server, HandleState)
+    if pid = Process.whereis(agent), do: Agent.stop(pid)
+    parent = self()
+
+    {caller, caller_ref} =
+      spawn_monitor(fn ->
+        _tools = listed_tools(:worker)
+        send(parent, {:handle_state_started, self()})
+
+        receive do
+          :stop -> exit(:shutdown)
+        end
+      end)
+
+    assert_receive {:handle_state_started, ^caller}
+    agent_pid = Process.whereis(agent)
+    agent_ref = Process.monitor(agent_pid)
+    send(caller, :stop)
+
+    assert_receive {:DOWN, ^caller_ref, :process, ^caller, :shutdown}
+    refute_receive {:DOWN, ^agent_ref, :process, ^agent_pid, _reason}, 50
+    assert Process.alive?(agent_pid)
+  end
+
   test "role profiles are complete without a tools/list refresh" do
     worker = tools_by_name(:worker)
     architect = tools_by_name(:architect)
@@ -40,8 +65,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
 
     assert Map.has_key?(architect, "claim_local_architect_assignment")
     assert Map.has_key?(architect, "read_work_request")
-    assert Map.has_key?(architect, "dispatch_slice")
-    assert architect["dispatch_slice"]["inputSchema"]["required"] == ["planned_slice_id"]
+    assert Map.has_key?(architect, "dispatch_work_package")
+    assert architect["dispatch_work_package"]["inputSchema"]["required"] == ["work_package_id"]
     refute Enum.any?(@removed_tools, &Map.has_key?(architect, &1))
   end
 

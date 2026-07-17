@@ -47,7 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "summary" => payload |> map_value("summary") |> primitive_map(),
       "clarification_questions" => payload |> map_value("clarification_questions") |> list_rows(&question_row/1),
       "decisions_as_rationale" => payload |> map_value("decision_log_entries") |> list_rows(&decision_row/1),
-      "planned_slices" => payload |> map_value("planned_slices") |> list_rows(&planned_slice_row/1)
+      "work_packages" => payload |> map_value("work_packages") |> list_rows(&work_package_row/1)
     }
   end
 
@@ -62,10 +62,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "mode" => text_value(map_value(product_tree, "mode")),
       "summary" => product_tree |> map_value("summary") |> primitive_map(),
       "root_node_ids" => product_tree |> map_value("root_node_ids") |> join_list(),
-      "root_slice_ids" => product_tree |> map_value("root_slice_ids") |> join_list(),
+      "root_work_package_ids" => product_tree |> map_value("root_work_package_ids") |> join_list(),
       "nodes" => product_tree |> map_value("nodes") |> list_rows(&product_tree_node_row/1),
-      "slice_refs" => product_tree |> map_value("slice_refs") |> list_rows(&product_tree_slice_ref_row/1),
-      "slices" => product_tree |> map_value("slices") |> list_rows(&planned_slice_row/1)
+      "work_package_refs" => product_tree |> map_value("work_package_refs") |> list_rows(&product_tree_work_package_ref_row/1),
+      "work_packages" => product_tree |> map_value("work_packages") |> list_rows(&work_package_row/1)
     }
   end
 
@@ -77,7 +77,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "work_request" => payload |> map_value("work_request") |> compact_mutation_work_request(),
       "scope" => payload |> map_value("scope") |> primitive_map(),
       "counts" => board |> map_value("counts") |> primitive_map(),
-      "slices" => board |> map_value("slices") |> list_rows(&delivery_slice_row/1)
+      "work_packages" => board |> map_value("work_packages") |> list_rows(&delivery_work_package_row/1)
     }
   end
 
@@ -180,41 +180,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
     }
   end
 
-  defp planned_slice_row(%{} = slice) do
+  defp work_package_row(%{} = work_package) do
     %{
-      "id" => text_value(map_value(slice, "id")),
-      "sequence" => integer_value(map_value(slice, "sequence")),
-      "title" => text_value(map_value(slice, "title")),
-      "goal" => text_value(map_value(slice, "goal")),
-      "status" => text_value(map_value(slice, "status")),
-      "work_package_id" => text_value(map_value(slice, "work_package_id")),
-      "work_package_kind" => text_value(map_value(slice, "work_package_kind")),
-      "target_base_branch" => text_value(map_value(slice, "target_base_branch")),
-      "branch_pattern" => text_value(map_value(slice, "branch_pattern")),
-      "owned_file_globs" => slice |> map_value("owned_file_globs") |> detail_list(),
-      "forbidden_file_globs" => slice |> map_value("forbidden_file_globs") |> detail_list(),
-      "acceptance_count" => list_count(map_value(slice, "acceptance_criteria")),
-      "acceptance_criteria" => slice |> map_value("acceptance_criteria") |> detail_list(),
-      "validation_count" => list_count(map_value(slice, "validation_steps")),
-      "validation_steps" => slice |> map_value("validation_steps") |> detail_list(),
-      "review" => map_value(slice, "review")
+      "id" => text_value(map_value(work_package, "id")),
+      "sequence" => integer_value(map_value(work_package, "sequence")),
+      "title" => text_value(map_value(work_package, "title")),
+      "goal" => text_value(map_value(work_package, "goal")),
+      "status" => text_value(map_value(work_package, "status")),
+      "kind" => text_value(map_value(work_package, "kind")),
+      "base_branch" => text_value(map_value(work_package, "base_branch")),
+      "branch_pattern" => text_value(map_value(work_package, "branch_pattern")),
+      "allowed_file_globs" => work_package |> map_value("allowed_file_globs") |> detail_list(),
+      "forbidden_file_globs" => work_package |> map_value("forbidden_file_globs") |> detail_list(),
+      "acceptance_count" => list_count(map_value(work_package, "acceptance_criteria")),
+      "acceptance_criteria" => work_package |> map_value("acceptance_criteria") |> detail_list(),
+      "validation_count" => list_count(map_value(work_package, "validation_steps")),
+      "validation_steps" => work_package |> map_value("validation_steps") |> detail_list(),
+      "review" => map_value(work_package, "review")
     }
   end
 
-  defp delivery_slice_row(%{} = slice) do
-    work_package = map_value(slice, "work_package") || %{}
-    operational_state = map_value(slice, "operational_state") || %{}
-    delivery = map_value(slice, "delivery") || %{}
+  defp delivery_work_package_row(%{} = projected_work_package) do
+    work_package = map_value(projected_work_package, "work_package") || %{}
+    operational_state = map_value(projected_work_package, "operational_state") || %{}
+    delivery = map_value(projected_work_package, "delivery") || %{}
     blocker_state = map_value(work_package, "blocker_state") || %{}
     runtime_state = map_value(work_package, "runtime_state") || %{}
     pr = map_value(work_package, "pr") || %{}
 
     %{
-      "id" => text_value(map_value(slice, "id")),
-      "sequence" => integer_value(map_value(slice, "sequence")),
-      "title" => text_value(map_value(slice, "title")),
-      "raw_status" => text_value(map_value(slice, "raw_status")),
-      "delivery_outcome" => text_value(map_value(slice, "delivery_outcome")),
+      "id" => text_value(map_value(projected_work_package, "id")),
+      "sequence" => integer_value(map_value(projected_work_package, "sequence")),
+      "title" => text_value(map_value(projected_work_package, "title")),
+      "raw_status" => text_value(map_value(projected_work_package, "raw_status")),
+      "delivery_outcome" => text_value(map_value(projected_work_package, "delivery_outcome")),
       "delivery_pr" => text_value(map_value(delivery, "pr_url")),
       "work_package_id" => text_value(map_value(work_package, "id")),
       "work_package_status" =>
@@ -243,20 +242,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "title" => text_value(map_value(node, "title")),
       "node_kind" => text_value(map_value(node, "node_kind")),
       "completion" => text_value(map_value(node, "computed_completion_mark")),
-      "slice_count" => integer_value(map_value(node, "slice_count")),
+      "work_package_count" => integer_value(map_value(node, "work_package_count")),
       "child_node_count" => integer_value(map_value(node, "child_node_count")),
-      "slice_ids" => node |> map_value("slice_ids") |> join_list()
+      "work_package_ids" => node |> map_value("work_package_ids") |> join_list()
     }
     |> reject_nil_values()
   end
 
-  defp product_tree_slice_ref_row(%{} = slice) do
+  defp product_tree_work_package_ref_row(%{} = work_package) do
     %{
-      "id" => text_value(map_value(slice, "id")),
-      "sequence" => integer_value(map_value(slice, "sequence")),
-      "title" => text_value(map_value(slice, "title")),
-      "status" => text_value(map_value(slice, "status")),
-      "work_package_id" => text_value(map_value(slice, "work_package_id"))
+      "id" => text_value(map_value(work_package, "id")),
+      "sequence" => integer_value(map_value(work_package, "sequence")),
+      "title" => text_value(map_value(work_package, "title")),
+      "status" => text_value(map_value(work_package, "status"))
     }
     |> reject_nil_values()
   end

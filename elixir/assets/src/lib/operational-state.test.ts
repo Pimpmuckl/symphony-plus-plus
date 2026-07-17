@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { operationalBadgeVariant, operationalStatusIsRunning, sliceCardTone, sliceLane } from "./operational-state";
-import type { PlannedSlice } from "@/types/dashboard";
+import type { WorkRequestPackage } from "@/types/dashboard";
 
 describe("operational state presentation", () => {
   it("uses guidance color for clarifying statuses", () => {
@@ -18,7 +18,7 @@ describe("operational state presentation", () => {
     }
   });
 
-  it("keeps planned slices visually quiet", () => {
+  it("keeps planned WorkPackages visually quiet", () => {
     const slice = plannedSlice("planned");
 
     expect(sliceCardTone(slice, undefined, sliceLane(slice))).toBe("muted");
@@ -31,7 +31,7 @@ describe("operational state presentation", () => {
   });
 });
 
-function plannedSlice(status: string): PlannedSlice {
+function plannedSlice(status: string): WorkRequestPackage {
   return {
     id: `slice-${status}`,
     work_request_id: "wr-colors",

@@ -3,16 +3,26 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.HelpersTest do
 
   alias SymphonyElixirWeb.SymppWorkRequestLive.Helpers
 
-  test "planned-slice form defaults ordinary work and parses an optional generic review" do
+  test "work-package form defaults ordinary work and parses an optional generic review" do
     assert %{
-             "work_package_kind" => "standard_pr",
-             "target_base_branch" => "main"
-           } = Helpers.planned_slice_form(%{}, %{base_branch: "main"})
+             "kind" => "standard_pr",
+             "base_branch" => "main"
+           } = Helpers.work_package_form(%{}, %{base_branch: "main"})
 
-    attrs = Helpers.planned_slice_attrs(%{"review_json" => " \n "})
+    attrs = Helpers.work_package_attrs(%{"review_json" => " \n "})
     refute Map.has_key?(attrs, "review_requirement")
 
     review = %{"type" => "human", "args" => %{"team" => "maintainers"}}
-    assert Helpers.planned_slice_attrs(%{"review_json" => Jason.encode!(review)})["review_requirement"] == review
+    assert Helpers.work_package_attrs(%{"review_json" => Jason.encode!(review)})["review_requirement"] == review
+  end
+
+  test "work-package authoring follows the repository authoring states" do
+    for status <- ["ready_for_clarification", "clarifying", "human_info_needed", "ready_for_slicing", "sliced"] do
+      assert Helpers.can_author_work_package?(%{status: status})
+      assert Helpers.can_author_work_package?(%{work_request: %{status: status}})
+    end
+
+    refute Helpers.can_author_work_package?(%{status: "draft"})
+    refute Helpers.can_author_work_package?(%{status: "completed"})
   end
 end

@@ -1,4 +1,4 @@
-import type { PlannedSlice, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
+import type { WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import type { ProductTreeCompletionMark, ProductTreeNode } from "@/types/product-tree";
 import { isFinishedBoardStatus, operationalLabel, sliceOperationalState } from "@/lib/operational-state";
 import type { BadgeTone } from "@/lib/operational-state";
@@ -90,7 +90,7 @@ export function requestBoardState(
     fallbackStatus: rawStatus,
     guidanceCount: counts.guidanceCount,
     progress,
-    slices: detail.planned_slices ?? [],
+    slices: detail.work_packages ?? [],
     packageById,
   });
 }
@@ -103,7 +103,7 @@ export function requestStatusLabels(detail: WorkRequestDetail, packageById: Map<
     labels.push(productNodeStatusLabel(node));
   }
 
-  for (const slice of detail.planned_slices ?? []) {
+  for (const slice of detail.work_packages ?? []) {
     const pkg = packageById.get(slice.work_package_id || "");
     labels.push(operationalLabel(sliceOperationalState(slice, pkg), slice.work_package_status || slice.status));
   }
@@ -136,7 +136,7 @@ function activeBlockerCountForNode(
   }
 
   let count = 0;
-  for (const sliceId of node.slice_ids ?? []) {
+  for (const sliceId of node.work_package_ids ?? []) {
     count += activeBlockerCountBySliceId.get(sliceId) ?? 0;
   }
 
@@ -155,7 +155,7 @@ function activeBlockerKeysForNode(
 ) {
   const blockerKeys = new Set<string>();
 
-  for (const sliceId of node.slice_ids ?? []) {
+  for (const sliceId of node.work_package_ids ?? []) {
     for (const blockerKey of activeBlockerKeysBySliceId.get(sliceId) ?? []) {
       blockerKeys.add(blockerKey);
     }
@@ -178,7 +178,7 @@ export function productNodeState(
   treeIndex: { childrenByParent: Map<string, ProductTreeNode[]> },
   activeBlockerCountBySliceId: Map<string, number>,
   activeBlockerKeysBySliceId?: Map<string, Set<string>>,
-  nodeSubtreeSlices: PlannedSlice[] = [],
+  nodeSubtreeSlices: WorkRequestPackage[] = [],
   packageById: Map<string, WorkPackageCard> = new Map(),
 ) {
   const activeBlockerCount = activeBlockerCountForNode(node, treeIndex, activeBlockerCountBySliceId, activeBlockerKeysBySliceId);
@@ -202,7 +202,7 @@ export function productNodeState(
     badgeVariant: boardState.badgeVariant,
     blockerCount,
     guidanceCount,
-    nodeSliceCount: node.slice_count || nodeSliceCount,
+    nodeSliceCount: node.work_package_count || nodeSliceCount,
     progress,
     statusKind: boardState.kind,
     statusLabel: boardState.label,
@@ -234,7 +234,7 @@ function aggregateBoardRowState({
   guidanceCount: number;
   packageById: Map<string, WorkPackageCard>;
   progress: number;
-  slices: PlannedSlice[];
+  slices: WorkRequestPackage[];
 }): BoardRowState {
   const childState = aggregateChildSliceState(slices, packageById);
   const derived = firstMatchingBoardRowState([
@@ -265,7 +265,7 @@ type AggregateChildSliceState = {
   ready: boolean;
 };
 
-function aggregateChildSliceState(slices: PlannedSlice[], packageById: Map<string, WorkPackageCard>): AggregateChildSliceState {
+function aggregateChildSliceState(slices: WorkRequestPackage[], packageById: Map<string, WorkPackageCard>): AggregateChildSliceState {
   const state: AggregateChildSliceState = {
     active: false,
     blocked: false,
@@ -292,7 +292,7 @@ function aggregateChildSliceState(slices: PlannedSlice[], packageById: Map<strin
   return state;
 }
 
-function sliceBoardStateKind(slice: PlannedSlice, pkg?: WorkPackageCard): BoardRowStateKind {
+function sliceBoardStateKind(slice: WorkRequestPackage, pkg?: WorkPackageCard): BoardRowStateKind {
   const operational = sliceOperationalState(slice, pkg);
   const status = operational?.key || slice.work_package_status || pkg?.operational_state?.key || pkg?.status || slice.status;
   return firstMatchingBoardRowKind([
@@ -307,11 +307,11 @@ function sliceBoardStateKind(slice: PlannedSlice, pkg?: WorkPackageCard): BoardR
   ]) ?? "unknown";
 }
 
-function sliceIsBlocked(slice: PlannedSlice, pkg: WorkPackageCard | undefined, status?: string | null) {
+function sliceIsBlocked(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, status?: string | null) {
   return status === "blocked" || sliceBlockerCount(slice, pkg, new Map()) > 0;
 }
 
-function sliceHasActiveWork(slice: PlannedSlice, pkg: WorkPackageCard | undefined, status?: string | null) {
+function sliceHasActiveWork(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, status?: string | null) {
   return Boolean(packageHasActiveRuntime(pkg) || ACTIVE_WORK_STATUSES.has(status || "") || slice.operational_state?.has_active_worker);
 }
 
@@ -398,7 +398,7 @@ function completionMarkLabel(mark: ProductTreeCompletionMark) {
 }
 
 export function sliceBlockerCount(
-  slice: PlannedSlice,
+  slice: WorkRequestPackage,
   pkg: WorkPackageCard | undefined,
   activeBlockerCountBySliceId: Map<string, number>,
 ) {
@@ -413,7 +413,7 @@ export function sliceBlockerCount(
   return [operational?.key, slice.work_package_status, slice.status, pkg?.status].includes("blocked") ? 1 : 0;
 }
 
-export function sliceGuidanceCount(slice: PlannedSlice, pkg: WorkPackageCard | undefined) {
+export function sliceGuidanceCount(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined) {
   const operational = sliceOperationalState(slice, pkg);
   const guidanceAttention = (operational?.attention_items ?? []).filter(attentionItemIsGuidance).length;
   const stateNeedsGuidance = [operational?.key, slice.status, slice.work_package_status, pkg?.status].some((status) =>

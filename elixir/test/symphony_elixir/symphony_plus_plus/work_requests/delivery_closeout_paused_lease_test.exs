@@ -15,9 +15,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -37,8 +36,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
   setup %{repo: repo} do
     for schema <- [
           ProgressEvent,
-          PlannedSliceDelivery,
-          PlannedSlice,
+          WorkPackageDelivery,
+          WorkPackage,
           ClaimLease,
           AccessGrant,
           WorkRequest,
@@ -52,7 +51,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
   end
 
   test "service delivery closeout rejects a paused current claim lease", %{repo: repo} do
-    {work_request, planned_slice, linked_package} = linked_slice!(repo, work_request_id: "WR-DELIVERY-PAUSED-LEASE")
+    {work_request, work_package, linked_package} = linked_slice!(repo, work_request_id: "WR-DELIVERY-PAUSED-LEASE")
     claim_lease = pause_claim_lease!(repo, linked_package)
     assert {:ok, _closed} = WorkPackageRepository.update_status(repo, linked_package.id, "ready_for_merge", "closed")
 
@@ -62,17 +61,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
         no_pr_evidence: "The package status is terminal, but the paused claim lease still gates closeout."
       })
 
-    assert {:error, :active_runtime} = WorkRequestService.record_planned_slice_delivery(repo, work_request.id, planned_slice.id, attrs)
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert {:error, :active_runtime} = WorkRequestService.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
 
     assert {:ok, _released_lease} = ClaimLeaseService.release(repo, claim_lease.id, reason: "operator resumed closeout")
-    assert {:ok, delivery} = WorkRequestService.record_planned_slice_delivery(repo, work_request.id, planned_slice.id, attrs)
+    assert {:ok, delivery} = WorkRequestService.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
     assert delivery.outcome == "completed_no_pr"
     assert repo.get!(WorkPackage, linked_package.id).status == "closed"
   end
 
-  test "MCP record_planned_slice_delivery cannot bypass a paused current claim lease", %{repo: repo} do
-    {work_request, planned_slice, linked_package} = linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-PAUSED-LEASE")
+  test "MCP record_work_package_delivery cannot bypass a paused current claim lease", %{repo: repo} do
+    {work_request, work_package, linked_package} = linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-PAUSED-LEASE")
     session = create_work_request_architect_session(repo, work_request)
     claim_lease = pause_claim_lease!(repo, linked_package)
     assert {:ok, _closed} = WorkPackageRepository.update_status(repo, linked_package.id, "ready_for_merge", "closed")
@@ -80,7 +79,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
     args =
       no_pr_args(
         work_request,
-        planned_slice,
+        work_package,
         "delivery-mcp-paused-claim-lease",
         "The linked package has a paused current claim lease and must not be closed out."
       )
@@ -89,12 +88,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
 
     assert get_in(response, ["error", "code"]) == -32_009
     assert get_in(response, ["error", "data", "reason"]) == "active_runtime"
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
 
     assert {:ok, _released_lease} = ClaimLeaseService.release(repo, claim_lease.id, reason: "operator resumed closeout")
     closeout_response = record_delivery(repo, session, args)
 
-    assert get_in(closeout_response, ["result", "structuredContent", "planned_slice_delivery", "outcome"]) == "completed_no_pr"
+    assert get_in(closeout_response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "completed_no_pr"
     assert repo.get!(WorkPackage, linked_package.id).status == "closed"
   end
 
@@ -121,10 +120,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
   defp linked_slice!(repo, overrides) do
     request_id = Keyword.fetch!(overrides, :work_request_id)
     work_request = create_work_request!(repo, id: request_id, status: "ready_for_slicing")
-    planned_slice = create_planned_slice!(repo, work_request, id: "WRS-#{request_id}")
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, planned_slice.id, "planned")
+    work_package = create_work_package!(repo, work_request, id: "WRS-#{request_id}")
+    assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
     work_package = create_matching_work_package!(repo, work_request, approved_slice, id: "WP-#{request_id}", status: "ready_for_merge")
-    assert {:ok, dispatched_slice} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", work_package.id)
+    assert {:ok, dispatched_slice} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved_slice.id, "approved", work_package.id)
 
     {work_request, dispatched_slice, work_package}
   end
@@ -134,22 +133,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
     work_request
   end
 
-  defp create_planned_slice!(repo, work_request, overrides) do
-    assert {:ok, planned_slice} = WorkRequestRepository.add_planned_slice(repo, work_request.id, planned_slice_attrs(overrides))
-    planned_slice
+  defp create_work_package!(repo, work_request, overrides) do
+    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(overrides))
+    work_package
   end
 
-  defp create_matching_work_package!(repo, work_request, planned_slice, overrides) do
+  defp create_matching_work_package!(repo, work_request, work_package, overrides) do
     attrs =
       [
-        kind: planned_slice.work_package_kind,
-        title: planned_slice.title,
+        kind: work_package.kind,
+        title: work_package.title,
         repo: work_request.repo,
-        base_branch: planned_slice.target_base_branch,
-        branch_pattern: planned_slice.branch_pattern,
+        base_branch: work_package.base_branch,
+        branch_pattern: work_package.branch_pattern,
         product_description: work_request.human_description,
-        allowed_file_globs: planned_slice.owned_file_globs,
-        acceptance_criteria: planned_slice.acceptance_criteria
+        allowed_file_globs: work_package.allowed_file_globs,
+        acceptance_criteria: work_package.acceptance_criteria
       ]
       |> Keyword.merge(overrides)
       |> WorkPackageFactory.attrs()
@@ -194,10 +193,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
     |> Map.merge(overrides)
   end
 
-  defp no_pr_args(work_request, planned_slice, idempotency_key, evidence) do
+  defp no_pr_args(work_request, work_package, idempotency_key, evidence) do
     %{
       "work_request_id" => work_request.id,
-      "planned_slice_id" => planned_slice.id,
+      "work_package_id" => work_package.id,
       "outcome" => "completed_no_pr",
       "idempotency_key" => idempotency_key,
       "evidence" => %{"completed_no_pr" => %{"no_pr_evidence" => evidence}}
@@ -219,14 +218,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
     Enum.into(overrides, defaults)
   end
 
-  defp planned_slice_attrs(overrides) do
+  defp work_package_attrs(overrides) do
     defaults = %{
       title: "Close delivered slice",
       goal: "Record terminal delivery state.",
-      work_package_kind: "mcp",
-      target_base_branch: "main",
+      kind: "mcp",
+      base_branch: "main",
       branch_pattern: "feat/delivery-closeout",
-      owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
+      allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
       forbidden_file_globs: ["elixir/assets/**"],
       acceptance_criteria: ["Delivery closeout is transactional."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/work_requests/delivery_closeout_paused_lease_test.exs"],
@@ -237,7 +236,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
     Enum.into(overrides, defaults)
   end
 
-  defp record_delivery(repo, session, arguments), do: mcp_tool(repo, session, "record_planned_slice_delivery", arguments)
+  defp record_delivery(repo, session, arguments), do: mcp_tool(repo, session, "record_work_package_delivery", arguments)
 
   defp mcp_tool(repo, %Session{} = session, name, arguments) do
     MCPHarness.request(

@@ -5,7 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
     CommentProjection,
-    DeliverySliceProjection,
+    DeliveryWorkPackageProjection,
     OperationalProjection,
     Sanitizer
   }
@@ -17,7 +17,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion, as: WorkRequestCompletion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   import Ecto.Query, only: [from: 2]
@@ -70,19 +69,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     end)
   end
 
-  @spec visible_planned_slices([PlannedSlice.t()], map() | nil) :: [PlannedSlice.t()]
-  def visible_planned_slices(planned_slices, nil), do: planned_slices
+  @spec visible_work_packages([WorkPackage.t()], map() | nil) :: [WorkPackage.t()]
+  def visible_work_packages(work_packages, nil), do: work_packages
 
-  def visible_planned_slices(planned_slices, delivery_board) do
-    visible_by_id = DeliverySliceProjection.slices_by_id(delivery_board)
+  def visible_work_packages(work_packages, delivery_board) do
+    visible_by_id = DeliveryWorkPackageProjection.work_packages_by_id(delivery_board)
 
-    Enum.filter(planned_slices, &Map.has_key?(visible_by_id, &1.id))
+    Enum.filter(work_packages, &Map.has_key?(visible_by_id, &1.id))
   end
 
   @spec work_request_payload(
           WorkRequest.t(),
           [ClarificationQuestion.t()],
-          [PlannedSlice.t()],
+          [WorkPackage.t()],
           map(),
           map(),
           map(),
@@ -91,7 +90,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   def work_request_payload(
         %WorkRequest{} = work_request,
         questions,
-        planned_slices,
+        work_packages,
         work_package_contexts,
         repo_identity_catalog,
         comment_context,
@@ -106,9 +105,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
       work_request
       |> WorkRequestCompletion.visible_state(
         question_state,
-        planned_slices,
+        work_packages,
         work_package_contexts,
-        completion_deliveries_by_slice_id(Keyword.get(opts, :delivery_board))
+        completion_deliveries_by_work_package_id(Keyword.get(opts, :delivery_board))
       )
 
     work_request
@@ -121,7 +120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
       :operational_state,
       operational_state(
         work_request,
-        planned_slices,
+        work_packages,
         work_package_contexts,
         completion_state,
         Keyword.get(opts, :delivery_board),
@@ -132,7 +131,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
       CommentProjection.work_request_counts(
         comment_context,
         work_request,
-        Keyword.get(opts, :comment_planned_slices, planned_slices)
+        Keyword.get(opts, :comment_work_packages, work_packages)
       )
     )
   end
@@ -144,14 +143,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
 
     with {:ok, question_context} <- question_context(repo, work_request_ids),
          {:ok, decision_counts} <- decision_counts(repo, work_request_ids),
-         {:ok, planned_slices} <- planned_slices(repo, work_request_ids),
-         {:ok, comment_context} <- card_comment_context(repo, work_requests, planned_slices),
-         {:ok, work_package_contexts} <- card_work_package_contexts(repo, planned_slices, opts) do
+         {:ok, work_packages} <- work_packages(repo, work_request_ids),
+         {:ok, comment_context} <- card_comment_context(repo, work_requests, work_packages),
+         {:ok, work_package_contexts} <- card_work_package_contexts(repo, work_packages, opts) do
       question_counts = question_context.counts
-      planned_slices_by_request = Enum.group_by(planned_slices, & &1.work_request_id)
+      work_packages_by_request = Enum.group_by(work_packages, & &1.work_request_id)
 
       with {:ok, delivery_boards} <-
-             card_delivery_boards(repo, work_requests, planned_slices_by_request, work_package_contexts) do
+             card_delivery_boards(repo, work_requests, work_packages_by_request, work_package_contexts) do
         delivery_state_opts = delivery_state_opts(opts)
 
         card_summaries(
@@ -159,7 +158,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
           question_counts,
           question_context.states,
           decision_counts,
-          planned_slices_by_request,
+          work_packages_by_request,
           comment_context,
           work_package_contexts,
           %{boards: delivery_boards, state_opts: delivery_state_opts}
@@ -173,7 +172,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
          question_counts,
          question_states,
          decision_counts,
-         planned_slices_by_request,
+         work_packages_by_request,
          comment_context,
          work_package_contexts,
          delivery_context
@@ -181,11 +180,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     delivery_boards = Map.fetch!(delivery_context, :boards)
     delivery_state_opts = Map.fetch!(delivery_context, :state_opts)
 
-    visible_planned_slices_by_request =
-      visible_planned_slices_by_request(work_requests, planned_slices_by_request, delivery_boards)
+    visible_work_packages_by_request =
+      visible_work_packages_by_request(work_requests, work_packages_by_request, delivery_boards)
 
-    planned_slice_counts =
-      visible_planned_slices_by_request
+    work_package_counts =
+      visible_work_packages_by_request
       |> Map.values()
       |> Enum.flat_map(& &1)
       |> Enum.map(&{&1.work_request_id, &1.status})
@@ -193,9 +192,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
 
     summaries =
       Map.new(work_requests, fn %WorkRequest{} = work_request ->
-        planned_slices = Map.get(visible_planned_slices_by_request, work_request.id, [])
-        all_planned_slices = Map.get(planned_slices_by_request, work_request.id, [])
-        comment_counts = CommentProjection.work_request_counts(comment_context, work_request, all_planned_slices)
+        work_packages = Map.get(visible_work_packages_by_request, work_request.id, [])
+        all_work_packages = Map.get(work_packages_by_request, work_request.id, [])
+        comment_counts = CommentProjection.work_request_counts(comment_context, work_request, all_work_packages)
         open_question_count = status_count(question_counts, work_request.id, "open")
 
         question_state =
@@ -208,15 +207,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
           work_request
           |> WorkRequestCompletion.visible_state(
             question_state,
-            planned_slices,
+            work_packages,
             work_package_contexts,
-            completion_deliveries_by_slice_id(Map.get(delivery_boards, work_request.id))
+            completion_deliveries_by_work_package_id(Map.get(delivery_boards, work_request.id))
           )
 
         operational_state =
           operational_state(
             work_request,
-            planned_slices,
+            work_packages,
             work_package_contexts,
             completion_state,
             Map.get(delivery_boards, work_request.id),
@@ -231,10 +230,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
            decision_count: Map.get(decision_counts, work_request.id, 0),
            comment_count: comment_counts.comment_count,
            open_comment_count: comment_counts.open_comment_count,
-           planned_slice_count: status_count(planned_slice_counts, work_request.id, "planned"),
-           approved_slice_count: status_count(planned_slice_counts, work_request.id, "approved"),
-           dispatched_slice_count: status_count(planned_slice_counts, work_request.id, "dispatched"),
-           skipped_slice_count: status_count(planned_slice_counts, work_request.id, "skipped"),
+           work_package_count: length(work_packages),
+           planned_work_package_count: Enum.count(work_packages, &(&1.status == "planned")),
+           dispatched_work_package_count: Enum.count(work_packages, &(not is_nil(&1.dispatched_at))),
+           skipped_work_package_count: status_count(work_package_counts, work_request.id, "skipped"),
            completed_at: timestamp(completion_state.completed_at),
            completion_source: work_request.completion_source,
            archived_at: timestamp(completion_state.archived_at),
@@ -245,11 +244,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     {:ok, summaries}
   end
 
-  defp card_delivery_boards(repo, work_requests, planned_slices_by_request, work_package_contexts) do
+  defp card_delivery_boards(repo, work_requests, work_packages_by_request, work_package_contexts) do
     DeliveryBoard.project_many(
       repo,
       work_requests,
-      planned_slices_by_request,
+      work_packages_by_request,
       delivery_board_card_opts(work_package_contexts)
     )
   end
@@ -269,16 +268,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     end
   end
 
-  defp card_work_package_contexts(repo, planned_slices, opts) do
+  defp card_work_package_contexts(repo, work_packages, opts) do
     case Keyword.get(opts, :grant) do
-      %AccessGrant{} = grant -> planned_slice_work_package_contexts_for_grant(repo, planned_slices, grant)
-      _grant -> Dashboard.planned_slice_work_package_contexts(repo, planned_slices)
+      %AccessGrant{} = grant -> work_package_work_package_contexts_for_grant(repo, work_packages, grant)
+      _grant -> Dashboard.work_package_work_package_contexts(repo, work_packages)
     end
   end
 
-  defp planned_slice_work_package_contexts_for_grant(repo, planned_slices, %AccessGrant{} = grant) do
+  defp work_package_work_package_contexts_for_grant(repo, work_packages, %AccessGrant{} = grant) do
     with {:ok, filters} <- Dashboard.work_request_filters_for_grant(repo, grant),
-         {:ok, work_package_contexts} <- Dashboard.planned_slice_work_package_contexts(repo, planned_slices) do
+         {:ok, work_package_contexts} <- Dashboard.work_package_work_package_contexts(repo, work_packages) do
       {:ok,
        Map.filter(work_package_contexts, fn
          {_work_package_id, %{work_package: %WorkPackage{} = work_package}} ->
@@ -290,28 +289,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     end
   end
 
-  defp card_comment_context(repo, work_requests, planned_slices) do
+  defp card_comment_context(repo, work_requests, work_packages) do
     targets =
       Enum.map(work_requests, &{"work_request", &1.id}) ++
-        Enum.map(planned_slices, &{"planned_slice", &1.id})
+        Enum.map(work_packages, &{"work_package", &1.id})
 
     Dashboard.comment_count_context(repo, targets)
   end
 
-  defp visible_planned_slices_by_request(work_requests, planned_slices_by_request, delivery_boards) do
+  defp visible_work_packages_by_request(work_requests, work_packages_by_request, delivery_boards) do
     Map.new(work_requests, fn %WorkRequest{} = work_request ->
-      planned_slices = Map.get(planned_slices_by_request, work_request.id, [])
+      work_packages = Map.get(work_packages_by_request, work_request.id, [])
       delivery_board = Map.get(delivery_boards, work_request.id)
 
-      {work_request.id, visible_planned_slices(planned_slices, delivery_board)}
+      {work_request.id, visible_work_packages(work_packages, delivery_board)}
     end)
   end
 
-  defp completion_deliveries_by_slice_id(delivery_board) do
+  defp completion_deliveries_by_work_package_id(delivery_board) do
     delivery_board
-    |> DeliverySliceProjection.slices_by_id()
-    |> Enum.flat_map(fn {slice_id, delivery_slice} ->
-      case completion_delivery_outcome(delivery_slice) do
+    |> DeliveryWorkPackageProjection.work_packages_by_id()
+    |> Enum.flat_map(fn {slice_id, delivery_work_package} ->
+      case completion_delivery_outcome(delivery_work_package) do
         outcome when is_binary(outcome) and outcome != "" -> [{slice_id, %{outcome: outcome}}]
         _outcome -> []
       end
@@ -319,15 +318,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     |> Map.new()
   end
 
-  defp completion_delivery_outcome(%{} = delivery_slice) do
-    map_value(delivery_slice, "delivery_outcome") ||
-      case map_value(delivery_slice, "delivery") do
+  defp completion_delivery_outcome(%{} = delivery_work_package) do
+    map_value(delivery_work_package, "delivery_outcome") ||
+      case map_value(delivery_work_package, "delivery") do
         %{} = delivery -> map_value(delivery, "outcome")
         _delivery -> nil
       end
   end
 
-  defp completion_delivery_outcome(_delivery_slice), do: nil
+  defp completion_delivery_outcome(_delivery_work_package), do: nil
 
   defp question_context(repo, work_request_ids) do
     rows =
@@ -375,12 +374,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp planned_slices(repo, work_request_ids) do
+  defp work_packages(repo, work_request_ids) do
     rows =
       chunked_work_request_rows(work_request_ids, fn chunk ->
-        from(planned_slice in PlannedSlice,
-          where: planned_slice.work_request_id in ^chunk,
-          order_by: [asc: planned_slice.work_request_id, asc: planned_slice.sequence, asc: planned_slice.inserted_at]
+        from(work_package in WorkPackage,
+          where: work_package.work_request_id in ^chunk,
+          order_by: [asc: work_package.work_request_id, asc: work_package.sequence, asc: work_package.inserted_at]
         )
         |> repo.all()
       end)
@@ -452,14 +451,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
 
   defp operational_state(
          %WorkRequest{} = work_request,
-         planned_slices,
+         work_packages,
          work_package_contexts,
          completion_state,
          delivery_board,
          delivery_state_opts
        ) do
     slice_states =
-      planned_slice_operational_states(planned_slices, work_package_contexts, delivery_board, delivery_state_opts)
+      work_package_operational_states(work_packages, work_package_contexts, delivery_board, delivery_state_opts)
 
     attention_items = aggregate_operational_attention(slice_states)
     promoted_state = primary_work_request_slice_state(slice_states)
@@ -472,8 +471,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
         completed_operational_state(work_request, attention_items)
 
       delivery_truth_operational_state?(promoted_state) ->
-        promoted_operational_state(work_request, promoted_state, planned_slices, attention_items)
-        |> DeliverySliceProjection.redact_reasons(delivery_state_opts)
+        promoted_operational_state(work_request, promoted_state, work_packages, attention_items)
+        |> DeliveryWorkPackageProjection.redact_reasons(delivery_state_opts)
 
       completion_state.completed? ->
         completed_operational_state(work_request, attention_items)
@@ -482,7 +481,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
         base_operational_state(work_request.status, attention_items)
 
       promoted_state ->
-        promoted_operational_state(work_request, promoted_state, planned_slices, attention_items)
+        promoted_operational_state(work_request, promoted_state, work_packages, attention_items)
 
       true ->
         base_operational_state(work_request.status, attention_items)
@@ -508,7 +507,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
       "completed",
       "Completed",
       "success",
-      "All WorkRequest questions, slices, linked packages, blockers, and active runtimes are terminal.",
+      "All WorkRequest questions, WorkPackages, blockers, and active runtimes are terminal.",
       work_request.status,
       attention_items
     )
@@ -542,7 +541,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
       "ready_for_slicing",
       "Ready For Slicing",
       "neutral",
-      "WorkRequest is ready for an architect to author planned slices.",
+      "WorkRequest is ready for an architect to author WorkPackages.",
       status,
       attention_items
     )
@@ -557,14 +556,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     operational_state_map(key, status_label(key), "neutral", "Raw WorkRequest lifecycle status is #{key}.", status, attention_items)
   end
 
-  defp planned_slice_operational_states(planned_slices, work_package_contexts, delivery_board, delivery_state_opts) do
-    delivery_slices_by_id = DeliverySliceProjection.slices_by_id(delivery_board)
+  defp work_package_operational_states(work_packages, work_package_contexts, delivery_board, delivery_state_opts) do
+    delivery_work_packages_by_id = DeliveryWorkPackageProjection.work_packages_by_id(delivery_board)
 
-    Enum.map(planned_slices, fn %PlannedSlice{} = planned_slice ->
-      OperationalProjection.planned_slice_operational_state(
-        planned_slice,
-        Map.get(work_package_contexts, planned_slice.work_package_id),
-        Map.get(delivery_slices_by_id, planned_slice.id),
+    Enum.map(work_packages, fn %WorkPackage{} = work_package ->
+      OperationalProjection.work_package_operational_state(
+        work_package,
+        Map.get(work_package_contexts, work_package.id),
+        Map.get(delivery_work_packages_by_id, work_package.id),
         delivery_state_opts
       )
     end)
@@ -582,7 +581,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
   defp delivery_truth_operational_state?(%{delivery_outcome: outcome}) when is_binary(outcome), do: true
   defp delivery_truth_operational_state?(_state), do: false
 
-  defp promoted_operational_state(%WorkRequest{} = work_request, promoted_state, planned_slices, attention_items) do
+  defp promoted_operational_state(%WorkRequest{} = work_request, promoted_state, work_packages, attention_items) do
     promoted_state
     |> OperationalProjection.operational_activity_fields()
     |> Map.merge(
@@ -590,7 +589,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
         promoted_state.key,
         promoted_state.label,
         promoted_state.tone,
-        "Most actionable planned-slice or linked-package state is #{promoted_state.label} across #{length(planned_slices)} slice(s).",
+        "Most actionable WorkPackage state is #{promoted_state.label} across #{length(work_packages)} package(s).",
         work_request.status,
         attention_items
       )

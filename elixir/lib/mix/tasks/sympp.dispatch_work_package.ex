@@ -1,23 +1,23 @@
-defmodule Mix.Tasks.Sympp.DispatchPlannedSlice do
+defmodule Mix.Tasks.Sympp.DispatchWorkPackage do
   @moduledoc false
 
   use Mix.Task
 
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDispatch
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.Workflow
 
-  @shortdoc "Dispatches one approved Symphony++ WorkRequest planned slice"
+  @shortdoc "Dispatches one planned Symphony++ WorkRequest WorkPackage"
 
   @switches [
     database: :string,
     work_request_id: :string,
-    planned_slice_id: :string,
+    work_package_id: :string,
     claimed_by: :string,
     help: :boolean
   ]
-  @blank_checked_options [:database, :work_request_id, :planned_slice_id, :claimed_by]
+  @blank_checked_options [:database, :work_request_id, :work_package_id, :claimed_by]
 
   @impl Mix.Task
   def run(args) do
@@ -36,7 +36,7 @@ defmodule Mix.Tasks.Sympp.DispatchPlannedSlice do
   @spec usage() :: String.t()
   def usage do
     [
-      "Usage: mix sympp.dispatch_planned_slice --work-request-id <id> --planned-slice-id <id>",
+      "Usage: mix sympp.dispatch_work_package --work-request-id <id> --work-package-id <id>",
       "[--database <sqlite-path>]",
       "[--claimed-by <worker-id>]",
       Repo.default_database_help_text()
@@ -59,7 +59,7 @@ defmodule Mix.Tasks.Sympp.DispatchPlannedSlice do
       blank?(Keyword.get(opts, :work_request_id)) ->
         {:error, usage()}
 
-      blank?(Keyword.get(opts, :planned_slice_id)) ->
+      blank?(Keyword.get(opts, :work_package_id)) ->
         {:error, usage()}
 
       has_blank_option?(opts, @blank_checked_options) ->
@@ -78,18 +78,18 @@ defmodule Mix.Tasks.Sympp.DispatchPlannedSlice do
         try do
           with :ok <- WorkRequestRepository.migrate(Repo),
                {:ok, dispatch} <-
-                 PlannedSliceDispatch.dispatch(
+                 WorkPackageDispatch.dispatch(
                    Repo,
                    Keyword.fetch!(opts, :work_request_id),
-                   Keyword.fetch!(opts, :planned_slice_id),
+                   Keyword.fetch!(opts, :work_package_id),
                    dispatch_bootstrap_opts(opts, database)
                  ) do
             dispatch
-            |> PlannedSliceDispatch.response_payload()
+            |> WorkPackageDispatch.response_payload()
             |> Jason.encode!(pretty: true)
             |> Mix.shell().info()
           else
-            {:error, reason} -> Mix.raise(PlannedSliceDispatch.error_message(reason))
+            {:error, reason} -> Mix.raise(WorkPackageDispatch.error_message(reason))
           end
         after
           stop_repo(repo_pid)
@@ -98,7 +98,7 @@ defmodule Mix.Tasks.Sympp.DispatchPlannedSlice do
 
       {:error, reason} ->
         Repo.put_dynamic_repo(original_repo)
-        Mix.raise(PlannedSliceDispatch.error_message(reason))
+        Mix.raise(WorkPackageDispatch.error_message(reason))
     end
   end
 

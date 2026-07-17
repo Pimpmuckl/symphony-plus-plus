@@ -39,7 +39,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError do
       "id" => target.id,
       "phase_id" => target.phase_id,
       "work_request_id" => target.work_request_id,
-      "planned_slice_id" => target.planned_slice_id,
       "work_package_id" => target.work_package_id
     }
   end

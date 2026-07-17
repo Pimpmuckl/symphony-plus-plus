@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { PlannedSlice, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
+import type { WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import type { ProductTreeNode } from "@/types/product-tree";
 import {
   productNodeState,
@@ -54,7 +54,7 @@ describe("workstream row state", () => {
         nodes: [{ id: "node-1", completion_mark: "partial", completion_label: "Partially Complete" }],
         root_node_ids: ["node-1"],
       },
-      planned_slices: [
+      work_packages: [
         plannedSlice("slice-1", "pkg-1", "completed_no_pr", "Completed Without PR"),
         plannedSlice("slice-2", undefined, "delivered", "Delivered"),
       ],
@@ -78,7 +78,7 @@ describe("workstream row state", () => {
       title: "Shared blocker node",
       completion_mark: "partial",
       attention_count: 2,
-      slice_ids: ["slice-a", "slice-b"],
+      work_package_ids: ["slice-a", "slice-b"],
     };
 
     const state = productNodeState(
@@ -108,7 +108,7 @@ describe("workstream row state", () => {
       attention_count: 23,
       guidance_count: 0,
       blocker_count: 0,
-      slice_ids: ["slice-active"],
+      work_package_ids: ["slice-active"],
     };
 
     const state = productNodeState(node, 1, { childrenByParent: new Map() }, new Map());
@@ -124,7 +124,7 @@ describe("workstream row state", () => {
       id: "node-active-descendant",
       title: "Active descendant node",
       completion_mark: "partial",
-      slice_ids: ["slice-active"],
+      work_package_ids: ["slice-active"],
     };
     const state = productNodeState(
       node,
@@ -147,7 +147,7 @@ describe("workstream row state", () => {
       id: "node-ready-descendant",
       title: "Ready descendant node",
       completion_mark: "partial",
-      slice_ids: ["slice-ready"],
+      work_package_ids: ["slice-ready"],
     };
     const state = productNodeState(
       node,
@@ -170,7 +170,7 @@ describe("workstream row state", () => {
       id: "node-planned-descendant",
       title: "Planned descendant node",
       completion_mark: "not_done",
-      slice_ids: ["slice-planned"],
+      work_package_ids: ["slice-planned"],
     };
     const state = productNodeState(
       node,
@@ -193,7 +193,7 @@ describe("workstream row state", () => {
       id: "node-mixed-quiet-descendants",
       title: "Mixed quiet descendants",
       completion_mark: "not_done",
-      slice_ids: ["slice-planned", "slice-created"],
+      work_package_ids: ["slice-planned", "slice-created"],
     };
     const state = productNodeState(
       node,
@@ -220,7 +220,7 @@ describe("workstream row state", () => {
         status: "clarifying",
         operational_state: { key: "clarifying", label: "Clarifying" },
       },
-      planned_slices: [],
+      work_packages: [],
     };
 
     const state = requestBoardState(detail, new Map(), { blockerCount: 0, guidanceCount: 0 }, 0);
@@ -237,7 +237,7 @@ describe("workstream row state", () => {
         status: "ready_for_slicing",
         operational_state: { key: "ready_for_slicing", label: "Ready For Slicing" },
       },
-      planned_slices: [],
+      work_packages: [],
     };
 
     const state = requestBoardState(detail, new Map(), { blockerCount: 0, guidanceCount: 0 }, 0);
@@ -254,7 +254,7 @@ describe("workstream row state", () => {
         status: "sliced",
         operational_state: { key: "sliced", label: "Sliced" },
       },
-      planned_slices: [plannedSlice("slice-planned", undefined, "planned", "Planned")],
+      work_packages: [plannedSlice("slice-planned", undefined, "planned", "Planned")],
     };
 
     const state = requestBoardState(detail, new Map(), { blockerCount: 0, guidanceCount: 0 }, 50);
@@ -272,7 +272,7 @@ describe("workstream row state", () => {
         status: "sliced",
         operational_state: { key: "sliced", label: "Sliced" },
       },
-      planned_slices: [plannedSlice("slice-active-child", "pkg-active", "active", "Active")],
+      work_packages: [plannedSlice("slice-active-child", "pkg-active", "active", "Active")],
     };
 
     const state = requestBoardState(detail, new Map(), { blockerCount: 0, guidanceCount: 0 }, 50);
@@ -288,7 +288,7 @@ describe("workstream row state", () => {
         status: "sliced",
         operational_state: { key: "sliced", label: "Sliced" },
       },
-      planned_slices: [plannedSlice("slice-ready-finish-child", "pkg-ready-finish", "ready_to_finish", "Ready To Finish")],
+      work_packages: [plannedSlice("slice-ready-finish-child", "pkg-ready-finish", "ready_to_finish", "Ready To Finish")],
     };
 
     const state = requestBoardState(detail, new Map(), { blockerCount: 0, guidanceCount: 0 }, 50);
@@ -305,7 +305,7 @@ describe("workstream row state", () => {
         status: "sliced",
         operational_state: { key: "sliced", label: "Sliced" },
       },
-      planned_slices: [plannedSlice("slice-active-full-progress", "pkg-active", "active", "Active")],
+      work_packages: [plannedSlice("slice-active-full-progress", "pkg-active", "active", "Active")],
     };
     const packages = new Map<string, WorkPackageCard>([
       ["pkg-active", { id: "pkg-active", status: "active", plan: { completed_count: 1, total_count: 1 } }],
@@ -316,13 +316,13 @@ describe("workstream row state", () => {
       {
         id: "node-active-full-progress",
         completion_mark: "partial",
-        slice_ids: ["slice-active-full-progress"],
+        work_package_ids: ["slice-active-full-progress"],
       },
       1,
       { childrenByParent: new Map() },
       new Map(),
       undefined,
-      detail.planned_slices ?? [],
+      detail.work_packages ?? [],
       packages,
     );
 
@@ -338,7 +338,7 @@ describe("workstream row state", () => {
         status: "delivered",
         operational_state: { key: "delivered", label: "Delivered" },
       },
-      planned_slices: [plannedSlice("slice-stale-active", "pkg-active", "active", "Active")],
+      work_packages: [plannedSlice("slice-stale-active", "pkg-active", "active", "Active")],
     };
     const packages = new Map<string, WorkPackageCard>([["pkg-active", { id: "pkg-active", status: "active" }]]);
     const requestState = requestBoardState(detail, packages, { blockerCount: 0, guidanceCount: 0 }, 100);
@@ -346,13 +346,13 @@ describe("workstream row state", () => {
       {
         id: "node-done-active-child",
         completion_mark: "done",
-        slice_ids: ["slice-stale-active"],
+        work_package_ids: ["slice-stale-active"],
       },
       1,
       { childrenByParent: new Map() },
       new Map(),
       undefined,
-      detail.planned_slices ?? [],
+      detail.work_packages ?? [],
       packages,
     );
 
@@ -367,7 +367,7 @@ describe("workstream row state", () => {
         status: "delivered",
         operational_state: { key: "delivered", label: "Delivered" },
       },
-      planned_slices: [],
+      work_packages: [],
     };
 
     const state = requestBoardState(detail, new Map(), { blockerCount: 1, guidanceCount: 0 }, 100);
@@ -418,7 +418,7 @@ describe("workstream row state", () => {
   });
 });
 
-function plannedSlice(id: string, workPackageId: string | undefined, stateKey: string, label: string): PlannedSlice {
+function plannedSlice(id: string, workPackageId: string | undefined, stateKey: string, label: string): WorkRequestPackage {
   return {
     id,
     work_request_id: "wr-row-state",

@@ -3,12 +3,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
 
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -35,8 +35,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
           {:ok, WorkRequest.t()} | {:error, error()}
   def update_status(repo, id, current_status, next_status), do: notify_dashboard(Repository.update_status(repo, id, current_status, next_status))
 
-  @spec prepare_for_planned_slices(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error()}
-  def prepare_for_planned_slices(repo, id), do: notify_dashboard(Repository.prepare_for_planned_slices(repo, id))
+  @spec prepare_for_work_packages(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error()}
+  def prepare_for_work_packages(repo, id), do: notify_dashboard(Repository.prepare_for_work_packages(repo, id))
 
   @spec ask_question(Repository.repo(), String.t(), map()) :: {:ok, ClarificationQuestion.t()} | {:error, error()}
   def ask_question(repo, work_request_id, attrs), do: notify_dashboard(Repository.ask_question(repo, work_request_id, attrs))
@@ -54,41 +54,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   @spec record_decision(Repository.repo(), String.t(), map()) :: {:ok, DecisionLogEntry.t()} | {:error, error()}
   def record_decision(repo, work_request_id, attrs), do: notify_dashboard(Repository.record_decision(repo, work_request_id, attrs))
 
-  @spec add_planned_slice(Repository.repo(), String.t(), map()) :: {:ok, PlannedSlice.t()} | {:error, error()}
-  def add_planned_slice(repo, work_request_id, attrs), do: notify_dashboard(Repository.add_planned_slice(repo, work_request_id, attrs))
+  @spec slice_work_request(Repository.repo(), String.t(), [map()]) ::
+          {:ok, %{work_request: WorkRequest.t(), work_packages: [WorkPackage.t()]}} | {:error, error()}
+  def slice_work_request(repo, work_request_id, work_packages),
+    do: notify_dashboard(Repository.slice_work_request(repo, work_request_id, work_packages))
 
-  @spec add_planned_slice_for_authoring(Repository.repo(), String.t(), map()) :: {:ok, PlannedSlice.t()} | {:error, error()}
-  def add_planned_slice_for_authoring(repo, work_request_id, attrs),
-    do: notify_dashboard(Repository.add_planned_slice_for_authoring(repo, work_request_id, attrs))
+  @spec list_work_packages(Repository.repo(), String.t()) :: {:ok, [WorkPackage.t()]} | {:error, error()}
+  def list_work_packages(repo, work_request_id), do: Repository.list_work_packages(repo, work_request_id)
 
-  @spec list_planned_slices(Repository.repo(), String.t()) :: {:ok, [PlannedSlice.t()]} | {:error, error()}
-  def list_planned_slices(repo, work_request_id), do: Repository.list_planned_slices(repo, work_request_id)
+  @spec get_work_package(Repository.repo(), String.t(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
+  def get_work_package(repo, work_request_id, id), do: Repository.get_work_package(repo, work_request_id, id)
 
-  @spec get_planned_slice(Repository.repo(), String.t(), String.t()) :: {:ok, PlannedSlice.t()} | {:error, error()}
-  def get_planned_slice(repo, work_request_id, id), do: Repository.get_planned_slice(repo, work_request_id, id)
+  @spec update_work_package(Repository.repo(), String.t(), String.t(), pos_integer(), map()) ::
+          {:ok, WorkPackage.t()} | {:error, error()}
+  def update_work_package(repo, work_request_id, id, expected_revision, attrs),
+    do: notify_dashboard(Repository.update_work_package(repo, work_request_id, id, expected_revision, attrs))
 
-  @spec record_planned_slice_delivery(Repository.repo(), String.t(), String.t(), map()) ::
-          {:ok, PlannedSliceDelivery.t()} | {:error, error()}
-  def record_planned_slice_delivery(repo, work_request_id, planned_slice_id, attrs),
-    do: notify_dashboard(DeliveryCloseout.record(repo, work_request_id, planned_slice_id, attrs))
+  @spec record_work_package_delivery(Repository.repo(), String.t(), String.t(), map()) ::
+          {:ok, WorkPackageDelivery.t()} | {:error, error()}
+  def record_work_package_delivery(repo, work_request_id, work_package_id, attrs),
+    do: notify_dashboard(DeliveryCloseout.record(repo, work_request_id, work_package_id, attrs))
 
-  @spec approve_planned_slice(Repository.repo(), String.t(), String.t(), String.t()) ::
-          {:ok, PlannedSlice.t()} | {:error, error()}
-  def approve_planned_slice(repo, work_request_id, id, current_status),
-    do: notify_dashboard(Repository.approve_planned_slice(repo, work_request_id, id, current_status))
-
-  @spec skip_planned_slice(Repository.repo(), String.t(), String.t(), String.t()) ::
-          {:ok, PlannedSlice.t()} | {:error, error()}
-  def skip_planned_slice(repo, work_request_id, id, current_status),
-    do: notify_dashboard(Repository.skip_planned_slice(repo, work_request_id, id, current_status))
-
-  @spec dispatch_planned_slice(Repository.repo(), String.t(), String.t(), String.t(), String.t()) ::
-          {:ok, PlannedSlice.t()} | {:error, error()}
-  def dispatch_planned_slice(repo, work_request_id, id, current_status, work_package_id),
-    do: notify_dashboard(Repository.dispatch_planned_slice(repo, work_request_id, id, current_status, work_package_id))
-
-  @spec mark_sliced(Repository.repo(), String.t(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error()}
-  def mark_sliced(repo, id, current_status), do: notify_dashboard(Repository.mark_sliced(repo, id, current_status))
+  @spec skip_work_package(Repository.repo(), String.t(), String.t(), String.t()) ::
+          {:ok, WorkPackage.t()} | {:error, error()}
+  def skip_work_package(repo, work_request_id, id, current_status),
+    do: notify_dashboard(Repository.skip_work_package(repo, work_request_id, id, current_status))
 
   @spec list_decisions(Repository.repo(), String.t()) :: {:ok, [DecisionLogEntry.t()]} | {:error, error()}
   def list_decisions(repo, work_request_id), do: Repository.list_decisions(repo, work_request_id)

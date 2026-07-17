@@ -19,19 +19,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionMultiRepoTest do
         repo_scopes: [%{repo: package.repo, base_branch: package.base_branch}]
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-LOCAL-DELIVERY-REPO",
-                 delivery_repo: package.repo,
-                 target_base_branch: package.base_branch,
+                 repo: package.repo,
+                 base_branch: package.base_branch,
                  branch_pattern: package.branch_pattern
                )
              )
 
-    repo.update!(Ecto.Changeset.change(planned_slice, work_package_id: package.id))
+    assert {:ok, _canonical_package} =
+             CanonicalWorkPackageFixtures.dispatch_work_package(
+               repo,
+               work_request.id,
+               work_package.id,
+               "planned",
+               package.id
+             )
+
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
     {response, claimed_server} =

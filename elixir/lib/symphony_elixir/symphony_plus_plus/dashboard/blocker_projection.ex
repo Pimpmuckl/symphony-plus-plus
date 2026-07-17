@@ -52,8 +52,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection do
 
   defp normalize_blocker_endpoint_kind(value) when is_binary(value) do
     case String.trim(value) do
-      "planned_slice" -> "slice"
-      "slice" -> "slice"
       "work_package" -> "work_package"
       _other -> nil
     end

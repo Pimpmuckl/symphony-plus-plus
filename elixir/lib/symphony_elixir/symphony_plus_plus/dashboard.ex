@@ -10,7 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
     BlockerProjection,
     CommentProjection,
-    DeliverySliceProjection,
+    DeliveryWorkPackageProjection,
     MetadataProjection,
     OperationalProjection,
     Sanitizer,
@@ -37,7 +37,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -290,48 +289,48 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
            :ok <- require_visible_work_request_scope(repo, work_request, grant),
            {:ok, questions} <- WorkRequestRepository.list_questions(repo, work_request_id),
            {:ok, decisions} <- WorkRequestRepository.list_decisions(repo, work_request_id),
-           {:ok, planned_slices} <- WorkRequestRepository.list_planned_slices(repo, work_request_id),
-           {:ok, work_package_contexts} <- planned_slice_work_package_contexts_for_grant(repo, planned_slices, grant),
-           delivery_board_opts = delivery_board_opts(work_request, planned_slices, work_package_contexts, opts),
+           {:ok, work_packages} <- WorkRequestRepository.list_work_packages(repo, work_request_id),
+           {:ok, work_package_contexts} <- work_package_work_package_contexts_for_grant(repo, work_packages, grant),
+           delivery_board_opts = delivery_board_opts(work_request, work_packages, work_package_contexts, opts),
            {:ok, delivery_board} <- DeliveryBoard.project(repo, work_request_id, delivery_board_opts),
-           visible_planned_slices = visible_planned_slices(planned_slices, delivery_board),
-           {:ok, comment_context} <- work_request_comment_context(repo, work_request, planned_slices),
+           visible_work_packages = visible_work_packages(work_packages, delivery_board),
+           {:ok, comment_context} <- work_request_comment_context(repo, work_request, work_packages),
            {:ok, repo_identity_catalog} <-
              work_request_detail_repo_identity_catalog_for_grant(repo, grant, [work_request.repo]) do
-        all_planned_slices = ordered_sequence_records(planned_slices)
+        all_work_packages = ordered_sequence_records(work_packages)
         questions = ordered_sequence_records(questions)
         decisions = ordered_sequence_records(decisions)
-        planned_slices = ordered_sequence_records(visible_planned_slices)
+        work_packages = ordered_sequence_records(visible_work_packages)
 
         work_request_payload =
           work_request_payload(
             work_request,
             questions,
-            planned_slices,
+            work_packages,
             work_package_contexts,
             repo_identity_catalog,
             comment_context,
             delivery_board: delivery_board,
             delivery_state_opts: [include_package_fields?: false],
-            comment_planned_slices: all_planned_slices
+            comment_work_packages: all_work_packages
           )
 
-        planned_slice_payloads =
-          planned_slice_payloads(planned_slices, %{}, false, comment_context, delivery_board: delivery_board)
+        work_package_payloads =
+          work_package_payloads(work_packages, %{}, false, comment_context, delivery_board: delivery_board)
 
         {:ok,
          %{
            work_request: work_request_payload,
            clarification_questions: Enum.map(questions, &clarification_question/1),
            decision_logs: Enum.map(decisions, &decision_log_entry/1),
-           planned_slices: planned_slice_payloads,
+           work_packages: work_package_payloads,
            product_tree:
-             ProductTree.project(repo, work_request.id, planned_slice_payloads,
+             ProductTree.project(repo, work_request.id, work_package_payloads,
                visible_only?: true,
-               include_unlinked_nodes?: true
+               include_unowned_nodes?: true
              ),
            comments: CommentProjection.comments_for(comment_context, "work_request", work_request.id),
-           summary: work_request_summary(questions, decisions, planned_slices, comment_context)
+           summary: work_request_summary(questions, decisions, work_packages, comment_context)
          }}
       end
     end)
@@ -388,15 +387,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   @doc false
-  @spec all_planned_slices([WorkRequest.t()], map()) :: [PlannedSlice.t()]
-  def all_planned_slices(work_requests, planned_slices_by_request) do
-    Enum.flat_map(work_requests, &Map.get(planned_slices_by_request, &1.id, []))
+  @spec all_work_packages([WorkRequest.t()], map()) :: [WorkPackage.t()]
+  def all_work_packages(work_requests, work_packages_by_request) do
+    Enum.flat_map(work_requests, &Map.get(work_packages_by_request, &1.id, []))
   end
 
-  defp delivery_board_opts(%WorkRequest{} = work_request, planned_slices, work_package_contexts, _opts) do
+  defp delivery_board_opts(%WorkRequest{} = work_request, work_packages, work_package_contexts, _opts) do
     [
       work_request: work_request,
-      planned_slices: planned_slices,
+      work_packages: work_packages,
       visible_work_package_ids: Map.keys(work_package_contexts),
       work_package_contexts: work_package_contexts
     ]
@@ -1012,66 +1011,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   defp active_blocking_edges_from_card_contexts(_repo, []), do: {:ok, []}
 
-  defp active_blocking_edges_from_card_contexts(repo, contexts) do
-    work_package_ids = Enum.map(contexts, & &1.work_package.id)
-
-    with {:ok, planned_slices_by_work_package_id} <- linked_planned_slices_by_work_package_id(repo, work_package_ids) do
-      edges =
-        contexts
-        |> Enum.flat_map(fn %{work_package: work_package, blockers: blockers} ->
-          linked_planned_slice = Map.get(planned_slices_by_work_package_id, work_package.id)
-
-          blockers
-          |> Enum.filter(& &1.active)
-          |> Enum.map(&active_blocking_edge(&1, work_package, linked_planned_slice))
-        end)
-        |> sort_active_blocking_edges()
-
-      {:ok, edges}
-    end
-  end
-
-  defp linked_planned_slices_by_work_package_id(_repo, []), do: {:ok, %{}}
-
-  defp linked_planned_slices_by_work_package_id(repo, work_package_ids) do
-    planned_slices =
-      repo.all(
-        from(planned_slice in PlannedSlice,
-          where: planned_slice.work_package_id in ^work_package_ids,
-          order_by: [asc: planned_slice.work_package_id, asc: planned_slice.sequence, asc: planned_slice.id]
-        )
-      )
-
-    planned_slices_by_work_package_id =
-      planned_slices
-      |> Enum.group_by(& &1.work_package_id)
-      |> Map.new(fn
-        {work_package_id, [planned_slice]} ->
-          {work_package_id, planned_slice}
-
-        {work_package_id, _duplicates} ->
-          {work_package_id, nil}
+  defp active_blocking_edges_from_card_contexts(_repo, contexts) do
+    edges =
+      contexts
+      |> Enum.flat_map(fn %{work_package: work_package, blockers: blockers} ->
+        blockers
+        |> Enum.filter(& &1.active)
+        |> Enum.map(&active_blocking_edge(&1, work_package))
       end)
+      |> sort_active_blocking_edges()
 
-    {:ok, planned_slices_by_work_package_id}
+    {:ok, edges}
   end
 
-  defp active_blocking_edge(blocker, %WorkPackage{} = work_package, %PlannedSlice{} = planned_slice) do
-    fallback_from = %{kind: "slice", id: planned_slice.id}
+  defp active_blocking_edge(blocker, %WorkPackage{} = work_package) do
+    fallback_from = %{kind: "work_package", id: work_package.id}
     from = blocker.blocked_by || fallback_from
     to = blocker.blocked_item || %{kind: "work_package", id: work_package.id}
 
     blocker
     |> build_active_blocking_edge(work_package, from, to)
-    |> Map.put(:work_request_id, planned_slice.work_request_id)
-    |> Map.put(:planned_slice_id, planned_slice.id)
-  end
-
-  defp active_blocking_edge(blocker, %WorkPackage{} = work_package, _linked_planned_slice) do
-    from = blocker.blocked_by || %{kind: "work_package", id: work_package.id}
-    to = blocker.blocked_item || %{kind: "work_package", id: work_package.id}
-
-    build_active_blocking_edge(blocker, work_package, from, to)
+    |> Map.put(:work_request_id, work_package.work_request_id)
+    |> Map.put(:work_package_id, work_package.id)
   end
 
   defp build_active_blocking_edge(blocker, %WorkPackage{} = work_package, from, to) do
@@ -1260,8 +1221,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     }
   end
 
-  defp work_request_comment_context(repo, %WorkRequest{} = work_request, planned_slices) do
-    comment_context(repo, [{"work_request", work_request.id} | Enum.map(planned_slices, &{"planned_slice", &1.id})])
+  defp work_request_comment_context(repo, %WorkRequest{} = work_request, work_packages) do
+    comment_context(repo, [{"work_request", work_request.id} | Enum.map(work_packages, &{"work_package", &1.id})])
   end
 
   @doc false
@@ -1282,8 +1243,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   @doc false
-  @spec visible_planned_slices([PlannedSlice.t()], map() | nil) :: [PlannedSlice.t()]
-  def visible_planned_slices(planned_slices, delivery_board), do: WorkRequestCards.visible_planned_slices(planned_slices, delivery_board)
+  @spec visible_work_packages([WorkPackage.t()], map() | nil) :: [WorkPackage.t()]
+  def visible_work_packages(work_packages, delivery_board), do: WorkRequestCards.visible_work_packages(work_packages, delivery_board)
 
   defp human_guidance_request_cards(repo, opts) do
     rows =
@@ -1324,7 +1285,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   @spec work_request_payload(
           WorkRequest.t(),
           [ClarificationQuestion.t()],
-          [PlannedSlice.t()],
+          [WorkPackage.t()],
           map(),
           map(),
           map(),
@@ -1333,7 +1294,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   def work_request_payload(
         %WorkRequest{} = work_request,
         questions,
-        planned_slices,
+        work_packages,
         work_package_contexts,
         repo_identity_catalog,
         comment_context,
@@ -1342,7 +1303,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     WorkRequestCards.work_request_payload(
       work_request,
       questions,
-      planned_slices,
+      work_packages,
       work_package_contexts,
       repo_identity_catalog,
       comment_context,
@@ -1412,65 +1373,66 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   @doc false
-  @spec planned_slice_payloads([PlannedSlice.t()], map(), boolean(), map(), keyword()) :: [map()]
-  def planned_slice_payloads(planned_slices, work_package_contexts, include_dispatch_linkage?, comment_context, opts) do
-    delivery_slices_by_id = opts |> Keyword.get(:delivery_board) |> DeliverySliceProjection.slices_by_id()
+  @spec work_package_payloads([WorkPackage.t()], map(), boolean(), map(), keyword()) :: [map()]
+  def work_package_payloads(work_packages, work_package_contexts, include_dispatch_details?, comment_context, opts) do
+    delivery_work_packages_by_id = opts |> Keyword.get(:delivery_board) |> DeliveryWorkPackageProjection.work_packages_by_id()
 
-    Enum.map(planned_slices, fn slice ->
-      planned_slice(slice, work_package_contexts,
-        include_dispatch_linkage?: include_dispatch_linkage?,
+    Enum.map(work_packages, fn slice ->
+      work_package(slice, work_package_contexts,
+        include_dispatch_details?: include_dispatch_details?,
         comment_context: comment_context,
-        delivery_slice: Map.get(delivery_slices_by_id, slice.id)
+        delivery_work_package: Map.get(delivery_work_packages_by_id, slice.id)
       )
     end)
   end
 
-  defp planned_slice(%PlannedSlice{} = planned_slice, work_package_statuses, opts) do
+  defp work_package(%WorkPackage{} = work_package, work_package_statuses, opts) do
     %{
-      id: planned_slice.id,
-      work_request_id: planned_slice.work_request_id,
-      sequence: planned_slice.sequence,
-      title: redacted_text(planned_slice.title),
-      goal: redacted_text(planned_slice.goal),
-      work_package_kind: planned_slice.work_package_kind,
-      delivery_repo: redacted_text(planned_slice.delivery_repo),
-      target_base_branch: planned_slice.target_base_branch,
-      branch_pattern: redacted_text(planned_slice.branch_pattern),
-      owned_file_globs: Enum.map(planned_slice.owned_file_globs || [], &redacted_text/1),
-      forbidden_file_globs: Enum.map(planned_slice.forbidden_file_globs || [], &redacted_text/1),
-      acceptance_criteria: Enum.map(planned_slice.acceptance_criteria || [], &redacted_text/1),
-      validation_steps: Enum.map(planned_slice.validation_steps || [], &redacted_text/1),
-      review: redacted_json(planned_slice.review_requirement),
-      stop_conditions: Enum.map(planned_slice.stop_conditions || [], &redacted_text/1),
-      status: planned_slice.status,
-      inserted_at: timestamp(planned_slice.inserted_at),
-      updated_at: timestamp(planned_slice.updated_at)
+      id: work_package.id,
+      work_request_id: work_package.work_request_id,
+      product_tree_node_id: work_package.product_tree_node_id,
+      sequence: work_package.sequence,
+      title: redacted_text(work_package.title),
+      goal: redacted_text(work_package.goal),
+      kind: work_package.kind,
+      repo: redacted_text(work_package.repo),
+      base_branch: work_package.base_branch,
+      branch_pattern: redacted_text(work_package.branch_pattern),
+      allowed_file_globs: Enum.map(work_package.allowed_file_globs || [], &redacted_text/1),
+      forbidden_file_globs: Enum.map(work_package.forbidden_file_globs || [], &redacted_text/1),
+      acceptance_criteria: Enum.map(work_package.acceptance_criteria || [], &redacted_text/1),
+      validation_steps: Enum.map(work_package.validation_steps || [], &redacted_text/1),
+      review: redacted_json(work_package.review_requirement),
+      stop_conditions: Enum.map(work_package.stop_conditions || [], &redacted_text/1),
+      status: work_package.status,
+      inserted_at: timestamp(work_package.inserted_at),
+      updated_at: timestamp(work_package.updated_at)
     }
-    |> CommentProjection.put_counts(CommentProjection.counts_for(Keyword.get(opts, :comment_context), "planned_slice", planned_slice.id))
-    |> Map.put(:comments, CommentProjection.comments_for(Keyword.get(opts, :comment_context), "planned_slice", planned_slice.id))
-    |> maybe_put_dispatch_linkage(planned_slice, work_package_statuses, opts)
+    |> CommentProjection.put_counts(CommentProjection.counts_for(Keyword.get(opts, :comment_context), "work_package", work_package.id))
+    |> Map.put(:comments, CommentProjection.comments_for(Keyword.get(opts, :comment_context), "work_package", work_package.id))
+    |> maybe_put_dispatch_details(work_package, work_package_statuses, opts)
   end
 
   @doc false
-  @spec compact_planned_slice(map()) :: map()
-  def compact_planned_slice(payload) when is_map(payload) do
+  @spec compact_work_package(map()) :: map()
+  def compact_work_package(payload) when is_map(payload) do
     payload
     |> drop_keys([
       :acceptance_criteria,
       :comments,
       :forbidden_file_globs,
-      :owned_file_globs,
+      :allowed_file_globs,
       :stop_conditions,
       :validation_steps
     ])
-    |> compact_planned_slice_delivery()
+    |> compact_work_package_delivery()
   end
 
-  defp compact_planned_slice_delivery(%{delivery: delivery} = payload) when is_map(delivery) do
+  defp compact_work_package_delivery(%{delivery: delivery} = payload) when is_map(delivery) do
     Map.put(payload, :delivery, compact_delivery_evidence(delivery))
   end
 
-  defp compact_planned_slice_delivery(payload), do: payload
+  defp compact_work_package_delivery(payload), do: payload
 
   @doc false
   @spec compact_delivery_evidence(term()) :: term()
@@ -1491,56 +1453,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     end)
   end
 
-  defp maybe_put_dispatch_linkage(payload, %PlannedSlice{} = planned_slice, work_package_contexts, opts) do
-    delivery_slice = Keyword.get(opts, :delivery_slice)
-    include_dispatch_linkage? = Keyword.get(opts, :include_dispatch_linkage?, false)
-    delivery_opts = [include_delivery_data?: include_dispatch_linkage?]
+  defp maybe_put_dispatch_details(payload, %WorkPackage{} = work_package, work_package_contexts, opts) do
+    delivery_work_package = Keyword.get(opts, :delivery_work_package)
+    include_dispatch_details? = Keyword.get(opts, :include_dispatch_details?, false)
+    delivery_opts = [include_delivery_data?: include_dispatch_details?]
 
-    payload = DeliverySliceProjection.put_delivery_slice(payload, delivery_slice, delivery_opts)
+    payload = DeliveryWorkPackageProjection.put_delivery_work_package(payload, delivery_work_package, delivery_opts)
 
-    if include_dispatch_linkage? do
-      work_package_context = Map.get(work_package_contexts, planned_slice.work_package_id)
+    if include_dispatch_details? do
+      work_package_context = Map.get(work_package_contexts, work_package.id)
 
       payload
-      |> Map.put(:work_package_id, planned_slice.work_package_id)
-      |> Map.put(:work_package_status, linked_work_package_status(work_package_context))
-      |> Map.put(:dispatched_at, timestamp(planned_slice.dispatched_at))
-      |> Map.put(:operational_state, OperationalProjection.planned_slice_operational_state(planned_slice, work_package_context, delivery_slice))
+      |> Map.put(:work_package_id, work_package.id)
+      |> Map.put(:work_package_status, context_work_package_status(work_package_context))
+      |> Map.put(:dispatched_at, timestamp(work_package.dispatched_at))
+      |> Map.put(:operational_state, OperationalProjection.work_package_operational_state(work_package, work_package_context, delivery_work_package))
     else
-      DeliverySliceProjection.put_delivery_operational_state(payload, delivery_slice)
+      DeliveryWorkPackageProjection.put_delivery_operational_state(payload, delivery_work_package)
     end
   end
 
   @doc false
-  @spec planned_slice_work_package_contexts(repo(), [PlannedSlice.t()]) :: {:ok, map()}
-  def planned_slice_work_package_contexts(repo, planned_slices) do
-    work_package_ids =
-      planned_slices
-      |> Enum.map(& &1.work_package_id)
-      |> Enum.filter(&filled_string?/1)
-      |> Enum.uniq()
+  @spec work_package_work_package_contexts(repo(), [WorkPackage.t()]) :: {:ok, map()}
+  def work_package_work_package_contexts(repo, work_packages) do
+    work_packages = Enum.filter(work_packages, &filled_string?(&1.id))
 
-    if work_package_ids == [] do
+    if work_packages == [] do
       {:ok, %{}}
     else
-      work_packages =
-        work_package_ids
-        |> work_package_context_chunks()
-        |> Enum.flat_map(fn work_package_id_chunk ->
-          repo.all(
-            from(work_package in WorkPackage,
-              where: work_package.id in ^work_package_id_chunk
-            )
-          )
-        end)
-
-      {:ok, linked_work_package_contexts(repo, work_packages)}
+      {:ok, work_package_contexts(repo, work_packages)}
     end
   end
 
-  defp planned_slice_work_package_contexts_for_grant(repo, planned_slices, %AccessGrant{} = grant) do
+  defp work_package_work_package_contexts_for_grant(repo, work_packages, %AccessGrant{} = grant) do
     with {:ok, filters} <- work_request_filters_for_grant(repo, grant),
-         {:ok, work_package_contexts} <- planned_slice_work_package_contexts(repo, planned_slices) do
+         {:ok, work_package_contexts} <- work_package_work_package_contexts(repo, work_packages) do
       {:ok,
        Map.filter(work_package_contexts, fn
          {_work_package_id, %{work_package: %WorkPackage{} = work_package}} ->
@@ -1553,10 +1500,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   @doc false
-  @spec linked_work_package_contexts(repo(), [WorkPackage.t()]) :: map()
-  def linked_work_package_contexts(_repo, []), do: %{}
+  @spec work_package_contexts(repo(), [WorkPackage.t()]) :: map()
+  def work_package_contexts(_repo, []), do: %{}
 
-  def linked_work_package_contexts(repo, work_packages) do
+  def work_package_contexts(repo, work_packages) do
     work_package_ids = Enum.map(work_packages, & &1.id)
     progress_events_by_id = grouped_progress_events(repo, work_package_ids)
     plan_nodes_by_id = grouped_plan_nodes(repo, work_package_ids)
@@ -1688,8 +1635,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   defp records_by_work_package_id(records), do: Enum.group_by(records, & &1.work_package_id)
 
   @doc false
-  @spec work_request_summary([ClarificationQuestion.t()], [DecisionLogEntry.t()], [PlannedSlice.t()], map()) :: map()
-  def work_request_summary(questions, decisions, planned_slices, comment_context) do
+  @spec work_request_summary([ClarificationQuestion.t()], [DecisionLogEntry.t()], [WorkPackage.t()], map()) :: map()
+  def work_request_summary(questions, decisions, work_packages, comment_context) do
     comment_counts = CommentProjection.total_counts(comment_context)
 
     %{
@@ -1699,16 +1646,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       decision_count: length(decisions),
       comment_count: comment_counts.comment_count,
       open_comment_count: comment_counts.open_comment_count,
-      planned_slice_count: Enum.count(planned_slices, &(&1.status == "planned")),
-      approved_slice_count: Enum.count(planned_slices, &(&1.status == "approved")),
-      dispatched_slice_count: Enum.count(planned_slices, &(&1.status == "dispatched")),
-      skipped_slice_count: Enum.count(planned_slices, &(&1.status == "skipped"))
+      work_package_count: length(work_packages),
+      planned_work_package_count: Enum.count(work_packages, &(&1.status == "planned")),
+      dispatched_work_package_count: Enum.count(work_packages, &(not is_nil(&1.dispatched_at))),
+      skipped_work_package_count: Enum.count(work_packages, &(&1.status == "skipped"))
     }
   end
 
   @doc false
-  @spec work_request_board_summary([ClarificationQuestion.t()], [PlannedSlice.t()], map()) :: map()
-  def work_request_board_summary(questions, planned_slices, comment_context) do
+  @spec work_request_board_summary([ClarificationQuestion.t()], [WorkPackage.t()], map()) :: map()
+  def work_request_board_summary(questions, work_packages, comment_context) do
     comment_counts = CommentProjection.total_counts(comment_context)
 
     %{
@@ -1717,10 +1664,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       closed_question_count: Enum.count(questions, &(&1.status == "closed")),
       comment_count: comment_counts.comment_count,
       open_comment_count: comment_counts.open_comment_count,
-      planned_slice_count: Enum.count(planned_slices, &(&1.status == "planned")),
-      approved_slice_count: Enum.count(planned_slices, &(&1.status == "approved")),
-      dispatched_slice_count: Enum.count(planned_slices, &(&1.status == "dispatched")),
-      skipped_slice_count: Enum.count(planned_slices, &(&1.status == "skipped"))
+      work_package_count: length(work_packages),
+      planned_work_package_count: Enum.count(work_packages, &(&1.status == "planned")),
+      dispatched_work_package_count: Enum.count(work_packages, &(not is_nil(&1.dispatched_at))),
+      skipped_work_package_count: Enum.count(work_packages, &(&1.status == "skipped"))
     }
   end
 
@@ -1848,8 +1795,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   defp pr_required?(%WorkPackage{} = work_package), do: OperationalProjection.pr_required?(work_package)
   defp required_gate?(%WorkPackage{} = work_package, gate), do: OperationalProjection.required_gate?(work_package, gate)
 
-  defp linked_work_package_status(%{work_package: %WorkPackage{status: status}}), do: status
-  defp linked_work_package_status(_work_package_context), do: nil
+  defp context_work_package_status(%{work_package: %WorkPackage{status: status}}), do: status
+  defp context_work_package_status(_work_package_context), do: nil
 
   defp actor(event), do: BlockerProjection.actor(event)
   defp grant_status(%AccessGrant{revoked_at: %DateTime{}}), do: "revoked"

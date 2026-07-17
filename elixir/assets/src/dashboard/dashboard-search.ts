@@ -1,4 +1,4 @@
-import type { PlannedSlice, WorkPackageCard, WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
+import type { WorkRequestPackage, WorkPackageCard, WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
 import type { ProductTreeNode } from "@/types/product-tree";
 
 import type { RepoSummary } from "./dashboard-data";
@@ -29,7 +29,7 @@ export function filterWorkstreamsBySearch(
     const repoMatches = matchesTerms(terms, repoFields(repo));
     const matchedPackageIds = new Set(repo.packages.filter((pkg) => matchesTerms(terms, packageFields(pkg))).map((pkg) => pkg.id));
     const matchedDetails = details.filter((detail) => matchesTerms(terms, requestDetailFields(detail)) || detailHasPackage(detail, matchedPackageIds));
-    const visiblePackageIds = new Set(matchedDetails.flatMap((detail) => (detail.planned_slices ?? []).map((slice) => slice.work_package_id).filter(Boolean)));
+    const visiblePackageIds = new Set(matchedDetails.flatMap((detail) => (detail.work_packages ?? []).map((slice) => slice.work_package_id).filter(Boolean)));
     const visibleRequestIds = new Set(matchedDetails.map((detail) => detail.work_request.id));
     const packages = repo.packages.filter((pkg) => matchedPackageIds.has(pkg.id) || visiblePackageIds.has(pkg.id));
     const requests = repo.requests.filter((request) => visibleRequestIds.has(request.id) || matchesTerms(terms, requestFields(request)));
@@ -84,7 +84,7 @@ function requestDetailFields(detail: WorkRequestDetail) {
     ...(detail.clarification_questions ?? []).map((question) => question.id),
     ...(detail.decision_logs ?? []).map((decision) => decision.id),
     ...(detail.product_tree?.nodes ?? []).flatMap(productNodeFields),
-    ...(detail.planned_slices ?? []).flatMap(sliceFields),
+    ...(detail.work_packages ?? []).flatMap(sliceFields),
   ];
 }
 
@@ -96,8 +96,8 @@ function packageFields(pkg: WorkPackageCard) {
   return [pkg.id, pkg.title, pkg.status, pkg.kind, pkg.base_branch];
 }
 
-function sliceFields(slice: PlannedSlice) {
-  return [slice.id, slice.title, slice.status, slice.work_package_id, slice.work_package_status, slice.work_package_kind, slice.target_base_branch];
+function sliceFields(slice: WorkRequestPackage) {
+  return [slice.id, slice.title, slice.status, slice.work_package_id, slice.work_package_status, slice.kind, slice.base_branch];
 }
 
 function productNodeFields(node: ProductTreeNode) {
@@ -105,5 +105,5 @@ function productNodeFields(node: ProductTreeNode) {
 }
 
 function detailHasPackage(detail: WorkRequestDetail, packageIds: Set<string>) {
-  return (detail.planned_slices ?? []).some((slice) => Boolean(slice.work_package_id && packageIds.has(slice.work_package_id)));
+  return (detail.work_packages ?? []).some((slice) => Boolean(slice.work_package_id && packageIds.has(slice.work_package_id)));
 }

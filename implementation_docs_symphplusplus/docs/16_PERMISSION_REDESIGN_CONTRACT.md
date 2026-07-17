@@ -2,7 +2,7 @@
 
 This is the target contract for the Symphony++ permission redesign.
 
-The goal is not to replace WorkRequests, planned slices, WorkPackages,
+The goal is not to replace WorkRequests, WorkPackages, WorkPackages,
 questions, comments, planning/progress/findings, blockers, decisions, review
 evidence, delivery closeout, or reconciliation. Those remain the product model.
 
@@ -22,7 +22,7 @@ Human / Operator
 Architect
 |-- broad redacted read across local operational state
 |   |-- WorkRequests
-|   |-- planned slices
+|   |-- WorkPackages
 |   |-- WorkPackages
 |   |-- comments / guidance / blockers
 |   |-- progress / findings / review evidence
@@ -71,7 +71,7 @@ ledger
     |-- clarification_questions
     |-- decision_log
     |-- comments
-    |-- planned_slices
+    |-- work_packages
     |   |-- comments
     |   |-- delivery_closeout
     |   `-- work_package
@@ -98,7 +98,7 @@ boundary.
 | `work_request` | Architect | Write authority over the claimed WR and descendants. |
 | `work_package` | Worker | Write authority inside exactly one WP. |
 | `repo` | Architect or WR metadata | Discovery and multi-repo composition, not broad mutation by itself. |
-| `planned_slice` | Rare explicit grant | Prefer reaching slices through WR or WP lineage. |
+| `work_package` | Rare explicit grant | Prefer reaching slices through WR or WP lineage. |
 
 Architects also have broad redacted read visibility over operational state so
 they can avoid duplicate work, understand dependencies, and scope slices
@@ -115,8 +115,8 @@ work_request_read
 work_request_update
 question_create / question_answer / question_close
 decision_record
-planned_slice_create / planned_slice_update / planned_slice_approve
-planned_slice_skip / planned_slice_dispatch
+work_package_create / work_package_update / work_package_approve
+work_package_skip / work_package_dispatch
 work_package_read / work_package_update / work_package_repair_state
 task_plan_read / task_plan_update
 progress_append / finding_append
@@ -236,7 +236,7 @@ not authorize WorkRequest mutation, and workers remain limited to one
 `work_package` scope.
 
 This slice does not force full multi-repo dashboard, dispatch, or worker-UX
-behavior. Planned slices and WorkPackages remain single-repo execution units
+behavior. WorkPackages and WorkPackages remain single-repo execution units
 until a later slice adds explicit per-slice repo selection.
 
 ## Reviewable PR Slices
@@ -244,7 +244,7 @@ until a later slice adds explicit per-slice repo selection.
 1. Policy skeleton and target contract, with no behavior change.
 2. Tool discovery cleanup.
 3. Explicit grant scopes and grant-to-actor resolution.
-4. WorkRequest and planned-slice authorization through policy.
+4. WorkRequest and work-package authorization through policy.
 5. Delivery board, reconciliation, closeout, and safe repair through policy.
 6. Comments, guidance, blockers, and planning authorization through policy.
 7. Human/operator actor and audit for dangerous actions.

@@ -102,15 +102,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
                "answer_question_and_record_decision",
                "close_question",
                "record_decision",
-               "plan_slice",
+               "slice_work_request",
+               "update_work_package",
                "upsert_plan_node",
                "move_plan_node",
                "set_plan_node_completion",
-               "move_slice_to_plan_node",
-               "approve_slice",
-               "skip_slice",
-               "finish_slicing",
-               "dispatch_slice"
+               "skip_work_package",
+               "dispatch_work_package"
              ],
              &Map.has_key?(claimed_tools_by_name, &1)
            )
@@ -132,34 +130,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert get_in(old_name_response, ["error", "code"]) == -32_601
     assert get_in(old_name_response, ["error", "data", "tool"]) == "read_work_request_product_tree"
 
-    assert get_in(claimed_tools_by_name, ["plan_slice", "inputSchema", "required"]) == [
-             "title",
-             "goal",
-             "owned_file_globs",
-             "acceptance_criteria",
-             "validation_steps",
-             "stop_conditions"
+    assert get_in(claimed_tools_by_name, ["slice_work_request", "inputSchema", "required"]) == ["work_packages"]
+
+    assert get_in(claimed_tools_by_name, ["update_work_package", "inputSchema", "required"]) == [
+             "work_package_id",
+             "expected_contract_revision",
+             "patch"
            ]
 
-    assert get_in(claimed_tools_by_name, ["plan_slice", "inputSchema", "properties", "work_package_kind", "default"]) ==
-             "standard_pr"
-
-    assert get_in(claimed_tools_by_name, ["plan_slice", "description"]) =~ "mcp is MCP server"
-
-    assert get_in(claimed_tools_by_name, ["plan_slice", "inputSchema", "properties", "work_request_id", "description"]) =~
-             "claimed architect WorkRequest"
-
-    assert get_in(claimed_tools_by_name, ["approve_slice", "inputSchema", "required"]) == [
-             "planned_slice_id",
+    assert get_in(claimed_tools_by_name, ["skip_work_package", "inputSchema", "required"]) == [
+             "work_package_id",
              "current_status"
            ]
-
-    assert get_in(claimed_tools_by_name, ["skip_slice", "inputSchema", "required"]) == [
-             "planned_slice_id",
-             "current_status"
-           ]
-
-    assert get_in(claimed_tools_by_name, ["finish_slicing", "inputSchema", "required"]) == ["current_status"]
 
     {default_owner_response, _default_owner_server} =
       Server.handle_state(
@@ -427,9 +409,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
                work_request_decision_attrs(id: "WRD-MCP-WR-1", decision: "Use https://example.test/path?sig=raw-secret-value")
              )
 
-    assert {:ok, _planned} = WorkRequestRepository.add_planned_slice(repo, in_scope.id, work_request_planned_slice_attrs(id: "WRS-MCP-WR-PLANNED"))
-    assert {:ok, approved} = WorkRequestRepository.add_planned_slice(repo, in_scope.id, work_request_planned_slice_attrs(id: "WRS-MCP-WR-APPROVED"))
-    assert {:ok, skipped} = WorkRequestRepository.add_planned_slice(repo, in_scope.id, work_request_planned_slice_attrs(id: "WRS-MCP-WR-SKIPPED"))
+    assert {:ok, _planned} = CanonicalWorkPackageFixtures.add_work_package(repo, in_scope.id, work_request_work_package_attrs(id: "WRS-MCP-WR-PLANNED"))
+    assert {:ok, approved} = CanonicalWorkPackageFixtures.add_work_package(repo, in_scope.id, work_request_work_package_attrs(id: "WRS-MCP-WR-APPROVED"))
+    assert {:ok, skipped} = CanonicalWorkPackageFixtures.add_work_package(repo, in_scope.id, work_request_work_package_attrs(id: "WRS-MCP-WR-SKIPPED"))
     repo.update!(Ecto.Changeset.change(approved, status: "approved"))
     repo.update!(Ecto.Changeset.change(skipped, status: "skipped"))
 
@@ -460,7 +442,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
 
     refute Map.has_key?(listed_work_request, "open_question_count")
     refute Map.has_key?(listed_work_request, "decision_count")
-    refute Map.has_key?(listed_work_request, "planned_slice_count")
+    refute Map.has_key?(listed_work_request, "work_package_count")
 
     read_response = mcp_tool(repo, session, "read_work_request", %{"work_request_id" => in_scope.id})
     read_payload = get_in(read_response, ["result", "structuredContent"])
@@ -473,23 +455,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert Enum.map(read_payload["decision_log_entries"], & &1["id"]) == ["WRD-MCP-WR-1"]
     assert Enum.at(read_payload["decision_log_entries"], 0)["decision"] =~ "[REDACTED]"
 
-    assert Enum.map(read_payload["planned_slices"], & &1["id"]) == [
+    assert Enum.map(read_payload["work_packages"], & &1["id"]) == [
              "WRS-MCP-WR-PLANNED",
              "WRS-MCP-WR-APPROVED",
              "WRS-MCP-WR-SKIPPED"
            ]
 
-    assert Enum.at(read_payload["planned_slices"], 0)["review"] == nil
+    assert Enum.at(read_payload["work_packages"], 0)["review"] == nil
 
     assert read_payload["summary"] == %{
              "open_question_count" => 1,
              "answered_question_count" => 1,
              "closed_question_count" => 1,
              "decision_count" => 1,
-             "planned_slice_count" => 1,
-             "approved_slice_count" => 1,
-             "dispatched_slice_count" => 0,
-             "skipped_slice_count" => 1
+             "work_package_count" => 3,
+             "planned_work_package_count" => 1,
+             "dispatched_work_package_count" => 0,
+             "skipped_work_package_count" => 1
            }
 
     refute inspect(list_response) =~ "WR-MCP-WR-OTHER-REPO"
@@ -508,72 +490,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
              repo.aggregate(ProgressEvent, :count),
              repo.aggregate(Artifact, :count)
            } == counts_before
-  end
-
-  test "planned slice add advances answered clarification WorkRequest after MCP read", %{repo: repo} do
-    {anchor, session, _grant} =
-      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-CLARIFIED-SLICE", [
-        "read:work_request",
-        "write:work_request"
-      ])
-
-    work_request =
-      create_work_request!(repo,
-        id: "WR-MCP-WR-CLARIFIED-SLICE",
-        repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "clarifying"
-      )
-
-    assert {:ok, question} =
-             WorkRequestRepository.ask_question(repo, work_request.id, work_request_question_attrs(id: "WRQ-MCP-WR-CLARIFIED-SLICE"))
-
-    assert {:ok, _answered} =
-             WorkRequestRepository.answer_question(repo, question.id, "open", %{
-               answer: "Implement the shared WorkRequest service path.",
-               answered_by: "operator-1"
-             })
-
-    read_response = mcp_tool(repo, session, "read_work_request", %{"work_request_id" => work_request.id})
-    assert get_in(read_response, ["result", "structuredContent", "work_request", "status"]) == "clarifying"
-    assert get_in(read_response, ["result", "structuredContent", "summary", "open_question_count"]) == 0
-
-    add_args = %{
-      "work_request_id" => work_request.id,
-      "title" => "Unlock clarified slicing",
-      "goal" => "Let architects add slices after questions are answered.",
-      "work_package_kind" => "mcp",
-      "target_base_branch" => anchor.base_branch,
-      "owned_file_globs" => ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/service.ex"],
-      "forbidden_file_globs" => [],
-      "acceptance_criteria" => ["Answered clarification questions no longer require manual status ceremony."],
-      "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp/work_request_tools_01_test.exs"],
-      "review" => %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
-      "stop_conditions" => ["Do not bypass open questions."]
-    }
-
-    add_response = mcp_tool(repo, session, "plan_slice", add_args)
-    add_payload = get_in(add_response, ["result", "structuredContent"])
-
-    assert add_payload["work_request"]["status"] == "ready_for_slicing"
-    assert get_in(add_payload, ["planned_slice", "status"]) == "planned"
-    assert add_payload["status"] == %{"work_request_status" => "ready_for_slicing", "planned_slice_status" => "planned"}
-
-    blocked =
-      create_work_request!(repo,
-        id: "WR-MCP-WR-OPEN-QUESTION-SLICE",
-        repo: anchor.repo,
-        base_branch: anchor.base_branch,
-        status: "clarifying"
-      )
-
-    assert {:ok, _open_question} =
-             WorkRequestRepository.ask_question(repo, blocked.id, work_request_question_attrs(id: "WRQ-MCP-WR-OPEN-QUESTION-SLICE"))
-
-    blocked_response = mcp_tool(repo, session, "plan_slice", Map.put(add_args, "work_request_id", blocked.id))
-
-    assert get_in(blocked_response, ["error", "data", "reason"]) == "open_questions"
-    assert get_in(blocked_response, ["error", "data", "message"]) =~ "Answer or close all open clarification questions"
   end
 
   test "architect-facing MCP reads emit TOON text without changing structured WorkRequest truth", %{repo: repo} do
@@ -609,62 +525,48 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
                work_request_decision_attrs(
                  id: "WRD-MCP-WR-TOON",
                  decision: "Use one worker package.",
-                 rationale: "Delivery sequencing stays in the planned slices.",
+                 rationale: "Delivery sequencing stays in the WorkPackages.",
                  scope_impact: "No lifecycle state is inferred from this decision."
                )
              )
 
     assert {:ok, dispatched_slice} =
-             WorkRequestRepository.add_planned_slice(
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-WR-TOON-DISPATCHED",
                  title: "Implement TOON MCP text",
-                 target_base_branch: anchor.base_branch,
+                 base_branch: anchor.base_branch,
                  branch_pattern: "feat/toon-architect-context"
                )
              )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-WR-TOON-PLANNED",
                  title: "Follow-up dashboard markdown",
-                 target_base_branch: anchor.base_branch,
+                 base_branch: anchor.base_branch,
                  branch_pattern: "feat/toon-dashboard-followup"
                )
              )
 
-    assert {:ok, approved_slice} = WorkRequestRepository.approve_planned_slice(repo, work_request.id, dispatched_slice.id, "planned")
-
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-TOON-DELIVERY",
-                 kind: approved_slice.work_package_kind,
-                 title: approved_slice.title,
-                 repo: work_request.repo,
-                 base_branch: approved_slice.target_base_branch,
-                 branch_pattern: approved_slice.branch_pattern,
-                 phase_id: anchor.phase_id,
-                 product_description: work_request.human_description,
-                 engineering_scope: approved_slice.goal,
-                 allowed_file_globs: approved_slice.owned_file_globs,
-                 acceptance_criteria: approved_slice.acceptance_criteria,
-                 status: "ci_waiting"
-               )
-             )
-
-    assert {:ok, _linked_slice} = WorkRequestRepository.dispatch_planned_slice(repo, work_request.id, approved_slice.id, "approved", package.id)
+    package =
+      repo.update!(
+        Ecto.Changeset.change(dispatched_slice,
+          status: "ci_waiting",
+          phase_id: anchor.phase_id,
+          dispatched_at: DateTime.utc_now(:microsecond)
+        )
+      )
 
     assert {:ok, _comment} =
              CommentService.create(repo, %{
-               target_kind: "planned_slice",
-               target_id: approved_slice.id,
+               target_kind: "work_package",
+               target_id: package.id,
                body: "Comment before merge",
                source_type: "architect",
                author_name: "architect-1"
@@ -711,15 +613,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     read_response = mcp_tool(repo, session, "read_work_request", %{"work_request_id" => work_request.id})
     read_text = get_in(read_response, ["result", "content", Access.at(0), "text"])
 
-    assert get_in(read_response, ["result", "structuredContent", "planned_slices", Access.at(0), "id"]) == approved_slice.id
-    assert get_in(read_response, ["result", "structuredContent", "planned_slices", Access.at(1), "id"]) == planned_slice.id
+    assert get_in(read_response, ["result", "structuredContent", "work_packages", Access.at(0), "id"]) == package.id
+    assert get_in(read_response, ["result", "structuredContent", "work_packages", Access.at(1), "id"]) == work_package.id
     assert read_text =~ "agent_context: work_request_read"
     assert read_text =~ "decision_log_semantics: rationale_not_lifecycle_truth"
     assert read_text =~ "Record the human outcome before slicing."
     assert read_text =~ "allowed_paths"
     assert read_text =~ "elixir/lib"
     assert read_text =~ "decisions_as_rationale[1]"
-    assert read_text =~ "planned_slices[2]"
+    assert read_text =~ "work_packages[2]"
     assert read_text =~ "WRS-MCP-WR-TOON-DISPATCHED"
     assert read_text =~ "Expose scoped read-only WorkRequest MCP payloads."
     assert read_text =~ "elixir/lib/symphony_elixir/symphony_plus_plus/mcp/server.ex"
@@ -729,9 +631,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     board_response = mcp_tool(repo, session, "read_delivery_board", %{"work_request_id" => work_request.id})
     board_text = get_in(board_response, ["result", "content", Access.at(0), "text"])
 
-    assert get_in(board_response, ["result", "structuredContent", "delivery_board", "slices", Access.at(0), "work_package", "blocker_state", "active?"]) == true
+    assert get_in(board_response, ["result", "structuredContent", "delivery_board", "work_packages", Access.at(0), "work_package", "blocker_state", "active?"]) == true
     assert board_text =~ "agent_context: work_request_delivery_board"
-    assert board_text =~ "slices[2]"
+    assert board_text =~ "work_packages[2]"
     assert board_text =~ "toon-guidance"
     assert board_text =~ "active_blocker"
     assert board_text =~ "https://github.com/#{package.repo}/pull/44"
@@ -746,8 +648,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
 
     list_comments_response =
       mcp_tool(repo, session, "list_comments", %{
-        "target_kind" => "planned_slice",
-        "target_id" => approved_slice.id
+        "target_kind" => "work_package",
+        "target_id" => package.id
       })
 
     assert [%{"body" => "Comment before merge"}] = get_in(list_comments_response, ["result", "structuredContent", "comments"])

@@ -3,10 +3,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, SoloTools}
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{Node, SliceLink}
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @health_tool "sympp.health"
@@ -87,9 +87,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "resolve_blocker",
     "read_delivery_board",
     "reconcile_work_request",
-    "cleanup_work_request_planned_slice_runtime",
-    "record_planned_slice_delivery",
-    "revoke_planned_slice_worker_key",
+    "cleanup_work_request_work_package_runtime",
+    "record_work_package_delivery",
+    "revoke_work_package_worker_key",
     "list_guidance_requests",
     "read_guidance_request",
     "answer_guidance_request",
@@ -100,15 +100,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "answer_question_and_record_decision",
     "close_question",
     "record_decision",
-    "plan_slice",
+    "slice_work_request",
+    "update_work_package",
     "upsert_plan_node",
     "move_plan_node",
     "set_plan_node_completion",
-    "move_slice_to_plan_node",
-    "approve_slice",
-    "skip_slice",
-    "finish_slicing",
-    "dispatch_slice",
+    "skip_work_package",
+    "dispatch_work_package",
     "prepare_work_package_worktree",
     "cleanup_work_package_worktree",
     "read_child_status",
@@ -128,42 +126,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "answer_question_and_record_decision",
     "close_question",
     "record_decision",
-    "plan_slice",
+    "slice_work_request",
+    "update_work_package",
     "upsert_plan_node",
     "move_plan_node",
     "set_plan_node_completion",
-    "move_slice_to_plan_node",
-    "approve_slice",
-    "skip_slice",
-    "finish_slicing",
-    "dispatch_slice"
+    "skip_work_package",
+    "dispatch_work_package"
   ]
   @current_work_request_write_tools [
-    "plan_slice",
+    "slice_work_request",
+    "update_work_package",
     "upsert_plan_node",
     "move_plan_node",
     "set_plan_node_completion",
-    "move_slice_to_plan_node",
-    "approve_slice",
-    "skip_slice",
-    "finish_slicing"
+    "skip_work_package"
   ]
   @current_work_request_tools @current_work_request_write_tools ++
                                 [
                                   "read_delivery_board",
                                   "reconcile_work_request",
-                                  "cleanup_work_request_planned_slice_runtime",
-                                  "record_planned_slice_delivery",
-                                  "revoke_planned_slice_worker_key",
-                                  "dispatch_slice"
+                                  "cleanup_work_request_work_package_runtime",
+                                  "record_work_package_delivery",
+                                  "revoke_work_package_worker_key",
+                                  "dispatch_work_package"
                                 ]
   @delivery_policy_tools [
     "reconcile_work_request",
-    "cleanup_work_request_planned_slice_runtime",
-    "record_planned_slice_delivery",
-    "revoke_planned_slice_worker_key"
+    "cleanup_work_request_work_package_runtime",
+    "record_work_package_delivery",
+    "revoke_work_package_worker_key"
   ]
-  @work_request_product_tree_views ["nodes_only", "nodes_with_slice_refs", "nodes_with_slices"]
+  @work_request_product_tree_views ["nodes_only", "nodes_with_work_package_refs", "nodes_with_work_packages"]
   @type tool_name :: String.t()
   @type input_schema :: map()
   @type tool_spec :: map()
@@ -337,20 +331,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp architect_tool_description("mint_child_worker_key"), do: "Mint a narrower worker grant for a phase-child work package in the architect grant's current phase."
   defp architect_tool_description("revoke_child_worker_key"), do: "Revoke one live child-worker grant for a same-phase child package in the architect grant's current phase."
   defp architect_tool_description("list_work_requests"), do: "List WorkRequests scoped to the architect grant's repo and base branch."
-  defp architect_tool_description("read_work_request"), do: "Read a scoped WorkRequest with clarification questions, decisions, visible planned slices, and status summaries."
-  defp architect_tool_description("read_plan"), do: "Read the scoped WorkRequest V3 product-tree projection, with optional slice refs or full visible slice payloads."
+  defp architect_tool_description("read_work_request"), do: "Read a scoped WorkRequest with clarification questions, decisions, visible WorkPackages, and status summaries."
+  defp architect_tool_description("read_plan"), do: "Read the scoped WorkRequest V3 product-tree projection, with optional WorkPackage refs or full visible WorkPackage payloads."
   defp architect_tool_description("add_comment"), do: "Add a policy-scoped comment to a claimed WorkRequest descendant package surface, or a narrow external comment to a visible WorkRequest."
-  defp architect_tool_description("list_comments"), do: "List comments attached to a scoped WorkRequest, planned slice, or linked WorkPackage."
+  defp architect_tool_description("list_comments"), do: "List comments attached to a scoped WorkRequest or WorkPackage."
   defp architect_tool_description("resolve_comment"), do: "Resolve a policy-scoped comment attached to a claimed WorkRequest descendant package surface."
   defp architect_tool_description("resolve_blocker"), do: "Resolve a blocker event for a policy-scoped descendant WorkPackage."
-  defp architect_tool_description("read_delivery_board"), do: "Read the scoped WorkRequest delivery-board projection for visible planned-slice closeout without broad package visibility."
+  defp architect_tool_description("read_delivery_board"), do: "Read the scoped WorkRequest delivery-board projection for visible work-package closeout without broad package visibility."
   defp architect_tool_description("reconcile_work_request"), do: "Dry-run or apply deterministic WorkRequest delivery closeout repairs from structured PR/GitHub evidence."
 
-  defp architect_tool_description("record_planned_slice_delivery") do
-    "Record an idempotent planned-slice delivery closeout. Required evidence depends on outcome: pr_merged needs PR evidence, completed_no_pr needs direct evidence, superseded needs successor and reason, and abandoned needs rationale. Use abandoned for cleaned no-code failed dispatches that never reached implementation. If the linked WorkPackage has active blockers, answer blocker_closeout to say whether those blockers are resolved or intentionally still active."
+  defp architect_tool_description("record_work_package_delivery") do
+    "Record an idempotent work-package delivery closeout. Required evidence depends on outcome: pr_merged needs PR evidence, completed_no_pr needs direct evidence, superseded needs successor and reason, and abandoned needs rationale. Use abandoned for cleaned no-code failed dispatches that never reached implementation. If the WorkPackage has active blockers, answer blocker_closeout to say whether those blockers are resolved or intentionally still active."
   end
 
-  defp architect_tool_description(tool) when tool in ["cleanup_work_request_planned_slice_runtime", "revoke_planned_slice_worker_key"],
+  defp architect_tool_description(tool) when tool in ["cleanup_work_request_work_package_runtime", "revoke_work_package_worker_key"],
     do: delivery_runtime_tool_description(tool)
 
   defp architect_tool_description("list_guidance_requests"), do: "List package-scoped guidance requests visible to the architect grant's phase, repo, and base branch."
@@ -366,11 +360,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp architect_tool_description("record_decision"),
     do: "Record a durable decision log entry on a scoped WorkRequest. source_type must be one of: #{Enum.join(DecisionLogEntry.source_types(), ", ")}."
 
-  defp architect_tool_description("plan_slice"),
-    do: "Add a slice; standard_pr is ordinary PR work, while mcp is MCP server, protocol, tool, or plugin work."
+  defp architect_tool_description("slice_work_request"),
+    do: "Atomically slice the claimed WorkRequest into canonical WorkPackages."
+
+  defp architect_tool_description("update_work_package"),
+    do: "Update one canonical WorkPackage contract using its optimistic contract revision."
 
   defp architect_tool_description("upsert_plan_node") do
-    "Create or edit V3 product plan node content inside the claimed current WorkRequest. Do not create a plan node solely to wrap one slice. Leave simple slices direct unless the node groups multiple units or records a real product boundary."
+    "Create or edit V3 product plan node content inside the claimed current WorkRequest. Do not create a plan node solely to wrap one WorkPackage."
   end
 
   defp architect_tool_description("move_plan_node") do
@@ -381,24 +378,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "Set a V3 product plan node completion mark inside the claimed current WorkRequest. If setting completion_mark to done or deferred and descendant blockers are active, answer blocker_closeout before completing the node."
   end
 
-  defp architect_tool_description("move_slice_to_plan_node") do
-    "Move a planned slice under a V3 product plan node in the claimed current WorkRequest, or unlink it back to the WorkRequest's direct slice list."
+  defp architect_tool_description("skip_work_package") do
+    "Skip a WorkPackage that belongs to the claimed current WorkRequest."
   end
 
-  defp architect_tool_description("approve_slice") do
-    "Approve a planned slice that belongs to the claimed current WorkRequest."
-  end
-
-  defp architect_tool_description("skip_slice") do
-    "Skip a planned slice that belongs to the claimed current WorkRequest."
-  end
-
-  defp architect_tool_description("finish_slicing") do
-    "Mark the claimed current WorkRequest sliced using the existing approved-slice requirement."
-  end
-
-  defp architect_tool_description("dispatch_slice") do
-    "Dispatch one approved planned slice into a WorkPackage and redacted ledger-backed worker claim bootstrap."
+  defp architect_tool_description("dispatch_work_package") do
+    "Activate one planned WorkPackage and return its redacted ledger-backed worker claim bootstrap."
   end
 
   defp architect_tool_description("prepare_work_package_worktree") do
@@ -587,7 +572,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
       }),
       ["body"]
     )
-    |> require_comment_target_id_for_explicit_non_package_target()
+    |> require_comment_target_id_for_explicit_work_request()
   end
 
   def worker_tool_input_schema("list_comments") do
@@ -598,7 +583,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
       }),
       []
     )
-    |> require_comment_target_id_for_explicit_non_package_target()
+    |> require_comment_target_id_for_explicit_work_request()
   end
 
   def worker_tool_input_schema("resolve_comment") do
@@ -717,7 +702,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         "view" =>
           @work_request_product_tree_views
           |> string_enum_schema()
-          |> Map.put("description", "Projection size. Defaults to nodes_with_slice_refs.")
+          |> Map.put("description", "Projection size. Defaults to nodes_with_work_package_refs.")
       },
       ["work_request_id"]
     )
@@ -748,23 +733,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         "work_request_id" => current_work_request_id_schema(),
         "apply" =>
           boolean_schema()
-          |> Map.put("description", "When false or omitted, only report proposed closeout repairs. When true, apply through record_planned_slice_delivery."),
+          |> Map.put("description", "When false or omitted, only report proposed closeout repairs. When true, apply through record_work_package_delivery."),
         "recorded_by" => described_string_schema("Optional closeout actor for applied repairs. Defaults to the claimed architect identity.")
       },
       []
     )
   end
 
-  def architect_tool_input_schema(tool) when tool in ["cleanup_work_request_planned_slice_runtime", "revoke_planned_slice_worker_key"],
+  def architect_tool_input_schema(tool) when tool in ["cleanup_work_request_work_package_runtime", "revoke_work_package_worker_key"],
     do: delivery_runtime_tool_input_schema(tool)
 
-  def architect_tool_input_schema("record_planned_slice_delivery") do
+  def architect_tool_input_schema("record_work_package_delivery") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
-        "planned_slice_id" => described_string_schema("Planned slice id within the WorkRequest."),
+        "work_package_id" => described_string_schema("WorkPackage id within the WorkRequest."),
         "outcome" =>
-          PlannedSliceDelivery.outcomes()
+          WorkPackageDelivery.outcomes()
           |> string_enum_schema()
           |> Map.put(
             "description",
@@ -772,10 +757,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
           ),
         "idempotency_key" => described_string_schema("Stable caller-provided key for replay. Reusing the same key and evidence returns the existing delivery; conflicting evidence is rejected."),
         "recorded_by" => described_string_schema("Optional closeout actor. Defaults to the claimed architect identity."),
-        "evidence" => planned_slice_delivery_evidence_schema(),
+        "evidence" => work_package_delivery_evidence_schema(),
         "blocker_closeout" => blocker_closeout_schema()
       },
-      ["planned_slice_id", "outcome", "idempotency_key", "evidence"]
+      ["work_package_id", "outcome", "idempotency_key", "evidence"]
     )
   end
 
@@ -935,37 +920,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("plan_slice") do
+  def architect_tool_input_schema("slice_work_request") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
-        "title" => string_schema(),
-        "goal" => string_schema(),
-        "work_package_kind" => Map.put(string_enum_schema(WorkPackage.planned_slice_kinds()), "default", "standard_pr"),
-        "delivery_repo" => described_string_schema("Optional delivery repo for this planned slice. Defaults to the parent WorkRequest primary repo and must be listed in the WorkRequest repo scopes."),
-        "target_base_branch" =>
-          described_string_schema(
-            "Optional delivery base branch for the planned slice and created WorkPackage. Defaults to the selected WorkRequest base branch for its primary repo; pass it when selecting a secondary delivery repo. Worktree preparation must use the effective package base branch."
-          ),
-        "owned_file_globs" =>
-          described_string_array_schema(
-            "Repo-relative slash-separated owned file globs. `**` must be a complete path segment, for example `scripts/**/deploy*.ps1`; invalid examples include `scripts/**deploy**` and `packages/**kraken_batch**`."
-          ),
-        "forbidden_file_globs" => described_string_array_schema("Optional forbidden file globs. Defaults to an empty list."),
-        "acceptance_criteria" => string_array_schema(),
-        "validation_steps" => string_array_schema(),
-        "review" => review_requirement_schema(),
-        "stop_conditions" => string_array_schema(),
-        "branch_pattern" => described_string_schema("Optional exact branch or {{placeholder}} template. Git wildcard patterns such as `*` are not supported.")
+        "work_packages" => %{
+          "type" => "array",
+          "minItems" => 1,
+          "items" => work_package_contract_schema()
+        }
       },
-      [
-        "title",
-        "goal",
-        "owned_file_globs",
-        "acceptance_criteria",
-        "validation_steps",
-        "stop_conditions"
-      ]
+      ["work_packages"]
+    )
+  end
+
+  def architect_tool_input_schema("update_work_package") do
+    schema(
+      %{
+        "work_request_id" => current_work_request_id_schema(),
+        "work_package_id" => nonblank_string_schema(),
+        "expected_contract_revision" => positive_integer_schema(),
+        "patch" => work_package_contract_patch_schema()
+      },
+      ["work_package_id", "expected_contract_revision", "patch"]
     )
   end
 
@@ -1018,51 +995,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("move_slice_to_plan_node") do
+  def architect_tool_input_schema("skip_work_package") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
-        "planned_slice_id" => string_schema(),
-        "product_tree_node_id" =>
-          nullable_string_schema()
-          |> Map.put("description", "Target product plan node id. Omit, null, or empty string to move the slice back to the WorkRequest's direct slice list."),
-        "role" => string_enum_schema(SliceLink.roles()),
-        "position" => nonnegative_integer_schema(),
-        "created_by" => described_string_schema("Optional architect identity for audit display.")
-      },
-      ["planned_slice_id"]
-    )
-  end
-
-  def architect_tool_input_schema(name) when name in ["approve_slice", "skip_slice"] do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "planned_slice_id" => string_schema(),
+        "work_package_id" => string_schema(),
         "current_status" => string_schema()
       },
-      ["planned_slice_id", "current_status"]
+      ["work_package_id", "current_status"]
     )
   end
 
-  def architect_tool_input_schema("finish_slicing") do
+  def architect_tool_input_schema("dispatch_work_package") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
-        "current_status" => string_schema()
-      },
-      ["current_status"]
-    )
-  end
-
-  def architect_tool_input_schema("dispatch_slice") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "planned_slice_id" => string_schema(),
+        "work_package_id" => string_schema(),
         "claimed_by" => described_string_schema("Optional claim display name to prefill worker bootstrap metadata.")
       },
-      ["planned_slice_id"]
+      ["work_package_id"]
     )
   end
 
@@ -1113,38 +1064,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   def architect_tool_input_schema("merge_child_into_phase"),
     do: schema(%{"work_package_id" => string_schema(), "merge_artifact" => merge_artifact_schema()}, ["work_package_id", "merge_artifact"])
 
-  defp delivery_runtime_tool_input_schema("cleanup_work_request_planned_slice_runtime") do
+  defp delivery_runtime_tool_input_schema("cleanup_work_request_work_package_runtime") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
-        "planned_slice_id" => described_string_schema("Dispatched planned slice whose linked WorkPackage owns the runtime artifacts."),
+        "work_package_id" => described_string_schema("Dispatched WorkPackage whose runtime artifacts are being cleaned up."),
         "outcome" =>
           ["superseded", "abandoned"]
           |> string_enum_schema()
-          |> Map.put("description", "Delivery outcome being prepared. cleanup_work_request_planned_slice_runtime only supports superseded or abandoned closeout cleanup."),
+          |> Map.put("description", "Delivery outcome being prepared. cleanup_work_request_work_package_runtime only supports superseded or abandoned closeout cleanup."),
         "reason" => described_string_schema("Redacted audit reason for recycling linked worker runtime before delivery closeout."),
-        "successor_planned_slice_id" => described_string_schema("Required for outcome superseded; must belong to the same WorkRequest."),
-        "successor_work_package_id" => described_string_schema("Optional successor package id; when present it must be linked to the declared successor planned slice inside the same WorkRequest."),
+        "successor_work_package_id" => described_string_schema("Required for outcome superseded; must belong to the same WorkRequest."),
         "superseded_reason" => markdown_string_schema("Required Markdown reason for outcome superseded."),
         "abandoned_rationale" => markdown_string_schema("Required Markdown rationale for outcome abandoned.")
       },
-      ["planned_slice_id", "outcome", "reason"]
+      ["work_package_id", "outcome", "reason"]
     )
   end
 
-  defp delivery_runtime_tool_input_schema("revoke_planned_slice_worker_key") do
+  defp delivery_runtime_tool_input_schema("revoke_work_package_worker_key") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
-        "planned_slice_id" => described_string_schema("Dispatched planned slice whose linked WorkPackage owns the worker grant."),
-        "grant_id" => described_string_schema("Live worker grant id for the linked WorkPackage. Raw worker secrets are never accepted or returned."),
+        "work_package_id" => described_string_schema("Dispatched WorkPackage whose worker grant is being revoked."),
+        "grant_id" => described_string_schema("Live worker grant id for the WorkPackage. Raw worker secrets are never accepted or returned."),
         "reason" => described_string_schema("Redacted audit reason for revoking the worker grant during recut, recycle, or delivery closeout cleanup.")
       },
-      ["planned_slice_id", "grant_id", "reason"]
+      ["work_package_id", "grant_id", "reason"]
     )
   end
 
-  defp planned_slice_delivery_evidence_schema do
+  defp work_package_delivery_evidence_schema do
     %{
       "type" => "object",
       "description" => "Exactly one typed evidence object matching outcome.",
@@ -1157,7 +1107,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
               "pr_number" => integer_schema() |> Map.put("minimum", 1) |> Map.put("description", "Optional positive pull request number."),
               "pr_repository" => described_string_schema("Optional owner/repository."),
               "pr_merged_at" => described_string_schema("ISO-8601 merge timestamp."),
-              "merge_commit_sha" => described_string_schema("Required for linked-package closeout strong evidence.")
+              "merge_commit_sha" => described_string_schema("Required for WorkPackage closeout strong evidence.")
             },
             ["pr_url", "pr_merged_at"]
           ),
@@ -1171,11 +1121,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         "superseded" =>
           schema(
             %{
-              "successor_planned_slice_id" => described_string_schema("Successor planned slice id in the same WorkRequest."),
-              "successor_work_package_id" => described_string_schema("Optional successor package linked to the successor slice."),
+              "successor_work_package_id" => described_string_schema("Successor WorkPackage id in the same WorkRequest."),
               "superseded_reason" => markdown_string_schema("Markdown reason for supersession.")
             },
-            ["successor_planned_slice_id", "superseded_reason"]
+            ["successor_work_package_id", "superseded_reason"]
           ),
         "abandoned" =>
           schema(
@@ -1185,7 +1134,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
             ["abandoned_rationale"]
           )
       },
-      "oneOf" => Enum.map(PlannedSliceDelivery.outcomes(), &%{"required" => [&1]})
+      "oneOf" => Enum.map(WorkPackageDelivery.outcomes(), &%{"required" => [&1]})
     }
   end
 
@@ -1311,11 +1260,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     })
   end
 
-  defp require_comment_target_id_for_explicit_non_package_target(schema) do
+  defp require_comment_target_id_for_explicit_work_request(schema) do
     Map.merge(schema, %{
       "if" => %{
         "required" => ["target_kind"],
-        "properties" => %{"target_kind" => %{"enum" => ["work_request", "planned_slice"]}}
+        "properties" => %{"target_kind" => %{"enum" => ["work_request"]}}
       },
       "then" => %{"required" => ["target_id"]}
     })
@@ -1392,6 +1341,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp boolean_schema, do: %{"type" => "boolean"}
   defp integer_schema, do: %{"type" => "integer"}
   defp nonnegative_integer_schema, do: %{"type" => "integer", "minimum" => 0}
+  defp positive_integer_schema, do: %{"type" => "integer", "minimum" => 1}
 
   defp pr_number_schema do
     %{"anyOf" => [%{"type" => "integer", "minimum" => 1}, %{"type" => "string", "pattern" => "^[1-9][0-9]*$"}]}
@@ -1400,6 +1350,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp nullable_string_schema, do: %{"type" => ["string", "null"]}
   defp markdown_nullable_string_schema(description), do: Map.put(nullable_string_schema(), "description", description)
   defp object_schema, do: %{"type" => "object", "additionalProperties" => true}
+
+  defp work_package_contract_schema do
+    schema(
+      work_package_contract_properties(),
+      ["title", "goal", "allowed_file_globs", "acceptance_criteria", "validation_steps", "stop_conditions"]
+    )
+  end
+
+  defp work_package_contract_patch_schema do
+    schema(work_package_contract_properties(), [])
+    |> Map.put("minProperties", 1)
+  end
+
+  defp work_package_contract_properties do
+    %{
+      "product_tree_node_id" => nullable_string_schema(),
+      "title" => nonblank_string_schema(),
+      "goal" => nonblank_string_schema(),
+      "kind" => Map.put(string_enum_schema(WorkPackage.executable_kinds()), "default", "standard_pr"),
+      "repo" => described_string_schema("Optional delivery repo. Defaults to the WorkRequest primary repo."),
+      "base_branch" => described_string_schema("Optional delivery base branch. Defaults to the WorkRequest base branch."),
+      "branch_pattern" => described_string_schema("Optional exact branch or {{placeholder}} template."),
+      "allowed_file_globs" => described_string_array_schema("Repo-relative slash-separated owned file globs."),
+      "forbidden_file_globs" => described_string_array_schema("Optional forbidden file globs."),
+      "acceptance_criteria" => string_array_schema(),
+      "validation_steps" => string_array_schema(),
+      "review" => review_requirement_schema(),
+      "stop_conditions" => string_array_schema()
+    }
+  end
 
   defp review_requirement_schema do
     %{
@@ -1534,10 +1514,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     }
   end
 
-  defp delivery_runtime_tool_description("cleanup_work_request_planned_slice_runtime"),
+  defp delivery_runtime_tool_description("cleanup_work_request_work_package_runtime"),
     do:
-      "Recycle stale or superseded runtime authority for the WorkPackage linked to a scoped WorkRequest planned slice after superseded or abandoned delivery evidence is supplied. Revokes linked worker grants, releases non-paused local claim leases, clears recoverable worker MCP session bindings, and records audit evidence before delivery closeout."
+      "Recycle stale or superseded runtime authority for the WorkPackage linked to a scoped WorkRequest WorkPackage after superseded or abandoned delivery evidence is supplied. Revokes linked worker grants, releases non-paused local claim leases, clears recoverable worker MCP session bindings, and records audit evidence before delivery closeout."
 
-  defp delivery_runtime_tool_description("revoke_planned_slice_worker_key"),
-    do: "Revoke one live worker grant for the WorkPackage linked to a scoped WorkRequest planned slice during in-progress recycle or delivery closeout cleanup."
+  defp delivery_runtime_tool_description("revoke_work_package_worker_key"),
+    do: "Revoke one live worker grant for the WorkPackage linked to a scoped WorkRequest WorkPackage during in-progress recycle or delivery closeout cleanup."
 end

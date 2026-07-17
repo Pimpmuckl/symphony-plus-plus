@@ -75,7 +75,7 @@ wrappers can target a package before a worker session is bound. Compact worker
 calls should omit values the bound WorkPackage already carries:
 
 - `add_comment(body)` comments on the current WorkPackage. Pass
-  `target_kind` and `target_id` only for a WorkRequest or planned-slice comment.
+  `target_kind` and `target_id` only for a WorkRequest or work-package comment.
 - `list_comments()` lists comments on the current WorkPackage. Pass
   `target_kind` and `target_id` only for another authorized target.
 - `attach_branch(head_sha)` uses the WorkPackage `branch_pattern` when it is a
@@ -96,18 +96,13 @@ reference remains opaque.
 
 Retained explicit-id operations and their reasons:
 
-- `record_planned_slice_delivery` and
-  `cleanup_work_request_planned_slice_runtime` still require a planned-slice id
-  because they mutate product delivery truth and linked runtime authority.
+- `record_work_package_delivery` and
+  `cleanup_work_request_work_package_runtime` still require a work-package id
+  because they mutate product delivery truth and runtime authority.
   `work_request_id` may be inferred from the claimed current WorkRequest.
-- `cleanup_work_request_planned_slice_runtime` and
-  `revoke_planned_slice_worker_key` fail closed when duplicate planned-slice
-  links share the same WorkPackage runtime; repair the linkage before mutating
-  package-wide runtime authority.
-- Superseded closeout keeps `successor_planned_slice_id`, and optional
-  `successor_work_package_id`, because the caller is naming a cross-slice
-  successor relation.
-- `revoke_planned_slice_worker_key` keeps `grant_id` because revocation is a
+- Superseded closeout keeps `successor_work_package_id` because the caller is
+  naming a cross-package successor relation.
+- `revoke_work_package_worker_key` keeps `grant_id` because revocation is a
   concurrency-sensitive runtime operation on one live worker grant.
 - Architect package tools such as `read_child_status`,
   `approve_scope_expansion`, `prepare_work_package_worktree`, and
@@ -165,7 +160,7 @@ solo_archive
 
 ## Architect Tools
 
-Bound architect sessions expose WorkRequest, product-tree, planned-slice,
+Bound architect sessions expose WorkRequest, product-tree, work-package,
 phase-child, guidance, closeout, and delivery tools listed in the JSON contract.
 Architect claims are WorkRequest-centric; WorkPackage anchor, repo, base branch,
 and phase fields are derived from the ledger when omitted.
@@ -175,44 +170,28 @@ Some names are shared across worker and architect sessions. For example,
 for architects; the live handler applies the role-specific authorization and
 target-scope checks.
 
-This release makes a clean public cutover to the concise planning names below.
-Superseded names are neither advertised nor accepted.
-
-| Superseded name | Current name |
-|---|---|
-| `read_work_request_product_tree` | `read_plan` |
-| `read_work_request_delivery_board` | `read_delivery_board` |
-| `ask_work_request_question` | `ask_question` |
-| `answer_work_request_question` | `answer_question` |
-| `answer_work_request_question_and_record_decision` | `answer_question_and_record_decision` |
-| `close_work_request_question` | `close_question` |
-| `record_work_request_decision` | `record_decision` |
-| `add_work_request_planned_slice` | `plan_slice` |
-| `upsert_work_request_product_plan_node_content` | `upsert_plan_node` |
-| `move_work_request_product_plan_node` | `move_plan_node` |
-| `set_work_request_product_plan_node_completion` | `set_plan_node_completion` |
-| `move_work_request_planned_slice_to_product_node` | `move_slice_to_plan_node` |
-| `approve_work_request_planned_slice` | `approve_slice` |
-| `skip_work_request_planned_slice` | `skip_slice` |
-| `mark_work_request_sliced` | `finish_slicing` |
-| `dispatch_work_request_planned_slice` | `dispatch_slice` |
+WorkRequests use one canonical WorkPackage identity from planning through
+delivery. `slice_work_request` atomically creates one or more planned
+WorkPackages beneath the WorkRequest root or optional existing product plan
+nodes. It returns only the WorkPackage ids and one product-tree revision.
+`update_work_package` edits the same row with optimistic contract revision;
+`skip_work_package` marks that row skipped; `dispatch_work_package` activates
+that row and atomically creates its worker grant, resources, and claim bootstrap.
+There is no separate approval, finish-slicing, link, or replacement-package step.
 
 Clarification has no extra completion ceremony. After open clarification
 questions are answered or closed, architects may read the WorkRequest and call
-`plan_slice`; the tool safely advances
-`ready_for_clarification`, `clarifying`, or `human_info_needed` WorkRequests to
-`ready_for_slicing` before inserting the slice. Open clarification questions
-still block the call with `open_questions`.
+`slice_work_request`. Open clarification questions still block planning with
+`open_questions`.
 
 Current-WorkRequest lifecycle tools may omit `work_request_id` after
 `claim_local_architect_assignment` has bound the session to exactly one
-WorkRequest. This compact path applies to `plan_slice`,
+WorkRequest. This compact path applies to `slice_work_request`,
+`update_work_package`,
 `upsert_plan_node`,
 `move_plan_node`,
 `set_plan_node_completion`,
-`move_slice_to_plan_node`,
-`approve_slice`, `skip_slice`, and
-`finish_slicing`, plus delivery board/reconcile, planned-slice delivery
+`skip_work_package`, plus delivery board/reconcile, work-package delivery
 closeout, runtime cleanup, worker-key revocation, and dispatch. Supplying
 `work_request_id` is still allowed and is checked against the same architect
 grant scope. Reads that can intentionally target sibling WorkRequests,
@@ -226,14 +205,13 @@ that need a complete list must continue until `next_cursor` is absent. A page
 may be short or empty when authorization is sparse because each call scans a
 bounded candidate window before returning a continuation.
 
-`plan_slice` defaults ordinary PR-backed work to
-`standard_pr`; reserve `mcp` for MCP servers, protocols, tools, or plugins.
+Each `slice_work_request.work_packages` item defaults ordinary PR-backed work
+to `standard_pr`; reserve `mcp` for MCP servers, protocols, tools, or plugins.
 The selected WorkRequest supplies the default delivery repo and target base
 branch for its primary repo; pass the target base branch when selecting a
-secondary delivery repo. Branch pattern and forbidden globs may be omitted.
-Review is also optional and provider-agnostic. Title, goal, owned
-globs, acceptance criteria, validation, and stop conditions remain required. Without a single current WorkRequest,
-callers must supply `work_request_id` explicitly.
+secondary delivery repo. Branch pattern, forbidden globs, product node, and
+provider-agnostic review requirement are optional. Title, goal, owned globs,
+acceptance criteria, validation, and stop conditions remain required.
 
 Product-plan node authoring is split by intent: use
 `upsert_plan_node` for title, description, or kind,
@@ -241,28 +219,26 @@ Product-plan node authoring is split by intent: use
 `set_plan_node_completion` for completion marks and
 required blocker closeout.
 
-`dispatch_slice` requires only `planned_slice_id` once a
-single current WorkRequest is claimed; `claimed_by` is optional. It creates the
-linked WorkPackage, mints a worker grant, and returns the same simple
-`claim_local_assignment` bootstrap shape with primary execution and product
-audit coordinates.
+`dispatch_work_package` requires only `work_package_id` once a single current
+WorkRequest is claimed; `claimed_by` is optional. It activates the same row,
+mints a worker grant, and returns the simple `claim_local_assignment` bootstrap.
 
-`cleanup_work_request_planned_slice_runtime` is the WR architect cleanup path
-for linked planned-slice runtime that has been superseded or abandoned by
+`cleanup_work_request_work_package_runtime` is the WR architect cleanup path
+for WorkPackage runtime that has been superseded or abandoned by
 delivery truth. It requires `outcome` plus the same superseded or abandoned
-evidence that will be used for closeout. It revokes linked worker grants,
+evidence that will be used for closeout. It revokes worker grants,
 releases non-paused local claim leases, clears recoverable worker MCP session
 bindings for the linked WorkPackage, and records audit progress. Paused leases
 and fresh active AgentRun evidence fail closed; after cleanup, record the
 delivery outcome with
-`record_planned_slice_delivery`.
+`record_work_package_delivery`.
 
-`record_planned_slice_delivery` keeps `work_request_id`, `planned_slice_id`,
+`record_work_package_delivery` keeps `work_request_id`, `work_package_id`,
 `outcome`, and `idempotency_key` explicit, and groups closeout proof under one
 typed `evidence` object. Provide exactly one key matching `outcome`:
 `evidence.pr_merged`, `evidence.completed_no_pr`, `evidence.superseded`, or
 `evidence.abandoned`. `pr_merged` evidence still requires PR URL and merged-at
-timestamp, and linked packages still require `merge_commit_sha`; active blocker
+  timestamp, and `merge_commit_sha`; active blocker
 closeout remains an explicit `blocker_closeout` argument.
 
 `mint_child_worker_key` accepts an optional `template` object. The template may

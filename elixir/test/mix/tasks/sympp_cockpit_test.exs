@@ -3,7 +3,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
 
   alias Mix.Tasks.Sympp.Cockpit, as: CockpitTask
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
@@ -259,7 +259,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
       assert payload["work_requests"]["work_requests"] == []
 
       assert %WorkRequest{archived_at: %DateTime{}} = Repo.get!(WorkRequest, request.id)
-      assert [_slice] = Repo.all(PlannedSlice)
+      assert [_slice] = Repo.all(WorkPackage)
     after
       Repo.put_dynamic_repo(original_dynamic_repo)
       File.rm(database_path)
@@ -504,12 +504,12 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
              })
 
     assert {:ok, slice} =
-             WorkRequestRepository.add_planned_slice(Repo, request.id, %{
+             CanonicalWorkPackageFixtures.add_work_package(Repo, request.id, %{
                title: "Done slice",
                goal: "Finish the request.",
-               work_package_kind: "mcp",
-               target_base_branch: "main",
-               owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
+               kind: "mcp",
+               base_branch: "main",
+               allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
                forbidden_file_globs: [],
                acceptance_criteria: ["Done."],
                validation_steps: ["mix test"],
@@ -517,10 +517,10 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
                stop_conditions: []
              })
 
-    assert {:ok, _skipped} = WorkRequestRepository.skip_planned_slice(Repo, request.id, slice.id, "planned")
+    assert {:ok, _skipped} = WorkRequestRepository.skip_work_package(Repo, request.id, slice.id, "planned")
 
     assert {:ok, _delivery} =
-             WorkRequestRepository.record_planned_slice_delivery(Repo, request.id, slice.id, %{
+             WorkRequestRepository.record_work_package_delivery(Repo, request.id, slice.id, %{
                outcome: "abandoned",
                idempotency_key: "cockpit-retention-skipped-delivery",
                recorded_by: "cockpit-test",

@@ -65,7 +65,7 @@ Every work package must specify:
 ## E2E milestone scenario
 
 ```text
-Create hotfix WorkRequest and direct planned slice.
+Create hotfix WorkRequest and direct WorkPackage.
 Mint worker key.
 Claim through MCP.
 Read virtual files.
@@ -96,7 +96,7 @@ workers, or production services.
 
 Covered scenarios:
 
-- Hotfix planned-slice dispatch, MCP worker claim, virtual-file access, local
+- Hotfix work-package dispatch, MCP worker claim, virtual-file access, local
   progress evidence, fake GitHub metadata, fake review evidence, and readiness.
 - MCP package readiness through changed-file scope, current PR metadata, and
   persisted review-suite artifacts.

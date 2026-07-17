@@ -3,9 +3,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DetailDisclosure, DetailFacts, DetailHeader, DetailList, DetailSection, DetailStatGrid } from "@/components/dashboard/detail-layout";
 import { MarkdownBlock } from "@/components/dashboard/markdown-block";
-import type { ActiveBlockingEdgeEndpoint, PlannedSlice, WorkPackageCard, WorkPackageDetailPayload, WorkRequestDetail } from "@/types/dashboard";
+import type { ActiveBlockingEdgeEndpoint, WorkRequestPackage, WorkPackageCard, WorkPackageDetailPayload, WorkRequestDetail } from "@/types/dashboard";
 import { isFinishedBoardStatus, operationalBadgeVariant, operationalLabel, sliceOperationalState } from "@/lib/operational-state";
-import { reviewLaneLabel } from "@/lib/review-signals";
 import { statusLabel } from "@/lib/status-labels";
 import { useCallback, useReducer, useState } from "react";
 import { CardDetailSelection, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateAction, WorkPackageStateMutation } from "./runtime";
@@ -27,7 +26,7 @@ export function SliceDetailContent({
   canMutateComments,
 }: {
   detail: WorkRequestDetail;
-  slice: PlannedSlice;
+  slice: WorkRequestPackage;
   pkg?: WorkPackageCard;
   onSubmitComment: SubmitContextComment;
   onResolveComment: ResolveContextComment;
@@ -37,7 +36,7 @@ export function SliceDetailContent({
   const status = slice.work_package_status || slice.status;
   const operational = sliceOperationalState(slice, pkg);
   const blockerCount = Math.max(pkg?.active_blocker_count || 0, pkg?.status === "blocked" || operational?.key === "blocked" ? 1 : 0);
-  const reviewLanes = slice.review_lanes || [];
+  const reviewLabel = [slice.review?.type, slice.review?.args?.mode].filter(Boolean).join(" / ");
   const attentionItems = operational?.attention_items || [];
   const currentCommentStats = targetCommentStats(slice, slice.comments || [], sliceComments);
   const deliveryFacts = sliceDeliveryFacts(slice);
@@ -56,14 +55,14 @@ export function SliceDetailContent({
           stats={[
             { label: "State", value: operationalLabel(operational, status) },
             { label: "Package", value: pkg ? operationalLabel(pkg.operational_state || null, pkg.status) : "Not dispatched" },
-            { label: "Review", value: reviewLanes.length > 0 ? reviewLanes.map(reviewLaneLabel).join(", ") : "Not recorded" },
+            { label: "Review", value: reviewLabel || "Not recorded" },
             { label: "Blockers", value: String(blockerCount) },
             { label: "Comments", value: commentStatLabel(currentCommentStats.open_comment_count, currentCommentStats.comment_count) },
             { label: "Updated", value: detailDate(slice.updated_at || slice.dispatched_at || slice.inserted_at) },
           ]}
         />
-        <DetailSection title="Slice Goal">
-          <MarkdownBlock value={slice.goal} empty={pkg?.kind || "No slice goal has been recorded yet."} />
+        <DetailSection title="Package Goal">
+          <MarkdownBlock value={slice.goal} empty={pkg?.kind || "No package goal has been recorded yet."} />
         </DetailSection>
         <DetailSection title="Progress">
           <div className="grid gap-2">
@@ -85,13 +84,13 @@ export function SliceDetailContent({
           {blockerCount > 0 ? (
             <p>{blockerCount} active blocker{blockerCount === 1 ? "" : "s"} on the linked work package.</p>
           ) : (
-            <p>No blocker surfaced for this slice.</p>
+            <p>No blocker surfaced for this package.</p>
           )}
         </DetailSection>
         <DetailDisclosure title="Comments" meta={commentStatLabel(currentCommentStats.open_comment_count, currentCommentStats.comment_count)}>
           <CommentsPanel
-            key={`planned_slice:${slice.id}`}
-            target={{ target_kind: "planned_slice", target_id: slice.id }}
+            key={`work_package:${slice.id}`}
+            target={{ target_kind: "work_package", target_id: slice.id }}
             comments={sliceComments}
             onCommentsChange={setSliceComments}
             onSubmitComment={onSubmitComment}
@@ -103,16 +102,15 @@ export function SliceDetailContent({
         <DetailDisclosure title="Details" meta="Branch, files, and acceptance">
           <DetailFacts
             facts={[
-              ["Slice ID", slice.id],
-              ["Work Package", slice.work_package_id || "Not dispatched"],
+              ["WorkPackage ID", slice.id],
               ["Raw Lifecycle", statusLabel(slice.status)],
-              ["Target Branch", slice.target_base_branch || detail.work_request.base_branch || "main"],
+              ["Target Branch", slice.base_branch || detail.work_request.base_branch || "main"],
               ["Dispatched", detailDate(slice.dispatched_at)],
             ]}
           />
           <DetailList title="Acceptance" items={slice.acceptance_criteria || []} empty="No acceptance criteria recorded." />
           <DetailList title="Validation" items={slice.validation_steps || []} empty="No validation steps recorded." />
-          <DetailList title="Owned paths" items={slice.owned_file_globs || []} empty="No owned path constraints recorded." />
+          <DetailList title="Owned paths" items={slice.allowed_file_globs || []} empty="No owned path constraints recorded." />
           <DetailList title="Stop conditions" items={slice.stop_conditions || []} empty="No stop conditions recorded." />
         </DetailDisclosure>
       </div>
@@ -176,7 +174,7 @@ export function BlockerDetailContent({
             { label: "Blocker", value: displayBlockerId || "Not recorded" },
             { label: "Package", value: workPackageId || "Not linked" },
             { label: "Request", value: detail?.work_request.id || blocker.work_request_id || "Not linked" },
-            { label: "Slice", value: slice?.id || blocker.planned_slice_id || "Not linked" },
+            { label: "WorkPackage", value: slice?.id || blocker.work_package_id || "Not linked" },
             { label: "Updated", value: detailDate(blocker.updated_at) },
           ]}
         />
@@ -189,8 +187,8 @@ export function BlockerDetailContent({
             facts={[
               ["From", endpointLabel(blocker.from)],
               ["To", endpointLabel(blocker.to)],
-              ["Work Package", pkg?.title || workPackageId || "Not linked"],
-              ["Planned Slice", slice?.title || slice?.id || blocker.planned_slice_id || "Not linked"],
+              ["WorkPackage", pkg?.title || workPackageId || "Not linked"],
+              ["WorkPackage", slice?.title || slice?.id || blocker.work_package_id || "Not linked"],
               ["Work Request", detail?.work_request.title || detail?.work_request.id || blocker.work_request_id || "Not linked"],
             ]}
           />
@@ -423,7 +421,7 @@ function MarkdownDetail({ label, value }: { label: string; value: string }) {
   );
 }
 
-function sliceDeliveryMarkdown(slice: PlannedSlice) {
+function sliceDeliveryMarkdown(slice: WorkRequestPackage) {
   if (slice.delivery?.outcome === "completed_no_pr" && slice.delivery.no_pr_evidence) {
     return { label: "Evidence", value: slice.delivery.no_pr_evidence };
   }

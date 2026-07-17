@@ -11,8 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads,
     only: [
-      dispatch_link_recovery_payload: 1,
-      dispatch_slice_payload: 2,
+      dispatch_work_package_result_payload: 2,
       json_safe_payload: 1,
       worktree_lifecycle_payload: 3
     ]
@@ -43,10 +42,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDispatch
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceLinkage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -59,8 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     "answer_question",
     "answer_question_and_record_decision",
     "close_question",
-    "finish_slicing",
-    "dispatch_slice",
+    "dispatch_work_package",
     "prepare_work_package_worktree",
     "cleanup_work_package_worktree"
   ]
@@ -239,8 +235,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
              "read_delivery_board",
              repo_scope_opts
            ),
-         {:ok, planned_slices} <- WorkRequestService.list_planned_slices(config.repo, work_request_id),
-         {:ok, delivery_board} <- WorkRequestScope.scoped_delivery_board(config.repo, work_request, planned_slices, filters, repo_scope_opts) do
+         {:ok, work_packages} <- WorkRequestService.list_work_packages(config.repo, work_request_id),
+         {:ok, delivery_board} <- WorkRequestScope.scoped_delivery_board(config.repo, work_request, work_packages, filters, repo_scope_opts) do
       payload = %{
         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
         "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board),
@@ -259,8 +255,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     with :ok <- authorize_local_trusted_work_request_read_tool_call(opts, "read_delivery_board"),
          {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, work_request, filters} <- WorkRequestScope.local_trusted_work_request_read_scope(config.repo, work_request_id),
-         {:ok, planned_slices} <- WorkRequestService.list_planned_slices(config.repo, work_request_id),
-         {:ok, delivery_board} <- WorkRequestScope.scoped_delivery_board(config.repo, work_request, planned_slices, filters) do
+         {:ok, work_packages} <- WorkRequestService.list_work_packages(config.repo, work_request_id),
+         {:ok, delivery_board} <- WorkRequestScope.scoped_delivery_board(config.repo, work_request, work_packages, filters) do
       payload = %{
         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
         "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board),
@@ -423,51 +419,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     end
   end
 
-  defp call_tool("finish_slicing", config, session, arguments, _opts) do
+  defp call_tool("dispatch_work_package", config, session, arguments, _opts) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
-         {:ok, current_status} <- required_argument(arguments, "current_status"),
-         {:ok, _work_request, _filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, "finish_slicing"),
-         {:ok, updated_work_request} <- WorkRequestService.mark_sliced(config.repo, work_request_id, current_status) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(updated_work_request),
-         "scope" => scope,
-         "status" => %{
-           "previous_status" => current_status,
-           "current_status" => updated_work_request.status
-         }
-       })}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "finish_slicing", "reason" => reason}}
-      {:error, :not_found} -> not_found_error("finish_slicing")
-      {:error, reason} -> architect_error(reason, "finish_slicing")
-    end
-  end
-
-  defp call_tool("dispatch_slice", config, session, arguments, _opts) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
-         {:ok, planned_slice_id} <- required_argument(arguments, "planned_slice_id"),
+         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, claimed_by} <- optional_string_argument(arguments, "claimed_by", default_claimed_by(config)),
-         {:ok, _work_request, planned_slice, _filters, scope} <-
-           WorkRequestScope.authorized_planned_slice_scope(
+         {:ok, _work_request, work_package, _filters, scope} <-
+           WorkRequestScope.authorized_work_package_scope(
              config.repo,
              session,
              work_request_id,
-             planned_slice_id,
-             :planned_slice_dispatch,
-             "dispatch_slice"
+             work_package_id,
+             :work_package_dispatch,
+             "dispatch_work_package"
            ),
-         :ok <- require_approved_dispatch_planned_slice(planned_slice),
-         {:ok, handoff_opts, dispatch_opts} <- dispatch_planned_slice_bootstrap_opts(config, claimed_by),
-         {:ok, dispatch} <- PlannedSliceDispatch.dispatch(config.repo, work_request_id, planned_slice_id, handoff_opts, dispatch_opts) do
-      {:ok, ToolResult.tool_result(dispatch_slice_payload(dispatch, scope))}
+         :ok <- require_planned_dispatch_work_package(work_package),
+         {:ok, handoff_opts} <- dispatch_work_package_bootstrap_opts(config, claimed_by),
+         {:ok, dispatch} <- WorkPackageDispatch.dispatch(config.repo, work_request_id, work_package_id, handoff_opts) do
+      {:ok, ToolResult.tool_result(dispatch_work_package_result_payload(dispatch, scope))}
     else
-      {:tool_error, reason} -> invalid_params_error("dispatch_slice", reason)
-      {:error, :not_found} -> not_found_error("dispatch_slice")
-      {:error, reason} -> dispatch_slice_error(reason)
+      {:tool_error, reason} -> invalid_params_error("dispatch_work_package", reason)
+      {:error, :not_found} -> not_found_error("dispatch_work_package")
+      {:error, reason} -> dispatch_work_package_error(reason)
     end
   end
 
@@ -553,59 +526,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          view,
          repo_scope_opts \\ []
        ) do
-    with {:ok, planned_slices} <- WorkRequestService.list_planned_slices(repo, work_request.id),
+    with {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
          {:ok, delivery_board} <-
-           WorkRequestScope.scoped_delivery_board(repo, work_request, planned_slices, filters, Keyword.put(repo_scope_opts, :slice_projection, :operational_state)) do
-      payload = WorkRequestPayloads.work_request_product_tree(repo, work_request, planned_slices, delivery_board, view)
+           WorkRequestScope.scoped_delivery_board(repo, work_request, work_packages, filters, Keyword.put(repo_scope_opts, :slice_projection, :operational_state)) do
+      payload = WorkRequestPayloads.work_request_product_tree(repo, work_request, work_packages, delivery_board, view)
       payload = Map.put(payload, "scope", scope)
       {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_product_tree)}
     end
   end
 
-  defp dispatch_planned_slice_bootstrap_opts(%Config{} = config, claimed_by) do
+  defp dispatch_work_package_bootstrap_opts(%Config{} = config, claimed_by) do
     with {:ok, database} <- HandoffDatabase.resolve(config.database, config.repo) do
-      {:ok, [claimed_by: claimed_by, database: database], []}
+      {:ok, [claimed_by: claimed_by, database: database]}
     end
   end
 
   defp cleanup_worktree_opts(nil), do: []
   defp cleanup_worktree_opts(target_repo_root), do: [target_repo_root: target_repo_root]
 
-  defp require_approved_dispatch_planned_slice(%PlannedSlice{status: "approved"}), do: :ok
+  defp require_planned_dispatch_work_package(%WorkPackage{status: "planned"}), do: :ok
 
-  defp require_approved_dispatch_planned_slice(%PlannedSlice{status: status}),
-    do: {:error, {:invalid_planned_slice_status, status}}
+  defp require_planned_dispatch_work_package(%WorkPackage{status: status}),
+    do: {:error, {:invalid_work_package_status, status}}
 
-  defp dispatch_slice_error({:invalid_planned_slice_status, _status}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_slice", "reason" => "invalid_planned_slice_status"}}
+  defp dispatch_work_package_error({:invalid_work_package_status, _status}) do
+    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_work_package", "reason" => "invalid_work_package_status"}}
   end
 
-  defp dispatch_slice_error({:invalid_work_request_status, _status}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_slice", "reason" => "invalid_work_request_status"}}
+  defp dispatch_work_package_error({:work_package_scope_violation, errors}) do
+    invalid_params_error("dispatch_work_package", {:work_package_scope_violation, errors})
   end
 
-  defp dispatch_slice_error({:planned_slice_scope_violation, errors}) do
-    invalid_params_error("dispatch_slice", {:planned_slice_scope_violation, errors})
+  defp dispatch_work_package_error({:unsupported_branch_pattern, branch_pattern, reason}) do
+    invalid_params_error("dispatch_work_package", {:branch_pattern, branch_pattern, reason})
   end
 
-  defp dispatch_slice_error({:unsupported_branch_pattern, branch_pattern, reason}) do
-    invalid_params_error("dispatch_slice", {:branch_pattern, branch_pattern, reason})
-  end
-
-  defp dispatch_slice_error({:kind_not_dispatchable, _kind}) do
-    {:error, -32_602, "Invalid params", %{"tool" => "dispatch_slice", "reason" => "kind_not_dispatchable"}}
-  end
-
-  defp dispatch_slice_error({:dispatch_link_failed, _reason, recovery}) do
-    {:error, -32_000, "Server error",
-     %{
-       "tool" => "dispatch_slice",
-       "reason" => "dispatch_link_failed",
-       "recovery" => dispatch_link_recovery_payload(recovery)
-     }}
-  end
-
-  defp dispatch_slice_error(reason), do: architect_error(reason, "dispatch_slice")
+  defp dispatch_work_package_error(reason), do: architect_error(reason, "dispatch_work_package")
 
   defp append_worktree_lifecycle_audit(repo, %Session{} = session, work_package_id, source_tool, result) do
     PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, work_package_id, %{
@@ -778,7 +734,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp optional_product_tree_view(arguments) do
     case Map.fetch(arguments, "view") do
       :error ->
-        {:ok, "nodes_with_slice_refs"}
+        {:ok, "nodes_with_work_package_refs"}
 
       {:ok, view} when is_binary(view) ->
         view = String.trim(view)
@@ -806,51 +762,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   defp session_claimed_by(%Session{}), do: "architect"
 
+  defp require_worktree_work_package_scope(_repo, %WorkPackage{work_request_id: nil}, _filters), do: {:error, :forbidden}
+
   defp require_worktree_work_package_scope(repo, %WorkPackage{} = work_package, filters) do
-    case PlannedSliceLinkage.linked_work_requests_for_work_package(repo, work_package.id) do
-      {:ok, []} ->
+    case repo.get(WorkRequest, work_package.work_request_id) do
+      %WorkRequest{} = work_request ->
+        with :ok <- WorkRequestScope.require_work_package_repo_scope(work_package, work_request, work_package),
+             :ok <- WorkRequestScope.require_work_package_delivery_base_scope(work_package, work_package),
+             :ok <- WorkRequestScope.require_work_request_scope(repo, work_request, filters) do
+          WorkRequestScope.require_delivery_work_package_filter_scope(repo, work_package, work_request, filters)
+        end
+
+      nil ->
         {:error, :forbidden}
-
-      {:ok, links} ->
-        with :ok <- require_unique_worktree_work_request_link(links) do
-          require_any_worktree_work_package_link_scope(repo, work_package, links, filters)
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp require_unique_worktree_work_request_link(links) do
-    case Enum.uniq_by(links, fn {%PlannedSlice{}, %WorkRequest{id: work_request_id}} -> work_request_id end) do
-      [_single] -> :ok
-      [] -> {:error, :forbidden}
-      [_first | _rest] -> {:error, :ambiguous_planned_slice_link}
-    end
-  end
-
-  defp require_any_worktree_work_package_link_scope(repo, %WorkPackage{} = work_package, links, filters) do
-    Enum.reduce_while(links, {:error, :forbidden}, fn
-      {%PlannedSlice{} = planned_slice, %WorkRequest{} = work_request}, _error ->
-        case require_worktree_work_package_link_scope(repo, work_package, planned_slice, work_request, filters) do
-          :ok -> {:halt, :ok}
-          {:error, reason} when reason in [:forbidden, :not_found] -> {:cont, {:error, :forbidden}}
-          {:error, reason} -> {:halt, {:error, reason}}
-        end
-    end)
-  end
-
-  defp require_worktree_work_package_link_scope(
-         repo,
-         %WorkPackage{} = work_package,
-         %PlannedSlice{} = planned_slice,
-         %WorkRequest{} = work_request,
-         filters
-       ) do
-    with :ok <- WorkRequestScope.require_work_package_repo_scope(work_package, work_request, planned_slice),
-         :ok <- WorkRequestScope.require_work_package_delivery_base_scope(work_package, planned_slice),
-         :ok <- WorkRequestScope.require_work_request_scope(repo, work_request, filters) do
-      WorkRequestScope.require_delivery_work_package_filter_scope(repo, work_package, work_request, filters)
     end
   end
 
@@ -994,8 +918,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
 
-  defp architect_error({:planned_slice_scope_violation, errors}, tool) do
-    invalid_params_error(tool, {:planned_slice_scope_violation, errors})
+  defp architect_error({:work_package_scope_violation, errors}, tool) do
+    invalid_params_error(tool, {:work_package_scope_violation, errors})
   end
 
   defp architect_error(reason, tool) when reason in [:invalid_repo_root, :missing_repo_root] do
@@ -1017,11 +941,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   defp architect_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
-  defp invalid_params_error(tool, {:planned_slice_scope_violation, errors}) do
+  defp invalid_params_error(tool, {:work_package_scope_violation, errors}) do
     {:error, -32_602, "Invalid params",
      %{
        "tool" => tool,
-       "reason" => "planned_slice_scope_violation",
+       "reason" => "work_package_scope_violation",
        "validation_errors" => scope_validation_details(errors)
      }}
   end
@@ -1085,8 +1009,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     %{"field" => Atom.to_string(field), "reason" => "invalid_constraints"}
   end
 
-  defp scope_validation_detail({:invalid_owned_file_globs, field}) do
-    %{"field" => Atom.to_string(field), "reason" => "invalid_owned_file_globs"}
+  defp scope_validation_detail({:invalid_allowed_file_globs, field}) do
+    %{"field" => Atom.to_string(field), "reason" => "invalid_allowed_file_globs"}
   end
 
   defp scope_validation_detail({:invalid_path, field, value, reason}) do
@@ -1099,7 +1023,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   defp scope_validation_detail({:non_documentation_owned_glob, value}) do
     %{
-      "field" => "owned_file_globs",
+      "field" => "allowed_file_globs",
       "value" => value,
       "reason" => "non_documentation_owned_glob"
     }
@@ -1107,7 +1031,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   defp scope_validation_detail({:outside_allowed_paths, value, allowed_paths}) do
     %{
-      "field" => "owned_file_globs",
+      "field" => "allowed_file_globs",
       "value" => value,
       "reason" => "outside_allowed_paths",
       "allowed_paths" => allowed_paths
@@ -1116,7 +1040,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   defp scope_validation_detail({:forbidden_path_overlap, value, forbidden_path}) do
     %{
-      "field" => "owned_file_globs",
+      "field" => "allowed_file_globs",
       "value" => value,
       "reason" => "forbidden_path_overlap",
       "forbidden_path" => forbidden_path

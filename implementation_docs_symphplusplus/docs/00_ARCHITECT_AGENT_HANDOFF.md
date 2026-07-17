@@ -32,9 +32,9 @@ unless the node groups multiple units or records a real product boundary.
 
 ## Dispatch
 
-Dispatch planned slices with `dispatch_slice` using only
-`work_request_id`, `planned_slice_id`, and optional `claimed_by`. The response
-creates the worker WorkPackage and returns a non-secret `worker_bootstrap`
+Dispatch WorkPackages with `dispatch_work_package` using only
+`work_request_id`, `work_package_id`, and optional `claimed_by`. The response
+activates the same WorkPackage row and returns a non-secret `worker_bootstrap`
 object for `claim_local_assignment`.
 
 Workers claim with:

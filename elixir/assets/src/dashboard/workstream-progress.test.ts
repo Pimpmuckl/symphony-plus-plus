@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { activeBlockerEntityCounts, productTreeCounts, requestProgress, sliceProgressPercent } from "./workstream-progress";
-import type { ActiveBlockingEdge, PlannedSlice, WorkRequestDetail, WorkPackageCard } from "@/types/dashboard";
+import type { ActiveBlockingEdge, WorkRequestPackage, WorkRequestDetail, WorkPackageCard } from "@/types/dashboard";
 
 describe("workstream progress", () => {
   it("counts active direct slices as partial progress", () => {
@@ -19,7 +19,7 @@ describe("workstream progress", () => {
       plannedSlice("slice-planned", "planned"),
     ]);
 
-    expect(sliceProgressPercent(detail.planned_slices![0])).toBe(50);
+    expect(sliceProgressPercent(detail.work_packages![0])).toBe(50);
     expect(requestProgress(detail, new Map<string, WorkPackageCard>())).toBe(25);
   });
 
@@ -29,7 +29,7 @@ describe("workstream progress", () => {
       plannedSlice("slice-planned", "planned"),
     ]);
 
-    expect(sliceProgressPercent(detail.planned_slices![0])).toBe(50);
+    expect(sliceProgressPercent(detail.work_packages![0])).toBe(50);
     expect(requestProgress(detail, new Map<string, WorkPackageCard>())).toBe(25);
   });
 
@@ -47,9 +47,9 @@ describe("workstream progress", () => {
     detail.product_tree = {
       available: true,
       mode: "product_tree",
-      nodes: [{ id: "node-ready", completion_mark: "partial", slice_ids: ["slice-ready"] }],
+      nodes: [{ id: "node-ready", completion_mark: "partial", work_package_ids: ["slice-ready"] }],
       root_node_ids: ["node-ready"],
-      root_slice_ids: [],
+      root_work_package_ids: [],
     };
     const packages = new Map<string, WorkPackageCard>([
       ["pkg-ready", { id: "pkg-ready", status: "ready_for_worker", plan: { completed_count: 1, total_count: 2 } }],
@@ -65,7 +65,7 @@ describe("workstream progress", () => {
       summary: {
         blocker_count: 3,
         node_count: 2,
-        slice_count: 4,
+        work_package_count: 4,
       },
     };
 
@@ -80,7 +80,7 @@ describe("workstream progress", () => {
 
     const counts = activeBlockerEntityCounts(
       [
-        blockingEdge("blocker-slice", { kind: "work_package", id: "unknown-package" }, { kind: "slice", id: "slice-endpoint" }),
+        blockingEdge("blocker-package-detail", { kind: "work_package", id: "unknown-package" }, { kind: "work_package", id: "pkg-endpoint" }),
         blockingEdge("blocker-package", { kind: "work_package", id: "unknown-package" }, { kind: "work_package", id: "pkg-shared" }),
         blockingEdge("blocker-fallback", { kind: "work_package", id: "unknown-package" }, { kind: "work_package", id: "unknown-package" }, "wr-progress"),
       ],
@@ -100,10 +100,10 @@ describe("workstream progress", () => {
       [
         blockingEdge(
           "blocker-linked",
-          { kind: "slice", id: "slice-endpoint" },
+          { kind: "work_package", id: "pkg-endpoint" },
           { kind: "work_package", id: "pkg-endpoint" },
           undefined,
-          { planned_slice_id: "slice-endpoint", work_package_id: "pkg-endpoint" },
+          { work_package_id: "pkg-endpoint" },
         ),
         blockingEdge(
           "blocker-package",
@@ -181,21 +181,21 @@ describe("workstream progress", () => {
   });
 });
 
-function workRequestDetail(plannedSlices: PlannedSlice[]): WorkRequestDetail {
+function workRequestDetail(plannedSlices: WorkRequestPackage[]): WorkRequestDetail {
   return {
     work_request: { id: "wr-progress", status: "sliced", operational_state: { key: "active" } },
-    planned_slices: plannedSlices,
+    work_packages: plannedSlices,
     product_tree: {
       available: true,
-      mode: "direct_slices",
+      mode: "direct_work_packages",
       nodes: [],
       root_node_ids: [],
-      root_slice_ids: plannedSlices.map((slice) => slice.id),
+      root_work_package_ids: plannedSlices.map((slice) => slice.id),
     },
   };
 }
 
-function plannedSlice(id: string, state: string, workPackageId?: string): PlannedSlice {
+function plannedSlice(id: string, state: string, workPackageId?: string): WorkRequestPackage {
   return {
     id,
     work_request_id: "wr-progress",

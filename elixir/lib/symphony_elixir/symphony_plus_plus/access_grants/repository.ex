@@ -704,12 +704,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
 
   defp validate_requested_architect_scopes(repo, %AccessGrant{} = access_grant, attrs) do
     work_request_ids = requested_scope_ids(attrs, "work_request_id", :work_request)
-    planned_slice_ids = requested_scope_ids(attrs, "planned_slice_id", :planned_slice)
+    work_package_ids = requested_scope_ids(attrs, "work_package_id", :work_package)
 
     case validate_explicit_architect_scopes(access_grant, explicit_grant_scopes(attrs)) do
       :ok ->
         case validate_requested_work_request_scopes(repo, access_grant, work_request_ids) do
-          :ok -> validate_requested_planned_slice_scopes(repo, access_grant, planned_slice_ids, work_request_ids)
+          :ok -> validate_requested_work_package_scopes(repo, access_grant, work_package_ids, work_request_ids)
           {:error, _reason} = error -> error
         end
 
@@ -728,19 +728,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   end
 
   defp validate_explicit_architect_scope(%AccessGrant{}, %AuthScope{type: type})
-       when type in [:work_request, :planned_slice],
+       when type in [:work_request, :work_package],
        do: :ok
 
   defp validate_explicit_architect_scope(%AccessGrant{} = access_grant, %AuthScope{type: :repo} = scope) do
     if repo_scope_match?(scope.repo, access_grant.scope_repo) and scope.base_branch == access_grant.scope_base_branch do
-      :ok
-    else
-      {:error, :invalid_scope}
-    end
-  end
-
-  defp validate_explicit_architect_scope(%AccessGrant{} = access_grant, %AuthScope{type: :work_package, id: work_package_id}) do
-    if is_binary(work_package_id) and work_package_id == access_grant.work_package_id do
       :ok
     else
       {:error, :invalid_scope}
@@ -782,32 +774,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
     end
   end
 
-  defp validate_requested_planned_slice_scopes(_repo, %AccessGrant{}, [], _work_request_ids), do: :ok
+  defp validate_requested_work_package_scopes(_repo, %AccessGrant{}, [], _work_request_ids), do: :ok
 
-  defp validate_requested_planned_slice_scopes(repo, %AccessGrant{} = access_grant, planned_slice_ids, work_request_ids) do
-    Enum.reduce_while(planned_slice_ids, :ok, fn planned_slice_id, :ok ->
-      case validate_requested_planned_slice_scope(repo, access_grant, planned_slice_id, work_request_ids) do
+  defp validate_requested_work_package_scopes(repo, %AccessGrant{} = access_grant, work_package_ids, work_request_ids) do
+    Enum.reduce_while(work_package_ids, :ok, fn work_package_id, :ok ->
+      case validate_requested_work_package_scope(repo, access_grant, work_package_id, work_request_ids) do
         :ok -> {:cont, :ok}
         {:error, _reason} = error -> {:halt, error}
       end
     end)
   end
 
-  defp validate_requested_planned_slice_scope(repo, %AccessGrant{} = access_grant, planned_slice_id, work_request_ids) do
-    scope_ids = persisted_scope_ids(repo, access_grant.id, "planned_slice")
-    work_request_ids = planned_slice_work_request_scope_ids(repo, access_grant, work_request_ids)
+  defp validate_requested_work_package_scope(repo, %AccessGrant{} = access_grant, work_package_id, work_request_ids) do
+    scope_ids = persisted_scope_ids(repo, access_grant.id, "work_package")
+    work_request_ids = work_package_work_request_scope_ids(repo, access_grant, work_request_ids)
 
-    case require_matching_persisted_scope(scope_ids, planned_slice_id) do
-      :ok -> validate_planned_slice_anchor(repo, access_grant, planned_slice_id, work_request_ids)
+    case require_matching_persisted_scope(scope_ids, work_package_id) do
+      :ok -> validate_work_package_anchor(repo, access_grant, work_package_id, work_request_ids)
       {:error, _reason} = error -> error
     end
   end
 
-  defp planned_slice_work_request_scope_ids(_repo, %AccessGrant{}, work_request_ids)
+  defp work_package_work_request_scope_ids(_repo, %AccessGrant{}, work_request_ids)
        when work_request_ids != [],
        do: work_request_ids
 
-  defp planned_slice_work_request_scope_ids(repo, %AccessGrant{} = access_grant, []) do
+  defp work_package_work_request_scope_ids(repo, %AccessGrant{} = access_grant, []) do
     persisted_scope_ids(repo, access_grant.id, "work_request")
   end
 
@@ -830,7 +822,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
 
   defp work_request_matches_anchor?(repo, %AccessGrant{} = access_grant, work_request_id) do
     work_request_matches_handoff_anchor?(repo, access_grant, work_request_id) or
-      work_request_has_anchor_slice?(repo, access_grant, work_request_id)
+      work_request_has_anchor_package?(repo, access_grant, work_request_id)
   end
 
   defp work_request_matches_handoff_anchor?(repo, %AccessGrant{} = access_grant, work_request_id)
@@ -914,46 +906,54 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
     |> binary_part(0, 16)
   end
 
-  defp work_request_has_anchor_slice?(repo, %AccessGrant{work_package_id: work_package_id} = access_grant, work_request_id)
+  defp work_request_has_anchor_package?(repo, %AccessGrant{work_package_id: work_package_id} = access_grant, work_request_id)
        when is_binary(work_package_id) do
-    query =
-      from(slice in "sympp_work_request_planned_slices",
-        where: field(slice, :work_package_id) == ^work_package_id,
-        where: field(slice, :work_request_id) == ^work_request_id,
-        select: 1,
-        limit: 1
-      )
-
-    repo.one(query) == 1 and work_request_matches_grant_scope?(repo, access_grant, work_request_id)
+    match?(%WorkPackage{work_request_id: ^work_request_id}, repo.get(WorkPackage, work_package_id)) and
+      work_request_matches_grant_scope?(repo, access_grant, work_request_id)
   end
 
-  defp work_request_has_anchor_slice?(_repo, %AccessGrant{}, _work_request_id), do: false
+  defp work_request_has_anchor_package?(_repo, %AccessGrant{}, _work_request_id), do: false
 
-  defp validate_planned_slice_anchor(repo, %AccessGrant{work_package_id: work_package_id} = access_grant, planned_slice_id, work_request_ids)
+  defp validate_work_package_anchor(repo, %AccessGrant{work_package_id: work_package_id} = access_grant, work_package_id, work_request_ids)
        when is_binary(work_package_id) do
-    query =
-      from(slice in "sympp_work_request_planned_slices",
-        where: field(slice, :id) == ^planned_slice_id,
-        where: field(slice, :work_package_id) == ^work_package_id,
-        select: field(slice, :work_request_id),
-        limit: 1
-      )
-
-    case repo.one(query) do
-      slice_work_request_id when is_binary(slice_work_request_id) ->
-        if (work_request_ids == [] or slice_work_request_id in work_request_ids) and
-             work_request_matches_grant_scope?(repo, access_grant, slice_work_request_id) do
+    case repo.get(WorkPackage, work_package_id) do
+      %WorkPackage{work_request_id: work_request_id} when is_binary(work_request_id) ->
+        if (work_request_ids == [] or work_request_id in work_request_ids) and
+             work_request_matches_grant_scope?(repo, access_grant, work_request_id) do
           :ok
         else
           {:error, :invalid_scope}
         end
 
-      _slice_work_request_id ->
+      %WorkPackage{} = work_package ->
+        if direct_package_anchor_matches?(repo, work_package, access_grant, work_request_ids) do
+          :ok
+        else
+          {:error, :invalid_scope}
+        end
+
+      _work_package ->
         {:error, :invalid_scope}
     end
   end
 
-  defp validate_planned_slice_anchor(_repo, %AccessGrant{}, _planned_slice_id, _work_request_id), do: {:error, :invalid_scope}
+  defp validate_work_package_anchor(_repo, %AccessGrant{}, _work_package_id, _work_request_id), do: {:error, :invalid_scope}
+
+  defp direct_package_anchor_matches?(_repo, %WorkPackage{}, %AccessGrant{phase_id: phase_id}, [])
+       when phase_id in [nil, ""],
+       do: true
+
+  defp direct_package_anchor_matches?(repo, %WorkPackage{} = work_package, %AccessGrant{} = access_grant, work_request_ids) do
+    phase_anchor_matches_grant?(work_package, access_grant) and
+      Enum.all?(work_request_ids, &work_request_matches_handoff_anchor?(repo, access_grant, &1))
+  end
+
+  defp phase_anchor_matches_grant?(%WorkPackage{} = work_package, %AccessGrant{} = access_grant) do
+    is_binary(work_package.phase_id) and
+      work_package.phase_id == access_grant.phase_id and
+      repo_scope_match?(work_package.repo, access_grant.scope_repo) and
+      work_package.base_branch == access_grant.scope_base_branch
+  end
 
   defp work_request_matches_grant_scope?(repo, %AccessGrant{} = access_grant, work_request_id)
        when is_binary(work_request_id) do
@@ -975,7 +975,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
       scopes =
         [
           work_request_scope,
-          explicit_planned_slice_scope(attrs),
+          explicit_work_package_scope(attrs),
           optional_work_package_scope(access_grant.work_package_id),
           optional_repo_scope(access_grant.scope_repo, access_grant.scope_base_branch)
         ]
@@ -993,7 +993,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
         validated_work_request_scope(repo, access_grant, work_request_id)
 
       nil ->
-        case requested_planned_slice_work_request_id_from_attrs(repo, access_grant.work_package_id, attrs) do
+        case requested_work_package_work_request_id_from_attrs(repo, access_grant.work_package_id, attrs) do
           {:ok, work_request_id} -> validated_work_request_scope(repo, access_grant, work_request_id)
           {:error, :not_found} -> work_package_work_request_scope(repo, access_grant)
         end
@@ -1015,54 +1015,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
     end
   end
 
-  defp requested_planned_slice_work_request_id_from_attrs(repo, work_package_id, attrs) do
-    case string_attr(attrs, "planned_slice_id") do
-      planned_slice_id when is_binary(planned_slice_id) ->
-        requested_planned_slice_work_request_id(repo, work_package_id, planned_slice_id)
+  defp requested_work_package_work_request_id_from_attrs(repo, _work_package_id, attrs) do
+    case string_attr(attrs, "work_package_id") do
+      work_package_id when is_binary(work_package_id) ->
+        work_request_id_for_work_package(repo, work_package_id)
 
       nil ->
         {:error, :not_found}
     end
   end
 
-  defp requested_planned_slice_work_request_id(_repo, work_package_id, _planned_slice_id)
-       when not is_binary(work_package_id),
-       do: {:error, :not_found}
-
-  defp requested_planned_slice_work_request_id(repo, work_package_id, planned_slice_id) do
-    query =
-      from(slice in "sympp_work_request_planned_slices",
-        where: field(slice, :id) == ^planned_slice_id,
-        where: field(slice, :work_package_id) == ^work_package_id,
-        select: field(slice, :work_request_id),
-        limit: 1
-      )
-
-    case repo.one(query) do
-      work_request_id when is_binary(work_request_id) -> {:ok, work_request_id}
-      _work_request_id -> {:error, :not_found}
-    end
-  end
-
   defp work_request_id_for_work_package(_repo, work_package_id) when not is_binary(work_package_id), do: {:error, :not_found}
 
   defp work_request_id_for_work_package(repo, work_package_id) do
-    query =
-      from(slice in "sympp_work_request_planned_slices",
-        where: field(slice, :work_package_id) == ^work_package_id,
-        select: field(slice, :work_request_id),
-        limit: 1
-      )
-
-    case repo.one(query) do
-      work_request_id when is_binary(work_request_id) -> {:ok, work_request_id}
-      _work_request_id -> {:error, :not_found}
+    case repo.get(WorkPackage, work_package_id) do
+      %WorkPackage{work_request_id: work_request_id} when is_binary(work_request_id) -> {:ok, work_request_id}
+      _work_package -> {:error, :not_found}
     end
   end
 
-  defp explicit_planned_slice_scope(attrs) do
-    case string_attr(attrs, "planned_slice_id") do
-      planned_slice_id when is_binary(planned_slice_id) -> AuthScope.planned_slice(planned_slice_id)
+  defp explicit_work_package_scope(attrs) do
+    case string_attr(attrs, "work_package_id") do
+      work_package_id when is_binary(work_package_id) -> AuthScope.work_package(work_package_id)
       nil -> nil
     end
   end
@@ -1096,9 +1070,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
 
   defp explicit_grant_scope_for_type(type, attrs) when type in [:work_request, "work_request"],
     do: explicit_id_scope(attrs, &AuthScope.work_request/1)
-
-  defp explicit_grant_scope_for_type(type, attrs) when type in [:planned_slice, "planned_slice"],
-    do: explicit_id_scope(attrs, &AuthScope.planned_slice/1)
 
   defp explicit_grant_scope_for_type(type, attrs) when type in [:work_package, "work_package"],
     do: explicit_id_scope(attrs, &AuthScope.work_package/1)

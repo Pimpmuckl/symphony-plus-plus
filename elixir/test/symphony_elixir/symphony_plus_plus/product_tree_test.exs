@@ -2,560 +2,190 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTreeTest do
   use ExUnit.Case, async: false
 
   alias Ecto.Adapters.SQL
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, Node, Revision, SliceLink}
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, Node, Revision}
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
 
   setup_all do
     database_path = WorkPackageFactory.database_path()
-
     start_supervised!({Repo, database: database_path, pool_size: 1})
     assert :ok = WorkRequestRepository.migrate(Repo)
-
     on_exit(fn -> File.rm(database_path) end)
-
     {:ok, repo: Repo}
   end
 
   setup %{repo: repo} do
     repo.delete_all(Revision)
     repo.delete_all(DependencyEdge)
-    repo.delete_all(SliceLink)
+    repo.delete_all(WorkPackage)
     repo.delete_all(Node)
-    repo.delete_all(PlannedSlice)
     repo.delete_all(WorkRequest)
     :ok
   end
 
-  test "projects optional nested product nodes with linked and direct slices", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-V3-PRODUCT-TREE", title: "VOD Intelligence Upgrade")
-    backend = create_node!(repo, work_request, id: "ptn_backend", title: "Backend", position: 1)
+  test "projects nested product nodes with canonical WorkPackage ownership", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-PRODUCT-TREE")
+    parent = create_node!(repo, work_request, id: "node_parent", title: "Backend", position: 1)
+    child = create_node!(repo, work_request, id: "node_child", parent_id: parent.id, title: "Serving", position: 1)
 
-    kraken =
-      create_node!(repo, work_request,
-        id: "ptn_kraken",
-        parent_id: backend.id,
-        title: "Kraken P1.1 contract alignment",
-        completion_mark: "partial",
-        position: 1
-      )
+    nested = add_work_package!(repo, work_request, id: "wp_nested", product_tree_node_id: child.id, status: "implementing")
+    direct = add_work_package!(repo, work_request, id: "wp_direct", status: "planned")
 
-    serving =
-      create_node!(repo, work_request,
-        id: "ptn_serving",
-        parent_id: backend.id,
-        title: "VOD Intelligence serving substrate",
-        completion_mark: "unknown",
-        position: 2
-      )
+    projection = ProductTree.project(repo, work_request.id, Enum.map([nested, direct], &payload/1))
+    nodes = Map.new(projection.nodes, &{&1.id, &1})
 
-    contract_slice = add_slice!(repo, work_request, id: "wrs_contract", title: "Canonical /streams metadata")
-    serving_slice = add_slice!(repo, work_request, id: "wrs_serving", title: "stream_score_rollups substrate")
-    direct_slice = add_slice!(repo, work_request, id: "wrs_cutover", title: "No pre-P1.1 compatibility")
-
-    assert {:ok, _link} =
-             ProductTree.create_slice_link(repo, %{
-               work_request_id: work_request.id,
-               product_tree_node_id: kraken.id,
-               planned_slice_id: contract_slice.id,
-               position: 1
-             })
-
-    assert {:ok, _link} =
-             ProductTree.create_slice_link(repo, %{
-               work_request_id: work_request.id,
-               product_tree_node_id: serving.id,
-               planned_slice_id: serving_slice.id,
-               position: 1
-             })
-
-    assert {:ok, detail} = Dashboard.work_request_detail(repo, work_request.id)
-
-    assert detail.product_tree.mode == "product_tree"
-    assert detail.product_tree.root_node_ids == [backend.id]
-    assert detail.product_tree.root_slice_ids == [direct_slice.id]
-    assert detail.product_tree.summary.node_count == 3
-    assert detail.product_tree.summary.slice_count == 3
-    assert detail.product_tree.summary.linked_slice_count == 2
-
-    nodes_by_id = Map.new(detail.product_tree.nodes, &{&1.id, &1})
-    assert nodes_by_id[backend.id].child_node_count == 2
-    assert nodes_by_id[backend.id].computed_completion_mark == "not_done"
-    assert nodes_by_id[kraken.id].slice_ids == [contract_slice.id]
-    assert nodes_by_id[kraken.id].computed_completion_mark == "not_done"
-    assert nodes_by_id[serving.id].slice_ids == [serving_slice.id]
-
-    override_node = create_node!(repo, work_request, id: "ptn_override", title: "Manual done with planned slice", completion_mark: "done")
-    override_slice = add_slice!(repo, work_request, id: "wrs_override", title: "Still planned execution")
-
-    assert {:ok, _link} =
-             ProductTree.create_slice_link(repo, %{
-               work_request_id: work_request.id,
-               product_tree_node_id: override_node.id,
-               planned_slice_id: override_slice.id,
-               position: 1
-             })
-
-    assert %{nodes: override_nodes} = ProductTree.project(repo, work_request.id, [%{"id" => override_slice.id, "operational_state" => %{"key" => "planned"}}])
-    assert Map.new(override_nodes, &{&1.id, &1})[override_node.id].computed_completion_mark == "not_done"
-
-    projected =
-      ProductTree.project(repo, work_request.id, [
-        %{"id" => contract_slice.id, "operational_state" => %{"key" => "blocked"}},
-        %{
-          "id" => serving_slice.id,
-          "operational_state" => %{
-            "key" => "active",
-            "attention_items" => [%{"key" => "clarification_question", "label" => "Clarification question", "tone" => "warning"}]
-          }
-        },
-        %{"id" => direct_slice.id, "operational_state" => %{"key" => "needs_attention"}}
-      ])
-
-    projected_nodes_by_id = Map.new(projected.nodes, &{&1.id, &1})
-    assert projected_nodes_by_id[kraken.id].attention_count == 1
-    assert projected_nodes_by_id[kraken.id].guidance_count == 0
-    assert projected_nodes_by_id[backend.id].computed_completion_mark == "partial"
-    assert projected_nodes_by_id[serving.id].computed_completion_mark == "partial"
-    assert projected_nodes_by_id[backend.id].attention_count == 2
-    assert projected_nodes_by_id[backend.id].guidance_count == 1
-    assert projected_nodes_by_id[serving.id].guidance_count == 1
-    assert projected_nodes_by_id[kraken.id].blocker_count == 1
-    assert projected_nodes_by_id[backend.id].blocker_count == 1
-    assert projected.summary.attention_count == 3
-    assert projected.summary.guidance_count == 1
-    assert projected.summary.blocker_count == 1
+    assert projection.mode == "product_tree"
+    assert projection.root_node_ids == [parent.id]
+    assert projection.root_work_package_ids == [direct.id]
+    assert nodes[child.id].work_package_ids == [nested.id]
+    assert nodes[child.id].computed_completion_mark == "partial"
+    assert nodes[parent.id].computed_completion_mark == "partial"
+    assert projection.summary.work_package_count == 2
   end
 
-  test "counts planning slices as partial product progress", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-V3-PLANNING-PROGRESS", title: "Planning progress")
-    node = create_node!(repo, work_request, id: "ptn_planning", title: "Planning node")
-    slice = add_slice!(repo, work_request, id: "wrs_planning", title: "Planning slice")
+  test "moves one canonical WorkPackage between a node and direct WorkRequest ownership", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-MOVE-PACKAGE")
+    first = create_node!(repo, work_request, id: "node_first")
+    second = create_node!(repo, work_request, id: "node_second")
+    package = add_work_package!(repo, work_request, id: "wp_move", product_tree_node_id: first.id)
 
-    assert {:ok, _link} =
-             ProductTree.create_slice_link(repo, %{
-               work_request_id: work_request.id,
-               product_tree_node_id: node.id,
-               planned_slice_id: slice.id,
-               position: 1
-             })
+    assert {:ok, moved} =
+             WorkRequestRepository.update_work_package(
+               repo,
+               work_request.id,
+               package.id,
+               package.contract_revision,
+               %{product_tree_node_id: second.id}
+             )
 
-    projected = ProductTree.project(repo, work_request.id, [%{"id" => slice.id, "operational_state" => %{"key" => "planning"}}])
+    assert moved.id == package.id
+    assert moved.product_tree_node_id == second.id
 
-    assert Map.new(projected.nodes, &{&1.id, &1})[node.id].computed_completion_mark == "partial"
+    assert {:ok, direct} =
+             WorkRequestRepository.update_work_package(
+               repo,
+               work_request.id,
+               package.id,
+               moved.contract_revision,
+               %{product_tree_node_id: nil}
+             )
+
+    projection = ProductTree.project(repo, work_request.id, [payload(direct)])
+    assert projection.root_work_package_ids == [package.id]
+    assert Enum.all?(projection.nodes, &(&1.work_package_ids == []))
   end
 
-  test "counts ready-to-finish slices as partial product progress", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-V3-READY-FINISH-PROGRESS", title: "Ready finish progress")
-    node = create_node!(repo, work_request, id: "ptn_ready_finish", title: "No-PR closeout")
-    slice = add_slice!(repo, work_request, id: "wrs_ready_finish", title: "Ready finish slice")
+  test "normalizes atom-keyed goals into worker engineering scope", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-ATOM-GOAL")
 
-    assert {:ok, _link} =
-             ProductTree.create_slice_link(repo, %{
-               work_request_id: work_request.id,
-               product_tree_node_id: node.id,
-               planned_slice_id: slice.id,
-               position: 1
-             })
+    assert {:ok, %{work_packages: [package]}} =
+             WorkRequestRepository.slice_work_request(repo, work_request.id, [
+               %{
+                 id: "wp_atom_goal",
+                 title: "Atom-keyed package",
+                 goal: "Own the canonical package boundary.",
+                 kind: "mcp",
+                 base_branch: work_request.base_branch,
+                 branch_pattern: "refactor/canonical-work-packages",
+                 allowed_file_globs: ["elixir/lib/**"],
+                 acceptance_criteria: ["The package has one identity."]
+               }
+             ])
 
-    projected = ProductTree.project(repo, work_request.id, [%{"id" => slice.id, "operational_state" => %{"key" => "ready_to_finish"}}])
-
-    assert Map.new(projected.nodes, &{&1.id, &1})[node.id].computed_completion_mark == "partial"
+    assert package.goal == "Own the canonical package boundary."
+    assert package.engineering_scope == package.goal
   end
 
-  test "visible-only projection keeps scoped slice paths without leaking hidden tree records", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-V3-SCOPED-PROJECTION", title: "Scoped projection")
-    root = create_node!(repo, work_request, id: "ptn_scoped_root", title: "Backend")
-    visible_node = create_node!(repo, work_request, id: "ptn_scoped_visible", parent_id: root.id, title: "Visible work")
-    hidden_node = create_node!(repo, work_request, id: "ptn_scoped_hidden", parent_id: root.id, title: "Hidden work")
-    hidden_unlinked_node = create_node!(repo, work_request, id: "ptn_scoped_unlinked", title: "Hidden unlinked work")
-    visible_slice = add_slice!(repo, work_request, id: "wrs_scoped_visible", title: "Visible slice")
-    hidden_slice = add_slice!(repo, work_request, id: "wrs_scoped_hidden", title: "Hidden slice")
-    direct_visible_slice = add_slice!(repo, work_request, id: "wrs_scoped_direct", title: "Visible direct slice")
+  test "validates the effective file scope when a package becomes docs work", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-DOCS-SCOPE")
+    package = add_work_package!(repo, work_request, id: "wp_docs_scope", allowed_file_globs: ["elixir/lib/**"])
 
-    assert {:ok, _link} =
-             ProductTree.create_slice_link(repo, %{
-               work_request_id: work_request.id,
-               product_tree_node_id: visible_node.id,
-               planned_slice_id: visible_slice.id,
-               position: 1
-             })
+    assert {:error, errors} =
+             WorkRequestRepository.update_work_package(
+               repo,
+               work_request.id,
+               package.id,
+               package.contract_revision,
+               %{kind: "docs"}
+             )
 
-    assert {:ok, _link} =
-             ProductTree.create_slice_link(repo, %{
-               work_request_id: work_request.id,
-               product_tree_node_id: hidden_node.id,
-               planned_slice_id: hidden_slice.id,
-               position: 2
-             })
+    assert Enum.any?(errors, &match?({:non_documentation_owned_glob, "elixir/lib/**"}, &1))
+    assert repo.get!(WorkPackage, package.id).kind == package.kind
+  end
 
-    assert {:ok, visible_edge} =
+  test "visible-only projection keeps the owned node path without leaking hidden nodes", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-VISIBLE-TREE")
+    parent = create_node!(repo, work_request, id: "node_visible_parent")
+    visible_node = create_node!(repo, work_request, id: "node_visible", parent_id: parent.id)
+    hidden_node = create_node!(repo, work_request, id: "node_hidden")
+    visible = add_work_package!(repo, work_request, id: "wp_visible", product_tree_node_id: visible_node.id)
+    _hidden = add_work_package!(repo, work_request, id: "wp_hidden", product_tree_node_id: hidden_node.id)
+
+    projection = ProductTree.project(repo, work_request.id, [payload(visible)], visible_only?: true)
+
+    assert MapSet.new(Enum.map(projection.nodes, & &1.id)) == MapSet.new([parent.id, visible_node.id])
+    refute Enum.any?(projection.nodes, &(&1.id == hidden_node.id))
+  end
+
+  test "rejects cross-WorkRequest node ownership and dependency endpoints", %{repo: repo} do
+    left = create_work_request!(repo, id: "WR-LEFT")
+    right = create_work_request!(repo, id: "WR-RIGHT")
+    left_node = create_node!(repo, left, id: "node_left")
+    right_package = add_work_package!(repo, right, id: "wp_right")
+
+    assert {:error, :not_found} =
+             WorkRequestRepository.update_work_package(
+               repo,
+               right.id,
+               right_package.id,
+               right_package.contract_revision,
+               %{product_tree_node_id: left_node.id}
+             )
+
+    assert {:error, {:constraint_failed, "product_tree_dependency_target_scope"}} =
              ProductTree.create_dependency_edge(repo, %{
-               id: "ptde_scoped_visible",
-               work_request_id: work_request.id,
-               source_kind: "product_node",
-               source_id: visible_node.id,
-               target_kind: "planned_slice",
-               target_id: visible_slice.id,
-               kind: "validates"
-             })
-
-    assert {:ok, _hidden_node_edge} =
-             ProductTree.create_dependency_edge(repo, %{
-               id: "ptde_scoped_hidden_node",
-               work_request_id: work_request.id,
-               source_kind: "product_node",
-               source_id: hidden_node.id,
-               target_kind: "planned_slice",
-               target_id: visible_slice.id,
-               kind: "depends_on",
-               reason: "Hidden node endpoint must not leak."
-             })
-
-    assert {:ok, _hidden_slice_edge} =
-             ProductTree.create_dependency_edge(repo, %{
-               id: "ptde_scoped_hidden_slice",
-               work_request_id: work_request.id,
-               source_kind: "planned_slice",
-               source_id: visible_slice.id,
-               target_kind: "planned_slice",
-               target_id: hidden_slice.id,
-               kind: "blocks",
-               reason: "Hidden slice endpoint must not leak."
-             })
-
-    visible_projection =
-      ProductTree.project(
-        repo,
-        work_request.id,
-        [
-          %{"id" => visible_slice.id, "status" => "planned"},
-          %{"id" => direct_visible_slice.id, "status" => "planned"}
-        ],
-        visible_only?: true
-      )
-
-    visible_nodes_by_id = Map.new(visible_projection.nodes, &{&1.id, &1})
-    assert Map.keys(visible_nodes_by_id) |> Enum.sort() == Enum.sort([root.id, visible_node.id])
-    assert visible_nodes_by_id[root.id].child_node_count == 1
-    assert visible_nodes_by_id[visible_node.id].slice_ids == [visible_slice.id]
-    assert visible_projection.root_node_ids == [root.id]
-    assert visible_projection.root_slice_ids == [direct_visible_slice.id]
-    assert visible_projection.dependency_edges |> Enum.map(& &1.id) == [visible_edge.id]
-
-    refute Map.has_key?(visible_nodes_by_id, hidden_node.id)
-    refute Map.has_key?(visible_nodes_by_id, hidden_unlinked_node.id)
-    refute inspect(visible_projection) =~ hidden_slice.id
-
-    visible_with_empty_nodes =
-      ProductTree.project(
-        repo,
-        work_request.id,
-        [
-          %{"id" => visible_slice.id, "status" => "planned"},
-          %{"id" => direct_visible_slice.id, "status" => "planned"}
-        ],
-        visible_only?: true,
-        include_unlinked_nodes?: true
-      )
-
-    visible_empty_nodes_by_id = Map.new(visible_with_empty_nodes.nodes, &{&1.id, &1})
-    assert Map.has_key?(visible_empty_nodes_by_id, hidden_unlinked_node.id)
-    refute Map.has_key?(visible_empty_nodes_by_id, hidden_node.id)
-    refute inspect(visible_with_empty_nodes) =~ hidden_slice.id
-
-    full_projection =
-      ProductTree.project(repo, work_request.id, [
-        %{"id" => visible_slice.id, "status" => "planned"},
-        %{"id" => direct_visible_slice.id, "status" => "planned"}
-      ])
-
-    full_nodes_by_id = Map.new(full_projection.nodes, &{&1.id, &1})
-    assert Map.has_key?(full_nodes_by_id, hidden_node.id)
-    assert Map.has_key?(full_nodes_by_id, hidden_unlinked_node.id)
-    assert full_nodes_by_id[hidden_node.id].slice_ids == [hidden_slice.id]
-  end
-
-  test "rejects cross-WorkRequest product tree relationships", %{repo: repo} do
-    left = create_work_request!(repo, id: "WR-V3-SCOPE-LEFT", title: "Left")
-    right = create_work_request!(repo, id: "WR-V3-SCOPE-RIGHT", title: "Right")
-    left_node = create_node!(repo, left, id: "ptn_left", title: "Left node")
-    right_node = create_node!(repo, right, id: "ptn_right", title: "Right node")
-    left_slice = add_slice!(repo, left, id: "wrs_left", title: "Left slice")
-    right_slice = add_slice!(repo, right, id: "wrs_right", title: "Right slice")
-
-    assert {:error, {:constraint_failed, "product_tree_node_parent_scope"}} =
-             ProductTree.create_node(repo, %{work_request_id: right.id, parent_id: left_node.id, title: "Cross parent"})
-
-    assert {:error, {:constraint_failed, "product_tree_slice_link_node_scope"}} =
-             ProductTree.create_slice_link(repo, %{
-               work_request_id: right.id,
-               product_tree_node_id: left_node.id,
-               planned_slice_id: right_slice.id
-             })
-
-    assert {:error, {:constraint_failed, "product_tree_slice_link_slice_scope"}} =
-             ProductTree.create_slice_link(repo, %{
                work_request_id: left.id,
-               product_tree_node_id: left_node.id,
-               planned_slice_id: right_slice.id
-             })
-
-    assert {:error, {:constraint_failed, "product_tree_dependency_source_scope"}} =
-             ProductTree.create_dependency_edge(repo, %{
-               work_request_id: right.id,
                source_kind: "product_node",
                source_id: left_node.id,
-               target_kind: "planned_slice",
-               target_id: right_slice.id,
-               kind: "depends_on",
-               reason: "Cross-request node should not scope."
-             })
-
-    assert {:ok, _edge} =
-             ProductTree.create_dependency_edge(repo, %{
-               work_request_id: right.id,
-               source_kind: "product_node",
-               source_id: right_node.id,
-               target_kind: "planned_slice",
-               target_id: right_slice.id,
-               kind: "depends_on",
-               reason: "Same-request relationships remain valid."
-             })
-
-    assert {:ok, _edge} =
-             ProductTree.create_dependency_edge(repo, %{
-               work_request_id: left.id,
-               source_kind: "planned_slice",
-               source_id: left_slice.id,
-               target_kind: "product_node",
-               target_id: left_node.id,
-               kind: "validates",
-               reason: "Same-request reverse relationships remain valid."
+               target_kind: "work_package",
+               target_id: right_package.id
              })
   end
 
-  test "projects simple WorkRequests as direct slices without requiring product nodes", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-V3-HOTFIX", title: "Fix cockpit typo")
-    slice = add_slice!(repo, work_request, id: "wrs_hotfix", title: "Patch typo")
-
-    assert {:ok, detail} = Dashboard.work_request_detail(repo, work_request.id)
-
-    assert detail.product_tree.mode == "direct_slices"
-    assert detail.product_tree.nodes == []
-    assert detail.product_tree.root_node_ids == []
-    assert detail.product_tree.root_slice_ids == [slice.id]
-    assert detail.product_tree.summary.node_count == 0
-    assert detail.product_tree.summary.slice_count == 1
-  end
-
-  test "does not count deferred child nodes as partial progress", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-V3-DEFERRED-MIX", title: "Deferred completion")
-    parent = create_node!(repo, work_request, id: "ptn_deferred_parent", title: "Parent")
-
-    create_node!(repo, work_request,
-      id: "ptn_deferred_child",
-      parent_id: parent.id,
-      title: "Deferred child",
-      completion_mark: "deferred"
-    )
-
-    create_node!(repo, work_request,
-      id: "ptn_not_done_child",
-      parent_id: parent.id,
-      title: "Untouched child",
-      completion_mark: "not_done"
-    )
-
-    assert {:ok, detail} = Dashboard.work_request_detail(repo, work_request.id)
-    nodes_by_id = Map.new(detail.product_tree.nodes, &{&1.id, &1})
-
-    assert nodes_by_id[parent.id].computed_completion_mark == "not_done"
-    assert detail.product_tree.summary.partial_count == 0
-  end
-
-  test "upserts product nodes without allowing parent cycles", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-V3-UPSERT", title: "Re-sort implementation plan")
-
-    assert {:ok, backend} =
-             ProductTree.upsert_node(repo, %{
-               work_request_id: work_request.id,
-               title: "Backend",
-               node_kind: "layer",
-               position: 1
-             })
-
-    assert {:ok, runtime} =
-             ProductTree.upsert_node(repo, %{
-               work_request_id: work_request.id,
-               parent_id: backend.id,
-               title: "Runtime cleanup",
-               position: 2
-             })
-
-    assert {:error, {:constraint_failed, "product_tree_node_parent_cycle"}} =
-             ProductTree.upsert_node(repo, %{
-               work_request_id: work_request.id,
-               product_tree_node_id: backend.id,
-               parent_id: runtime.id,
-               title: "Backend"
-             })
-
-    assert {:ok, renamed} =
-             ProductTree.upsert_node(repo, %{
-               work_request_id: work_request.id,
-               product_tree_node_id: runtime.id,
-               parent_id: nil,
-               title: "Runtime and storage cleanup",
-               completion_mark: "partial",
-               position: 0
-             })
-
-    assert renamed.id == runtime.id
-    assert renamed.parent_id == nil
-    assert renamed.title == "Runtime and storage cleanup"
-    assert renamed.completion_mark == "partial"
-    assert renamed.position == 0
-  end
-
-  test "moves planned slices between product nodes and direct WorkRequest scope", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-V3-MOVE-SLICE", title: "Sort converted slices")
-    backend = create_node!(repo, work_request, id: "ptn_move_backend", title: "Backend")
-    frontend = create_node!(repo, work_request, id: "ptn_move_frontend", title: "Frontend")
-    slice = add_slice!(repo, work_request, id: "wrs_move_slice", title: "Move me")
-
-    assert {:ok, backend_link} =
-             ProductTree.move_slice_link(repo, %{
-               work_request_id: work_request.id,
-               product_tree_node_id: backend.id,
-               planned_slice_id: slice.id,
-               role: "evidence",
-               position: 1
-             })
-
-    assert backend_link.product_tree_node_id == backend.id
-    assert backend_link.role == "evidence"
-    assert backend_link.position == 1
-
-    assert {:ok, frontend_link} =
-             ProductTree.move_slice_link(repo, %{
-               work_request_id: work_request.id,
-               product_tree_node_id: frontend.id,
-               planned_slice_id: slice.id
-             })
-
-    assert frontend_link.id == backend_link.id
-    assert frontend_link.product_tree_node_id == frontend.id
-    assert frontend_link.role == "evidence"
-    assert frontend_link.position == 1
-
-    projected = ProductTree.project(repo, work_request.id, [%{"id" => slice.id, "status" => "planned"}])
-    nodes_by_id = Map.new(projected.nodes, &{&1.id, &1})
-    assert nodes_by_id[backend.id].slice_ids == []
-    assert nodes_by_id[frontend.id].slice_ids == [slice.id]
-    assert projected.root_slice_ids == []
-
-    assert {:ok, nil} =
-             ProductTree.move_slice_link(repo, %{
-               work_request_id: work_request.id,
-               product_tree_node_id: nil,
-               planned_slice_id: slice.id
-             })
-
-    moved_back = ProductTree.project(repo, work_request.id, [%{"id" => slice.id, "status" => "planned"}])
-    assert moved_back.root_slice_ids == [slice.id]
-    assert Enum.all?(moved_back.nodes, &(&1.slice_ids == []))
-  end
-
-  test "product tree schema relies on primary keys instead of redundant id indexes", %{repo: repo} do
-    node_indexes = index_names(repo, "sympp_product_tree_nodes")
-    slice_link_indexes = index_names(repo, "sympp_product_tree_slice_links")
-    dependency_edge_indexes = index_names(repo, "sympp_product_tree_dependency_edges")
-    revision_indexes = index_names(repo, "sympp_product_tree_revisions")
-
-    refute "sympp_product_tree_nodes_id_unique_index" in node_indexes
-    refute "sympp_product_tree_slice_links_id_unique_index" in slice_link_indexes
-    refute "sympp_product_tree_dependency_edges_id_unique_index" in dependency_edge_indexes
-    refute "sympp_product_tree_revisions_id_unique_index" in revision_indexes
-
-    assert "sympp_product_tree_slice_links_planned_slice_unique_index" in slice_link_indexes
-    assert "sympp_product_tree_revisions_work_request_revision_unique_index" in revision_indexes
-  end
-
-  test "normalizes native primary key collisions for product tree records", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-V3-PK-COLLISION", title: "Duplicate ids")
-    node = create_node!(repo, work_request, id: "ptn_duplicate_primary_key", title: "Original node")
+  test "records revisions and no removed product-tree linkage table remains", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-REVISION")
+    node = create_node!(repo, work_request, id: "node_revision")
 
     assert {:error, :id_already_exists} =
-             ProductTree.create_node(repo, %{
-               id: node.id,
-               work_request_id: work_request.id,
-               title: "Duplicate node"
-             })
+             ProductTree.create_node(repo, %{id: node.id, work_request_id: work_request.id, title: "Duplicate"})
 
-    first_slice = add_slice!(repo, work_request, id: "wrs_duplicate_link_first", title: "First linked slice")
-    second_slice = add_slice!(repo, work_request, id: "wrs_duplicate_link_second", title: "Second linked slice")
+    assert {:ok, first} = ProductTree.record_revision(repo, work_request.id, %{id: "revision_one", reason: "First"})
+    assert first.revision_number == 1
+    assert {:ok, second} = ProductTree.record_revision(repo, work_request.id, %{id: "revision_two", reason: "Second"})
+    assert second.revision_number == 2
 
-    assert {:ok, slice_link} =
-             ProductTree.create_slice_link(repo, %{
-               id: "ptl_duplicate_primary_key",
-               work_request_id: work_request.id,
-               product_tree_node_id: node.id,
-               planned_slice_id: first_slice.id
-             })
+    %{rows: rows} =
+      SQL.query!(repo, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sympp_product_tree_slice_links'")
 
-    assert {:error, :id_already_exists} =
-             ProductTree.create_slice_link(repo, %{
-               id: slice_link.id,
-               work_request_id: work_request.id,
-               product_tree_node_id: node.id,
-               planned_slice_id: second_slice.id
-             })
-
-    assert {:ok, edge} =
-             ProductTree.create_dependency_edge(repo, %{
-               id: "pte_duplicate_primary_key",
-               work_request_id: work_request.id,
-               source_kind: "product_node",
-               source_id: node.id,
-               target_kind: "planned_slice",
-               target_id: first_slice.id,
-               kind: "depends_on",
-               reason: "Original dependency."
-             })
-
-    assert {:error, :id_already_exists} =
-             ProductTree.create_dependency_edge(repo, %{
-               id: edge.id,
-               work_request_id: work_request.id,
-               source_kind: "product_node",
-               source_id: node.id,
-               target_kind: "planned_slice",
-               target_id: second_slice.id,
-               kind: "blocks",
-               reason: "Duplicate dependency id."
-             })
-
-    assert {:ok, revision} = ProductTree.record_revision(repo, work_request.id, %{id: "ptr_duplicate_primary_key", reason: "First"})
-    assert {:error, :id_already_exists} = ProductTree.record_revision(repo, work_request.id, %{id: revision.id, reason: "Second"})
+    assert rows == []
   end
 
   defp create_work_request!(repo, overrides) do
     attrs =
       %{
-        id: "WR-V3-#{System.unique_integer([:positive])}",
-        title: "Improve product tree",
+        id: "WR-#{System.unique_integer([:positive])}",
+        title: "Canonical product tree",
         repo: "symphony-plus-plus",
-        base_branch: "v3",
+        base_branch: "main",
         work_type: "feature",
-        human_description: "Make WorkRequest progress product-readable.",
+        human_description: "Project canonical WorkPackages.",
         constraints: %{},
-        desired_dispatch_shape: "architect_led_feature_branch"
+        desired_dispatch_shape: "single_package",
+        status: "sliced"
       }
       |> Map.merge(Map.new(overrides))
 
@@ -565,39 +195,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTreeTest do
 
   defp create_node!(repo, work_request, overrides) do
     attrs =
-      %{
-        work_request_id: work_request.id,
-        title: "Product node"
-      }
+      %{work_request_id: work_request.id, title: "Product node"}
       |> Map.merge(Map.new(overrides))
 
     assert {:ok, node} = ProductTree.create_node(repo, attrs)
     node
   end
 
-  defp add_slice!(repo, work_request, overrides) do
+  defp add_work_package!(repo, work_request, overrides) do
     attrs =
       %{
-        title: "Implement slice",
-        goal: "Deliver one product tree slice.",
-        work_package_kind: "mcp",
-        target_base_branch: work_request.base_branch,
-        branch_pattern: "feat/v3-product-tree",
-        owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/product_tree/*.ex"],
+        title: "Canonical WorkPackage",
+        goal: "Deliver a product boundary.",
+        kind: "mcp",
+        base_branch: work_request.base_branch,
+        branch_pattern: "refactor/canonical-work-packages",
+        allowed_file_globs: ["elixir/lib/**"],
         forbidden_file_globs: [],
-        acceptance_criteria: ["Slice is represented in the product tree."],
-        validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/product_tree_test.exs"],
+        acceptance_criteria: ["The package has one identity."],
+        validation_steps: ["mix test"],
         review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
-        stop_conditions: ["Stop on schema mismatch."]
+        stop_conditions: ["Stop on scope mismatch."]
       }
       |> Map.merge(Map.new(overrides))
 
-    assert {:ok, slice} = WorkRequestRepository.add_planned_slice(repo, work_request.id, attrs)
-    slice
+    assert {:ok, package} = CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, attrs)
+    package
   end
 
-  defp index_names(repo, table) do
-    %{rows: index_rows} = SQL.query!(repo, "PRAGMA index_list(#{table})")
-    Enum.map(index_rows, &Enum.at(&1, 1))
+  defp payload(%WorkPackage{} = package) do
+    %{
+      "id" => package.id,
+      "product_tree_node_id" => package.product_tree_node_id,
+      "sequence" => package.sequence,
+      "status" => package.status
+    }
   end
 end

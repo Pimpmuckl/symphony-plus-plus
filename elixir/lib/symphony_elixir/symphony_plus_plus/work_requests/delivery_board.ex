@@ -8,10 +8,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @ready_statuses ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"]
@@ -24,42 +23,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   @delivery_states %{
     "pr_merged" => {"delivered", "Delivered", "success", "Recorded delivery outcome says the linked PR merged."},
-    "completed_no_pr" => {"completed_no_pr", "Completed Without PR", "success", "Recorded delivery outcome says the slice completed without a PR."},
-    "superseded" => {"superseded", "Superseded", "neutral", "Recorded delivery outcome says this slice was superseded by a successor."},
-    "abandoned" => {"abandoned", "Abandoned", "neutral", "Recorded delivery outcome says this slice was abandoned."}
+    "completed_no_pr" => {"completed_no_pr", "Completed Without PR", "success", "Recorded delivery outcome says the WorkPackage completed without a PR."},
+    "superseded" => {"superseded", "Superseded", "neutral", "Recorded delivery outcome says this WorkPackage was superseded by a successor."},
+    "abandoned" => {"abandoned", "Abandoned", "neutral", "Recorded delivery outcome says this WorkPackage was abandoned."}
   }
 
   @attention_details %{
     "active_blocker" => {"Blocker", "critical", "Active blocker."},
     "active_runtime" => {"Active", "info", "Worker activity is still current."},
-    "linked_package_active_after_delivery" => {"Active After Delivery", "warning", "Worker activity remains after delivery closeout."},
-    "linked_package_blocked_after_delivery" => {"Blocked After Delivery", "warning", "A blocker remains after delivery closeout."},
-    "linked_package_status_stale_after_delivery" => {"Status Needs Repair", "warning", "Package status does not match the delivery outcome."},
-    "ambiguous_linked_work_package" => {"Ambiguous Package", "warning", "Multiple planned slices point at the same WorkPackage."},
-    "missing_linked_work_package" => {"Missing Package", "warning", "Dispatched slice has no visible package."},
+    "work_package_active_after_delivery" => {"Active After Delivery", "warning", "Worker activity remains after delivery closeout."},
+    "work_package_blocked_after_delivery" => {"Blocked After Delivery", "warning", "A blocker remains after delivery closeout."},
+    "work_package_status_stale_after_delivery" => {"Status Needs Repair", "warning", "Package status does not match the delivery outcome."},
     "pr_merged_without_delivery_outcome" => {"Needs Closeout", "warning", "Merged PR needs delivery closeout."},
     "terminal_package_without_delivery_outcome" => {"Needs Closeout", "warning", "Terminal package needs delivery closeout."}
   }
 
   @type repo :: module()
   @type error :: Repository.error() | :database_busy | {:storage_failed, String.t()} | term()
-  @type planned_slice_visibility :: %{
-          visible_planned_slices: [PlannedSlice.t()]
+  @type work_package_visibility :: %{
+          visible_work_packages: [WorkPackage.t()]
         }
 
   @spec project(repo(), String.t()) :: {:ok, map()} | {:error, error()}
   @spec project(repo(), String.t(), keyword()) :: {:ok, map()} | {:error, error()}
   def project(repo, work_request_id, opts \\ []) when is_atom(repo) and is_binary(work_request_id) and is_list(opts) do
     with {:ok, _work_request} <- work_request(repo, work_request_id, opts),
-         {:ok, planned_slices} <- planned_slices(repo, work_request_id, opts),
-         {:ok, deliveries_by_slice_id} <- planned_slice_deliveries_by_id(repo, work_request_id, planned_slices),
-         visible_planned_slices = planned_slices,
-         {:ok, context} <- projection_context(repo, visible_planned_slices, deliveries_by_slice_id, opts) do
-      slices_by_scope = planned_slices_by_scope(visible_planned_slices)
+         {:ok, work_packages} <- work_packages(repo, work_request_id, opts),
+         {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_request_id, work_packages),
+         visible_work_packages = work_packages,
+         {:ok, context} <- projection_context(repo, visible_work_packages, deliveries_by_slice_id, opts) do
+      slices_by_scope = work_packages_by_scope(visible_work_packages)
 
       slices =
-        Enum.map(visible_planned_slices, fn %PlannedSlice{} = planned_slice ->
-          project_slice(planned_slice, deliveries_by_slice_id, slices_by_scope, context, opts)
+        Enum.map(visible_work_packages, fn %WorkPackage{} = work_package ->
+          project_slice(work_package, deliveries_by_slice_id, slices_by_scope, context, opts)
         end)
 
       {:ok, board_payload(work_request_id, slices)}
@@ -68,45 +65,45 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  @spec visible_planned_slices(repo(), String.t(), [PlannedSlice.t()]) ::
-          {:ok, [PlannedSlice.t()]} | {:error, error()}
-  @spec visible_planned_slices(repo(), String.t(), [PlannedSlice.t()], keyword()) ::
-          {:ok, [PlannedSlice.t()]} | {:error, error()}
-  def visible_planned_slices(repo, work_request_id, planned_slices, opts \\ [])
-      when is_atom(repo) and is_binary(work_request_id) and is_list(planned_slices) and is_list(opts) do
-    with {:ok, visibility} <- planned_slice_visibility(repo, work_request_id, planned_slices, opts) do
-      {:ok, Map.fetch!(visibility, :visible_planned_slices)}
+  @spec visible_work_packages(repo(), String.t(), [WorkPackage.t()]) ::
+          {:ok, [WorkPackage.t()]} | {:error, error()}
+  @spec visible_work_packages(repo(), String.t(), [WorkPackage.t()], keyword()) ::
+          {:ok, [WorkPackage.t()]} | {:error, error()}
+  def visible_work_packages(repo, work_request_id, work_packages, opts \\ [])
+      when is_atom(repo) and is_binary(work_request_id) and is_list(work_packages) and is_list(opts) do
+    with {:ok, visibility} <- work_package_visibility(repo, work_request_id, work_packages, opts) do
+      {:ok, Map.fetch!(visibility, :visible_work_packages)}
     end
   end
 
-  @spec planned_slice_visibility(repo(), String.t(), [PlannedSlice.t()]) ::
-          {:ok, planned_slice_visibility()} | {:error, error()}
-  @spec planned_slice_visibility(repo(), String.t(), [PlannedSlice.t()], keyword()) ::
-          {:ok, planned_slice_visibility()} | {:error, error()}
-  def planned_slice_visibility(_repo, _work_request_id, planned_slices, _opts \\ [])
-      when is_list(planned_slices) do
-    {:ok, %{visible_planned_slices: planned_slices}}
+  @spec work_package_visibility(repo(), String.t(), [WorkPackage.t()]) ::
+          {:ok, work_package_visibility()} | {:error, error()}
+  @spec work_package_visibility(repo(), String.t(), [WorkPackage.t()], keyword()) ::
+          {:ok, work_package_visibility()} | {:error, error()}
+  def work_package_visibility(_repo, _work_request_id, work_packages, _opts \\ [])
+      when is_list(work_packages) do
+    {:ok, %{visible_work_packages: work_packages}}
   end
 
-  @spec project_many(repo(), [WorkRequest.t()], %{optional(String.t()) => [PlannedSlice.t()]}) ::
+  @spec project_many(repo(), [WorkRequest.t()], %{optional(String.t()) => [WorkPackage.t()]}) ::
           {:ok, %{optional(String.t()) => map()}} | {:error, error()}
-  @spec project_many(repo(), [WorkRequest.t()], %{optional(String.t()) => [PlannedSlice.t()]}, keyword()) ::
+  @spec project_many(repo(), [WorkRequest.t()], %{optional(String.t()) => [WorkPackage.t()]}, keyword()) ::
           {:ok, %{optional(String.t()) => map()}} | {:error, error()}
-  def project_many(repo, work_requests, planned_slices_by_request, opts \\ [])
-      when is_atom(repo) and is_list(work_requests) and is_map(planned_slices_by_request) and is_list(opts) do
-    with :ok <- validate_planned_slices_by_request(work_requests, planned_slices_by_request),
-         planned_slices = all_planned_slices(work_requests, planned_slices_by_request),
-         {:ok, deliveries_by_slice_id} <- planned_slice_deliveries_by_id(repo, planned_slices),
-         visible_planned_slices_by_request = planned_slices_by_request,
-         visible_planned_slices = all_planned_slices(work_requests, visible_planned_slices_by_request),
-         {:ok, context} <- projection_context(repo, visible_planned_slices, deliveries_by_slice_id, opts) do
+  def project_many(repo, work_requests, work_packages_by_request, opts \\ [])
+      when is_atom(repo) and is_list(work_requests) and is_map(work_packages_by_request) and is_list(opts) do
+    with :ok <- validate_work_packages_by_request(work_requests, work_packages_by_request),
+         work_packages = all_work_packages(work_requests, work_packages_by_request),
+         {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_packages),
+         visible_work_packages_by_request = work_packages_by_request,
+         visible_work_packages = all_work_packages(work_requests, visible_work_packages_by_request),
+         {:ok, context} <- projection_context(repo, visible_work_packages, deliveries_by_slice_id, opts) do
       {:ok,
        Map.new(
          work_requests,
          &project_request_board(
            &1,
-           planned_slices_by_request,
-           visible_planned_slices_by_request,
+           work_packages_by_request,
+           visible_work_packages_by_request,
            deliveries_by_slice_id,
            context,
            opts
@@ -119,15 +116,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp project_request_board(
          %WorkRequest{} = work_request,
-         _planned_slices_by_request,
-         visible_planned_slices_by_request,
+         _work_packages_by_request,
+         visible_work_packages_by_request,
          deliveries_by_slice_id,
          context,
          opts
        ) do
-    visible_request_planned_slices = Map.get(visible_planned_slices_by_request, work_request.id, [])
-    slices_by_scope = planned_slices_by_scope(visible_request_planned_slices)
-    slices = Enum.map(visible_request_planned_slices, &project_slice(&1, deliveries_by_slice_id, slices_by_scope, context, opts))
+    visible_request_work_packages = Map.get(visible_work_packages_by_request, work_request.id, [])
+    slices_by_scope = work_packages_by_scope(visible_request_work_packages)
+    slices = Enum.map(visible_request_work_packages, &project_slice(&1, deliveries_by_slice_id, slices_by_scope, context, opts))
 
     {work_request.id, board_payload(work_request.id, slices)}
   end
@@ -140,14 +137,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     end
   end
 
-  defp planned_slices(repo, work_request_id, opts) do
-    case Keyword.get(opts, :planned_slices) do
+  defp work_packages(repo, work_request_id, opts) do
+    case Keyword.get(opts, :work_packages) do
       nil ->
-        Repository.list_planned_slices(repo, work_request_id)
+        Repository.list_work_packages(repo, work_request_id)
 
-      planned_slices when is_list(planned_slices) ->
-        if Enum.all?(planned_slices, &planned_slice_for_work_request?(&1, work_request_id)) do
-          {:ok, planned_slices}
+      work_packages when is_list(work_packages) ->
+        if Enum.all?(work_packages, &work_package_for_work_request?(&1, work_request_id)) do
+          {:ok, work_packages}
         else
           {:error, :not_found}
         end
@@ -157,102 +154,101 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     end
   end
 
-  defp planned_slice_for_work_request?(%PlannedSlice{work_request_id: slice_work_request_id}, work_request_id) do
+  defp work_package_for_work_request?(%WorkPackage{work_request_id: slice_work_request_id}, work_request_id) do
     slice_work_request_id == work_request_id
   end
 
-  defp planned_slice_for_work_request?(_value, _work_request_id), do: false
+  defp work_package_for_work_request?(_value, _work_request_id), do: false
 
-  defp planned_slice_deliveries_by_id(_repo, _work_request_id, []), do: {:ok, %{}}
+  defp work_package_deliveries_by_id(_repo, _work_request_id, []), do: {:ok, %{}}
 
-  defp planned_slice_deliveries_by_id(repo, work_request_id, planned_slices) do
+  defp work_package_deliveries_by_id(repo, work_request_id, work_packages) do
     deliveries =
-      Enum.flat_map(planned_slice_chunks(planned_slices), fn planned_slice_chunk ->
-        planned_slice_ids = Enum.map(planned_slice_chunk, & &1.id)
+      Enum.flat_map(work_package_chunks(work_packages), fn work_package_chunk ->
+        work_package_ids = Enum.map(work_package_chunk, & &1.id)
 
         repo.all(
-          from(delivery in PlannedSliceDelivery,
+          from(delivery in WorkPackageDelivery,
             where: delivery.work_request_id == ^work_request_id,
-            where: delivery.planned_slice_id in ^planned_slice_ids
+            where: delivery.work_package_id in ^work_package_ids
           )
         )
       end)
 
-    {:ok, Map.new(deliveries, &{{&1.work_request_id, &1.planned_slice_id}, &1})}
+    {:ok, Map.new(deliveries, &{{&1.work_request_id, &1.work_package_id}, &1})}
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp planned_slice_deliveries_by_id(_repo, []), do: {:ok, %{}}
+  defp work_package_deliveries_by_id(_repo, []), do: {:ok, %{}}
 
-  defp planned_slice_deliveries_by_id(repo, planned_slices) do
+  defp work_package_deliveries_by_id(repo, work_packages) do
     deliveries =
-      Enum.flat_map(planned_slice_chunks(planned_slices), fn planned_slice_chunk ->
-        planned_slice_ids = Enum.map(planned_slice_chunk, & &1.id)
-        work_request_ids = planned_slice_chunk |> Enum.map(& &1.work_request_id) |> Enum.uniq()
+      Enum.flat_map(work_package_chunks(work_packages), fn work_package_chunk ->
+        work_package_ids = Enum.map(work_package_chunk, & &1.id)
+        work_request_ids = work_package_chunk |> Enum.map(& &1.work_request_id) |> Enum.uniq()
 
         repo.all(
-          from(delivery in PlannedSliceDelivery,
+          from(delivery in WorkPackageDelivery,
             where: delivery.work_request_id in ^work_request_ids,
-            where: delivery.planned_slice_id in ^planned_slice_ids
+            where: delivery.work_package_id in ^work_package_ids
           )
         )
       end)
 
-    {:ok, Map.new(deliveries, &{{&1.work_request_id, &1.planned_slice_id}, &1})}
+    {:ok, Map.new(deliveries, &{{&1.work_request_id, &1.work_package_id}, &1})}
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp planned_slice_chunks(planned_slices), do: Enum.chunk_every(planned_slices, @delivery_lookup_chunk_size)
+  defp work_package_chunks(work_packages), do: Enum.chunk_every(work_packages, @delivery_lookup_chunk_size)
   defp context_lookup_chunks(work_package_ids), do: Enum.chunk_every(work_package_ids, @context_lookup_chunk_size)
 
-  defp validate_planned_slices_by_request(work_requests, planned_slices_by_request) do
-    if Enum.all?(work_requests, &planned_slices_match_work_request?(&1, planned_slices_by_request)) do
+  defp validate_work_packages_by_request(work_requests, work_packages_by_request) do
+    if Enum.all?(work_requests, &work_packages_match_work_request?(&1, work_packages_by_request)) do
       :ok
     else
       {:error, :not_found}
     end
   end
 
-  defp planned_slices_match_work_request?(%WorkRequest{} = work_request, planned_slices_by_request) do
-    planned_slices_by_request
+  defp work_packages_match_work_request?(%WorkRequest{} = work_request, work_packages_by_request) do
+    work_packages_by_request
     |> Map.get(work_request.id, [])
-    |> Enum.all?(&planned_slice_for_work_request?(&1, work_request.id))
+    |> Enum.all?(&work_package_for_work_request?(&1, work_request.id))
   end
 
-  defp all_planned_slices(work_requests, planned_slices_by_request) do
-    Enum.flat_map(work_requests, &Map.get(planned_slices_by_request, &1.id, []))
+  defp all_work_packages(work_requests, work_packages_by_request) do
+    Enum.flat_map(work_requests, &Map.get(work_packages_by_request, &1.id, []))
   end
 
-  defp board_payload(work_request_id, slices) do
+  defp board_payload(work_request_id, work_packages) do
     %{
       work_request_id: work_request_id,
-      slice_count: length(slices),
-      counts: state_counts(slices),
-      slices: slices
+      work_package_count: length(work_packages),
+      counts: state_counts(work_packages),
+      work_packages: work_packages
     }
   end
 
-  defp delivery_for_slice(deliveries_by_slice_id, %PlannedSlice{} = planned_slice) do
-    Map.get(deliveries_by_slice_id, {planned_slice.work_request_id, planned_slice.id})
+  defp delivery_for_slice(deliveries_by_slice_id, %WorkPackage{} = work_package) do
+    Map.get(deliveries_by_slice_id, {work_package.work_request_id, work_package.id})
   end
 
-  defp planned_slices_by_scope(planned_slices) do
-    Map.new(planned_slices, &{{&1.work_request_id, &1.id}, &1})
+  defp work_packages_by_scope(work_packages) do
+    Map.new(work_packages, &{{&1.work_request_id, &1.id}, &1})
   end
 
-  defp projection_context(repo, planned_slices, deliveries_by_slice_id, opts) do
+  defp projection_context(repo, work_packages, deliveries_by_slice_id, opts) do
     all_work_package_ids =
-      planned_slices
-      |> Enum.flat_map(fn %PlannedSlice{} = planned_slice ->
-        delivery = delivery_for_slice(deliveries_by_slice_id, planned_slice)
-        [planned_slice.work_package_id, delivery && delivery.successor_work_package_id]
+      work_packages
+      |> Enum.flat_map(fn %WorkPackage{} = work_package ->
+        delivery = delivery_for_slice(deliveries_by_slice_id, work_package)
+        [work_package.id, delivery && delivery.successor_work_package_id]
       end)
       |> Enum.filter(&filled_string?/1)
       |> Enum.uniq()
 
-    ambiguous_work_package_ids = ambiguous_work_package_ids(repo, all_work_package_ids)
     work_package_ids = visible_work_package_ids(all_work_package_ids, Keyword.get(opts, :visible_work_package_ids, :all))
     hidden_work_package_ids = MapSet.difference(MapSet.new(all_work_package_ids), MapSet.new(work_package_ids))
 
@@ -280,29 +276,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
        progress_events: progress_events,
        activity_contexts: activity_contexts,
        metadata_contexts: preloaded_metadata_contexts,
-       hidden_work_package_ids: hidden_work_package_ids,
-       ambiguous_work_package_ids: ambiguous_work_package_ids
+       hidden_work_package_ids: hidden_work_package_ids
      }}
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp ambiguous_work_package_ids(_repo, []), do: MapSet.new()
-
-  defp ambiguous_work_package_ids(repo, work_package_ids) do
-    work_package_ids
-    |> context_lookup_chunks()
-    |> Enum.flat_map(fn work_package_id_chunk ->
-      repo.all(
-        from(planned_slice in PlannedSlice,
-          where: planned_slice.work_package_id in ^work_package_id_chunk,
-          group_by: planned_slice.work_package_id,
-          having: count(planned_slice.id) > 1,
-          select: planned_slice.work_package_id
-        )
-      )
-    end)
-    |> MapSet.new()
   end
 
   defp visible_work_package_ids(work_package_ids, :all), do: work_package_ids
@@ -437,44 +414,43 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     |> Enum.reduce(%{}, &Map.merge/2)
   end
 
-  defp project_slice(%PlannedSlice{} = planned_slice, deliveries_by_slice_id, slices_by_scope, context, opts) do
-    delivery = delivery_for_slice(deliveries_by_slice_id, planned_slice)
-    work_package = slice_work_package_summary(planned_slice.work_package_id, context, opts)
-    operational_work_package = work_package || hidden_work_package_marker(planned_slice, delivery, context)
-    operational_state = operational_state(planned_slice, delivery, operational_work_package)
+  defp project_slice(%WorkPackage{} = work_package, deliveries_by_slice_id, slices_by_scope, context, opts) do
+    delivery = delivery_for_slice(deliveries_by_slice_id, work_package)
+    work_package_summary = slice_work_package_summary(work_package.id, context, opts)
+    operational_work_package = work_package_summary || hidden_work_package_marker(work_package, context)
+    operational_state = operational_state(work_package, delivery, operational_work_package)
 
     if Keyword.get(opts, :slice_projection) == :operational_state do
-      operational_slice(planned_slice, delivery, operational_state)
+      operational_slice(work_package, delivery, operational_state)
     else
       successor = successor_context(delivery, slices_by_scope, context)
 
-      full_slice(planned_slice, delivery, context, work_package, successor, operational_state)
+      full_slice(work_package, delivery, context, work_package_summary, successor, operational_state)
     end
   end
 
-  defp operational_slice(%PlannedSlice{} = planned_slice, delivery, operational_state) do
+  defp operational_slice(%WorkPackage{} = work_package, delivery, operational_state) do
     %{
-      id: planned_slice.id,
-      work_request_id: planned_slice.work_request_id,
-      raw_status: planned_slice.status,
+      id: work_package.id,
+      work_request_id: work_package.work_request_id,
+      raw_status: work_package.status,
       delivery_outcome: delivery && delivery.outcome,
       operational_state: operational_state,
       attention_reason_codes: Map.fetch!(operational_state, :attention_reason_codes)
     }
   end
 
-  defp full_slice(%PlannedSlice{} = planned_slice, delivery, context, work_package, successor, operational_state) do
+  defp full_slice(%WorkPackage{} = work_package, delivery, context, work_package_summary, successor, operational_state) do
     %{
-      id: planned_slice.id,
-      work_request_id: planned_slice.work_request_id,
-      sequence: planned_slice.sequence,
-      title: planned_slice.title,
-      raw_status: planned_slice.status,
+      id: work_package.id,
+      work_request_id: work_package.work_request_id,
+      sequence: work_package.sequence,
+      title: work_package.title,
+      raw_status: work_package.status,
       delivery_outcome: delivery && delivery.outcome,
       delivery: delivery_summary(delivery, context),
-      work_package: work_package,
-      work_package_hidden?: hidden_work_package?(planned_slice.work_package_id, context),
-      work_package_ambiguous?: visible_ambiguous_work_package?(planned_slice.work_package_id, context),
+      work_package: work_package_summary,
+      work_package_hidden?: hidden_work_package?(work_package.id, context),
       successor: successor,
       operational_state: operational_state,
       attention_reason_codes: Map.fetch!(operational_state, :attention_reason_codes)
@@ -493,11 +469,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   defp operational_work_package_summary("", _context), do: nil
 
   defp operational_work_package_summary(work_package_id, context) do
-    if ambiguous_work_package?(work_package_id, context) do
-      nil
-    else
-      visible_operational_work_package_summary(work_package_id, context)
-    end
+    visible_operational_work_package_summary(work_package_id, context)
   end
 
   defp visible_operational_work_package_summary(work_package_id, context) do
@@ -523,7 +495,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp delivery_summary(nil, _context), do: nil
 
-  defp delivery_summary(%PlannedSliceDelivery{} = delivery, context) do
+  defp delivery_summary(%WorkPackageDelivery{} = delivery, context) do
     %{
       id: delivery.id,
       outcome: delivery.outcome,
@@ -535,7 +507,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       pr_merged_at: delivery.pr_merged_at,
       merge_commit_sha: delivery.merge_commit_sha,
       no_pr_evidence: bounded_string(delivery.no_pr_evidence),
-      successor_planned_slice_id: delivery.successor_planned_slice_id,
       successor_work_package_id: visible_work_package_id(delivery.successor_work_package_id, context),
       superseded_reason: bounded_string(delivery.superseded_reason),
       abandoned_rationale: bounded_string(delivery.abandoned_rationale)
@@ -546,11 +517,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   defp work_package_summary("", _context), do: nil
 
   defp work_package_summary(work_package_id, context) do
-    if ambiguous_work_package?(work_package_id, context) do
-      nil
-    else
-      visible_work_package_summary(work_package_id, context)
-    end
+    visible_work_package_summary(work_package_id, context)
   end
 
   defp visible_work_package_summary(work_package_id, context) do
@@ -703,107 +670,82 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp successor_context(nil, _slices_by_scope, _context), do: nil
 
-  defp successor_context(%PlannedSliceDelivery{outcome: "superseded"} = delivery, slices_by_scope, context) do
-    successor_slice = Map.get(slices_by_scope, {delivery.work_request_id, delivery.successor_planned_slice_id})
-
-    successor_work_package_id =
-      delivery.successor_work_package_id || (successor_slice && successor_slice.work_package_id)
+  defp successor_context(%WorkPackageDelivery{outcome: "superseded"} = delivery, slices_by_scope, context) do
+    successor_work_package = Map.get(slices_by_scope, {delivery.work_request_id, delivery.successor_work_package_id})
+    successor_work_package_id = delivery.successor_work_package_id
 
     %{
-      planned_slice_id: delivery.successor_planned_slice_id,
       work_package_id: visible_work_package_id(successor_work_package_id, context),
-      planned_slice: successor_slice_summary(successor_slice, context),
-      work_package: work_package_summary(successor_work_package_id, context)
+      work_package: successor_slice_summary(successor_work_package, context)
     }
   end
 
-  defp successor_context(%PlannedSliceDelivery{}, _slices_by_scope, _context), do: nil
+  defp successor_context(%WorkPackageDelivery{}, _slices_by_scope, _context), do: nil
 
   defp successor_slice_summary(nil, _context), do: nil
 
-  defp successor_slice_summary(%PlannedSlice{} = planned_slice, context) do
+  defp successor_slice_summary(%WorkPackage{} = work_package, context) do
     %{
-      id: planned_slice.id,
-      sequence: planned_slice.sequence,
-      title: planned_slice.title,
-      raw_status: planned_slice.status,
-      work_package_id: visible_work_package_id(planned_slice.work_package_id, context)
+      id: work_package.id,
+      sequence: work_package.sequence,
+      title: work_package.title,
+      raw_status: work_package.status,
+      work_package_id: visible_work_package_id(work_package.id, context)
     }
   end
 
-  defp operational_state(%PlannedSlice{} = planned_slice, %PlannedSliceDelivery{} = delivery, work_package) do
+  defp operational_state(%WorkPackage{} = work_package, %WorkPackageDelivery{} = delivery, work_package_summary) do
     {key, label, tone, reason} = Map.fetch!(@delivery_states, delivery.outcome)
-    codes = terminal_delivery_attention_codes(delivery, work_package)
+    codes = terminal_delivery_attention_codes(delivery, work_package_summary)
 
-    state(key, label, tone, reason, planned_slice.status, delivery.outcome, work_package, codes)
+    state(key, label, tone, reason, work_package.status, delivery.outcome, work_package_summary, codes)
   end
 
-  defp operational_state(%PlannedSlice{} = planned_slice, nil, work_package) do
-    no_delivery_operational_state(planned_slice, work_package)
+  defp operational_state(%WorkPackage{} = work_package, nil, work_package_summary) do
+    no_delivery_operational_state(work_package, work_package_summary)
   end
 
-  defp hidden_work_package_marker(%PlannedSlice{} = planned_slice, _delivery, context) do
-    cond do
-      hidden_work_package?(planned_slice.work_package_id, context) -> :hidden
-      ambiguous_work_package?(planned_slice.work_package_id, context) -> :ambiguous
-      true -> nil
-    end
+  defp hidden_work_package_marker(%WorkPackage{} = work_package, context) do
+    if hidden_work_package?(work_package.id, context), do: :hidden
   end
 
-  defp no_delivery_operational_state(%PlannedSlice{status: "planned"} = planned_slice, nil) do
-    state("planned", "Planned", "neutral", "Slice is planned and has no linked WorkPackage.", planned_slice.status, nil, nil, [])
+  defp no_delivery_operational_state(%WorkPackage{status: "planned"} = work_package, nil) do
+    state("planned", "Planned", "neutral", "WorkPackage is planned and has not been dispatched.", work_package.status, nil, nil, [])
   end
 
-  defp no_delivery_operational_state(%PlannedSlice{status: "approved"} = planned_slice, nil) do
-    state("ready_for_worker", "Ready", "neutral", "Approved slice has no linked package.", planned_slice.status, nil, nil, [])
+  defp no_delivery_operational_state(%WorkPackage{status: "skipped"} = work_package, nil) do
+    state("skipped", "Skipped", "neutral", "WorkPackage was skipped before dispatch.", work_package.status, nil, nil, [])
   end
 
-  defp no_delivery_operational_state(%PlannedSlice{status: "skipped"} = planned_slice, nil) do
-    state("skipped", "Skipped", "neutral", "Slice was skipped before dispatch.", planned_slice.status, nil, nil, [])
-  end
-
-  defp no_delivery_operational_state(%PlannedSlice{} = planned_slice, :hidden) do
+  defp no_delivery_operational_state(%WorkPackage{} = work_package, :hidden) do
     state(
       "dispatched",
       "Dispatched",
       "neutral",
-      "Slice is dispatched to a linked WorkPackage hidden by the current scope.",
-      planned_slice.status,
+      "WorkPackage is hidden by the current scope.",
+      work_package.status,
       nil,
       nil,
       []
     )
   end
 
-  defp no_delivery_operational_state(%PlannedSlice{} = planned_slice, :ambiguous) do
-    state(
-      "needs_repair",
-      "Needs Repair",
-      "warning",
-      "Multiple planned slices point at the same WorkPackage.",
-      planned_slice.status,
-      nil,
-      nil,
-      ["ambiguous_linked_work_package"]
-    )
-  end
-
-  defp no_delivery_operational_state(%PlannedSlice{} = planned_slice, nil) do
+  defp no_delivery_operational_state(%WorkPackage{} = work_package, nil) do
     state(
       "dispatched",
       "Dispatched",
       "warning",
-      "Slice is marked dispatched but no linked WorkPackage or delivery outcome exists.",
-      planned_slice.status,
+      "WorkPackage projection is unavailable.",
+      work_package.status,
       nil,
       nil,
-      ["missing_linked_work_package"]
+      []
     )
   end
 
-  defp no_delivery_operational_state(%PlannedSlice{} = planned_slice, work_package) when is_map(work_package) do
-    {key, label, tone, reason, codes} = no_delivery_work_package_state(work_package)
-    state(key, label, tone, reason, planned_slice.status, nil, work_package, codes)
+  defp no_delivery_operational_state(%WorkPackage{} = work_package, work_package_summary) when is_map(work_package_summary) do
+    {key, label, tone, reason, codes} = no_delivery_work_package_state(work_package_summary)
+    state(key, label, tone, reason, work_package.status, nil, work_package_summary, codes)
   end
 
   defp no_delivery_work_package_state(work_package) do
@@ -869,13 +811,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     {key, status_label(key), "neutral", "Package status: #{key}.", []}
   end
 
-  defp terminal_delivery_attention_codes(%PlannedSliceDelivery{} = delivery, work_package) do
+  defp terminal_delivery_attention_codes(%WorkPackageDelivery{} = delivery, work_package) do
     [
-      if(work_package == :ambiguous, do: "ambiguous_linked_work_package"),
-      if(work_package && active_blocker?(work_package), do: "linked_package_blocked_after_delivery"),
-      if(work_package && active_runtime?(work_package), do: "linked_package_active_after_delivery"),
+      if(work_package && active_blocker?(work_package), do: "work_package_blocked_after_delivery"),
+      if(work_package && active_runtime?(work_package), do: "work_package_active_after_delivery"),
       if(is_map(work_package) and not package_reconciled_with_delivery?(work_package.raw_status, delivery.outcome),
-        do: "linked_package_status_stale_after_delivery"
+        do: "work_package_status_stale_after_delivery"
       )
     ]
     |> Enum.reject(&is_nil/1)
@@ -883,8 +824,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   end
 
   defp package_reconciled_with_delivery?(status, outcome) do
-    is_nil(PlannedSliceDelivery.terminal_status_for_outcome(outcome)) or
-      PlannedSliceDelivery.terminal_status_matches_outcome?(status, outcome)
+    is_nil(WorkPackageDelivery.terminal_status_for_outcome(outcome)) or
+      WorkPackageDelivery.terminal_status_matches_outcome?(status, outcome)
   end
 
   defp state(key, label, tone, reason, raw_status, delivery_outcome, work_package, attention_reason_codes) do
@@ -976,7 +917,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   defp visible_work_package_id("", _context), do: nil
 
   defp visible_work_package_id(work_package_id, context) do
-    if hidden_work_package?(work_package_id, context) or ambiguous_work_package?(work_package_id, context) do
+    if hidden_work_package?(work_package_id, context) do
       nil
     else
       work_package_id
@@ -988,18 +929,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   end
 
   defp hidden_work_package?(_work_package_id, _context), do: false
-
-  defp ambiguous_work_package?(work_package_id, context) when is_binary(work_package_id) do
-    MapSet.member?(Map.fetch!(context, :ambiguous_work_package_ids), work_package_id)
-  end
-
-  defp ambiguous_work_package?(_work_package_id, _context), do: false
-
-  defp visible_ambiguous_work_package?(work_package_id, context) when is_binary(work_package_id) do
-    ambiguous_work_package?(work_package_id, context) and not hidden_work_package?(work_package_id, context)
-  end
-
-  defp visible_ambiguous_work_package?(_work_package_id, _context), do: false
 
   defp status_label(value) when is_binary(value) do
     value

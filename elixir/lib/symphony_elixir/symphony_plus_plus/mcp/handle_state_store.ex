@@ -207,7 +207,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
   defp ensure_agent do
     case Process.whereis(@agent) do
       nil ->
-        case Agent.start_link(fn -> %{} end, name: @agent) do
+        case Agent.start(fn -> %{} end, name: @agent) do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
         end

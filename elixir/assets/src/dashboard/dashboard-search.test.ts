@@ -18,7 +18,7 @@ describe("dashboard search", () => {
     const pkg: WorkPackageCard = { id: "wp_backend", title: "Backend API", repo: "vod-api" };
     const detail: WorkRequestDetail = {
       work_request: { id: "wr_creator_roster", title: "Creator roster read model", repo: "vod-api" },
-      planned_slices: [{ id: "wrs_backend", work_request_id: "wr_creator_roster", title: "Fast creator read", work_package_id: pkg.id }],
+      work_packages: [{ id: "wrs_backend", work_request_id: "wr_creator_roster", title: "Fast creator read", work_package_id: pkg.id }],
     };
     const repo: RepoSummary = {
       repoKey: "vod-api",

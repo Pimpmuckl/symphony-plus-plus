@@ -277,8 +277,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
   end
 
   test "claim_local_assignment rejects terminal work packages before claiming", %{repo: repo} do
-    package = create_local_claim_package!(repo, "SYMPP-LOCAL-TERMINAL", status: "closed")
+    package = create_local_claim_package!(repo, "SYMPP-LOCAL-TERMINAL")
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    package = repo.update!(Ecto.Changeset.change(package, status: "closed"))
 
     {response, _server} =
       Server.handle_state(
@@ -702,18 +703,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
         status: "ready_for_slicing"
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               work_request_planned_slice_attrs(
+               work_request_work_package_attrs(
                  id: "WRS-MCP-LOCAL-DELIVERY-BASE",
-                 target_base_branch: package.base_branch,
+                 base_branch: package.base_branch,
                  branch_pattern: package.branch_pattern
                )
              )
 
-    repo.update!(Ecto.Changeset.change(planned_slice, work_package_id: package.id))
+    assert {:ok, _canonical_package} =
+             CanonicalWorkPackageFixtures.dispatch_work_package(
+               repo,
+               work_request.id,
+               work_package.id,
+               "planned",
+               package.id
+             )
+
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
     {response, claimed_server} =
@@ -735,47 +744,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
     assert {:ok, claimed_grant} = AccessGrantRepository.get(repo, minted.grant.id)
     assert claimed_grant.claimed_at != nil
     refute inspect(response) =~ minted.work_key.secret
-  end
-
-  test "claim_local_assignment rejects linked WorkRequest delivery-base drift", %{repo: repo} do
-    package = create_local_claim_package!(repo, "SYMPP-LOCAL-WR-DELIVERY-DRIFT")
-
-    work_request =
-      create_work_request!(repo,
-        id: "WR-MCP-LOCAL-DELIVERY-DRIFT",
-        repo: package.repo,
-        base_branch: "main",
-        status: "ready_for_slicing"
-      )
-
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               work_request_planned_slice_attrs(
-                 id: "WRS-MCP-LOCAL-DELIVERY-DRIFT",
-                 target_base_branch: "feature/other-delivery-base",
-                 branch_pattern: package.branch_pattern
-               )
-             )
-
-    repo.update!(Ecto.Changeset.change(planned_slice, work_package_id: package.id))
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-
-    {response, _server} =
-      Server.handle_state(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "local-wr-delivery-drift",
-          "method" => "tools/call",
-          "params" => %{"name" => "claim_local_assignment", "arguments" => local_assignment_claim_args(package)}
-        },
-        local_mcp_server(local_mcp_config(repo), "local-wr-delivery-drift-state")
-      )
-
-    assert get_in(response, ["error", "data", "reason"]) == "package_delivery_base_mismatch"
-    assert {:ok, unclaimed_grant} = AccessGrantRepository.get(repo, minted.grant.id)
-    assert unclaimed_grant.claimed_at == nil
   end
 
   test "final sync tools remain idempotent after claim_local_assignment reconnect", %{repo: repo} do

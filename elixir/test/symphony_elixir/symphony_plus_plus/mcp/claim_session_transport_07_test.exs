@@ -99,18 +99,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
         status: "ready_for_slicing"
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
-               repo,
-               work_request.id,
-               work_request_planned_slice_attrs(
-                 id: "WRS-#{id}",
-                 target_base_branch: package.base_branch,
-                 branch_pattern: package.branch_pattern
-               )
-             )
+    package =
+      repo.update!(
+        Ecto.Changeset.change(package,
+          work_request_id: work_request.id,
+          sequence: 1,
+          goal: package.engineering_scope,
+          status: "ready_for_worker",
+          dispatched_at: DateTime.utc_now(:microsecond)
+        )
+      )
 
-    repo.update!(Ecto.Changeset.change(planned_slice, status: "dispatched", work_package_id: package.id))
     assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     {package, work_request}
   end

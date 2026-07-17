@@ -136,25 +136,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
 
   defp compact_tool_entry("work_request", key, value), do: {key, compact_status_payload(value, ["id", "status", "updated_at"])}
 
-  defp compact_tool_entry("planned_slice", key, value),
-    do:
-      {key,
-       compact_status_payload(value, [
-         "id",
-         "work_request_id",
-         "status",
-         "work_package_id",
-         "delivery_repo",
-         "target_base_branch",
-         "dispatched_at",
-         "updated_at"
-       ])}
-
   defp compact_tool_entry("work_package", key, value),
     do:
       {key,
        compact_status_payload(value, [
          "id",
+         "work_request_id",
          "kind",
          "status",
          "repo",
@@ -164,6 +151,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
          "title",
          "branch_pattern",
          "worktree_path",
+         "dispatched_at",
          "inserted_at",
          "updated_at"
        ])}
@@ -196,20 +184,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   defp compact_tool_entry("product_plan_node", key, value),
     do: {key, compact_status_payload(value, ["id", "work_request_id", "parent_id", "position", "completion_mark"])}
 
-  defp compact_tool_entry("product_tree_slice_link", key, value),
-    do: {key, compact_status_payload(value, ["id", "work_request_id", "planned_slice_id", "product_tree_node_id", "position"])}
-
-  defp compact_tool_entry("planned_slice_delivery", key, value),
+  defp compact_tool_entry("work_package_delivery", key, value),
     do:
       {key,
        compact_status_payload(value, [
          "id",
          "work_request_id",
-         "planned_slice_id",
+         "work_package_id",
          "outcome",
          "recorded_by",
          "pr_url",
-         "successor_planned_slice_id",
+         "successor_work_package_id",
          "successor_work_package_id"
        ])}
 
@@ -302,13 +287,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
     cond do
       present?(Map.get(status, "current_status")) -> Map.get(status, "current_status")
       present?(Map.get(status, "work_request_status")) -> Map.get(status, "work_request_status")
-      present?(Map.get(status, "planned_slice_status")) -> Map.get(status, "planned_slice_status")
+      present?(Map.get(status, "work_package_status")) -> Map.get(status, "work_package_status")
       present?(Map.get(status, "guidance_request_status")) -> Map.get(status, "guidance_request_status")
       true -> "inspect_status"
     end
   end
 
-  defp next_action(%{"planned_slice_delivery" => %{"outcome" => outcome}}) when is_binary(outcome), do: outcome
+  defp next_action(%{"work_package_delivery" => %{"outcome" => outcome}}) when is_binary(outcome), do: outcome
   defp next_action(%{"work_package" => %{"status" => status}}) when is_binary(status), do: status
   defp next_action(%{"work_request" => %{"status" => status}}) when is_binary(status), do: status
   defp next_action(_payload), do: "done"

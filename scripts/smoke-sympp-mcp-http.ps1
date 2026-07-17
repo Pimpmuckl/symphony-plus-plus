@@ -60,10 +60,10 @@ $ForbiddenBoundWorkerTools =
 
 $ExpectedPreClaimGatedCalls = @(
   @{
-    name = "dispatch_slice"
+    name = "dispatch_work_package"
     arguments = @{
       work_request_id = "WR-SMOKE-PRECLAIM"
-      planned_slice_id = "SLICE-SMOKE-PRECLAIM"
+      work_package_id = "WP-SMOKE-PRECLAIM"
       claimed_by = "sympp-http-smoke"
     }
   },
@@ -85,7 +85,7 @@ $ExpectedTrustedLocalPreClaimReadCalls = @(
     name = "read_plan"
     arguments = @{
       work_request_id = "WR-SMOKE-PRECLAIM-READ"
-      view = "nodes_with_slice_refs"
+      view = "nodes_with_work_package_refs"
     }
     allowedReasons = @("not_found")
   },
@@ -1413,7 +1413,7 @@ function Invoke-SelfTest {
     throw "Expected unbound discovery to include worker scoped schemas."
   }
 
-  if ($ExpectedUnboundTools -notcontains "read_work_request" -or $ExpectedUnboundTools -notcontains "read_plan" -or $ExpectedUnboundTools -notcontains "dispatch_slice" -or $ExpectedUnboundTools -notcontains "read_delivery_board") {
+  if ($ExpectedUnboundTools -notcontains "read_work_request" -or $ExpectedUnboundTools -notcontains "read_plan" -or $ExpectedUnboundTools -notcontains "dispatch_work_package" -or $ExpectedUnboundTools -notcontains "read_delivery_board") {
     throw "Expected unbound discovery to include architect scoped schemas."
   }
 
@@ -1435,11 +1435,11 @@ function Invoke-SelfTest {
     throw "Expected pre-claim smoke to treat read_work_request as trusted-local read validation, not a claim-gated call."
   }
 
-  if ($preClaimGateNames -notcontains "dispatch_slice" -or $preClaimGateNames -notcontains "read_context") {
+  if ($preClaimGateNames -notcontains "dispatch_work_package" -or $preClaimGateNames -notcontains "read_context") {
     throw "Expected pre-claim smoke to verify mutation and worker context calls remain gated."
   }
 
-  if ($ForbiddenBoundWorkerTools -notcontains "list_work_requests" -or $ForbiddenBoundWorkerTools -notcontains "dispatch_slice") {
+  if ($ForbiddenBoundWorkerTools -notcontains "list_work_requests" -or $ForbiddenBoundWorkerTools -notcontains "dispatch_work_package") {
     throw "Expected bound worker forbidden tools to include architect-only tools."
   }
 

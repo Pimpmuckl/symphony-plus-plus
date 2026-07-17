@@ -54,7 +54,7 @@ export type FinishedHighlight = {
   selection: CardDetailSelection;
 };
 
-export type FinishedHighlightKind = "Request" | "Slice" | "Work Package";
+export type FinishedHighlightKind = "Request" | "WorkPackage";
 
 export type WorkstreamCategoryCounts = {
   requests: number;

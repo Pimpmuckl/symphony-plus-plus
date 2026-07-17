@@ -1,4 +1,4 @@
-import type { GuidanceItem, PlannedSlice, SoloSession, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
+import type { GuidanceItem, WorkRequestPackage, SoloSession, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import { UPDATE_ANIMATION_TTL_MS } from "@/components/dashboard/motion";
 import type { UpdateMotion, UpdateMotionKind } from "@/components/dashboard/motion";
 import { packageLane, sliceLane, sliceOperationalState, workRequestLane } from "@/lib/operational-state";
@@ -100,7 +100,7 @@ function dashboardAnimationSnapshot({
   requestDetails.forEach((detail) => {
     snapshot.set(requestUpdateKey(detail), requestAnimationEntity(detail));
 
-    (detail.planned_slices || []).forEach((slice) => {
+    (detail.work_packages || []).forEach((slice) => {
       snapshot.set(sliceUpdateKey(slice), sliceAnimationEntity(slice, slice.work_package_id ? packageById.get(slice.work_package_id) : undefined));
     });
   });
@@ -128,7 +128,7 @@ export function requestUpdateKey(detail: WorkRequestDetail) {
   return `request:${detail.work_request.id}`;
 }
 
-export function sliceUpdateKey(slice: PlannedSlice) {
+export function sliceUpdateKey(slice: WorkRequestPackage) {
   return `slice:${slice.id}`;
 }
 
@@ -172,10 +172,10 @@ function requestAnimationEntity(detail: WorkRequestDetail): UpdateAnimationEntit
       request.updated_at,
       request.open_question_count,
       request.answered_question_count,
-      request.planned_slice_count,
-      request.approved_slice_count,
-      request.dispatched_slice_count,
-      request.skipped_slice_count,
+      request.work_package_count,
+      request.planned_work_package_count,
+      request.dispatched_work_package_count,
+      request.skipped_work_package_count,
       detail.summary,
       (detail.clarification_questions || []).map((question) => [
         question.id,
@@ -192,7 +192,7 @@ function requestAnimationEntity(detail: WorkRequestDetail): UpdateAnimationEntit
   };
 }
 
-function sliceAnimationEntity(slice: PlannedSlice, pkg?: WorkPackageCard): UpdateAnimationEntity {
+function sliceAnimationEntity(slice: WorkRequestPackage, pkg?: WorkPackageCard): UpdateAnimationEntity {
   const operational = sliceOperationalState(slice, pkg);
   const status = operational?.key || slice.work_package_status || slice.status;
   const blockerCount = pkg?.active_blocker_count || (pkg?.status === "blocked" || operational?.key === "blocked" ? 1 : 0);

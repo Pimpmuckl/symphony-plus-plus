@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Client, DefaultClient, HttpClient, PullRequest}
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{PullRequestArtifact, PullRequestProgress}
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
@@ -240,6 +241,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
     repo
     |> transaction_with_rollback(fn -> persist_merged_transition(repo, work_package, payload, metadata) end)
     |> normalize_transaction_result()
+    |> DashboardPubSub.broadcast_changed_on_success()
   end
 
   defp transaction_with_rollback(repo, fun) do

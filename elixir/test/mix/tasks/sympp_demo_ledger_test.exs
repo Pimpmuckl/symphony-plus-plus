@@ -14,7 +14,6 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
 
@@ -99,6 +98,8 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
         })
 
         assert_statuses(repo, WorkPackage, %{
+          "SYMPP-DEMO-WP-PLANNED" => "planned",
+          "SYMPP-DEMO-WP-SKIPPED" => "skipped",
           "SYMPP-DEMO-WP-ACTIVE" => "implementing",
           "SYMPP-DEMO-WP-QUEUED" => "ready_for_worker",
           "SYMPP-DEMO-WP-PLANNING" => "planning",
@@ -112,30 +113,13 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
           "SYMPP-DEMO-WP-CLOSED-SPIKE" => "closed"
         })
 
-        assert_statuses(repo, PlannedSlice, %{
-          "SYMPP-DEMO-SLICE-APPROVED" => "approved",
-          "SYMPP-DEMO-SLICE-SKIPPED" => "skipped",
-          "SYMPP-DEMO-SLICE-DISPATCHED" => "dispatched",
-          "SYMPP-DEMO-SLICE-QUEUED" => "dispatched",
-          "SYMPP-DEMO-SLICE-PLANNING" => "dispatched",
-          "SYMPP-DEMO-SLICE-REVIEW" => "dispatched",
-          "SYMPP-DEMO-SLICE-CI" => "dispatched",
-          "SYMPP-DEMO-SLICE-READY" => "dispatched",
-          "SYMPP-DEMO-SLICE-ARCH-READY" => "dispatched",
-          "SYMPP-DEMO-SLICE-MERGED" => "dispatched",
-          "SYMPP-DEMO-SLICE-MERGED-DOCS" => "dispatched",
-          "SYMPP-DEMO-SLICE-CLOSED-SPIKE" => "dispatched"
-        })
-
         assert payload["seed"]["comments"] == [
                  "SYMPP-DEMO-COMMENT-WR-SLICED",
-                 "SYMPP-DEMO-COMMENT-SLICE-DISPATCHED",
                  "SYMPP-DEMO-COMMENT-WP-ACTIVE"
                ]
 
         assert_statuses(repo, Comment, %{
           "SYMPP-DEMO-COMMENT-WR-SLICED" => "open",
-          "SYMPP-DEMO-COMMENT-SLICE-DISPATCHED" => "open",
           "SYMPP-DEMO-COMMENT-WP-ACTIVE" => "open"
         })
 
@@ -146,9 +130,9 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
         assert guidance.status == "human_info_needed"
         assert guidance.decision_prompt["tl_dr"] == "Pick the operator triage grouping."
 
-        dispatched = repo.get!(PlannedSlice, "SYMPP-DEMO-SLICE-DISPATCHED")
-        assert dispatched.work_package_id == "SYMPP-DEMO-WP-ACTIVE"
-        assert dispatched.dispatched_at
+        active_package = repo.get!(WorkPackage, "SYMPP-DEMO-WP-ACTIVE")
+        assert active_package.work_request_id == "SYMPP-DEMO-WR-SLICED"
+        assert active_package.dispatched_at
 
         assert {:ok, board} = Dashboard.board(repo)
         cards = board.groups |> Map.values() |> List.flatten()
@@ -169,8 +153,8 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
         assert sliced_request.open_comment_count == 2
 
         assert {:ok, sliced_detail} = Dashboard.work_request_detail(repo, "SYMPP-DEMO-WR-SLICED")
-        dispatched_slice = Enum.find(sliced_detail.planned_slices, &(&1.id == "SYMPP-DEMO-SLICE-DISPATCHED"))
-        assert dispatched_slice.open_comment_count == 1
+        active_package = Enum.find(sliced_detail.work_packages, &(&1.id == "SYMPP-DEMO-WP-ACTIVE"))
+        assert active_package.open_comment_count == 1
 
         assert {:ok, operator_board} = Dashboard.operator_board(repo)
 
@@ -182,8 +166,8 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
 
         assert Enum.any?(operator_board.active_blocking_edges, fn edge ->
                  edge.blocker_id == "demo-slice-sequencing-dependency" and
-                   edge.from == %{kind: "slice", id: "SYMPP-DEMO-SLICE-QUEUED"} and
-                   edge.to == %{kind: "slice", id: "SYMPP-DEMO-SLICE-PLANNING"}
+                   edge.from == %{kind: "work_package", id: "SYMPP-DEMO-WP-QUEUED"} and
+                   edge.to == %{kind: "work_package", id: "SYMPP-DEMO-WP-PLANNING"}
                end)
 
         ready = Enum.find(cards, &(&1.id == "SYMPP-DEMO-WP-READY"))
@@ -263,7 +247,7 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
       assert demo_stable_rows(database_path) == first_stable_rows
 
       with_repo(database_path, fn repo ->
-        assert repo.aggregate(WorkPackage, :count) == 11
+        assert repo.aggregate(WorkPackage, :count) == 13
         assert repo.aggregate(WorkRequest, :count) == 5
       end)
     after
@@ -323,7 +307,6 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
             "sympp_work_requests",
             "sympp_work_request_clarification_questions",
             "sympp_work_packages",
-            "sympp_work_request_planned_slices",
             "sympp_solo_sessions"
           ],
           into: %{} do

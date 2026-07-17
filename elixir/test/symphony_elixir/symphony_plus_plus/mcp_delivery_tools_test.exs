@@ -4,8 +4,6 @@ Code.require_file("../../support/symphony_plus_plus/mcp_session_helpers.exs", __
 defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   use ExUnit.Case, async: false
 
-  alias Ecto.Adapters.SQL
-
   import SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers,
     only: [create_phase_architect_session: 4]
 
@@ -22,11 +20,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
 
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{
     ArchitectHandoff,
-    PlannedSlice,
-    PlannedSliceDelivery,
     WorkRequest
   }
 
@@ -47,8 +44,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   setup %{repo: repo} do
     schemas = [
       ProgressEvent,
-      PlannedSliceDelivery,
-      PlannedSlice,
+      WorkPackageDelivery,
+      WorkPackage,
       ClaimLease,
       GrantScope,
       AccessGrant,
@@ -67,7 +64,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   test "WR architect stale capabilities still read scoped package status and record closeout", %{
     repo: repo
   } do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-READ-CLOSE")
 
     session =
@@ -100,7 +97,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     board_payload = get_in(board_response, ["result", "structuredContent"])
 
-    assert get_in(board_payload, ["delivery_board", "slices", Access.at(0), "work_package", "id"]) ==
+    assert get_in(board_payload, ["delivery_board", "work_packages", Access.at(0), "work_package", "id"]) ==
              linked_package.id
 
     evidence_url = "https://example.invalid/delivery?token=placeholder"
@@ -109,7 +106,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     closeout_args =
       no_pr_args(
         work_request,
-        planned_slice,
+        work_package,
         "delivery-mcp-no-pr",
         "Operator confirmed #{evidence_url} completed without a PR."
       )
@@ -117,8 +114,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     closeout_response = record_delivery(repo, session, closeout_args)
     closeout_payload = get_in(closeout_response, ["result", "structuredContent"])
 
-    assert closeout_payload["planned_slice_delivery"]["outcome"] == "completed_no_pr"
-    refute Map.has_key?(closeout_payload["planned_slice_delivery"], "no_pr_evidence")
+    assert closeout_payload["work_package_delivery"]["outcome"] == "completed_no_pr"
+    refute Map.has_key?(closeout_payload["work_package_delivery"], "no_pr_evidence")
     refute inspect(closeout_response) =~ evidence_query_value
 
     read_closed_response =
@@ -138,7 +135,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              "result",
              "structuredContent",
              "delivery_board",
-             "slices",
+             "work_packages",
              Access.at(0),
              "operational_state",
              "key"
@@ -146,7 +143,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     delivery_evidence_path = [
       "delivery_board",
-      "slices",
+      "work_packages",
       Access.at(0),
       "delivery",
       "no_pr_evidence"
@@ -158,16 +155,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     replay_response = record_delivery(repo, session, closeout_args)
 
-    assert get_in(replay_response, ["result", "structuredContent", "planned_slice_delivery", "id"]) ==
-             closeout_payload["planned_slice_delivery"]["id"]
+    assert get_in(replay_response, ["result", "structuredContent", "work_package_delivery", "id"]) ==
+             closeout_payload["work_package_delivery"]["id"]
 
     refute get_in(read_closed_response, ["result", "structuredContent" | delivery_evidence_path]) =~
              evidence_query_value
 
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 1
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
   end
 
-  test "WR architect reads and closes linked package on planned-slice delivery base", %{
+  test "WR architect reads and closes linked package on work-package delivery base", %{
     repo: repo
   } do
     delivery_base = "feature/integration-base"
@@ -179,18 +176,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         status: "ready_for_slicing"
       )
 
-    planned_slice =
-      create_planned_slice!(repo, work_request,
+    work_package =
+      create_work_package!(repo, work_request,
         id: "WRS-MCP-DELIVERY-CROSS-BASE",
-        target_base_branch: delivery_base,
+        base_branch: delivery_base,
         branch_pattern: "feat/integration-base"
       )
 
     assert {:ok, approved_slice} =
-             WorkRequestRepository.approve_planned_slice(
+             CanonicalWorkPackageFixtures.approve_work_package(
                repo,
                work_request.id,
-               planned_slice.id,
+               work_package.id,
                "planned"
              )
 
@@ -201,7 +198,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       )
 
     assert {:ok, dispatched_slice} =
-             WorkRequestRepository.dispatch_planned_slice(
+             CanonicalWorkPackageFixtures.dispatch_work_package(
                repo,
                work_request.id,
                approved_slice.id,
@@ -224,12 +221,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              "base_branch" => work_request.base_branch
            }
 
-    assert get_in(board_payload, ["delivery_board", "slices", Access.at(0), "work_package", "id"]) ==
+    assert get_in(board_payload, ["delivery_board", "work_packages", Access.at(0), "work_package", "id"]) ==
              linked_package.id
 
     assert get_in(board_payload, [
              "delivery_board",
-             "slices",
+             "work_packages",
              Access.at(0),
              "work_package",
              "base_branch"
@@ -248,7 +245,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       )
 
     closeout_payload = get_in(closeout_response, ["result", "structuredContent"])
-    assert closeout_payload["planned_slice_delivery"]["outcome"] == "completed_no_pr"
+    assert closeout_payload["work_package_delivery"]["outcome"] == "completed_no_pr"
 
     read_closed_response =
       mcp_tool(repo, session, "read_delivery_board", %{
@@ -267,7 +264,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              "result",
              "structuredContent",
              "delivery_board",
-             "slices",
+             "work_packages",
              Access.at(0),
              "work_package",
              "base_branch"
@@ -294,20 +291,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     feature_a_slice =
       repo
-      |> create_planned_slice!(
+      |> create_work_package!(
         work_request,
         id: "WRS-MCP-DELIVERY-REPO-SCOPE-A",
-        target_base_branch: "feature/a",
+        base_branch: "feature/a",
         branch_pattern: "feat/a"
       )
       |> approve_slice!(repo, work_request)
 
     feature_b_slice =
       repo
-      |> create_planned_slice!(
+      |> create_work_package!(
         work_request,
         id: "WRS-MCP-DELIVERY-REPO-SCOPE-B",
-        target_base_branch: "feature/b",
+        base_branch: "feature/b",
         branch_pattern: "feat/b"
       )
       |> approve_slice!(repo, work_request)
@@ -325,7 +322,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       )
 
     assert {:ok, _feature_a_dispatched} =
-             WorkRequestRepository.dispatch_planned_slice(
+             CanonicalWorkPackageFixtures.dispatch_work_package(
                repo,
                work_request.id,
                feature_a_slice.id,
@@ -334,7 +331,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              )
 
     assert {:ok, _feature_b_dispatched} =
-             WorkRequestRepository.dispatch_planned_slice(
+             CanonicalWorkPackageFixtures.dispatch_work_package(
                repo,
                work_request.id,
                feature_b_slice.id,
@@ -347,8 +344,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     primary_payload = delivery_board_payload_for(repo, primary_session, work_request)
 
-    assert slice_work_package(primary_payload, feature_a_slice.id)["id"] == feature_a_package.id
-    assert slice_work_package(primary_payload, feature_b_slice.id)["id"] == feature_b_package.id
+    assert slice_work_package(primary_payload, feature_a_package.id)["id"] == feature_a_package.id
+    assert slice_work_package(primary_payload, feature_b_package.id)["id"] == feature_b_package.id
 
     {_anchor, feature_a_session, _grant} =
       create_phase_architect_session(
@@ -363,10 +360,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     assert get_in(scoped_payload, ["scope", "repo"]) == work_request.repo
     assert get_in(scoped_payload, ["scope", "base_branch"]) == "feature/a"
-    assert slice_work_package(scoped_payload, feature_a_slice.id)["id"] == feature_a_package.id
-    assert slice_by_id(scoped_payload, feature_b_slice.id)["work_package"] == nil
-    assert slice_by_id(scoped_payload, feature_b_slice.id)["work_package_hidden?"] == true
-    refute inspect(scoped_payload) =~ feature_b_package.id
+    assert slice_work_package(scoped_payload, feature_a_package.id)["id"] == feature_a_package.id
+    assert slice_by_id(scoped_payload, feature_b_package.id)["work_package"] == nil
+    assert slice_by_id(scoped_payload, feature_b_package.id)["work_package_hidden?"] == true
 
     hidden_closeout_response =
       record_delivery(
@@ -374,7 +370,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         feature_a_session,
         no_pr_args(
           work_request,
-          feature_b_slice,
+          feature_b_package,
           "delivery-mcp-repo-scope-hidden-no-pr",
           "Hidden delivery-base closeout."
         )
@@ -385,7 +381,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   end
 
   test "WR architect reconciles merged PR evidence over stale package grant state", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-MCP-DELIVERY-RECONCILE-MERGED-STALE",
         work_package_status: "ready_for_merge"
@@ -429,14 +425,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     assert [
              %{
-               "planned_slice_id" => proposed_slice_id,
+               "work_package_id" => proposed_slice_id,
                "status" => "proposed",
                "reason" => "github_pr_merged"
              }
            ] = dry_run_payload["results"]
 
-    assert proposed_slice_id == planned_slice.id
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert proposed_slice_id == work_package.id
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     refute repo.get!(AccessGrant, minted.grant.id).revoked_at
 
     apply_response =
@@ -447,13 +443,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert get_in(apply_payload, ["reconciliation", "mode"]) == "apply"
     assert get_in(apply_payload, ["reconciliation", "applied_count"]) == 1
     assert get_in(apply_payload, ["delivery_board", "counts", "delivered"]) == 1
-    refute Map.has_key?(apply_payload["delivery_board"], "slices")
+    refute Map.has_key?(apply_payload["delivery_board"], "work_packages")
     assert repo.get!(WorkPackage, linked_package.id).status == "merged"
     assert repo.get!(AccessGrant, minted.grant.id).revoked_at
   end
 
   test "WR architect read-only grants cannot mutate delivery closeout state", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-MCP-DELIVERY-READONLY",
         work_package_status: "ready_for_merge"
@@ -481,7 +477,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         session,
         no_pr_args(
           work_request,
-          planned_slice,
+          work_package,
           "delivery-mcp-readonly-closeout",
           "Read-only architects cannot close delivery."
         )
@@ -495,7 +491,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         session,
         revoke_args(
           work_request,
-          planned_slice,
+          work_package,
           minted.grant.id,
           "Read-only architects cannot revoke worker grants."
         )
@@ -503,13 +499,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     assert insufficient_capability?(revoke_response)
     refute repo.get!(AccessGrant, minted.grant.id).revoked_at
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
   end
 
   test "WR architect live grant narrowing overrides stale session write capabilities", %{
     repo: repo
   } do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-MCP-DELIVERY-LIVE-NARROWED",
         work_package_status: "ready_for_merge"
@@ -542,7 +538,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         session,
         no_pr_args(
           work_request,
-          planned_slice,
+          work_package,
           "delivery-mcp-live-narrowed-closeout",
           "Live grant narrowing blocks stale write sessions."
         )
@@ -556,7 +552,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         session,
         revoke_args(
           work_request,
-          planned_slice,
+          work_package,
           minted.grant.id,
           "Live grant narrowing blocks stale write sessions."
         )
@@ -568,13 +564,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert insufficient_capability?(invalid_revoke_response)
 
     refute repo.get!(AccessGrant, minted.grant.id).revoked_at
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
   end
 
   test "WR architect write-only grants can apply reconciliation without dry-run read", %{
     repo: repo
   } do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-MCP-DELIVERY-RECONCILE-WRITEONLY",
         work_package_status: "ready_for_merge"
@@ -620,7 +616,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   test "WR architect read_child_status falls back for dispatched package scope tool errors", %{
     repo: repo
   } do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-STATUS-FALLBACK")
 
     session =
@@ -644,100 +640,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              linked_package.status
   end
 
-  test "WR architect read_child_status still works for duplicate planned-slice package links", %{
-    repo: repo
-  } do
-    {work_request, _planned_slice, linked_package} =
-      linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-STATUS-DUPLICATE")
-
-    other_slice =
-      create_planned_slice!(
-        repo,
-        work_request,
-        id: "WRS-MCP-DELIVERY-STATUS-DUPLICATE-OTHER"
-      )
-
-    session =
-      create_work_request_architect_session(repo, work_request, ArchitectHandoff.capabilities())
-
-    drop_planned_slice_work_package_unique_index!(repo)
-
-    try do
-      repo.update!(
-        Ecto.Changeset.change(other_slice,
-          status: "dispatched",
-          work_package_id: linked_package.id,
-          dispatched_at: DateTime.utc_now(:microsecond)
-        )
-      )
-
-      response =
-        mcp_tool(repo, session, "read_child_status", %{"work_package_id" => linked_package.id})
-
-      assert get_in(response, ["result", "structuredContent", "work_package", "id"]) ==
-               linked_package.id
-    after
-      SQL.query!(
-        repo,
-        "UPDATE sympp_work_request_planned_slices SET work_package_id = NULL, dispatched_at = NULL WHERE id = ?",
-        [other_slice.id]
-      )
-
-      create_planned_slice_work_package_unique_index!(repo)
-    end
-  end
-
-  test "WR architect read_child_status fails closed for cross-WorkRequest duplicate links", %{
-    repo: repo
-  } do
-    {work_request, _planned_slice, linked_package} =
-      linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-STATUS-CROSS-DUPLICATE")
-
-    other_work_request =
-      sibling_work_request!(
-        repo,
-        work_request,
-        "WR-MCP-DELIVERY-STATUS-CROSS-DUPLICATE-OTHER"
-      )
-
-    other_slice =
-      create_planned_slice!(
-        repo,
-        other_work_request,
-        id: "WRS-MCP-DELIVERY-STATUS-CROSS-DUPLICATE-OTHER"
-      )
-
-    session =
-      create_work_request_architect_session(repo, work_request, ArchitectHandoff.capabilities())
-
-    drop_planned_slice_work_package_unique_index!(repo)
-
-    try do
-      repo.update!(
-        Ecto.Changeset.change(other_slice,
-          status: "dispatched",
-          work_package_id: linked_package.id,
-          dispatched_at: DateTime.utc_now(:microsecond)
-        )
-      )
-
-      response =
-        mcp_tool(repo, session, "read_child_status", %{"work_package_id" => linked_package.id})
-
-      assert get_in(response, ["error", "data", "reason"]) == "ambiguous_planned_slice_link"
-    after
-      SQL.query!(
-        repo,
-        "UPDATE sympp_work_request_planned_slices SET work_package_id = NULL, dispatched_at = NULL WHERE id = ?",
-        [other_slice.id]
-      )
-
-      create_planned_slice_work_package_unique_index!(repo)
-    end
-  end
-
   test "WR architect narrowed capabilities do not regain child status calls", %{repo: repo} do
-    {work_request, _planned_slice, linked_package} =
+    {work_request, _work_package, linked_package} =
       linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-NARROWED")
 
     narrowed_capabilities = legacy_work_request_architect_capabilities()
@@ -778,18 +682,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         status: "ready_for_slicing"
       )
 
-    planned_slice =
-      create_planned_slice!(repo, work_request,
+    work_package =
+      create_work_package!(repo, work_request,
         id: "WRS-MCP-DELIVERY-GRANT-CLOSEOUT",
-        target_base_branch: delivery_base,
+        base_branch: delivery_base,
         branch_pattern: "feat/revoke-delivery-base"
       )
 
     assert {:ok, approved_slice} =
-             WorkRequestRepository.approve_planned_slice(
+             CanonicalWorkPackageFixtures.approve_work_package(
                repo,
                work_request.id,
-               planned_slice.id,
+               work_package.id,
                "planned"
              )
 
@@ -799,8 +703,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         status: "ready_for_merge"
       )
 
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.dispatch_planned_slice(
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.dispatch_work_package(
                repo,
                work_request.id,
                approved_slice.id,
@@ -818,7 +722,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     closeout_args =
       no_pr_args(
         work_request,
-        planned_slice,
+        work_package,
         "delivery-mcp-stale-grant",
         "Worker reported completion; architect is closing no-PR delivery."
       )
@@ -826,7 +730,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     closeout_response = record_delivery(repo, session, closeout_args)
     closeout_payload = get_in(closeout_response, ["result", "structuredContent"])
 
-    assert closeout_payload["planned_slice_delivery"]["outcome"] == "completed_no_pr"
+    assert closeout_payload["work_package_delivery"]["outcome"] == "completed_no_pr"
 
     assert repo.get!(AccessGrant, minted.grant.id).revoked_at
 
@@ -844,7 +748,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   end
 
   test "WR architect no-PR closeout still works after explicit worker revoke", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(repo,
         work_request_id: "WR-MCP-DELIVERY-REVOKE-THEN-NO-PR",
         work_package_status: "ready_for_merge"
@@ -863,7 +767,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         session,
         revoke_args(
           work_request,
-          planned_slice,
+          work_package,
           minted.grant.id,
           "Worker is complete; operator is closing without a PR."
         )
@@ -873,7 +777,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              minted.grant.id
 
     assert get_in(revoke_response, ["result", "structuredContent", "next_action"]) ==
-             "retry_record_planned_slice_delivery"
+             "retry_record_work_package_delivery"
 
     refute get_in(revoke_response, ["result", "structuredContent", "work_request"])
     refute get_in(revoke_response, ["result", "structuredContent", "revocation_event"])
@@ -884,7 +788,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         session,
         no_pr_args(
           work_request,
-          planned_slice,
+          work_package,
           "delivery-mcp-after-explicit-revoke",
           "Worker was explicitly revoked before no-PR closeout."
         )
@@ -893,7 +797,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert get_in(closeout_response, [
              "result",
              "structuredContent",
-             "planned_slice_delivery",
+             "work_package_delivery",
              "outcome"
            ]) == "completed_no_pr"
 
@@ -920,10 +824,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
     assert {:ok, failed_minted} = AccessGrantService.mint_worker_grant(repo, failed_package.id)
 
-    oracle_slice = create_planned_slice!(repo, work_request, id: "WRS-MCP-DELIVERY-ORACLE-ACTIVE")
+    oracle_slice = create_work_package!(repo, work_request, id: "WRS-MCP-DELIVERY-ORACLE-ACTIVE")
 
     assert {:ok, approved_oracle} =
-             WorkRequestRepository.approve_planned_slice(
+             CanonicalWorkPackageFixtures.approve_work_package(
                repo,
                work_request.id,
                oracle_slice.id,
@@ -937,7 +841,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       )
 
     assert {:ok, _oracle_dispatch} =
-             WorkRequestRepository.dispatch_planned_slice(
+             CanonicalWorkPackageFixtures.dispatch_work_package(
                repo,
                work_request.id,
                approved_oracle.id,
@@ -951,10 +855,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              AccessGrantService.claim(repo, oracle_minted.work_key.secret, claimed_by: "oracle-worker")
 
     replacement_slice =
-      create_planned_slice!(repo, work_request, id: "WRS-MCP-DELIVERY-REPLACEMENT")
+      create_work_package!(repo, work_request, id: "WRS-MCP-DELIVERY-REPLACEMENT")
 
     assert {:ok, approved_replacement} =
-             WorkRequestRepository.approve_planned_slice(
+             CanonicalWorkPackageFixtures.approve_work_package(
                repo,
                work_request.id,
                replacement_slice.id,
@@ -968,7 +872,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       )
 
     assert {:ok, dispatched_replacement} =
-             WorkRequestRepository.dispatch_planned_slice(
+             CanonicalWorkPackageFixtures.dispatch_work_package(
                repo,
                work_request.id,
                approved_replacement.id,
@@ -986,7 +890,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert get_in(replacement_response, [
              "result",
              "structuredContent",
-             "planned_slice_delivery",
+             "work_package_delivery",
              "outcome"
            ]) == "pr_merged"
 
@@ -1024,7 +928,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert get_in(abandon_response, [
              "result",
              "structuredContent",
-             "planned_slice_delivery",
+             "work_package_delivery",
              "outcome"
            ]) == "abandoned"
 
@@ -1037,7 +941,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
 
   test "abandoned delivery closeout reports currently non-abandonable packages as preconditions",
        %{repo: repo} do
-    {work_request, planned_slice, _linked_package} =
+    {work_request, work_package, _linked_package} =
       linked_slice!(
         repo,
         work_request_id: "WR-MCP-DELIVERY-ABANDONED-BLOCKED",
@@ -1053,7 +957,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         session,
         abandoned_args(
           work_request,
-          planned_slice,
+          work_package,
           "delivery-mcp-abandoned-blocked",
           "Currently blocked packages should be superseded rather than hidden as no-code abandonments."
         )
@@ -1066,7 +970,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   end
 
   test "workers and out-of-scope WR architects cannot record or revoke delivery", %{repo: repo} do
-    {work_request, planned_slice, linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-SCOPED")
 
     worker_session = create_worker_session(repo, linked_package)
@@ -1074,7 +978,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     args =
       no_pr_args(
         work_request,
-        planned_slice,
+        work_package,
         "delivery-mcp-denied",
         "Denied closeout should not be recorded."
       )
@@ -1091,7 +995,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       revoke_worker_key(
         repo,
         worker_session,
-        revoke_args(work_request, planned_slice, "grant-denied", "Denied")
+        revoke_args(work_request, work_package, "grant-denied", "Denied")
       )
 
     assert get_in(worker_revoke_response, ["error", "data", "reason"]) ==
@@ -1112,25 +1016,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       revoke_worker_key(
         repo,
         sibling_session,
-        revoke_args(work_request, planned_slice, minted.grant.id, "Denied")
+        revoke_args(work_request, work_package, minted.grant.id, "Denied")
       )
 
     assert get_in(sibling_revoke_response, ["error", "code"]) == -32_004
     assert get_in(sibling_revoke_response, ["error", "data", "reason"]) == "not_found"
     refute repo.get!(AccessGrant, minted.grant.id).revoked_at
 
-    assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
   end
 
   test "delivery closeout refuses out-of-scope or mismatched successors", %{repo: repo} do
-    {work_request, planned_slice, _linked_package} =
+    {work_request, work_package, _linked_package} =
       linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-SUCCESSOR-SCOPE")
 
-    successor_slice = create_planned_slice!(repo, work_request, id: "WRS-MCP-DELIVERY-SUCCESSOR")
+    successor_slice = create_work_package!(repo, work_request, id: "WRS-MCP-DELIVERY-SUCCESSOR")
     session = create_work_request_architect_session(repo, work_request, ["write:work_request"])
 
     assert {:ok, approved_successor} =
-             WorkRequestRepository.approve_planned_slice(
+             CanonicalWorkPackageFixtures.approve_work_package(
                repo,
                work_request.id,
                successor_slice.id,
@@ -1143,8 +1047,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         status: "reviewing"
       )
 
-    assert {:ok, successor_slice} =
-             WorkRequestRepository.dispatch_planned_slice(
+    assert {:ok, _dispatched_successor} =
+             CanonicalWorkPackageFixtures.dispatch_work_package(
                repo,
                work_request.id,
                approved_successor.id,
@@ -1156,7 +1060,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       sibling_work_request!(repo, work_request, "WR-MCP-DELIVERY-SUCCESSOR-SIBLING")
 
     sibling_successor_slice =
-      create_planned_slice!(repo, sibling_request, id: "WRS-MCP-DELIVERY-SUCCESSOR-SIBLING")
+      create_work_package!(repo, sibling_request, id: "WRS-MCP-DELIVERY-SUCCESSOR-SIBLING")
 
     sibling_response =
       record_delivery(
@@ -1164,7 +1068,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         session,
         superseded_args(
           work_request,
-          planned_slice,
+          work_package,
           "delivery-mcp-successor-slice-out-of-scope",
           sibling_successor_slice.id,
           "Recut to a sibling request."
@@ -1172,50 +1076,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       )
 
     assert get_in(sibling_response, ["error", "data", "reason"]) ==
-             "successor_planned_slice_out_of_scope"
-
-    other_successor_slice =
-      create_planned_slice!(repo, work_request, id: "WRS-MCP-DELIVERY-SUCCESSOR-OTHER")
-
-    assert {:ok, approved_other_successor} =
-             WorkRequestRepository.approve_planned_slice(
-               repo,
-               work_request.id,
-               other_successor_slice.id,
-               "planned"
-             )
-
-    other_successor_package =
-      create_matching_work_package!(repo, work_request, approved_other_successor,
-        id: "WP-MCP-DELIVERY-SUCCESSOR-OTHER",
-        status: "reviewing"
-      )
-
-    assert {:ok, _dispatched_other_successor} =
-             WorkRequestRepository.dispatch_planned_slice(
-               repo,
-               work_request.id,
-               approved_other_successor.id,
-               "approved",
-               other_successor_package.id
-             )
-
-    response =
-      record_delivery(
-        repo,
-        session,
-        superseded_args(
-          work_request,
-          planned_slice,
-          "delivery-mcp-successor-out-of-scope",
-          successor_slice.id,
-          "Recut to a narrower package.",
-          other_successor_package.id
-        )
-      )
-
-    assert get_in(response, ["error", "data", "reason"]) ==
-             "successor_work_package_slice_mismatch"
+             "successor_work_package_out_of_scope"
 
     _success_response =
       record_delivery(
@@ -1223,112 +1084,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         session,
         superseded_args(
           work_request,
-          planned_slice,
+          work_package,
           "delivery-mcp-successor-visible",
-          successor_slice.id,
-          "Recut to a narrower package.",
-          successor_package.id
+          successor_package.id,
+          "Recut to a narrower package."
         )
       )
 
     assert [delivery] =
-             PlannedSliceDelivery
+             WorkPackageDelivery
              |> repo.all()
-             |> Enum.filter(&(&1.planned_slice_id == planned_slice.id))
+             |> Enum.filter(&(&1.work_package_id == work_package.id))
 
     assert delivery.successor_work_package_id == successor_package.id
-  end
-
-  test "superseded closeout returns structured error for duplicate successor package links", %{
-    repo: repo
-  } do
-    {work_request, planned_slice, _linked_package} =
-      linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-SUCCESSOR-DUPLICATE")
-
-    successor_slice =
-      create_planned_slice!(repo, work_request, id: "WRS-MCP-DELIVERY-SUCCESSOR-DUPLICATE")
-
-    session = create_work_request_architect_session(repo, work_request, ["write:work_request"])
-
-    assert {:ok, approved_successor} =
-             WorkRequestRepository.approve_planned_slice(
-               repo,
-               work_request.id,
-               successor_slice.id,
-               "planned"
-             )
-
-    successor_package =
-      create_matching_work_package!(repo, work_request, approved_successor,
-        id: "WP-MCP-DELIVERY-SUCCESSOR-DUPLICATE",
-        status: "reviewing"
-      )
-
-    assert {:ok, dispatched_successor} =
-             WorkRequestRepository.dispatch_planned_slice(
-               repo,
-               work_request.id,
-               approved_successor.id,
-               "approved",
-               successor_package.id
-             )
-
-    duplicate_successor_slice =
-      create_planned_slice!(repo, work_request, id: "WRS-MCP-DELIVERY-SUCCESSOR-DUPLICATE-OTHER")
-
-    drop_planned_slice_work_package_unique_index!(repo)
-
-    try do
-      repo.update!(
-        Ecto.Changeset.change(duplicate_successor_slice,
-          status: "dispatched",
-          work_package_id: successor_package.id,
-          dispatched_at: DateTime.utc_now(:microsecond)
-        )
-      )
-
-      response =
-        record_delivery(
-          repo,
-          session,
-          superseded_args(
-            work_request,
-            planned_slice,
-            "delivery-mcp-successor-duplicate-package-link",
-            dispatched_successor.id,
-            "Recut to a successor package with ambiguous duplicate links.",
-            successor_package.id
-          )
-        )
-
-      assert get_in(response, ["error", "data", "reason"]) == "ambiguous_planned_slice_link"
-      assert repo.aggregate(PlannedSliceDelivery, :count, :id) == 0
-    after
-      SQL.query!(
-        repo,
-        """
-        UPDATE sympp_work_request_planned_slices
-        SET work_package_id = NULL, dispatched_at = NULL
-        WHERE id = ?
-        """,
-        [duplicate_successor_slice.id]
-      )
-
-      create_planned_slice_work_package_unique_index!(repo)
-    end
   end
 
   defp linked_slice!(repo, overrides) do
     request_id = Keyword.fetch!(overrides, :work_request_id)
     work_package_status = Keyword.get(overrides, :work_package_status, "reviewing")
     work_request = create_work_request!(repo, id: request_id, status: "ready_for_slicing")
-    planned_slice = create_planned_slice!(repo, work_request, id: "WRS-#{request_id}")
+    work_package = create_work_package!(repo, work_request, id: "WRS-#{request_id}")
 
     assert {:ok, approved_slice} =
-             WorkRequestRepository.approve_planned_slice(
+             CanonicalWorkPackageFixtures.approve_work_package(
                repo,
                work_request.id,
-               planned_slice.id,
+               work_package.id,
                "planned"
              )
 
@@ -1339,7 +1120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       )
 
     assert {:ok, dispatched_slice} =
-             WorkRequestRepository.dispatch_planned_slice(
+             CanonicalWorkPackageFixtures.dispatch_work_package(
                repo,
                work_request.id,
                approved_slice.id,
@@ -1364,40 +1145,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     )
   end
 
-  defp create_planned_slice!(repo, work_request, overrides) do
-    assert {:ok, planned_slice} =
-             WorkRequestRepository.add_planned_slice(
+  defp create_work_package!(repo, work_request, overrides) do
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
                repo,
                work_request.id,
-               planned_slice_attrs(overrides)
+               work_package_attrs(overrides)
              )
 
-    planned_slice
+    work_package
   end
 
-  defp approve_slice!(%PlannedSlice{} = planned_slice, repo, %WorkRequest{} = work_request) do
+  defp approve_slice!(%WorkPackage{} = work_package, repo, %WorkRequest{} = work_request) do
     assert {:ok, approved_slice} =
-             WorkRequestRepository.approve_planned_slice(
+             CanonicalWorkPackageFixtures.approve_work_package(
                repo,
                work_request.id,
-               planned_slice.id,
+               work_package.id,
                "planned"
              )
 
     approved_slice
   end
 
-  defp create_matching_work_package!(repo, work_request, planned_slice, overrides) do
+  defp create_matching_work_package!(repo, work_request, work_package, overrides) do
     attrs =
       [
-        kind: planned_slice.work_package_kind,
-        title: planned_slice.title,
+        kind: work_package.kind,
+        title: work_package.title,
         repo: work_request.repo,
-        base_branch: planned_slice.target_base_branch,
-        branch_pattern: planned_slice.branch_pattern,
+        base_branch: work_package.base_branch,
+        branch_pattern: work_package.branch_pattern,
         product_description: work_request.human_description,
-        allowed_file_globs: planned_slice.owned_file_globs,
-        acceptance_criteria: planned_slice.acceptance_criteria
+        allowed_file_globs: work_package.allowed_file_globs,
+        acceptance_criteria: work_package.acceptance_criteria
       ]
       |> Keyword.merge(overrides)
       |> WorkPackageFactory.attrs()
@@ -1465,20 +1246,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
   end
 
-  defp no_pr_args(work_request, planned_slice, idempotency_key, evidence) do
+  defp no_pr_args(work_request, work_package, idempotency_key, evidence) do
     %{
       "work_request_id" => work_request.id,
-      "planned_slice_id" => planned_slice.id,
+      "work_package_id" => work_package.id,
       "outcome" => "completed_no_pr",
       "idempotency_key" => idempotency_key,
       "evidence" => %{"completed_no_pr" => %{"no_pr_evidence" => evidence}}
     }
   end
 
-  defp pr_merged_args(work_request, planned_slice, idempotency_key) do
+  defp pr_merged_args(work_request, work_package, idempotency_key) do
     %{
       "work_request_id" => work_request.id,
-      "planned_slice_id" => planned_slice.id,
+      "work_package_id" => work_package.id,
       "outcome" => "pr_merged",
       "idempotency_key" => idempotency_key,
       "evidence" => %{
@@ -1493,20 +1274,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     }
   end
 
-  defp abandoned_args(work_request, planned_slice, idempotency_key, rationale) do
+  defp abandoned_args(work_request, work_package, idempotency_key, rationale) do
     %{
       "work_request_id" => work_request.id,
-      "planned_slice_id" => planned_slice.id,
+      "work_package_id" => work_package.id,
       "outcome" => "abandoned",
       "idempotency_key" => idempotency_key,
       "evidence" => %{"abandoned" => %{"abandoned_rationale" => rationale}}
     }
   end
 
-  defp revoke_args(work_request, planned_slice, grant_id, reason) do
+  defp revoke_args(work_request, work_package, grant_id, reason) do
     %{
       "work_request_id" => work_request.id,
-      "planned_slice_id" => planned_slice.id,
+      "work_package_id" => work_package.id,
       "grant_id" => grant_id,
       "reason" => reason
     }
@@ -1516,43 +1297,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     ArchitectHandoff.capabilities() -- ["read:child_progress", "read:child_findings"]
   end
 
-  defp superseded_args(
-         work_request,
-         planned_slice,
-         idempotency_key,
-         successor_planned_slice_id,
-         reason,
-         successor_work_package_id \\ nil
-       ) do
+  defp superseded_args(work_request, work_package, idempotency_key, successor_work_package_id, reason) do
     %{
       "work_request_id" => work_request.id,
-      "planned_slice_id" => planned_slice.id,
+      "work_package_id" => work_package.id,
       "outcome" => "superseded",
       "idempotency_key" => idempotency_key,
-      "evidence" =>
-        %{
-          "superseded" => %{
-            "superseded_reason" => reason,
-            "successor_planned_slice_id" => successor_planned_slice_id
-          }
+      "evidence" => %{
+        "superseded" => %{
+          "superseded_reason" => reason,
+          "successor_work_package_id" => successor_work_package_id
         }
-        |> put_in_if_present(["superseded", "successor_work_package_id"], successor_work_package_id)
+      }
     }
-  end
-
-  defp put_in_if_present(attrs, _path, nil), do: attrs
-  defp put_in_if_present(attrs, path, value), do: put_in(attrs, path, value)
-
-  defp drop_planned_slice_work_package_unique_index!(repo) do
-    SQL.query!(repo, "DROP INDEX IF EXISTS sympp_work_request_planned_slices_work_package_id_unique_index")
-  end
-
-  defp create_planned_slice_work_package_unique_index!(repo) do
-    SQL.query!(repo, """
-    CREATE UNIQUE INDEX IF NOT EXISTS sympp_work_request_planned_slices_work_package_id_unique_index
-    ON sympp_work_request_planned_slices (work_package_id)
-    WHERE work_package_id IS NOT NULL
-    """)
   end
 
   defp work_request_attrs(overrides) do
@@ -1574,15 +1331,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     Enum.into(overrides, defaults)
   end
 
-  defp planned_slice_attrs(overrides) do
+  defp work_package_attrs(overrides) do
     defaults = %{
       id: "WRS-MCP-DELIVERY-#{System.unique_integer([:positive])}",
       title: "Delivery MCP slice",
-      goal: "Close delivered planned slices through MCP.",
-      work_package_kind: "mcp",
-      target_base_branch: "main",
+      goal: "Close delivered WorkPackages through MCP.",
+      kind: "mcp",
+      base_branch: "main",
       branch_pattern: "feat/mcp-delivery",
-      owned_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
+      allowed_file_globs: ["elixir/lib/symphony_elixir/symphony_plus_plus/work_requests/**"],
       forbidden_file_globs: ["elixir/assets/**"],
       acceptance_criteria: ["Delivery MCP tools are scoped."],
       validation_steps: [
@@ -1596,13 +1353,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   end
 
   defp record_delivery(repo, session, arguments),
-    do: mcp_tool(repo, session, "record_planned_slice_delivery", arguments)
+    do: mcp_tool(repo, session, "record_work_package_delivery", arguments)
 
   defp reconcile_request(repo, session, arguments),
     do: mcp_tool(repo, session, "reconcile_work_request", arguments)
 
   defp revoke_worker_key(repo, session, arguments),
-    do: mcp_tool(repo, session, "revoke_planned_slice_worker_key", arguments)
+    do: mcp_tool(repo, session, "revoke_work_package_worker_key", arguments)
 
   defp delivery_board_payload_for(repo, session, %WorkRequest{} = work_request) do
     response =
@@ -1614,16 +1371,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     get_in(response, ["result", "structuredContent"])
   end
 
-  defp slice_work_package(payload, planned_slice_id) do
+  defp slice_work_package(payload, work_package_id) do
     payload
-    |> slice_by_id(planned_slice_id)
+    |> slice_by_id(work_package_id)
     |> Map.get("work_package")
   end
 
-  defp slice_by_id(payload, planned_slice_id) do
+  defp slice_by_id(payload, work_package_id) do
     payload
-    |> get_in(["delivery_board", "slices"])
-    |> Enum.find(&(&1["id"] == planned_slice_id))
+    |> get_in(["delivery_board", "work_packages"])
+    |> Enum.find(&(&1["id"] == work_package_id))
   end
 
   defp insufficient_capability?(response) do

@@ -206,7 +206,7 @@ export function RequestDetailContent({
           />
         </DetailDisclosure>
         <RecentDecisionsDisclosure detail={detail} />
-        <DetailDisclosure title="Product Plan" meta="IDs, constraints, plan nodes, and execution slices">
+        <DetailDisclosure title="Product Plan" meta="IDs, constraints, plan nodes, and execution WorkPackages">
           <DetailFacts
             facts={[
               ["Request ID", request.id],
@@ -219,7 +219,7 @@ export function RequestDetailContent({
             ]}
           />
           <DetailList title="Plan nodes" items={(detail.product_tree?.nodes || []).map((node) => node.title || node.id)} empty="No product plan nodes recorded." />
-          <DetailList title="Execution slices" items={(detail.planned_slices || []).map((slice) => slice.title || slice.id)} empty="No slices recorded." />
+          <DetailList title="Execution WorkPackages" items={(detail.work_packages || []).map((slice) => slice.title || slice.id)} empty="No WorkPackages recorded." />
           <JsonDetail label="Constraints" value={request.constraints} />
         </DetailDisclosure>
         <RequestDangerActions
@@ -241,7 +241,7 @@ export function RequestDetailContent({
         open={deliverConfirmOpen}
         onOpenChange={setDeliverConfirmOpen}
         title="Mark WorkRequest Delivered?"
-        description="This manually marks the request Delivered for the local dashboard even if unfinished plan nodes, execution slices, or open questions still exist."
+        description="This manually marks the request Delivered for the local dashboard even if unfinished plan nodes, WorkPackages, or open questions still exist."
         confirmLabel="Mark Delivered"
         pending={statePending}
         onConfirm={() => void markDelivered()}
@@ -319,7 +319,7 @@ function requestDetailStats(
   return [
     { label: "Open Questions", value: String(openQuestionCount || request.open_question_count || 0) },
     { label: "Plan Nodes", value: String(requestPlanNodeCount(detail)) },
-    { label: "Slices", value: String(sliceCount) },
+    { label: "WorkPackages", value: String(sliceCount) },
     { label: "Decisions", value: String(detail.decision_logs?.length || detail.summary?.decision_count || 0) },
     { label: "Comments", value: commentStatLabel(currentCommentStats.open_comment_count, currentCommentStats.comment_count) },
     { label: "Updated", value: detailDate(request.updated_at || request.inserted_at) },

@@ -26,7 +26,7 @@ Child A established the rehearsal naming convention:
 
 | Item | Value |
 | --- | --- |
-| Planned slice | `SYMPP-V2-DOGFOOD-002-SLICE-B` |
+| WorkPackage | `SYMPP-V2-DOGFOOD-002-SLICE-B` |
 | Dispatched WorkPackage | `wp_sHfN93m9r_YI13w7TOqeXw` |
 | Branch | `feat/sympp-v2-dogfood-002-child-b` |
 | Owned file | `implementation_docs_symphplusplus/dogfood/SYMPP-V2-DOGFOOD-002-child-b-handoff.md` |

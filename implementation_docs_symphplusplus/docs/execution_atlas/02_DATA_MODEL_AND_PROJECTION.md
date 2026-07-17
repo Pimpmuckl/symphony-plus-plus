@@ -10,6 +10,6 @@ Current contract:
 - `implementation_docs_symphplusplus/docs/13_WORKREQUEST_CONTRACT.md`
 
 Current V3 persistence is the WorkRequest-scoped product tree:
-`sympp_product_tree_nodes`, `sympp_product_tree_slice_links`,
+`sympp_product_tree_nodes`, direct WorkPackage ownership,
 `sympp_product_tree_dependency_edges`, and `sympp_product_tree_revisions`.
 Product plan nodes are optional and arbitrarily nested.

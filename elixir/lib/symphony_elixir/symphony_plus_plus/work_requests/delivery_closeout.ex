@@ -7,21 +7,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSlice
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.PlannedSliceDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   import Ecto.Query, only: [from: 2]
 
   @abandonable_no_code_statuses ["planning", "ready_for_worker"]
   @abandoned_no_code_status "abandoned"
-  @planned_slice_delivery_replay_fields [
+  @work_package_delivery_replay_fields [
     :work_request_id,
-    :planned_slice_id,
+    :work_package_id,
     :outcome,
     :idempotency_key,
     :recorded_by,
@@ -31,7 +31,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     :pr_merged_at,
     :merge_commit_sha,
     :no_pr_evidence,
-    :successor_planned_slice_id,
     :successor_work_package_id,
     :superseded_reason,
     :abandoned_rationale
@@ -64,26 +63,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
           | :work_package_not_abandonable
 
   @spec record(Repository.repo(), String.t(), String.t(), map()) ::
-          {:ok, PlannedSliceDelivery.t()} | {:error, error()}
-  def record(repo, work_request_id, planned_slice_id, attrs)
-      when is_atom(repo) and is_binary(work_request_id) and is_binary(planned_slice_id) and
+          {:ok, WorkPackageDelivery.t()} | {:error, error()}
+  def record(repo, work_request_id, work_package_id, attrs)
+      when is_atom(repo) and is_binary(work_request_id) and is_binary(work_package_id) and
              is_map(attrs) do
-    with {:ok, planned_slice} <-
-           Repository.get_planned_slice(repo, work_request_id, planned_slice_id),
-         {:ok, delivery} <- validate_delivery_input(work_request_id, planned_slice_id, attrs),
+    with {:ok, work_package} <-
+           Repository.get_work_package(repo, work_request_id, work_package_id),
+         {:ok, delivery} <- validate_delivery_input(work_request_id, work_package_id, attrs),
          :ok <-
            validate_pre_cleanup_closeout(
              repo,
-             planned_slice,
+             work_package,
              delivery,
              delivery_closeout_opts(attrs)
            ),
          {:ok, delivery} <-
            repo.transaction(fn ->
-             record_in_transaction(repo, work_request_id, planned_slice_id, attrs)
+             record_in_transaction(repo, work_request_id, work_package_id, attrs)
            end)
            |> normalize_transaction_result() do
-      best_effort_cleanup_linked_worktree(repo, planned_slice, delivery)
+      best_effort_cleanup_linked_worktree(repo, work_package, delivery)
       {:ok, delivery}
     end
   rescue
@@ -91,27 +90,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp record_in_transaction(repo, work_request_id, planned_slice_id, attrs) do
+  defp record_in_transaction(repo, work_request_id, work_package_id, attrs) do
     with {:ok, work_request} <- Repository.get(repo, work_request_id),
-         {:ok, planned_slice} <-
-           Repository.get_planned_slice(repo, work_request_id, planned_slice_id),
+         {:ok, work_package} <-
+           Repository.get_work_package(repo, work_request_id, work_package_id),
          {:ok, delivery} <-
-           Repository.record_planned_slice_delivery_in_transaction(
+           Repository.record_work_package_delivery_in_transaction(
              repo,
              work_request_id,
-             planned_slice_id,
+             work_package_id,
              attrs
            ),
          closeout_opts = delivery_closeout_opts(attrs),
          {:ok, delivery} <-
-           complete_closeout(repo, work_request, planned_slice, delivery, closeout_opts) do
+           complete_closeout(repo, work_request, work_package, delivery, closeout_opts) do
       delivery
     else
       {:error, reason} -> repo.rollback(reason)
     end
   end
 
-  defp validate_delivery_input(work_request_id, planned_slice_id, attrs) do
+  defp validate_delivery_input(work_request_id, work_package_id, attrs) do
     attrs =
       attrs
       |> Map.drop([
@@ -125,24 +124,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
         :updated_at
       ])
       |> Map.put("work_request_id", work_request_id)
-      |> Map.put("planned_slice_id", planned_slice_id)
+      |> Map.put("work_package_id", work_package_id)
 
-    PlannedSliceDelivery.create_changeset(attrs)
+    WorkPackageDelivery.create_changeset(attrs)
     |> Ecto.Changeset.apply_action(:insert)
   end
 
   defp validate_pre_cleanup_closeout(
          repo,
-         %PlannedSlice{} = planned_slice,
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackage{} = work_package,
+         %WorkPackageDelivery{} = delivery,
          opts
        ) do
-    case existing_delivery_state(repo, planned_slice, delivery) do
+    case existing_delivery_state(repo, work_package, delivery) do
       :replayed_closeout ->
         :ok
 
       :new_or_unclosed_replay ->
-        validate_new_closeout_pre_cleanup(repo, planned_slice, delivery, opts)
+        validate_new_closeout_pre_cleanup(repo, work_package, delivery, opts)
 
       {:error, reason} ->
         {:error, reason}
@@ -151,37 +150,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp validate_new_closeout_pre_cleanup(
          repo,
-         %PlannedSlice{} = planned_slice,
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackage{} = work_package,
+         %WorkPackageDelivery{} = delivery,
          opts
        ) do
-    with :ok <- validate_delivery_scope(repo, planned_slice, delivery),
-         :ok <- validate_closeout_progress_slot(repo, planned_slice, delivery),
-         :ok <- validate_terminal_evidence(planned_slice, delivery) do
-      validate_linked_closeout_preconditions(repo, planned_slice, delivery, opts)
+    with :ok <- validate_delivery_scope(repo, work_package, delivery),
+         :ok <- validate_closeout_progress_slot(repo, work_package, delivery),
+         :ok <- validate_terminal_evidence(work_package, delivery) do
+      validate_linked_closeout_preconditions(repo, work_package, delivery, opts)
     end
   end
 
   defp validate_delivery_scope(
          repo,
-         %PlannedSlice{work_request_id: work_request_id},
-         %PlannedSliceDelivery{outcome: "superseded"} = delivery
+         %WorkPackage{work_request_id: work_request_id},
+         %WorkPackageDelivery{outcome: "superseded"} = delivery
        ) do
-    with %PlannedSlice{work_request_id: ^work_request_id} = successor_slice <-
-           repo.get(PlannedSlice, delivery.successor_planned_slice_id),
-         true <- delivery.successor_work_package_id in [nil, successor_slice.work_package_id] do
+    with %WorkPackage{work_request_id: ^work_request_id} = successor_slice <-
+           repo.get(WorkPackage, delivery.successor_work_package_id),
+         true <- delivery.successor_work_package_id in [nil, successor_slice.id] do
       :ok
     else
       _result -> {:error, :not_found}
     end
   end
 
-  defp validate_delivery_scope(_repo, %PlannedSlice{}, %PlannedSliceDelivery{}), do: :ok
+  defp validate_delivery_scope(_repo, %WorkPackage{}, %WorkPackageDelivery{}), do: :ok
 
   defp validate_closeout_progress_slot(
          repo,
-         %PlannedSlice{work_package_id: work_package_id} = planned_slice,
-         %PlannedSliceDelivery{} = delivery
+         %WorkPackage{id: work_package_id} = work_package,
+         %WorkPackageDelivery{} = delivery
        ) do
     with true <- filled_string?(work_package_id),
          {:ok, event} <-
@@ -190,7 +189,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              work_package_id,
              closeout_idempotency_key(delivery)
            ) do
-      if closeout_progress_slot_matches?(event, planned_slice, delivery) do
+      if closeout_progress_slot_matches?(event, work_package, delivery) do
         :ok
       else
         {:error, :idempotency_key_conflict}
@@ -204,12 +203,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp closeout_progress_slot_matches?(
          event,
-         %PlannedSlice{} = planned_slice,
-         %PlannedSliceDelivery{} = delivery
+         %WorkPackage{} = work_package,
+         %WorkPackageDelivery{} = delivery
        ) do
     closeout_progress_event_matches?(
       event,
-      planned_slice,
+      work_package,
       delivery,
       terminal_status_for_outcome(delivery.outcome)
     )
@@ -217,19 +216,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp existing_delivery_state(
          repo,
-         %PlannedSlice{} = planned_slice,
-         %PlannedSliceDelivery{} = delivery
+         %WorkPackage{} = work_package,
+         %WorkPackageDelivery{} = delivery
        ) do
-    case existing_planned_slice_delivery(repo, delivery.planned_slice_id) do
+    case existing_work_package_delivery(repo, delivery.work_package_id) do
       nil ->
         :new_or_unclosed_replay
 
-      %PlannedSliceDelivery{} = existing ->
+      %WorkPackageDelivery{} = existing ->
         cond do
-          not planned_slice_delivery_replay?(existing, delivery) ->
+          not work_package_delivery_replay?(existing, delivery) ->
             {:error, :delivery_outcome_conflict}
 
-          closeout_progress_replay?(repo, planned_slice, existing) ->
+          closeout_progress_replay?(repo, work_package, existing) ->
             :replayed_closeout
 
           true ->
@@ -238,43 +237,43 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     end
   end
 
-  defp existing_planned_slice_delivery(repo, planned_slice_id) do
+  defp existing_work_package_delivery(repo, work_package_id) do
     repo.one(
-      from(delivery in PlannedSliceDelivery,
-        where: delivery.planned_slice_id == ^planned_slice_id,
+      from(delivery in WorkPackageDelivery,
+        where: delivery.work_package_id == ^work_package_id,
         limit: 1
       )
     )
   end
 
-  defp planned_slice_delivery_replay?(
-         %PlannedSliceDelivery{} = existing,
-         %PlannedSliceDelivery{} = candidate
+  defp work_package_delivery_replay?(
+         %WorkPackageDelivery{} = existing,
+         %WorkPackageDelivery{} = candidate
        ) do
-    Enum.all?(@planned_slice_delivery_replay_fields, fn field ->
+    Enum.all?(@work_package_delivery_replay_fields, fn field ->
       Map.get(existing, field) == Map.get(candidate, field)
     end)
   end
 
   defp validate_linked_closeout_preconditions(
          repo,
-         %PlannedSlice{work_package_id: work_package_id},
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackage{id: work_package_id},
+         %WorkPackageDelivery{} = delivery,
          opts
        ) do
     case filled_string?(work_package_id) do
       true ->
-        validate_linked_package_closeout_preconditions(repo, work_package_id, delivery, opts)
+        validate_work_package_closeout_preconditions(repo, work_package_id, delivery, opts)
 
       false ->
         :ok
     end
   end
 
-  defp validate_linked_package_closeout_preconditions(
+  defp validate_work_package_closeout_preconditions(
          repo,
          work_package_id,
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackageDelivery{} = delivery,
          opts
        ) do
     context = WorkPackageActivity.context(repo, work_package_id)
@@ -310,8 +309,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   end
 
   defp validate_terminal_evidence(
-         %PlannedSlice{work_package_id: work_package_id},
-         %PlannedSliceDelivery{outcome: "pr_merged"} = delivery
+         %WorkPackage{id: work_package_id},
+         %WorkPackageDelivery{outcome: "pr_merged"} = delivery
        ) do
     cond do
       not merged_pr_fields?(delivery) ->
@@ -328,22 +327,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     end
   end
 
-  defp validate_terminal_evidence(%PlannedSlice{}, %PlannedSliceDelivery{}), do: :ok
+  defp validate_terminal_evidence(%WorkPackage{}, %WorkPackageDelivery{}), do: :ok
 
   defp complete_closeout(
          repo,
          %WorkRequest{} = work_request,
-         %PlannedSlice{} = planned_slice,
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackage{} = work_package,
+         %WorkPackageDelivery{} = delivery,
          opts
        ) do
-    case closeout_progress_replay?(repo, planned_slice, delivery) do
+    case closeout_progress_replay?(repo, work_package, delivery) do
       true ->
         refresh_replayed_closeout(repo, work_request, delivery)
 
       false ->
-        with :ok <- validate_terminal_evidence(planned_slice, delivery) do
-          perform_closeout(repo, work_request, planned_slice, delivery, opts)
+        with :ok <- validate_terminal_evidence(work_package, delivery) do
+          perform_closeout(repo, work_request, work_package, delivery, opts)
         end
     end
   end
@@ -351,7 +350,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   defp refresh_replayed_closeout(
          repo,
          %WorkRequest{} = work_request,
-         %PlannedSliceDelivery{} = delivery
+         %WorkPackageDelivery{} = delivery
        ) do
     with {:ok, _refreshed} <- Completion.refresh_in_transaction(repo, work_request.id) do
       {:ok, delivery}
@@ -361,17 +360,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   defp perform_closeout(
          repo,
          %WorkRequest{} = work_request,
-         %PlannedSlice{} = planned_slice,
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackage{} = work_package,
+         %WorkPackageDelivery{} = delivery,
          opts
        ) do
     with {:ok, closeout_context} <-
-           prepare_linked_closeout_context(repo, planned_slice, delivery, opts),
+           prepare_linked_closeout_context(repo, work_package, delivery, opts),
          {:ok, closeout} <-
-           close_linked_work_package(
+           close_work_package(
              repo,
              work_request,
-             planned_slice,
+             work_package,
              delivery,
              closeout_context
            ),
@@ -379,7 +378,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
            append_closeout_progress(
              repo,
              work_request,
-             planned_slice,
+             work_package,
              delivery,
              closeout,
              closeout_context
@@ -389,37 +388,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     end
   end
 
-  defp close_linked_work_package(
+  defp close_work_package(
          repo,
          %WorkRequest{} = work_request,
-         %PlannedSlice{} = planned_slice,
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackage{} = work_package,
+         %WorkPackageDelivery{} = delivery,
          closeout_context
        ) do
-    WorkPackageRepository.close_compatible_linked_delivery_package(
+    WorkPackageRepository.close_delivery_work_package(
       repo,
       work_request,
-      planned_slice,
+      work_package,
       terminal_status_for_outcome(delivery.outcome),
       allow_active_blockers?: Map.get(closeout_context, :allow_active_blockers?, false)
     )
   end
 
   defp append_closeout_progress(
-         _repo,
-         %WorkRequest{},
-         %PlannedSlice{},
-         %PlannedSliceDelivery{},
-         nil,
-         _closeout_context
-       ),
-       do: {:ok, nil}
-
-  defp append_closeout_progress(
          repo,
          %WorkRequest{} = work_request,
-         %PlannedSlice{} = planned_slice,
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackage{} = work_package,
+         %WorkPackageDelivery{} = delivery,
          closeout,
          closeout_context
        )
@@ -433,14 +422,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              payload:
                closeout_progress_payload(
                  work_request,
-                 planned_slice,
+                 work_package,
                  delivery,
                  closeout,
                  closeout_context
                )
            }),
          true <-
-           closeout_progress_event_matches?(event, planned_slice, delivery, closeout.next_status) do
+           closeout_progress_event_matches?(event, work_package, delivery, closeout.next_status) do
       {:ok, event}
     else
       false -> {:error, :idempotency_key_conflict}
@@ -449,24 +438,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   end
 
   defp terminal_status_for_outcome(outcome),
-    do: PlannedSliceDelivery.terminal_status_for_outcome(outcome)
+    do: WorkPackageDelivery.terminal_status_for_outcome(outcome)
 
   defp prepare_linked_closeout_context(
          repo,
-         %PlannedSlice{work_package_id: work_package_id},
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackage{id: work_package_id},
+         %WorkPackageDelivery{} = delivery,
          opts
        ) do
     case filled_string?(work_package_id) do
-      true -> prepare_linked_package_closeout_context(repo, work_package_id, delivery, opts)
+      true -> prepare_work_package_closeout_context(repo, work_package_id, delivery, opts)
       false -> {:ok, empty_closeout_context()}
     end
   end
 
-  defp prepare_linked_package_closeout_context(
+  defp prepare_work_package_closeout_context(
          repo,
          work_package_id,
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackageDelivery{} = delivery,
          opts
        ) do
     context_observed_at = DateTime.utc_now(:microsecond)
@@ -685,15 +674,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   defp progress_history_statuses(%{status: status}) when is_binary(status), do: [status]
   defp progress_history_statuses(_event), do: []
 
-  defp best_effort_cleanup_linked_worktree(_repo, %PlannedSlice{work_package_id: work_package_id}, %PlannedSliceDelivery{})
+  defp best_effort_cleanup_linked_worktree(_repo, %WorkPackage{id: work_package_id}, %WorkPackageDelivery{})
        when not is_binary(work_package_id), do: :ok
 
-  defp best_effort_cleanup_linked_worktree(_repo, %PlannedSlice{work_package_id: ""}, %PlannedSliceDelivery{}), do: :ok
+  defp best_effort_cleanup_linked_worktree(_repo, %WorkPackage{id: ""}, %WorkPackageDelivery{}), do: :ok
 
   defp best_effort_cleanup_linked_worktree(
          repo,
-         %PlannedSlice{work_package_id: work_package_id},
-         %PlannedSliceDelivery{} = delivery
+         %WorkPackage{id: work_package_id},
+         %WorkPackageDelivery{} = delivery
        ) do
     case WorkPackageService.cleanup_worktree(repo, work_package_id) do
       {:ok, _cleanup} -> :ok
@@ -701,7 +690,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     end
   end
 
-  defp audit_worktree_cleanup_failure(repo, work_package_id, %PlannedSliceDelivery{} = delivery, reason) do
+  defp audit_worktree_cleanup_failure(repo, work_package_id, %WorkPackageDelivery{} = delivery, reason) do
     PlanningRepository.append_progress_event(repo, %{
       work_package_id: work_package_id,
       status: "worktree_cleanup_failed",
@@ -709,7 +698,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
       idempotency_key: "#{closeout_idempotency_key(delivery)}:worktree_cleanup",
       payload: %{
         type: "work_request_delivery_worktree_cleanup",
-        source_tool: "record_planned_slice_delivery",
+        source_tool: "record_work_package_delivery",
         delivery_id: delivery.id,
         outcome: delivery.outcome,
         reason: inspect(closeout_worktree_cleanup_error(reason))
@@ -784,10 +773,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     end
   end
 
-  defp recovery_closeout_mode(%PlannedSliceDelivery{outcome: "pr_merged"}), do: :pr_merged
-  defp recovery_closeout_mode(%PlannedSliceDelivery{outcome: "superseded"}), do: :superseded
-  defp recovery_closeout_mode(%PlannedSliceDelivery{outcome: "abandoned"}), do: :abandoned
-  defp recovery_closeout_mode(%PlannedSliceDelivery{}), do: :normal
+  defp recovery_closeout_mode(%WorkPackageDelivery{outcome: "pr_merged"}), do: :pr_merged
+  defp recovery_closeout_mode(%WorkPackageDelivery{outcome: "superseded"}), do: :superseded
+  defp recovery_closeout_mode(%WorkPackageDelivery{outcome: "abandoned"}), do: :abandoned
+  defp recovery_closeout_mode(%WorkPackageDelivery{}), do: :normal
 
   defp empty_closeout_context do
     closeout_context(WorkPackageActivity.empty_context(), [], [], allow_active_blockers?: false)
@@ -1096,8 +1085,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp closeout_progress_replay?(
          repo,
-         %PlannedSlice{work_package_id: work_package_id},
-         %PlannedSliceDelivery{} = delivery
+         %WorkPackage{id: work_package_id},
+         %WorkPackageDelivery{} = delivery
        ) do
     with true <- filled_string?(work_package_id),
          {:ok, event} <-
@@ -1108,7 +1097,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
            ),
          {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
          true <-
-           PlannedSliceDelivery.terminal_status_matches_outcome?(
+           WorkPackageDelivery.terminal_status_matches_outcome?(
              work_package.status,
              delivery.outcome
            ),
@@ -1121,15 +1110,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp closeout_progress_event_matches?(
          event,
-         %PlannedSlice{work_package_id: work_package_id},
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackage{id: work_package_id},
+         %WorkPackageDelivery{} = delivery,
          next_status
        ) do
     event.work_package_id == work_package_id and
       closeout_progress_event_matches?(event, delivery, next_status)
   end
 
-  defp closeout_progress_event_matches?(event, %PlannedSliceDelivery{} = delivery, next_status) do
+  defp closeout_progress_event_matches?(event, %WorkPackageDelivery{} = delivery, next_status) do
     event.idempotency_key == closeout_idempotency_key(delivery) and
       event.status == next_status and
       closeout_progress_payload_matches?(event.payload || %{}, delivery, next_status)
@@ -1137,28 +1126,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp closeout_progress_payload_matches?(
          payload,
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackageDelivery{} = delivery,
          next_status
        ) do
     closeout_progress_payload_identity_matches?(payload, delivery) and
       map_value(payload, :next_status) == next_status
   end
 
-  defp closeout_progress_payload_identity_matches?(payload, %PlannedSliceDelivery{} = delivery) do
+  defp closeout_progress_payload_identity_matches?(payload, %WorkPackageDelivery{} = delivery) do
     map_value(payload, :type) == "work_request_delivery_closeout" and
-      map_value(payload, :source_tool) == "record_planned_slice_delivery" and
+      map_value(payload, :source_tool) == "record_work_package_delivery" and
       map_value(payload, :work_request_id) == delivery.work_request_id and
-      map_value(payload, :planned_slice_id) == delivery.planned_slice_id and
+      map_value(payload, :work_package_id) == delivery.work_package_id and
       map_value(payload, :delivery_id) == delivery.id and
       map_value(payload, :outcome) == delivery.outcome
   end
 
-  defp merged_pr_fields?(%PlannedSliceDelivery{} = delivery) do
+  defp merged_pr_fields?(%WorkPackageDelivery{} = delivery) do
     filled_string?(delivery.pr_url) and
       match?(%DateTime{}, delivery.pr_merged_at)
   end
 
-  defp well_formed_pr_evidence?(%PlannedSliceDelivery{} = delivery) do
+  defp well_formed_pr_evidence?(%WorkPackageDelivery{} = delivery) do
     case github_pr_url_parts(delivery.pr_url) do
       {:ok, parts} ->
         pr_repository_matches?(delivery.pr_repository, parts.repository) and
@@ -1240,7 +1229,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     |> String.downcase()
   end
 
-  defp closeout_progress_summary(%PlannedSliceDelivery{} = delivery, closeout_context) do
+  defp closeout_progress_summary(%WorkPackageDelivery{} = delivery, closeout_context) do
     if closeout_context.active_blocker_ids != [] do
       "Recorded WorkRequest delivery closeout: #{delivery.outcome} (active blockers preserved)"
     else
@@ -1250,16 +1239,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp closeout_progress_payload(
          %WorkRequest{} = work_request,
-         %PlannedSlice{} = planned_slice,
-         %PlannedSliceDelivery{} = delivery,
+         %WorkPackage{} = work_package,
+         %WorkPackageDelivery{} = delivery,
          closeout,
          closeout_context
        ) do
     %{
       type: "work_request_delivery_closeout",
-      source_tool: "record_planned_slice_delivery",
+      source_tool: "record_work_package_delivery",
       work_request_id: work_request.id,
-      planned_slice_id: planned_slice.id,
+      work_package_id: work_package.id,
       delivery_id: delivery.id,
       outcome: delivery.outcome,
       previous_status: closeout.previous_status,
@@ -1270,7 +1259,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
       pr_repository: delivery.pr_repository,
       pr_merged_at: delivery.pr_merged_at,
       merge_commit_sha: delivery.merge_commit_sha,
-      successor_planned_slice_id: delivery.successor_planned_slice_id,
       successor_work_package_id: delivery.successor_work_package_id
     }
     |> put_non_empty(:active_blocker_ids, closeout_context.active_blocker_ids)
@@ -1284,12 +1272,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   defp put_non_empty(payload, _key, []), do: payload
   defp put_non_empty(payload, key, values) when is_list(values), do: Map.put(payload, key, values)
 
-  defp closeout_idempotency_key(%PlannedSliceDelivery{} = delivery) do
+  defp closeout_idempotency_key(%WorkPackageDelivery{} = delivery) do
     Enum.join(
       [
         "work_request_delivery_closeout",
         delivery.work_request_id,
-        delivery.planned_slice_id,
+        delivery.work_package_id,
         delivery.idempotency_key
       ],
       ":"

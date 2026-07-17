@@ -428,7 +428,7 @@ function renderSliceDetailContent(
   const detail = matchingRequestDetail(selection, state);
   if (!detail) return <CardDetailLoadingContent selection={selection} stage="loading" />;
 
-  const slice = detail.planned_slices?.find((candidate) => candidate.id === selection.slice.id) || selection.slice;
+  const slice = detail.work_packages?.find((candidate) => candidate.id === selection.slice.id) || selection.slice;
 
   return <SliceDetailContent detail={detail} slice={slice} pkg={selection.pkg} {...props} />;
 }

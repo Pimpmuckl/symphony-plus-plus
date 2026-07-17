@@ -353,7 +353,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
   test "transition rejects unknown lifecycle kinds", %{repo: repo} do
     package = insert_raw_package!(repo, kind: "legacy_kind", status: "created")
 
-    assert {:error, :unsupported_work_package_kind} = Service.transition(repo, package.id, "ready_for_worker", worker_actor!(repo, package))
+    assert {:error, :unsupported_kind} = Service.transition(repo, package.id, "ready_for_worker", worker_actor!(repo, package))
   end
 
   test "transition rejects unknown persisted lifecycle statuses", %{repo: repo} do
