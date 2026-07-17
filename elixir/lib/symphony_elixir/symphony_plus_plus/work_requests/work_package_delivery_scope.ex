@@ -22,6 +22,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope 
       {delivery_repo, base_branch} when is_binary(delivery_repo) and is_binary(base_branch) ->
         validate_delivery_scope(ecto_repo, work_request, delivery_repo, base_branch)
 
+      {delivery_repo, nil} when is_binary(delivery_repo) ->
+        {:error, :work_package_delivery_scope_out_of_scope}
+
       {_repo, _base_branch} ->
         :ok
     end

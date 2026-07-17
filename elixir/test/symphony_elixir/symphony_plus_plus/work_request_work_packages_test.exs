@@ -91,6 +91,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     assert {:error, :open_questions} = Repository.slice_work_request(repo, work_request.id, [package_attrs()])
   end
 
+  test "atomically advances a clarified WorkRequest while slicing", %{repo: repo} do
+    work_request = create_work_request!(repo, status: "clarifying")
+
+    assert {:error, :invalid_work_package} =
+             Repository.slice_work_request(repo, work_request.id, [package_attrs(kind: "phase_child")])
+
+    assert {:ok, %{status: "clarifying"}} = Repository.get(repo, work_request.id)
+
+    assert {:ok, %{work_request: sliced, work_packages: [_package]}} =
+             Repository.slice_work_request(repo, work_request.id, [package_attrs()])
+
+    assert sliced.status == "sliced"
+  end
+
   test "updates contracts with optimistic revisions and direct product-tree placement", %{repo: repo} do
     work_request = create_work_request!(repo)
     first_node = create_node!(repo, work_request.id, id: "node_first")
@@ -132,6 +146,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     assert {:ok, %{status: "ready_for_slicing"}} = Repository.get(repo, work_request.id)
   end
 
+  test "requires an explicit base branch for a secondary delivery repo", %{repo: repo} do
+    work_request =
+      create_work_request!(repo,
+        repo_scopes: [%{repo: "nextide/secondary-service"}]
+      )
+
+    assert {:error, :work_package_delivery_scope_out_of_scope} =
+             Repository.slice_work_request(repo, work_request.id, [
+               package_attrs(repo: "nextide/secondary-service")
+             ])
+
+    assert {:ok, []} = Repository.list_work_packages(repo, work_request.id)
+    assert {:ok, %{status: "ready_for_slicing"}} = Repository.get(repo, work_request.id)
+  end
+
   test "rejects product-tree placement outside the owning WorkRequest", %{repo: repo} do
     owner = create_work_request!(repo, id: "WR-OWNER")
     other = create_work_request!(repo, id: "WR-OTHER")
@@ -154,6 +183,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     assert {:error, :stale_status} = Repository.skip_work_package(repo, work_request.id, first.id, "planned")
     assert {:error, :last_active_work_package} = Repository.skip_work_package(repo, work_request.id, second.id, "planned")
     assert {:ok, %{status: "planned"}} = WorkPackageRepository.get(repo, second.id)
+  end
+
+  test "does not count terminal sibling packages as active", %{repo: repo} do
+    for terminal_status <- ["merged", "merged_into_phase", "closed", "abandoned"] do
+      work_request = create_work_request!(repo)
+
+      assert {:ok, %{work_packages: [terminal, planned]}} =
+               Repository.slice_work_request(repo, work_request.id, [
+                 package_attrs(),
+                 package_attrs()
+               ])
+
+      terminal
+      |> Ecto.Changeset.change(status: terminal_status)
+      |> repo.update!()
+
+      assert {:error, :last_active_work_package} =
+               Repository.skip_work_package(repo, work_request.id, planned.id, "planned")
+    end
   end
 
   test "dispatch activates the canonical package in place", %{repo: repo, database_path: database_path} do

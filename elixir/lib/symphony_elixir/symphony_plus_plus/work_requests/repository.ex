@@ -15,6 +15,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @completion_blocking_statuses ["human_info_needed"]
+  @inactive_work_package_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
   @work_package_delivery_replay_fields [
     :work_request_id,
     :work_package_id,
@@ -298,15 +299,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   def slice_work_request(repo, work_request_id, package_attrs)
       when is_atom(repo) and is_binary(work_request_id) and is_list(package_attrs) do
     repo.transaction(fn ->
-      with {:ok, %WorkRequest{} = work_request} <- get(repo, work_request_id),
+      with :ok <- prepare_for_work_packages_in_transaction(repo, work_request_id),
+           {:ok, %WorkRequest{} = work_request} <- get(repo, work_request_id),
            :ok <- require_slicing_status(work_request.status),
-           false <- open_questions?(repo, work_request_id),
            :ok <- require_package_batch(package_attrs),
            {:ok, work_packages} <- insert_work_package_batch(repo, work_request, package_attrs),
            {:ok, updated_work_request} <- mark_sliced_in_transaction(repo, work_request) do
         %{work_request: updated_work_request, work_packages: work_packages}
       else
-        true -> repo.rollback(:open_questions)
         {:error, reason} -> repo.rollback(reason)
       end
     end)
@@ -996,7 +996,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
               FROM sympp_work_packages AS sibling
               WHERE sibling.work_request_id = ?
                 AND sibling.id != ?
-                AND sibling.status != 'skipped'
+                AND sibling.status NOT IN ('skipped', 'merged', 'merged_into_phase', 'closed', 'abandoned')
             )
             """,
             work_package.work_request_id,
@@ -1043,7 +1043,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       from(work_package in WorkPackage,
         where:
           work_package.work_request_id == ^work_request_id and work_package.id != ^work_package_id and
-            work_package.status != "skipped",
+            work_package.status not in ^@inactive_work_package_statuses,
         select: 1,
         limit: 1
       )
@@ -1091,7 +1091,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> rename_key("review", "review_requirement")
       |> Map.drop(@work_package_create_ignored_attrs)
       |> put_new_value("repo", work_request.repo)
-      |> put_new_value("base_branch", work_request.base_branch)
+      |> put_primary_base_branch_default(work_request)
       |> put_new_value("kind", "standard_pr")
       |> then(&put_new_value(&1, "policy_template", Map.get(&1, "kind")))
       |> put_new_value("product_description", work_request.human_description)
@@ -1112,6 +1112,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
          :ok <- validate_docs_work_package_scope(attrs),
          :ok <- validate_product_tree_node(repo, work_request.id, Map.get(attrs, "product_tree_node_id")) do
       {:ok, attrs}
+    end
+  end
+
+  defp put_primary_base_branch_default(attrs, %WorkRequest{} = work_request) do
+    if Map.get(attrs, "repo") == work_request.repo do
+      put_new_value(attrs, "base_branch", work_request.base_branch)
+    else
+      attrs
     end
   end
 

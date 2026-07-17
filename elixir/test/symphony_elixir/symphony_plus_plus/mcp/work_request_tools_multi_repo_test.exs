@@ -38,6 +38,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestToolsMultiRepoTest do
       "stop_conditions" => ["Stop before unrelated scope."]
     }
 
+    missing_base_response =
+      mcp_tool(repo, session, "slice_work_request", %{
+        "work_request_id" => work_request.id,
+        "work_packages" => [Map.delete(package, "base_branch")]
+      })
+
+    assert get_in(missing_base_response, ["error", "data", "reason"]) ==
+             "work_package_delivery_scope_out_of_scope"
+
     response =
       mcp_tool(repo, session, "slice_work_request", %{
         "work_request_id" => work_request.id,
@@ -46,6 +55,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestToolsMultiRepoTest do
 
     payload = get_in(response, ["result", "structuredContent"])
     assert [work_package_id] = payload["work_package_ids"]
+    assert payload["product_tree_revision"]["revision_number"] == 1
 
     assert {:ok, [work_package]} = WorkRequestRepository.list_work_packages(repo, work_request.id)
     assert work_package.id == work_package_id

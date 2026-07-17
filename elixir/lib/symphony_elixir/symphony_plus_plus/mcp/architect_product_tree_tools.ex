@@ -161,8 +161,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, _work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_package_create, tool),
          :ok <- require_complete_work_package_contracts(work_packages),
-         {:ok, result} <-
-           mutate_product_tree(
+         {:ok, {result, detail}} <-
+           mutate_product_tree_with_projection(
              config.repo,
              work_request_id,
              tool,
@@ -172,6 +172,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
       {:ok,
        ToolResult.tool_result(%{
          "work_package_ids" => Enum.map(result.work_packages, & &1.id),
+         "product_tree_revision" => json_safe_payload(detail.product_tree.latest_revision),
          "scope" => scope,
          "status" => %{"work_request_status" => result.work_request.status}
        })}

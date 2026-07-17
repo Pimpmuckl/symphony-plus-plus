@@ -595,7 +595,14 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive.Helpers do
   def can_author_work_package?(%{work_request: work_request}), do: can_author_work_package?(work_request)
 
   def can_author_work_package?(work_request),
-    do: value(work_request, :status) == "ready_for_slicing"
+    do:
+      value(work_request, :status) in [
+        "ready_for_clarification",
+        "clarifying",
+        "human_info_needed",
+        "ready_for_slicing",
+        "sliced"
+      ]
 
   @spec can_skip_work_package?(any(), any()) :: any()
   def can_skip_work_package?(work_request, work_package),
