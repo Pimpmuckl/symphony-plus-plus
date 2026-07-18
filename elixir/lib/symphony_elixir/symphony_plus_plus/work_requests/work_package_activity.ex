@@ -41,14 +41,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
       grants = Map.get(grants_by_id, work_package_id, [])
       agent_runs = Map.get(agent_runs_by_id, work_package_id, [])
       claim_leases = Map.get(claim_leases_by_id, work_package_id, [])
-      runtime_evidence = runtime_evidence(grants, agent_runs, claim_leases, DateTime.utc_now(:microsecond))
 
-      {work_package_id,
-       %{
-         blocker_state: blocker_state(progress_events),
-         runtime_state: runtime_state(runtime_evidence, grants, agent_runs, claim_leases, progress_events, work_package),
-         worker_signal: worker_signal(grants, agent_runs, claim_leases, runtime_evidence)
-       }}
+      {work_package_id, project_context(grants, agent_runs, claim_leases, progress_events, work_package)}
     end)
   end
 
@@ -76,6 +70,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
         reason_codes: []
       },
       worker_signal: nil
+    }
+  end
+
+  @spec project_context([AccessGrant.t()], [AgentRun.t()], [ClaimLease.t()], [ProgressEvent.t()], WorkPackage.t() | nil) :: map()
+  def project_context(grants, agent_runs, claim_leases, progress_events, work_package)
+      when is_list(grants) and is_list(agent_runs) and is_list(claim_leases) and is_list(progress_events) do
+    runtime_evidence = runtime_evidence(grants, agent_runs, claim_leases, DateTime.utc_now(:microsecond))
+
+    %{
+      blocker_state: blocker_state(progress_events),
+      runtime_state: runtime_state(runtime_evidence, grants, agent_runs, claim_leases, progress_events, work_package),
+      worker_signal: worker_signal(grants, agent_runs, claim_leases, runtime_evidence)
     }
   end
 

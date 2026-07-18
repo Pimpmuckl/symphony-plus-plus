@@ -1524,6 +1524,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       agent_runs = Map.get(agent_runs_by_id, work_package.id, [])
       grants = Map.get(grants_by_id, work_package.id, [])
       claim_leases = Map.get(claim_leases_by_id, work_package.id, [])
+      activity_context = WorkPackageActivity.project_context(grants, agent_runs, claim_leases, progress_events, work_package)
       blockers = OperationalProjection.blockers(progress_events)
       runtime = OperationalProjection.runtime_summary(agent_runs)
       metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id, work_package.review_requirement)
@@ -1556,7 +1557,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       {work_package.id,
        %{
          work_package: work_package,
-         worker_signal: WorkPackageActivity.worker_signal(grants, agent_runs, claim_leases),
+         blocker_state: activity_context.blocker_state,
+         runtime_state: activity_context.runtime_state,
+         worker_signal: activity_context.worker_signal,
          card: %{operational_state: operational_state, metadata: metadata}
        }}
     end)

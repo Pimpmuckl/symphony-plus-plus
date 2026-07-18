@@ -4239,7 +4239,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert fanout_packages["WP-FANOUT-JOIN"].work_package.dependency_signal.required == 2
 
       parse = Repo.get!(WorkPackage, "WP-FANOUT-PARSE")
-      assert Dashboard.work_package_contexts(Repo, [parse])[parse.id].worker_signal.status == "active"
+      parse_context = Dashboard.work_package_contexts(Repo, [parse])[parse.id]
+      assert parse_context.worker_signal.status == "active"
+      assert parse_context.runtime_state.active?
+
+      Repo.get!(ClaimLease, "LEASE-RUN-FANOUT-PARSE")
+      |> ClaimLease.update_changeset(%{status: "released", released_at: ~U[2026-07-18 09:00:00.000000Z]})
+      |> Repo.update!()
+
+      Repo.get!(AgentRun, "RUN-FANOUT-PARSE")
+      |> AgentRun.update_changeset(%{status: "running", last_seen_at: ~U[2020-01-01 00:00:00.000000Z]})
+      |> Repo.update!()
+
+      stale_context = Dashboard.work_package_contexts(Repo, [parse])[parse.id]
+      assert stale_context.worker_signal.status == "stale"
+      refute stale_context.runtime_state.active?
+
+      assert {:ok, _branch_advance} =
+               PlanningRepository.append_progress_event(Repo, %{
+                 work_package_id: parse.id,
+                 summary: "Fixture branch advanced",
+                 status: "branch_attached",
+                 payload: %{type: "branch", source_tool: "attach_branch", branch: "feat/fixture-parse", head_sha: "parse-next-head"},
+                 created_at: ~U[2026-07-18 09:01:00.000000Z]
+               })
+
+      assert {:ok, advanced_fanout} = DeliveryBoard.project(Repo, "WR-FIXTURE-FANOUT")
+      advanced_parse = Enum.find(advanced_fanout.work_packages, &(&1.id == parse.id))
+      assert advanced_parse.work_package.review_signal.status == "pending"
 
       assert {:ok, recovery} = DeliveryBoard.project(Repo, "WR-FIXTURE-RECOVERY")
       recovery_packages = Map.new(recovery.work_packages, &{&1.id, &1})

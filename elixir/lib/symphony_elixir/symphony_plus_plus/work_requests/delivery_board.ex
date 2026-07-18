@@ -382,10 +382,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     {:ok,
      %{
        blocker_state: %{active?: card_blocked?(operational_state), latest_gate_at: nil},
-       runtime_state: %{
-         active?: map_value(operational_state, "has_active_worker") == true or worker_signal_active?(worker_signal),
-         latest_gate_at: nil
-       },
+       runtime_state: %{active?: map_value(operational_state, "has_active_worker") == true, latest_gate_at: nil},
        worker_signal: worker_signal
      }}
   end
@@ -398,8 +395,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     |> List.wrap()
     |> Enum.any?(&(is_map(&1) and map_value(&1, "key") == "active_blocker"))
   end
-
-  defp worker_signal_active?(worker_signal), do: map_value(worker_signal, "status") in ["active", "paused", "stale"]
 
   defp missing_ids(work_package_ids, preloaded_by_id) do
     Enum.reject(work_package_ids, &Map.has_key?(preloaded_by_id, &1))
@@ -572,30 +567,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp metadata_from_progress_events(events, %WorkPackage{} = work_package) do
     branch = latest_payload(events, "branch", "attach_branch")
+    current = MetadataProjection.metadata(events, [], work_package.id, work_package.review_requirement)
 
     %{
       branch: branch,
       pr: latest_pr_payload(events),
-      review_package: latest_payload(events, "review_package", "submit_review_package"),
-      review_completion: current_review_completion(events, work_package, branch)
+      review_package: current_review_package(events, branch, current),
+      review_completion: map_value(current, "review_completion")
     }
   end
 
-  defp current_review_completion(events, %WorkPackage{review_requirement: requirement} = work_package, branch)
-       when is_map(requirement) do
-    case map_value(branch, "head_sha") do
-      head_sha when is_binary(head_sha) ->
-        case MetadataProjection.latest_review_completion_event(events, work_package.id, head_sha, requirement) do
-          %ProgressEvent{payload: payload} -> payload
-          nil -> nil
-        end
-
-      _head_sha ->
-        nil
+  defp current_review_package(events, branch, current) do
+    if filled_string?(map_value(branch, "head_sha")) do
+      map_value(current, "review_package")
+    else
+      latest_payload(events, "review_package", "submit_review_package")
     end
   end
-
-  defp current_review_completion(_events, %WorkPackage{}, _branch), do: nil
 
   defp review_summary(metadata) do
     %{
@@ -903,9 +891,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     end
   end
 
-  defp latest_pr_payload(events) do
-    latest_payload(events, "pr", ["attach_pr", "sync_pr"])
-  end
+  defp latest_pr_payload(events), do: latest_payload(events, "pr", ["attach_pr", "sync_pr"])
 
   defp latest_payload(events, type, source_tool) do
     events
@@ -922,7 +908,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   end
 
   defp payload_matches?(%ProgressEvent{}, _type, _source_tool), do: false
-
   defp source_tool_matches?(value, expected) when is_list(expected), do: value in expected
   defp source_tool_matches?(value, expected), do: value == expected
 
