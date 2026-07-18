@@ -43,8 +43,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
       when is_list(nodes) and is_list(dependency_edges) and is_list(work_packages) and is_list(deliveries) do
     work_packages = Enum.sort_by(work_packages, &value(&1, :id))
     work_package_ids = Enum.map(work_packages, &value(&1, :id))
+    work_package_id_set = MapSet.new(work_package_ids)
     group_members = group_members(nodes, work_packages)
-    effective_edges = effective_edges(dependency_edges, group_members)
+
+    effective_edges =
+      dependency_edges
+      |> effective_edges(group_members)
+      |> Enum.filter(
+        &(MapSet.member?(work_package_id_set, &1.prerequisite_work_package_id) and
+            MapSet.member?(work_package_id_set, &1.dependent_work_package_id))
+      )
+
     deliveries_by_work_package_id = Map.new(deliveries, &{value(&1, :work_package_id), &1})
     resolutions = Enum.map(work_packages, &resolution(&1, deliveries_by_work_package_id))
 
@@ -215,7 +224,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
 
   defp resolution(work_package, deliveries_by_work_package_id) do
     work_package_id = value(work_package, :id)
-    status = value(work_package, :status)
+    status = value(work_package, :status) || value(work_package, :raw_status)
 
     delivery_outcome =
       value(work_package, :delivery_outcome) ||

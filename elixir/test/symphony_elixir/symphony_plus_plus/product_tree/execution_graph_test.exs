@@ -179,8 +179,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraphTest do
           dependency_edges: [dependency("dep_projected", "work_package", "wp_target", "product_node", "group_source")]
         },
         [
-          %{id: "wp_source", group_id: "group_source", status: "planned", operational_state: %{delivery_outcome: "pr_merged"}},
-          %{id: "wp_target", group_id: nil, status: "planned"}
+          %{id: "wp_source", group_id: "group_source", raw_status: "planned", operational_state: %{delivery_outcome: "pr_merged"}},
+          %{id: "wp_target", group_id: nil, raw_status: "planned"}
         ],
         []
       )
@@ -190,6 +190,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraphTest do
 
     assert %{delivery_outcome: "pr_merged", resolved: true} =
              Enum.find(graph.resolutions, &(&1.work_package_id == "wp_source"))
+  end
+
+  test "drops dependency endpoints outside the projected WorkPackage set" do
+    graph =
+      ExecutionGraph.evaluate(
+        %{
+          nodes: [],
+          dependency_edges: [dependency("dep_hidden", "work_package", "wp_hidden", "work_package", "wp_visible")]
+        },
+        [%{id: "wp_visible", raw_status: "skipped"}],
+        []
+      )
+
+    assert graph.effective_edges == []
+    assert graph.topological_order == ["wp_visible"]
+    assert [%{status: "skipped", resolved: true}] = graph.resolutions
   end
 
   defp group(id), do: %Node{id: id, parent_id: nil}
