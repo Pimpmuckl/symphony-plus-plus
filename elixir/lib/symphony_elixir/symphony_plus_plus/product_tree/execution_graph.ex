@@ -133,9 +133,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
           "blocks" -> {endpoint(edge, :source), endpoint(edge, :target)}
         end
 
-      for prerequisite_id <- expand_endpoint(prerequisite_endpoint, group_members),
-          dependent_id <- expand_endpoint(dependent_endpoint, group_members),
-          prerequisite_id != dependent_id,
+      prerequisite_ids = expand_endpoint(prerequisite_endpoint, group_members)
+      dependent_ids = expand_endpoint(dependent_endpoint, group_members)
+      shared_ids = MapSet.intersection(MapSet.new(prerequisite_ids), MapSet.new(dependent_ids))
+
+      for prerequisite_id <- prerequisite_ids,
+          dependent_id <- dependent_ids,
+          not (MapSet.member?(shared_ids, prerequisite_id) and MapSet.member?(shared_ids, dependent_id)),
           reduce: acc do
         edges ->
           Map.update(edges, {prerequisite_id, dependent_id}, [value(edge, :id)], fn ids ->

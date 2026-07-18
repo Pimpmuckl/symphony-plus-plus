@@ -15,13 +15,13 @@ The current V3 model is:
 
 ```text
 WorkRequest
-|-- optional product plan node
-|   |-- optional product plan node
+|-- optional Group
+|   |-- optional Group
 |   `-- WorkPackages
 `-- WorkPackages
 ```
 
-Product plan nodes are optional and arbitrarily nested. They are not a fixed
+Groups are optional and arbitrarily nested. They are not a fixed
 Topic -> Capability, Layer -> Capability, or Atlas hierarchy. Simple WorkRequests
 can stay as direct-slice rows.
 
@@ -32,9 +32,10 @@ longer a primary human-facing product board unit.
 
 Reorganization is agent-driven through MCP tools:
 
-- `upsert_plan_node`
-- `move_plan_node`
-- `set_plan_node_completion`
+- `upsert_group`
+- `delete_group`
+- `upsert_dependency`
+- `delete_dependency`
 - `update_work_package`
 
 Do not add human-facing reorganize UI for V3 cutover unless a later product

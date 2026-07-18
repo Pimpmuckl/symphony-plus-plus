@@ -77,7 +77,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraphTest do
 
     work_packages = [
       work_package("wp_parent", "parent_group"),
-      work_package("wp_child", "child_group")
+      work_package("wp_child_a", "child_group"),
+      work_package("wp_child_b", "child_group")
     ]
 
     graph =
@@ -94,14 +95,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraphTest do
 
     assert graph.effective_edges == [
              %{
-               dependent_work_package_id: "wp_child",
+               dependent_work_package_id: "wp_child_a",
+               dependency_ids: ["dep_nested_groups"],
+               prerequisite_work_package_id: "wp_parent"
+             },
+             %{
+               dependent_work_package_id: "wp_child_b",
                dependency_ids: ["dep_nested_groups"],
                prerequisite_work_package_id: "wp_parent"
              }
            ]
 
     assert graph.cycles == []
-    assert graph.topological_order == ["wp_parent", "wp_child"]
+    assert graph.topological_order == ["wp_parent", "wp_child_a", "wp_child_b"]
   end
 
   test "skipped, terminal, and every delivery outcome resolve dependencies without trapping dependents" do
