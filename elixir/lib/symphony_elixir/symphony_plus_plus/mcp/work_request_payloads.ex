@@ -63,7 +63,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
 
   @spec work_request_product_tree(repo(), WorkRequest.t(), [WorkPackage.t()], map(), binary()) :: map()
   def work_request_product_tree(repo, %WorkRequest{} = work_request, work_packages, delivery_board, view) do
-    projection_work_package_payloads = delivery_board |> Map.fetch!(:work_packages) |> json_safe_payload()
+    projection_work_package_payloads =
+      delivery_board
+      |> Map.fetch!(:work_packages)
+      |> json_safe_payload()
+      |> merge_projection_group_ids(work_packages)
+
     visible_work_packages = visible_work_packages_from_projection(work_packages, projection_work_package_payloads)
     work_package_payloads = product_tree_work_package_payloads(visible_work_packages, projection_work_package_payloads)
 
@@ -266,6 +271,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       |> MapSet.new()
 
     Enum.filter(work_packages, &MapSet.member?(visible_work_package_ids, &1.id))
+  end
+
+  defp merge_projection_group_ids(projection_work_package_payloads, work_packages) do
+    group_ids_by_work_package_id = Map.new(work_packages, &{&1.id, &1.product_tree_node_id})
+
+    Enum.map(projection_work_package_payloads, fn payload ->
+      case Map.fetch(group_ids_by_work_package_id, map_get(payload, :id)) do
+        {:ok, group_id} -> Map.put(payload, "group_id", group_id)
+        :error -> payload
+      end
+    end)
   end
 
   defp product_tree_view_payload(product_tree, _work_package_payloads, "groups_only") do

@@ -998,7 +998,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         "dependency_id" => described_string_schema("Optional existing dependency id. Omit to create a dependency."),
         "dependent" => dependency_endpoint_schema(),
         "prerequisite" => dependency_endpoint_schema(),
-        "reason" => markdown_nullable_string_schema("Why this dependency exists."),
+        "reason" => markdown_string_schema("Why this dependency exists."),
         "decision_ref" => object_schema(),
         "created_by" => described_string_schema("Optional architect identity for audit display.")
       },

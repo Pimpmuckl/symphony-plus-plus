@@ -236,6 +236,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   def call("upsert_group", %Config{} = config, session, arguments) do
     tool = "upsert_group"
     parent_group_id_supplied? = Map.has_key?(arguments, "parent_group_id")
+    description_supplied? = Map.has_key?(arguments, "description")
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
@@ -246,7 +247,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, parent_group_id} <- optional_string_argument(arguments, "parent_group_id"),
          {:ok, position} <- optional_nonnegative_integer_argument(arguments, "position"),
          {:ok, created_by} <- optional_string_argument(arguments, "created_by", session_claimed_by(session)),
-         :ok <- require_group_mutation(group_id, title, description, kind, parent_group_id_supplied?, position),
+         :ok <-
+           require_group_mutation(
+             group_id,
+             title,
+             description_supplied?,
+             kind,
+             parent_group_id_supplied?,
+             position
+           ),
          {:ok, work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
          :ok <- require_work_package_authoring_status(work_request.status),
@@ -254,7 +263,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
            %{"work_request_id" => work_request_id}
            |> optional_put("id", group_id)
            |> optional_put("title", title)
-           |> optional_put("description", description)
+           |> optional_put_present("description", description, description_supplied?)
            |> optional_put("node_kind", kind)
            |> optional_put_present("parent_id", parent_group_id, parent_group_id_supplied?)
            |> optional_put("position", position)
@@ -418,12 +427,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp require_work_package_authoring_status(status) when status in ["ready_for_slicing", "sliced"], do: :ok
   defp require_work_package_authoring_status(_status), do: {:tool_error, "invalid_status"}
 
-  defp require_group_mutation(nil, title, _description, _kind, _parent_supplied?, _position) do
+  defp require_group_mutation(nil, title, _description_supplied?, _kind, _parent_supplied?, _position) do
     if filled_string?(title), do: :ok, else: {:tool_error, "missing_title"}
   end
 
-  defp require_group_mutation(_group_id, title, description, kind, parent_supplied?, position) do
-    if Enum.any?([title, description, kind], &filled_string?/1) or parent_supplied? or is_integer(position),
+  defp require_group_mutation(_group_id, title, description_supplied?, kind, parent_supplied?, position) do
+    if Enum.any?([title, kind], &filled_string?/1) or description_supplied? or parent_supplied? or is_integer(position),
       do: :ok,
       else: {:tool_error, "missing_group_mutation"}
   end

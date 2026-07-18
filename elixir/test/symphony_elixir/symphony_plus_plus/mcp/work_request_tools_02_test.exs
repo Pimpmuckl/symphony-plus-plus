@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
 
   test "record_work_package_delivery accepts typed evidence for each outcome and rejects conflicts", %{repo: repo} do
@@ -175,6 +176,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       mcp_tool(repo, session, "upsert_group", %{
         "work_request_id" => work_request.id,
         "title" => "Child Group",
+        "description" => "Temporary description",
         "parent_group_id" => parent_group_id,
         "position" => 2
       })
@@ -186,12 +188,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
         "work_request_id" => work_request.id,
         "group_id" => child_group_id,
         "title" => "Renamed Group",
+        "description" => nil,
         "parent_group_id" => nil,
         "position" => 1
       })
 
     assert get_in(moved_response, ["result", "structuredContent", "group", "id"]) == child_group_id
     assert get_in(moved_response, ["result", "structuredContent", "group", "position"]) == 1
+    assert get_in(moved_response, ["result", "structuredContent", "group", "description"]) == nil
 
     dependency_response =
       mcp_tool(repo, session, "upsert_dependency", %{
@@ -216,6 +220,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     assert get_in(self_dependency_response, ["error", "data", "reason"]) == "invalid_dependency"
 
+    stale_dependency_response =
+      mcp_tool(repo, session, "upsert_dependency", %{
+        "work_request_id" => work_request.id,
+        "dependency_id" => "missing-dependency",
+        "dependent" => %{"kind" => "group", "id" => child_group_id},
+        "prerequisite" => %{"kind" => "group", "id" => parent_group_id},
+        "reason" => "This stale update must not create a new dependency."
+      })
+
+    assert get_in(stale_dependency_response, ["error", "data", "reason"]) == "not_found"
+
     read_response =
       mcp_tool(repo, session, "read_plan", %{
         "work_request_id" => work_request.id,
@@ -227,6 +242,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert Enum.map(product_tree["groups"], & &1["id"]) |> Enum.sort() == Enum.sort([parent_group_id, child_group_id])
     assert Enum.find(product_tree["groups"], &(&1["id"] == child_group_id))["title"] == "Renamed Group"
     assert Enum.find(product_tree["groups"], &(&1["id"] == child_group_id))["parent_group_id"] == nil
+    assert Enum.find(product_tree["groups"], &(&1["id"] == child_group_id))["description"] == nil
     refute Enum.find(product_tree["groups"], &(&1["id"] == child_group_id)) |> Map.has_key?("completion_mark")
     assert [%{"id" => _dependency_id}] = product_tree["dependency_intents"]
     assert product_tree["execution_graph"]["effective_edges"] == []
@@ -379,6 +395,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       })
 
     child_group_id = get_in(child_response, ["result", "structuredContent", "group", "id"])
+    child_before_delete = repo.get!(Node, child_group_id)
 
     prerequisite_response =
       mcp_tool(repo, session, "upsert_group", %{
@@ -432,10 +449,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     product_tree = get_in(read_response, ["result", "structuredContent", "product_tree"])
     refute Enum.any?(product_tree["groups"], &(&1["id"] == deleted_group_id))
     assert Enum.find(product_tree["groups"], &(&1["id"] == child_group_id))["parent_group_id"] == parent_group_id
+    assert DateTime.after?(repo.get!(Node, child_group_id).updated_at, child_before_delete.updated_at)
     assert product_tree["dependency_intents"] == []
     ungrouped_work_package = repo.get!(WorkPackage, work_package.id)
     assert ungrouped_work_package.product_tree_node_id == parent_group_id
     assert ungrouped_work_package.contract_revision == contract_revision_before_delete + 1
+    assert Enum.find(product_tree["groups"], &(&1["id"] == parent_group_id))["work_package_ids"] == [work_package.id]
+    assert product_tree["root_work_package_ids"] == []
+    assert [%{"group_id" => ^parent_group_id, "id" => work_package_id}] = product_tree["work_package_refs"]
+    assert work_package_id == work_package.id
   end
 
   test "dispatch reports exact unmet prerequisites from the public execution graph", %{repo: repo} do

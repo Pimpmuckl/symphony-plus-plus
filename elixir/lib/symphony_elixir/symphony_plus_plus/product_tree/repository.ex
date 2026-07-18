@@ -151,10 +151,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
   end
 
   defp reparent_child_groups(repo, work_request_id, group) do
+    now = DateTime.utc_now(:microsecond)
+
     {count, _} =
       repo.update_all(
         from(node in Node, where: node.work_request_id == ^work_request_id and node.parent_id == ^group.id),
-        set: [parent_id: group.parent_id]
+        set: [parent_id: group.parent_id, updated_at: now]
       )
 
     count
@@ -270,7 +272,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
   defp update_dependency_edge_by_id(repo, id, attrs) do
     case repo.get(DependencyEdge, id) do
       nil ->
-        create_dependency_edge(repo, attrs)
+        {:error, :not_found}
 
       %DependencyEdge{work_request_id: work_request_id} = edge ->
         update_existing_dependency_edge(repo, edge, Map.put_new(attrs, "work_request_id", work_request_id))

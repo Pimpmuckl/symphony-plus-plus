@@ -59,11 +59,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
       "work_request" => payload |> map_value("work_request") |> compact_work_request(),
       "scope" => payload |> map_value("scope") |> primitive_map(),
       "view" => text_value(map_value(payload, "view")),
+      "schema_version" => text_value(map_value(product_tree, "schema_version")),
       "mode" => text_value(map_value(product_tree, "mode")),
       "summary" => product_tree |> map_value("summary") |> primitive_map(),
-      "root_node_ids" => product_tree |> map_value("root_node_ids") |> join_list(),
+      "root_group_ids" => product_tree |> map_value("root_group_ids") |> join_list(),
       "root_work_package_ids" => product_tree |> map_value("root_work_package_ids") |> join_list(),
-      "nodes" => product_tree |> map_value("nodes") |> list_rows(&product_tree_node_row/1),
+      "groups" => product_tree |> map_value("groups") |> list_rows(&product_tree_group_row/1),
+      "dependency_intents" => product_tree |> map_value("dependency_intents") |> list_rows(&dependency_intent_row/1),
+      "execution_graph" => product_tree |> map_value("execution_graph") |> execution_graph_row(),
       "work_package_refs" => product_tree |> map_value("work_package_refs") |> list_rows(&product_tree_work_package_ref_row/1),
       "work_packages" => product_tree |> map_value("work_packages") |> list_rows(&work_package_row/1)
     }
@@ -183,6 +186,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
   defp work_package_row(%{} = work_package) do
     %{
       "id" => text_value(map_value(work_package, "id")),
+      "group_id" => text_value(map_value(work_package, "group_id")),
       "sequence" => integer_value(map_value(work_package, "sequence")),
       "title" => text_value(map_value(work_package, "title")),
       "goal" => text_value(map_value(work_package, "goal")),
@@ -235,16 +239,76 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
     }
   end
 
-  defp product_tree_node_row(%{} = node) do
+  defp product_tree_group_row(%{} = group) do
     %{
-      "id" => text_value(map_value(node, "id")),
-      "parent_id" => text_value(map_value(node, "parent_id")),
-      "title" => text_value(map_value(node, "title")),
-      "node_kind" => text_value(map_value(node, "node_kind")),
-      "completion" => text_value(map_value(node, "computed_completion_mark")),
-      "work_package_count" => integer_value(map_value(node, "work_package_count")),
-      "child_node_count" => integer_value(map_value(node, "child_node_count")),
-      "work_package_ids" => node |> map_value("work_package_ids") |> join_list()
+      "id" => text_value(map_value(group, "id")),
+      "parent_group_id" => text_value(map_value(group, "parent_group_id")),
+      "title" => text_value(map_value(group, "title")),
+      "description" => text_value(map_value(group, "description")),
+      "kind" => text_value(map_value(group, "kind")),
+      "work_package_count" => integer_value(map_value(group, "work_package_count")),
+      "child_group_count" => integer_value(map_value(group, "child_group_count")),
+      "work_package_ids" => group |> map_value("work_package_ids") |> join_list()
+    }
+    |> reject_nil_values()
+  end
+
+  defp dependency_intent_row(%{} = dependency) do
+    %{
+      "id" => text_value(map_value(dependency, "id")),
+      "dependent" => dependency |> map_value("dependent") |> dependency_endpoint_value(),
+      "prerequisite" => dependency |> map_value("prerequisite") |> dependency_endpoint_value(),
+      "reason" => text_value(map_value(dependency, "reason"))
+    }
+    |> reject_nil_values()
+  end
+
+  defp dependency_endpoint_value(%{} = endpoint) do
+    kind = text_value(map_value(endpoint, "kind"))
+    id = text_value(map_value(endpoint, "id"))
+    if kind && id, do: "#{kind}:#{id}", else: nil
+  end
+
+  defp dependency_endpoint_value(_endpoint), do: nil
+
+  defp execution_graph_row(%{} = graph) do
+    %{
+      "available" => bool_value(map_value(graph, "available")),
+      "topological_order" => graph |> map_value("topological_order") |> join_list(),
+      "cycles" => graph |> map_value("cycles") |> cycle_rows(),
+      "unmet_dependencies" => graph |> map_value("unmet_dependencies") |> list_rows(&unmet_dependency_row/1),
+      "dependency_ready_work_package_ids" => graph |> map_value("dependency_ready_work_package_ids") |> join_list(),
+      "effective_edges" => graph |> map_value("effective_edges") |> list_rows(&effective_edge_row/1),
+      "resolutions" => graph |> map_value("resolutions") |> list_rows(&resolution_row/1)
+    }
+  end
+
+  defp execution_graph_row(_graph), do: %{}
+
+  defp cycle_rows(cycles) when is_list(cycles), do: Enum.map(cycles, &join_list/1)
+  defp cycle_rows(_cycles), do: []
+
+  defp unmet_dependency_row(%{} = dependency) do
+    %{
+      "work_package_id" => text_value(map_value(dependency, "work_package_id")),
+      "prerequisite_work_package_ids" => dependency |> map_value("prerequisite_work_package_ids") |> join_list()
+    }
+  end
+
+  defp effective_edge_row(%{} = edge) do
+    %{
+      "prerequisite_work_package_id" => text_value(map_value(edge, "prerequisite_work_package_id")),
+      "dependent_work_package_id" => text_value(map_value(edge, "dependent_work_package_id")),
+      "dependency_ids" => edge |> map_value("dependency_ids") |> join_list()
+    }
+  end
+
+  defp resolution_row(%{} = resolution) do
+    %{
+      "work_package_id" => text_value(map_value(resolution, "work_package_id")),
+      "status" => text_value(map_value(resolution, "status")),
+      "delivery_outcome" => text_value(map_value(resolution, "delivery_outcome")),
+      "resolved" => bool_value(map_value(resolution, "resolved"))
     }
     |> reject_nil_values()
   end
@@ -252,6 +316,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext do
   defp product_tree_work_package_ref_row(%{} = work_package) do
     %{
       "id" => text_value(map_value(work_package, "id")),
+      "group_id" => text_value(map_value(work_package, "group_id")),
       "sequence" => integer_value(map_value(work_package, "sequence")),
       "title" => text_value(map_value(work_package, "title")),
       "status" => text_value(map_value(work_package, "status"))

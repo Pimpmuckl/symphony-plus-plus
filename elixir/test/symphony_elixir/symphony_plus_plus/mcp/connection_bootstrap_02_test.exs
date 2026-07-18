@@ -277,6 +277,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     dependency_properties = get_in(unbound_tools_by_name, ["upsert_dependency", "inputSchema", "properties"])
     assert get_in(dependency_properties, ["dependent", "properties", "kind", "enum"]) == ["work_package", "group"]
     assert get_in(dependency_properties, ["prerequisite", "properties", "id", "pattern"]) == "\\S"
+    assert get_in(dependency_properties, ["reason", "type"]) == "string"
 
     assert get_in(unbound_tools_by_name, ["delete_dependency", "inputSchema", "required"]) == [
              "work_request_id",

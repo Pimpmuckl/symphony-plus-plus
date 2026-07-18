@@ -28,6 +28,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
           {:ok, dispatch_result()} | {:error, term()}
   def dispatch(repo, work_request_id, work_package_id, handoff_opts)
       when is_atom(repo) and is_binary(work_request_id) and is_binary(work_package_id) and is_list(handoff_opts) do
+    repo.transaction(
+      fn ->
+        case dispatch_transaction(repo, work_request_id, work_package_id, handoff_opts) do
+          {:ok, result} -> result
+          {:error, reason} -> repo.rollback(reason)
+        end
+      end,
+      mode: :immediate
+    )
+    |> case do
+      {:ok, result} -> {:ok, result}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp dispatch_transaction(repo, work_request_id, work_package_id, handoff_opts) do
     with {:ok, %WorkRequest{status: "sliced"} = work_request} <- Repository.get(repo, work_request_id),
          {:ok, %WorkPackage{status: "planned"} = work_package} <-
            Repository.get_work_package(repo, work_request_id, work_package_id),
