@@ -574,6 +574,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       %{artifacts: artifacts, findings: findings} = readiness_collections
       blockers = OperationalProjection.blockers(progress_events)
       runtime = OperationalProjection.runtime_summary(agent_runs)
+      claim_leases = grouped_claim_leases(repo, [work_package.id]) |> Map.get(work_package.id, [])
+
+      activity_context =
+        WorkPackageActivity.project_context(grants, agent_runs, claim_leases, progress_events, work_package)
 
       readiness_context =
         OperationalProjection.readiness_context(
@@ -596,7 +600,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           metadata: metadata,
           readiness_context: readiness_context,
           grants: grants,
-          lineage: lineage
+          lineage: lineage,
+          worker_signal: activity_context.worker_signal
         })
 
       {:ok,
@@ -1554,7 +1559,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           metadata: metadata,
           readiness_context: readiness_context,
           grants: grants,
-          lineage: lineage
+          lineage: lineage,
+          worker_signal: activity_context.worker_signal
         })
 
       {work_package.id,

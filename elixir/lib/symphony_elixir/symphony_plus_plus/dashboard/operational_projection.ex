@@ -93,7 +93,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     grants = Map.fetch!(context, :grants)
     lineage = Map.fetch!(context, :lineage)
     missing_readiness = if work_package.status in @ready_statuses, do: missing_readiness_evidence(readiness_context), else: []
-    activity = work_package_activity(work_package, progress_events, agent_runs, runtime, metadata, grants)
+    activity = work_package_activity(work_package, progress_events, agent_runs, runtime, metadata, grants, Map.get(context, :worker_signal))
 
     attention_items =
       work_package_attention_items(work_package, blockers, %{
@@ -567,9 +567,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
   defp active_blockers(blockers), do: Enum.filter(blockers, & &1.active)
 
-  defp work_package_activity(%WorkPackage{status: status} = work_package, progress_events, agent_runs, runtime, metadata, grants) do
-    has_active_worker =
-      active_worker_grant?(grants) or active_agent_run?(agent_runs) or runtime_current_activity?(runtime)
+  defp work_package_activity(
+         %WorkPackage{status: status} = work_package,
+         progress_events,
+         agent_runs,
+         runtime,
+         metadata,
+         grants,
+         worker_signal
+       ) do
+    has_active_worker = match?(%{status: "active"}, worker_signal)
 
     {has_prepared_worktree, has_meaningful_progress} = progress_activity(progress_events)
 
@@ -642,20 +649,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     |> Enum.max_by(&DateTime.to_unix(&1, :microsecond), fn -> nil end)
   end
 
-  defp active_worker_grant?(grants) do
-    Enum.any?(grants, fn
-      %AccessGrant{grant_role: "worker"} = grant -> active_grant?(grant)
-      _grant -> false
-    end)
-  end
-
-  defp active_agent_run?(agent_runs) do
-    Enum.any?(agent_runs, fn
-      %AgentRun{status: status} = run -> status in AgentRun.active_statuses() and not stale_agent_run?(run)
-      _run -> false
-    end)
-  end
-
   defp agent_run_activity?(agent_runs), do: agent_runs != []
 
   defp progress_activity(progress_events) do
@@ -681,13 +674,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
   defp runtime_activity?(runtime) do
     Enum.any?([:active_count, :queued_count, :stopped_count, :failed_count, :completed_count, :terminal_count], &(safe_map_get(runtime, &1, 0) > 0))
-  end
-
-  defp runtime_current_activity?(runtime) do
-    current_count = Map.get(runtime, :active_count, 0) + Map.get(runtime, :queued_count, 0)
-    stale_count = Map.get(runtime, :stale_count, 0)
-
-    current_count > stale_count
   end
 
   defp metadata_activity?(metadata) do
@@ -1185,18 +1171,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   end
 
   defp status_label(status), do: to_string(status)
-
-  defp active_grant?(%AccessGrant{revoked_at: %DateTime{}}), do: false
-
-  defp active_grant?(%AccessGrant{expires_at: %DateTime{} = expires_at} = grant) do
-    DateTime.compare(expires_at, DateTime.utc_now(:microsecond)) == :gt and claimed_grant?(grant)
-  end
-
-  defp active_grant?(%AccessGrant{} = grant), do: claimed_grant?(grant)
-
-  defp claimed_grant?(%AccessGrant{claimed_at: nil}), do: false
-  defp claimed_grant?(%AccessGrant{claimed_by: nil}), do: false
-  defp claimed_grant?(%AccessGrant{}), do: true
 
   defp normalize_blocker_id(value) when is_binary(value), do: String.trim(value)
   defp normalize_blocker_id(value), do: to_string(value)
