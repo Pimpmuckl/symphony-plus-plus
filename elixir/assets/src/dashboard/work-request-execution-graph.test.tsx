@@ -237,13 +237,21 @@ describe("WorkRequestExecutionGraph", () => {
           operational_state: { key: "ready", label: "Ready for worker pickup", tone: "success" },
           dependency_signal: { satisfied: 0, required: 1, active: 0, blocked: 1, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "blocked" }] },
         },
+        {
+          id: "merged",
+          status: "merged",
+          operational_state: { key: "merged", label: "Merged", tone: "success" },
+          dependency_signal: { satisfied: 0, required: 1, active: 0, blocked: 1, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "blocked" }] },
+        },
       ],
-      topological_order: ["waiting", "blocked"],
+      topological_order: ["waiting", "blocked", "merged"],
     };
     const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={graph} />);
 
     expect(firstCard(html, "waiting")).toContain("Waiting on dependencies");
     expect(firstCard(html, "blocked")).toContain("Dependencies blocked");
+    expect(firstCard(html, "merged")).toContain("Merged");
+    expect(firstCard(html, "merged")).not.toContain("Dependencies blocked");
     expect(html).not.toContain("Ready for worker pickup");
   });
 
