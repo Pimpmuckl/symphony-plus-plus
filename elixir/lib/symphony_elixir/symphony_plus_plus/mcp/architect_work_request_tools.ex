@@ -526,12 +526,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
          view,
          repo_scope_opts \\ []
        ) do
-    with {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
+    case repo.transaction(fn -> read_plan_transaction(repo, work_request, filters, scope, view, repo_scope_opts) end) do
+      {:ok, result} -> {:ok, result}
+      {:error, {:error, reason}} -> {:error, reason}
+      {:error, {:tool_error, reason}} -> {:tool_error, reason}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp read_plan_transaction(repo, work_request, filters, scope, view, repo_scope_opts) do
+    with {:ok, work_request} <- WorkRequestService.get(repo, work_request.id),
+         {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
          {:ok, delivery_board} <-
            WorkRequestScope.scoped_delivery_board(repo, work_request, work_packages, filters, Keyword.put(repo_scope_opts, :slice_projection, :operational_state)) do
       payload = WorkRequestPayloads.work_request_product_tree(repo, work_request, work_packages, delivery_board, view)
       payload = Map.put(payload, "scope", scope)
-      {:ok, ToolResult.architect_agent_tool_result(payload, :work_request_product_tree)}
+      ToolResult.architect_agent_tool_result(payload, :work_request_product_tree)
+    else
+      error -> repo.rollback(error)
     end
   end
 
