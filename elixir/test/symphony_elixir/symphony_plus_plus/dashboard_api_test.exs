@@ -4279,6 +4279,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       stale_context = Dashboard.work_package_contexts(Repo, [parse])[parse.id]
       assert stale_context.worker_signal.status == "stale"
       refute stale_context.runtime_state.active?
+      refute stale_context.card.operational_state.has_active_worker
 
       assert {:ok, _branch_advance} =
                PlanningRepository.append_progress_event(Repo, %{
@@ -4320,6 +4321,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       architect_context = Dashboard.work_package_contexts(Repo, [architect_anchor])[architect_anchor.id]
       assert architect_context.runtime_state.active?
       assert is_nil(architect_context.worker_signal)
+      refute architect_context.card.operational_state.has_active_worker
 
       assert {:ok, dense_tree} = ProductTree.tree_for_work_request(Repo, "WR-FIXTURE-DENSE")
       assert length(dense_tree.nodes) == 3
@@ -4339,7 +4341,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              |> Enum.map(& &1.id)
              |> Enum.sort() == ["PLAN-FANOUT-PLAYTEST-01", "PLAN-FANOUT-PLAYTEST-02"]
 
-      {claim_response, _server} =
+      {claim_response, claimed_server} =
         Server.handle_response_state(
           %{
             "jsonrpc" => "2.0",
@@ -4358,6 +4360,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert get_in(claim_response, ["result", "structuredContent", "assignment", "work_package_id"]) ==
                "WP-FANOUT-PLAYTEST"
+
+      playtest = Repo.get!(WorkPackage, "WP-FANOUT-PLAYTEST")
+      active_context = Dashboard.work_package_contexts(Repo, [playtest])[playtest.id]
+      assert active_context.worker_signal.status == "active"
+      assert active_context.runtime_state.active?
+      assert active_context.card.operational_state.has_active_worker
+
+      ready_playtest = playtest |> Ecto.Changeset.change(status: "ready_for_merge") |> Repo.update!()
+
+      {release_response, _released_server} =
+        Server.handle_response_state(
+          %{
+            "jsonrpc" => "2.0",
+            "id" => "fixture-playtest-release",
+            "method" => "tools/call",
+            "params" => %{
+              "name" => "release_current_assignment",
+              "arguments" => %{"reason" => "fixture playtest ready"}
+            }
+          },
+          claimed_server
+        )
+
+      assert get_in(release_response, ["result", "structuredContent", "binding_cleared"]) == true
+
+      released_context = Dashboard.work_package_contexts(Repo, [ready_playtest])[ready_playtest.id]
+      assert released_context.worker_signal.status == "idle"
+      refute released_context.runtime_state.active?
+      refute released_context.card.operational_state.has_active_worker
     after
       Repo.put_dynamic_repo(previous_repo)
       GenServer.stop(pid)
