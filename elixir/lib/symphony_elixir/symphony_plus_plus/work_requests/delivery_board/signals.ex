@@ -11,6 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
+  @request_chunk_size 400
   @string_limit 240
 
   def execution_graphs(_repo, [], _work_packages_by_request, _deliveries_by_slice_id, _opts), do: {:ok, %{}}
@@ -27,21 +28,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     work_request_ids = Enum.map(work_requests, & &1.id)
 
     nodes_by_request =
-      repo.all(
-        from(node in Node,
-          where: node.work_request_id in ^work_request_ids,
-          order_by: [asc: node.work_request_id, asc: node.parent_id, asc: node.position, asc: node.created_at, asc: node.id]
+      work_request_ids
+      |> Enum.chunk_every(@request_chunk_size)
+      |> Enum.flat_map(fn request_id_chunk ->
+        repo.all(
+          from(node in Node,
+            where: node.work_request_id in ^request_id_chunk,
+            order_by: [asc: node.work_request_id, asc: node.parent_id, asc: node.position, asc: node.created_at, asc: node.id]
+          )
         )
-      )
+      end)
       |> Enum.group_by(& &1.work_request_id)
 
     edges_by_request =
-      repo.all(
-        from(edge in DependencyEdge,
-          where: edge.work_request_id in ^work_request_ids,
-          order_by: [asc: edge.work_request_id, asc: edge.kind, asc: edge.created_at, asc: edge.id]
+      work_request_ids
+      |> Enum.chunk_every(@request_chunk_size)
+      |> Enum.flat_map(fn request_id_chunk ->
+        repo.all(
+          from(edge in DependencyEdge,
+            where: edge.work_request_id in ^request_id_chunk,
+            order_by: [asc: edge.work_request_id, asc: edge.kind, asc: edge.created_at, asc: edge.id]
+          )
         )
-      )
+      end)
       |> Enum.group_by(& &1.work_request_id)
 
     deliveries_by_request =
