@@ -108,16 +108,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge do
   end
 
   defp validate_hard_edge_context(changeset) do
-    validate_change(changeset, :kind, fn :kind, kind ->
-      reason = get_field(changeset, :reason)
-      decision_ref = get_field(changeset, :decision_ref)
+    kind = get_field(changeset, :kind)
+    reason = get_field(changeset, :reason)
+    decision_ref = get_field(changeset, :decision_ref)
 
-      if kind in @hard_edge_kinds and blank?(reason) and blank?(decision_ref) do
-        [kind: "hard dependency edges require a reason or decision reference"]
-      else
-        []
-      end
-    end)
+    if kind in @hard_edge_kinds and blank?(reason) and blank?(decision_ref) do
+      add_error(changeset, :kind, "hard dependency edges require a reason or decision reference")
+    else
+      changeset
+    end
   end
 
   defp validate_not_self_edge(changeset) do
