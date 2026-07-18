@@ -668,6 +668,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
 
   test "projects provider-neutral worker, PR, review, and authoritative dependency signals", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-GRAPH-SIGNALS")
+    last_activity = DateTime.utc_now(:microsecond)
+    active_since = DateTime.add(last_activity, -60, :second)
 
     {_satisfied, satisfied} =
       linked_slice!(repo, work_request,
@@ -708,14 +710,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
         }
       )
 
-    assert {:ok, _run} =
+    assert {:ok, run} =
              AgentRunRepository.start_run(repo, %{
                work_package_id: active.id,
                status: "running",
                attempt: 1,
                worker_task_handle: "fictional-worker-a",
-               started_at: ~U[2026-07-18 08:00:00.000000Z],
-               last_seen_at: ~U[2026-07-18 08:05:00.000000Z]
+               started_at: active_since,
+               last_seen_at: last_activity
              })
 
     assert {:ok, _blocker} =
@@ -733,7 +735,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                work_package_id: join.id,
                summary: "Branch attached",
                status: "branch_attached",
-               payload: %{type: "branch", source_tool: "attach_branch", branch: "feat/fictional-join", head_sha: "join-head"},
+               payload: %{type: "branch", source_tool: "attach_branch", branch: "feat/fictional-join", head_sha: "0123456"},
                created_at: ~U[2026-07-18 08:03:00.000000Z]
              })
 
@@ -748,7 +750,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                  url: "https://github.com/example/fictional/pull/42",
                  number: 42,
                  repository: "example/fictional",
-                 head_sha: "join-head",
+                 head_sha: "0123456789abcdef0123456789abcdef01234567",
                  check_summary: %{status: "pending", completed: 1, total: 3},
                  merge_state: %{merged: false}
                },
@@ -763,7 +765,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                payload: %{
                  type: "review_package",
                  source_tool: "submit_review_package",
-                 head_sha: "join-head",
+                 head_sha: "0123456789abcdef0123456789abcdef01234567",
                  status: "running",
                  evidence_id: "review-join-42",
                  artifacts: ["review.txt"]
@@ -791,18 +793,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     packages = Map.new(board.work_packages, &{&1.id, &1.work_package})
 
     assert %{status: "active", run_label: "fictional-worker-a"} = packages[active.id].worker_signal
-    assert packages[active.id].worker_signal.active_since == ~U[2026-07-18 08:00:00.000000Z]
-    assert packages[active.id].worker_signal.last_activity == ~U[2026-07-18 08:05:00.000000Z]
+    assert packages[active.id].worker_signal.active_since == active_since
+    assert packages[active.id].worker_signal.last_activity == run.updated_at
 
-    assert %{status: "open", number: 42, head_sha: "join-head", current_head_sha: "join-head", head_matches: true} =
+    assert %{status: "open", number: 42, current_head_sha: "0123456", head_matches: true} =
              packages[join.id].pr_signal
 
     assert packages[join.id].pr_signal.checks == %{status: "pending", current: 1, total: 3}
 
-    assert %{type: "review-suite", status: "in_progress", current: 1, total: 2, step: "analysis"} =
+    assert %{type: "review-suite", status: "in_progress", current: 1, total: 2, step: "analysis", evidence_id: "review-join-42"} =
              packages[join.id].review_signal
-
-    assert packages[join.id].review_signal.evidence_id == "review-join-42"
 
     secret_requirement = put_in(join.review_requirement, ["args", "api_key"], "fixture-secret")
     assert Signals.review(%{join | review_requirement: secret_requirement}, %{}).args["api_key"] == "[REDACTED]"

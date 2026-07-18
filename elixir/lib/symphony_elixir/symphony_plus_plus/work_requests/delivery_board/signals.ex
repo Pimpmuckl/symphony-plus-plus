@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   import Ecto.Query, only: [from: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Sanitizer
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, ExecutionGraph, Node}
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -15,6 +16,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   def execution_graphs(_repo, [], _work_packages_by_request, _deliveries_by_slice_id, _opts), do: {:ok, %{}}
 
   def execution_graphs(repo, work_requests, work_packages_by_request, deliveries_by_slice_id, opts) do
+    if Keyword.get(opts, :slice_projection) == :operational_state do
+      {:ok, %{}}
+    else
+      load_execution_graphs(repo, work_requests, work_packages_by_request, deliveries_by_slice_id, opts)
+    end
+  end
+
+  defp load_execution_graphs(repo, work_requests, work_packages_by_request, deliveries_by_slice_id, opts) do
     work_request_ids = Enum.map(work_requests, & &1.id)
 
     nodes_by_request =
@@ -35,14 +44,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       )
       |> Enum.group_by(& &1.work_request_id)
 
+    deliveries_by_request =
+      deliveries_by_slice_id
+      |> Map.values()
+      |> Enum.group_by(& &1.work_request_id)
+
     graphs =
       Map.new(work_requests, fn %WorkRequest{} = work_request ->
         work_packages = Map.get(work_packages_by_request, work_request.id, [])
-
-        deliveries =
-          deliveries_by_slice_id
-          |> Map.values()
-          |> Enum.filter(&(&1.work_request_id == work_request.id))
+        deliveries = Map.get(deliveries_by_request, work_request.id, [])
 
         graph =
           ExecutionGraph.evaluate(
@@ -68,13 +78,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
         %{status: "none"}
 
       %{} = pr ->
-        head_sha = bounded_string(map_value(pr, "head_sha"))
+        raw_head_sha = map_value(pr, "head_sha")
 
-        current_head_sha =
+        raw_current_head_sha =
           map_value(pr, "current_head_sha") ||
             metadata |> map_value("branch") |> map_value("head_sha")
 
-        current_head_sha = bounded_string(current_head_sha)
+        head_sha = bounded_string(raw_head_sha)
+        current_head_sha = bounded_string(raw_current_head_sha)
 
         %{
           status: pr_status(pr),
@@ -83,7 +94,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
           repository: bounded_string(first_map_value(pr, ["repository", "pr_repository"])),
           head_sha: head_sha,
           current_head_sha: current_head_sha,
-          head_matches: if(filled_string?(head_sha) and filled_string?(current_head_sha), do: head_sha == current_head_sha),
+          head_matches:
+            if(filled_string?(raw_head_sha) and filled_string?(raw_current_head_sha),
+              do: PullRequest.head_sha_matches?(raw_head_sha, raw_current_head_sha)
+            ),
           checks: checks(map_value(pr, "check_summary"))
         }
         |> reject_nil_values()
@@ -275,10 +289,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
 
   defp normalize_exqlite_error(error) do
-    if String.contains?(Exception.message(error), "database is locked") do
+    message = Exception.message(error)
+    normalized_message = String.downcase(message)
+
+    if String.contains?(normalized_message, "busy") or String.contains?(normalized_message, "locked") do
       {:error, :database_busy}
     else
-      {:error, {:storage_failed, Exception.message(error)}}
+      {:error, {:storage_failed, message}}
     end
   end
 end

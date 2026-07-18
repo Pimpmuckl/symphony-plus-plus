@@ -377,11 +377,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   end
 
   defp preloaded_activity_context(%{card: %{operational_state: operational_state}} = context) when is_map(operational_state) do
+    worker_signal = Map.get(context, :worker_signal)
+
     {:ok,
      %{
        blocker_state: %{active?: card_blocked?(operational_state), latest_gate_at: nil},
-       runtime_state: %{active?: map_value(operational_state, "has_active_worker") == true, latest_gate_at: nil},
-       worker_signal: Map.get(context, :worker_signal)
+       runtime_state: %{
+         active?: map_value(operational_state, "has_active_worker") == true or worker_signal_active?(worker_signal),
+         latest_gate_at: nil
+       },
+       worker_signal: worker_signal
      }}
   end
 
@@ -393,6 +398,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     |> List.wrap()
     |> Enum.any?(&(is_map(&1) and map_value(&1, "key") == "active_blocker"))
   end
+
+  defp worker_signal_active?(worker_signal), do: map_value(worker_signal, "status") in ["active", "paused", "stale"]
 
   defp missing_ids(work_package_ids, preloaded_by_id) do
     Enum.reject(work_package_ids, &Map.has_key?(preloaded_by_id, &1))

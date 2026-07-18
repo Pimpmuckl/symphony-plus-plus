@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
+  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository, as: ClaimLeaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository, as: ProductTreeRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
@@ -18,6 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
     sympp_product_tree_dependency_edges
     sympp_progress_events
     sympp_agent_runs
+    sympp_claim_leases
     sympp_work_package_deliveries
   )
 
@@ -256,12 +258,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
         id: id,
         work_package_id: work_package_id,
         actor_id: "fixture-worker",
-        status: "running",
+        status: "completed",
         attempt: 1,
         worker_task_handle: label,
         started_at: at(offset),
-        last_seen_at: at(offset + 1)
+        last_seen_at: at(offset + 1),
+        finished_at: at(offset + 1)
       })
+
+    {:ok, _claim_lease} =
+      ClaimLeaseRepository.claim(
+        repo,
+        %{
+          id: "LEASE-#{id}",
+          work_package_id: work_package_id,
+          claim_group_id: "GROUP-#{id}",
+          actor_kind: "agent",
+          actor_id: "fixture:#{label}",
+          actor_display_name: label,
+          stale_after_ms: 3_153_600_000_000
+        },
+        now: at(offset)
+      )
   end
 
   defp branch!(repo, work_package_id, branch, head_sha, offset) do

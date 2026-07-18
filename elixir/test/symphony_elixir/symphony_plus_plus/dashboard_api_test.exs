@@ -4238,6 +4238,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert fanout_packages["WP-FANOUT-INDEX"].work_package.review_signal.status == "passed"
       assert fanout_packages["WP-FANOUT-JOIN"].work_package.dependency_signal.required == 2
 
+      parse = Repo.get!(WorkPackage, "WP-FANOUT-PARSE")
+      assert Dashboard.work_package_contexts(Repo, [parse])[parse.id].worker_signal.status == "active"
+
       assert {:ok, recovery} = DeliveryBoard.project(Repo, "WR-FIXTURE-RECOVERY")
       recovery_packages = Map.new(recovery.work_packages, &{&1.id, &1})
       assert recovery_packages["WP-RECOVERY-OLD"].successor.work_package_id == "WP-RECOVERY-SUCCESSOR"
@@ -4248,6 +4251,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert length(dense_tree.nodes) == 3
       assert length(dense_tree.dependency_edges) == 18
       assert Repo.all(AgentRun) |> length() == 6
+      assert Repo.all(ClaimLease) |> length() == 6
     after
       Repo.put_dynamic_repo(previous_repo)
       GenServer.stop(pid)

@@ -41,12 +41,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
       grants = Map.get(grants_by_id, work_package_id, [])
       agent_runs = Map.get(agent_runs_by_id, work_package_id, [])
       claim_leases = Map.get(claim_leases_by_id, work_package_id, [])
+      runtime_evidence = runtime_evidence(grants, agent_runs, claim_leases, DateTime.utc_now(:microsecond))
 
       {work_package_id,
        %{
          blocker_state: blocker_state(progress_events),
-         runtime_state: runtime_state(grants, agent_runs, claim_leases, progress_events, work_package),
-         worker_signal: worker_signal(grants, agent_runs, claim_leases)
+         runtime_state: runtime_state(runtime_evidence, grants, agent_runs, claim_leases, progress_events, work_package),
+         worker_signal: worker_signal(grants, agent_runs, claim_leases, runtime_evidence)
        }}
     end)
   end
@@ -81,16 +82,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   @spec worker_signal([AccessGrant.t()], [AgentRun.t()], [ClaimLease.t()]) :: map() | nil
   def worker_signal(grants, agent_runs, claim_leases)
       when is_list(grants) and is_list(agent_runs) and is_list(claim_leases) do
-    now = DateTime.utc_now(:microsecond)
-    current_claim_leases = Enum.filter(claim_leases, &current_claim_lease?/1)
-    paused? = Enum.any?(current_claim_leases, &paused_claim_lease?/1)
-    stale_claim_leases = Enum.filter(current_claim_leases, &stale_claim_lease?(&1, now))
-    active_claim_leases = Enum.filter(current_claim_leases, &active_claim_lease?(&1, now))
-    active_agent_runs = Enum.filter(agent_runs, &active_agent_run?(&1, now))
-    stale_agent_runs = Enum.filter(agent_runs, &stale_agent_run?(&1, now))
+    runtime_evidence = runtime_evidence(grants, agent_runs, claim_leases, DateTime.utc_now(:microsecond))
+    worker_signal(grants, agent_runs, claim_leases, runtime_evidence)
+  end
 
+  defp worker_signal(grants, agent_runs, claim_leases, runtime_evidence) do
     worker_grants = Enum.filter(grants, &(&1.grant_role == "worker"))
-    active_worker_grants = active_grants(worker_grants, current_claim_leases, now)
+    active_worker_grants = Enum.filter(runtime_evidence.active_grants, &(&1.grant_role == "worker"))
     evidence = worker_grants ++ agent_runs ++ claim_leases
 
     if evidence == [] do
@@ -99,11 +97,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
       %{
         status:
           worker_signal_status(
-            paused?,
-            stale_claim_leases,
-            stale_agent_runs,
-            active_claim_leases,
-            active_agent_runs,
+            runtime_evidence.paused?,
+            runtime_evidence.stale_claim_leases,
+            runtime_evidence.stale_agent_runs,
+            runtime_evidence.active_claim_leases,
+            runtime_evidence.active_agent_runs,
             active_worker_grants
           ),
         active_since: evidence |> Enum.flat_map(&worker_started_at/1) |> earliest_timestamp(),
@@ -198,50 +196,62 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
     {event.sequence || 0, timestamp_sort_value(event.created_at), event.id || ""}
   end
 
-  defp runtime_state(grants, agent_runs, claim_leases, progress_events, work_package) do
-    now = DateTime.utc_now(:microsecond)
+  defp runtime_evidence(grants, agent_runs, claim_leases, %DateTime{} = now) do
     current_claim_leases = Enum.filter(claim_leases, &current_claim_lease?/1)
     paused? = Enum.any?(current_claim_leases, &paused_claim_lease?/1)
     stale_claim_leases = Enum.filter(current_claim_leases, &stale_claim_lease?(&1, now))
     active_claim_leases = Enum.filter(current_claim_leases, &active_claim_lease?(&1, now))
     {active_agent_runs, stale_agent_runs} = agent_runtime_evidence(agent_runs, paused?, now)
     active_grants = active_grants(grants, current_claim_leases, now)
+
+    %{
+      now: now,
+      paused?: paused?,
+      stale_claim_leases: stale_claim_leases,
+      active_claim_leases: active_claim_leases,
+      active_agent_runs: active_agent_runs,
+      stale_agent_runs: stale_agent_runs,
+      active_grants: active_grants
+    }
+  end
+
+  defp runtime_state(evidence, grants, agent_runs, claim_leases, progress_events, work_package) do
     recycled? = recycled_runtime?(claim_leases, progress_events)
     terminal? = terminal_package?(work_package)
 
     active? =
       active_runtime?(
-        paused?,
-        stale_claim_leases,
-        active_claim_leases,
-        active_agent_runs,
-        active_grants
+        evidence.paused?,
+        evidence.stale_claim_leases,
+        evidence.active_claim_leases,
+        evidence.active_agent_runs,
+        evidence.active_grants
       )
 
-    stale? = stale_runtime?(paused?, stale_claim_leases, stale_agent_runs)
+    stale? = stale_runtime?(evidence.paused?, evidence.stale_claim_leases, evidence.stale_agent_runs)
 
     reason_codes =
       runtime_reason_codes(
-        active_grants,
-        active_agent_runs,
-        active_claim_leases,
-        stale_agent_runs,
-        stale_claim_leases,
-        paused?,
+        evidence.active_grants,
+        evidence.active_agent_runs,
+        evidence.active_claim_leases,
+        evidence.stale_agent_runs,
+        evidence.stale_claim_leases,
+        evidence.paused?,
         recycled?,
         terminal?
       )
 
     %{
       active?: active?,
-      paused?: paused?,
+      paused?: evidence.paused?,
       stale?: stale?,
       recycled?: recycled?,
       terminal?: terminal?,
-      active_agent_run_ids: runtime_ids(active_agent_runs),
-      stale_agent_run_ids: runtime_ids(stale_agent_runs),
-      lifecycle_state: runtime_lifecycle_state(active?, paused?, stale?, recycled?, terminal?),
-      latest_gate_at: latest_runtime_gate_at(grants, agent_runs, claim_leases, progress_events, work_package, now),
+      active_agent_run_ids: runtime_ids(evidence.active_agent_runs),
+      stale_agent_run_ids: runtime_ids(evidence.stale_agent_runs),
+      lifecycle_state: runtime_lifecycle_state(active?, evidence.paused?, stale?, recycled?, terminal?),
+      latest_gate_at: latest_runtime_gate_at(grants, agent_runs, claim_leases, progress_events, work_package, evidence.now),
       reason_codes: reason_codes
     }
   end
