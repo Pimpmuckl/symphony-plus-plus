@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Sanitizer
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, Node, Revision}
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, ExecutionGraph, Node, Revision}
 
   @terminal_completion_keys ["merged", "merged_into_phase", "delivered", "completed_no_pr", "closed", "completed"]
   @guidance_completion_keys ["human_info_needed", "ready_for_clarification", "clarifying"]
@@ -95,35 +95,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
 
   defp scope_execution_graph(execution_graph, visible_work_package_ids, opts) do
     if Keyword.get(opts, :visible_only?, false) do
-      visible? = &MapSet.member?(visible_work_package_ids, &1)
-
-      execution_graph
-      |> Map.update!(:work_package_ids, &Enum.filter(&1, visible?))
-      |> Map.update!(:effective_edges, fn edges ->
-        Enum.filter(edges, &(visible?.(&1.prerequisite_work_package_id) and visible?.(&1.dependent_work_package_id)))
-      end)
-      |> Map.update!(:topological_order, &Enum.filter(&1, visible?))
-      |> Map.update!(:cycles, fn cycles ->
-        cycles
-        |> Enum.map(&Enum.filter(&1, visible?))
-        |> Enum.reject(&(&1 == []))
-      end)
-      |> Map.update!(:unmet_dependencies, fn evidence ->
-        scope_unmet_dependencies(evidence, visible?)
-      end)
-      |> Map.update!(:dependency_ready_work_package_ids, &Enum.filter(&1, visible?))
-      |> Map.update!(:resolutions, &Enum.filter(&1, fn resolution -> visible?.(resolution.work_package_id) end))
+      ExecutionGraph.scope(execution_graph, visible_work_package_ids)
     else
       execution_graph
     end
-  end
-
-  defp scope_unmet_dependencies(evidence, visible?) do
-    evidence
-    |> Enum.filter(fn item -> visible?.(item.work_package_id) end)
-    |> Enum.map(fn item ->
-      Map.update!(item, :prerequisite_work_package_ids, &Enum.filter(&1, visible?))
-    end)
   end
 
   defp scope_tree_records(nodes, work_packages, dependency_edges, visible_work_package_ids, opts) when is_list(opts) do

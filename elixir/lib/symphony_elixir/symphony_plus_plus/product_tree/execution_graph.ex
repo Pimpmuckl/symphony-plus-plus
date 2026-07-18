@@ -45,10 +45,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
     work_package_ids = Enum.map(work_packages, &value(&1, :id))
     group_members = group_members(nodes, work_packages)
     effective_edges = effective_edges(dependency_edges, group_members)
-    pairs = Enum.map(effective_edges, &{&1.prerequisite_work_package_id, &1.dependent_work_package_id})
-    {topological_order, cycles} = topology(work_package_ids, pairs)
     deliveries_by_work_package_id = Map.new(deliveries, &{value(&1, :work_package_id), &1})
     resolutions = Enum.map(work_packages, &resolution(&1, deliveries_by_work_package_id))
+
+    build_graph(work_package_ids, effective_edges, resolutions)
+  end
+
+  @spec scope(graph(), Enumerable.t()) :: graph()
+  def scope(%{available: true} = graph, visible_work_package_ids) do
+    visible_ids = MapSet.new(visible_work_package_ids)
+    visible? = &MapSet.member?(visible_ids, &1)
+    work_package_ids = Enum.filter(graph.work_package_ids, visible?)
+
+    effective_edges =
+      Enum.filter(graph.effective_edges, fn edge ->
+        visible?.(edge.prerequisite_work_package_id) and visible?.(edge.dependent_work_package_id)
+      end)
+
+    resolutions = Enum.filter(graph.resolutions, &visible?.(&1.work_package_id))
+
+    build_graph(work_package_ids, effective_edges, resolutions)
+  end
+
+  def scope(graph, _visible_work_package_ids), do: graph
+
+  defp build_graph(work_package_ids, effective_edges, resolutions) do
+    pairs = Enum.map(effective_edges, &{&1.prerequisite_work_package_id, &1.dependent_work_package_id})
+    {topological_order, cycles} = topology(work_package_ids, pairs)
     resolved_ids = resolutions |> Enum.filter(& &1.resolved) |> Enum.map(& &1.work_package_id) |> MapSet.new()
     unmet_dependencies = unmet_dependencies(work_package_ids, effective_edges, resolved_ids)
     unmet_ids = unmet_dependencies |> Enum.map(& &1.work_package_id) |> MapSet.new()

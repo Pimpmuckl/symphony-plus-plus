@@ -121,13 +121,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge do
   end
 
   defp validate_not_self_edge(changeset) do
-    validate_change(changeset, :target_id, fn :target_id, target_id ->
-      source_kind = get_field(changeset, :source_kind)
-      target_kind = get_field(changeset, :target_kind)
-      source_id = get_field(changeset, :source_id)
+    source = {get_field(changeset, :source_kind), get_field(changeset, :source_id)}
+    target = {get_field(changeset, :target_kind), get_field(changeset, :target_id)}
 
-      if source_kind == target_kind and source_id == target_id, do: [target_id: "cannot point at the same item"], else: []
-    end)
+    if source == target, do: add_error(changeset, :target_id, "cannot point at the same item"), else: changeset
   end
 
   defp blank?(value), do: value in [nil, "", %{}]

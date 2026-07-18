@@ -205,6 +205,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert dependency["dependent"] == %{"kind" => "group", "id" => child_group_id}
     assert dependency["prerequisite"] == %{"kind" => "group", "id" => parent_group_id}
 
+    self_dependency_response =
+      mcp_tool(repo, session, "upsert_dependency", %{
+        "work_request_id" => work_request.id,
+        "dependency_id" => dependency["id"],
+        "dependent" => %{"kind" => "group", "id" => parent_group_id},
+        "prerequisite" => %{"kind" => "group", "id" => parent_group_id},
+        "reason" => "Invalid self-dependency."
+      })
+
+    assert get_in(self_dependency_response, ["error", "data", "reason"]) == "invalid_dependency"
+
     read_response =
       mcp_tool(repo, session, "read_plan", %{
         "work_request_id" => work_request.id,
@@ -396,6 +407,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       })
 
     assert is_binary(get_in(dependency_response, ["result", "structuredContent", "dependency", "id"]))
+    contract_revision_before_delete = repo.get!(WorkPackage, work_package.id).contract_revision
 
     delete_response =
       mcp_tool(repo, session, "delete_group", %{
@@ -421,7 +433,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute Enum.any?(product_tree["groups"], &(&1["id"] == deleted_group_id))
     assert Enum.find(product_tree["groups"], &(&1["id"] == child_group_id))["parent_group_id"] == parent_group_id
     assert product_tree["dependency_intents"] == []
-    assert repo.get!(WorkPackage, work_package.id).product_tree_node_id == parent_group_id
+    ungrouped_work_package = repo.get!(WorkPackage, work_package.id)
+    assert ungrouped_work_package.product_tree_node_id == parent_group_id
+    assert ungrouped_work_package.contract_revision == contract_revision_before_delete + 1
   end
 
   test "dispatch reports exact unmet prerequisites from the public execution graph", %{repo: repo} do

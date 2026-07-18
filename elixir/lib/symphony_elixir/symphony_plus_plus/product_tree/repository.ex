@@ -161,12 +161,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
   end
 
   defp ungroup_work_packages(repo, work_request_id, group) do
+    now = DateTime.utc_now(:microsecond)
+
     {count, _} =
       repo.update_all(
         from(work_package in WorkPackage,
           where: work_package.work_request_id == ^work_request_id and work_package.product_tree_node_id == ^group.id
         ),
-        set: [product_tree_node_id: group.parent_id]
+        set: [product_tree_node_id: group.parent_id, updated_at: now],
+        inc: [contract_revision: 1]
       )
 
     count
