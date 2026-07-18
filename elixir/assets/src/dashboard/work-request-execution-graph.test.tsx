@@ -23,7 +23,7 @@ describe("WorkRequestExecutionGraph", () => {
           work_package_ids: ["wp-active", "wp-old"],
           effective_edges: [{ prerequisite_work_package_id: "wp-active", dependent_work_package_id: "wp-old", dependency_ids: ["edge-a"] }],
           topological_order: ["wp-active", "wp-old"],
-          cycles: [],
+          cycles: [["wp-old"], ["wp-active", "wp-old"]],
         },
       },
       delivery_board: {
@@ -53,7 +53,9 @@ describe("WorkRequestExecutionGraph", () => {
     ]);
     expect(active.effective_edges).toEqual(detail.product_tree?.execution_graph?.effective_edges);
     expect(active.topological_order).toEqual(["wp-active", "wp-old"]);
+    expect(active.cycles).toEqual([["wp-active", "wp-old"]]);
     expect(all.work_packages.map((item) => item.id)).toEqual(["wp-active", "wp-old"]);
+    expect(all.cycles).toEqual([["wp-old"], ["wp-active", "wp-old"]]);
   });
 
   it("lays out the backend topological order left-to-right on desktop and top-to-bottom on mobile", () => {

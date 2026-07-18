@@ -18,6 +18,7 @@ export function workRequestExecutionGraphModel(
   const workPackageIds = list(graph?.work_package_ids).filter(
     (id) => includeHistorical || !isHistoricalWorkPackage(slices.get(id), delivery.get(id)),
   );
+  const visibleWorkPackageIds = new Set(workPackageIds);
 
   return {
     available: graphAvailable(graph),
@@ -25,7 +26,7 @@ export function workRequestExecutionGraphModel(
     work_packages: workPackageIds.map((id) => mapWorkPackage(id, slices.get(id), delivery.get(id))),
     effective_edges: list(graph?.effective_edges),
     topological_order: list(graph?.topological_order),
-    cycles: list(graph?.cycles),
+    cycles: includeHistorical ? list(graph?.cycles) : visibleCycles(graph?.cycles, visibleWorkPackageIds),
   };
 }
 
@@ -112,6 +113,10 @@ function deliverySignalHistoryStates(signal?: DeliverySignal | null) {
 
 function graphAvailable(graph?: ProductTreeExecutionGraph) {
   return graph?.available ?? false;
+}
+
+function visibleCycles(cycles: string[][] | null | undefined, visibleWorkPackageIds: Set<string>) {
+  return list(cycles).filter((cycle) => cycle.some((id) => visibleWorkPackageIds.has(id)));
 }
 
 function list<T>(values?: T[] | null) {
