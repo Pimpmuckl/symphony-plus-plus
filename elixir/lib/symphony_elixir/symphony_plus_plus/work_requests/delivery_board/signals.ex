@@ -14,6 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   @request_chunk_size 400
   @string_limit 240
 
+  @spec execution_graphs(module(), [WorkRequest.t()], map(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def execution_graphs(_repo, [], _work_packages_by_request, _deliveries_by_slice_id, _opts), do: {:ok, %{}}
 
   def execution_graphs(repo, work_requests, work_packages_by_request, deliveries_by_slice_id, opts) do
@@ -81,6 +82,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
+  @spec pr(map()) :: map()
   def pr(metadata) do
     case map_value(metadata, "pr") do
       nil ->
@@ -116,6 +118,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
     end
   end
 
+  @spec review(WorkPackage.t(), map()) :: map() | nil
   def review(%WorkPackage{review_requirement: nil}, _metadata), do: nil
 
   def review(%WorkPackage{review_requirement: requirement}, metadata) when is_map(requirement) do
@@ -139,6 +142,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
 
   def review(%WorkPackage{}, _metadata), do: %{status: "unavailable"}
 
+  @spec dependency(WorkPackage.t(), map()) :: map() | nil
   def dependency(%WorkPackage{} = work_package, context) do
     graph = get_in(context, [:execution_graphs, work_package.work_request_id])
 

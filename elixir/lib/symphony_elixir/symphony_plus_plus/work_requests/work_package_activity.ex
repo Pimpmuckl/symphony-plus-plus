@@ -73,7 +73,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
     }
   end
 
-  @spec project_context([AccessGrant.t()], [AgentRun.t()], [ClaimLease.t()], [ProgressEvent.t()], WorkPackage.t() | nil) :: map()
+  @spec project_context(
+          [AccessGrant.t()],
+          [AgentRun.t()],
+          [ClaimLease.t()],
+          [ProgressEvent.t()],
+          WorkPackage.t() | nil
+        ) :: map()
   def project_context(grants, agent_runs, claim_leases, progress_events, work_package)
       when is_list(grants) and is_list(agent_runs) and is_list(claim_leases) and is_list(progress_events) do
     runtime_evidence = runtime_evidence(grants, agent_runs, claim_leases, DateTime.utc_now(:microsecond))
@@ -450,10 +456,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   defp worker_started_at(%ClaimLease{} = lease), do: [lease.lease_started_at || lease.inserted_at]
 
   defp worker_activity_at(%AccessGrant{} = grant), do: [grant.revoked_at, grant.updated_at, grant.claimed_at, grant.inserted_at]
-  defp worker_activity_at(%AgentRun{} = run), do: [run.finished_at, run.last_seen_at, run.updated_at, run.started_at, run.inserted_at]
+
+  defp worker_activity_at(%AgentRun{} = run) do
+    [run.finished_at, run.last_seen_at, run.updated_at, run.started_at, run.inserted_at]
+  end
 
   defp worker_activity_at(%ClaimLease{} = lease) do
-    [lease.released_at, lease.reclaimed_at, lease.paused_at, lease.last_seen_at, lease.updated_at, lease.lease_started_at]
+    [
+      lease.released_at,
+      lease.reclaimed_at,
+      lease.paused_at,
+      lease.last_seen_at,
+      lease.updated_at,
+      lease.lease_started_at
+    ]
   end
 
   defp worker_run_label(evidence) do

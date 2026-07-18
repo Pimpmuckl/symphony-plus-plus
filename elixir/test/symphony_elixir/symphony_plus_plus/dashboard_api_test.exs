@@ -1,4 +1,4 @@
-Code.require_file(Path.expand("../../support/symphony_plus_plus/dashboard_fixture_database.ex", __DIR__))
+Code.require_file(Path.expand("../../support/symphony_plus_plus/dashboard_fixture_database_test.exs", __DIR__))
 
 defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   use ExUnit.Case, async: false
@@ -24,6 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Repository, as: GuidanceRequestRepository
@@ -4218,7 +4219,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     path = Path.join(System.tmp_dir!(), "sympp-dashboard-graph-fixture-#{System.unique_integer([:positive])}.sqlite3")
     on_exit(fn -> File.rm(path) end)
 
-    assert :ok = SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase.export!(path)
+    assert :ok = DashboardFixtureDatabase.export!(path)
     {:ok, pid} = Repo.start_link(database: path, name: nil, pool_size: 1, log: false)
     previous_repo = Repo.put_dynamic_repo(pid)
 
@@ -7816,7 +7817,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   defp maybe_export_dashboard_fixture(_repo) do
     case System.get_env("SYMPP_DASHBOARD_FIXTURE_DATABASE") do
       path when is_binary(path) and path != "" ->
-        SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase.export!(path)
+        DashboardFixtureDatabase.export!(path)
 
       _path ->
         :ok

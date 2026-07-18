@@ -10,9 +10,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
 
   @ready_statuses ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"]
   @terminal_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
@@ -53,7 +53,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
          {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_request_id, work_packages),
          visible_work_packages = work_packages,
          {:ok, execution_graphs} <-
-           Signals.execution_graphs(repo, [work_request], %{work_request_id => work_packages}, deliveries_by_slice_id, opts),
+           Signals.execution_graphs(
+             repo,
+             [work_request],
+             %{work_request_id => work_packages},
+             deliveries_by_slice_id,
+             opts
+           ),
          {:ok, context} <- projection_context(repo, visible_work_packages, deliveries_by_slice_id, opts) do
       slices_by_scope = work_packages_by_scope(visible_work_packages)
       context = Map.put(context, :execution_graphs, execution_graphs)
