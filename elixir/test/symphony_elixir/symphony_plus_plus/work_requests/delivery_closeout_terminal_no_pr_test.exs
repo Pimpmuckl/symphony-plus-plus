@@ -469,7 +469,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
 
     closeout_event = Enum.find(repo.all(ProgressEvent), &(&1.payload["type"] == "work_request_delivery_closeout"))
     assert closeout_event.payload["retired_worker_grant_ids"] == [minted.grant.id]
-    assert "worker_grant_active" in closeout_event.payload["runtime_reason_codes_before_closeout"]
+
+    refute "worker_grant_active" in List.wrap(closeout_event.payload["runtime_reason_codes_before_closeout"])
   end
 
   test "unclaimed worker grants are retired during no-PR closeout", %{repo: repo} do

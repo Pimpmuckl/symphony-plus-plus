@@ -894,7 +894,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert still_archived.archived_at == archived.archived_at
   end
 
-  test "completion waits for terminal package active grants even without claimed_by", %{repo: repo} do
+  test "completion ignores grant-only activity after the package is terminal", %{repo: repo} do
     assert {:ok, request} = Repository.create(repo, attrs(id: "WR-COMPLETE-UNNAMED-GRANT", status: "ready_for_slicing"))
     assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-COMPLETE-UNNAMED-GRANT"))
     assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
@@ -908,11 +908,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     |> repo.update!()
 
     assert {:ok, with_grant} = Service.refresh_completion(repo, request.id)
-    assert with_grant.completed_at == nil
+    assert %DateTime{} = with_grant.completed_at
 
     assert {:ok, _revoked_grant} = AccessGrantRepository.revoke(repo, minted.grant.id, DateTime.utc_now(:microsecond))
     assert {:ok, without_grant} = Service.refresh_completion(repo, request.id)
-    assert %DateTime{} = without_grant.completed_at
+    assert without_grant.completed_at == with_grant.completed_at
   end
 
   test "completion and archive wait for a paused current claim lease", %{repo: repo} do
@@ -1139,6 +1139,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     mixed_package = create_activity_work_package!(repo, "WP-ACTIVITY-MIXED", status: "implementing")
     paused_package = create_activity_work_package!(repo, "WP-ACTIVITY-PAUSED", status: "implementing")
     recycled_package = create_activity_work_package!(repo, "WP-ACTIVITY-RECYCLED", status: "ready_for_worker")
+    ready_package = create_activity_work_package!(repo, "WP-ACTIVITY-READY", status: "ready_for_merge")
     terminal_package = create_activity_work_package!(repo, "WP-ACTIVITY-TERMINAL", status: "closed")
     agent_package = create_activity_work_package!(repo, "WP-ACTIVITY-AGENT-STALE", status: "implementing")
 
@@ -1175,6 +1176,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
                stale_after_ms: 60_000
              )
 
+    insert_claimed_activity_grant!(repo, ready_package, "worker", "ready-worker")
+
+    assert {:ok, ready_lease} =
+             ClaimLeaseService.claim(repo, ready_package.id, activity_actor("ready-worker"), stale_after_ms: 60_000)
+
+    assert {:ok, _released_ready_lease} = ClaimLeaseService.release(repo, ready_lease.id, reason: "worker finished")
+
+    assert {:ok, _completed_ready_run} =
+             AgentRunRepository.start_run(repo, %{
+               work_package_id: ready_package.id,
+               status: "completed",
+               started_at: DateTime.add(now, -60, :second),
+               last_seen_at: now,
+               finished_at: now
+             })
+
     assert {:ok, agent_run} =
              AgentRunRepository.start_run(repo, %{
                work_package_id: agent_package.id,
@@ -1201,6 +1218,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
         mixed_package.id,
         paused_package.id,
         recycled_package.id,
+        ready_package.id,
         terminal_package.id,
         agent_package.id
       ])
@@ -1234,6 +1252,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert recycled_runtime.lifecycle_state == "active"
     assert "worker_recycled" in recycled_runtime.reason_codes
     assert DateTime.compare(recycled_runtime.latest_gate_at, DateTime.add(stale_seen_at, 1, :millisecond)) == :gt
+
+    ready_context = contexts[ready_package.id]
+    assert ready_context.runtime_state.active? == false
+    assert ready_context.runtime_state.lifecycle_state == "idle"
+    assert ready_context.worker_signal.status == "idle"
 
     terminal_runtime = get_in(contexts, [terminal_package.id, :runtime_state])
     assert terminal_runtime.active? == true

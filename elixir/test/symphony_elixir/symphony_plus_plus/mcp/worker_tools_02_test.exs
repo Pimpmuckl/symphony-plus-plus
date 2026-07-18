@@ -39,6 +39,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
       )
 
     assert get_in(invalid_patch_response, ["error", "code"]) == -32_602
+    assert get_in(invalid_patch_response, ["error", "data", "reason"]) == "invalid_status"
+
+    assert get_in(invalid_patch_response, ["error", "data", "validation_errors"]) == [
+             %{"field" => "status", "reason" => "invalid_value", "allowed_values" => ["pending", "done", "skipped"]}
+           ]
+
     assert {:ok, unchanged_nodes} = PlanningRepository.list_plan_nodes(repo, package.id)
     assert Enum.find(unchanged_nodes, &(&1.id == plan_node.id)).status == "pending"
 

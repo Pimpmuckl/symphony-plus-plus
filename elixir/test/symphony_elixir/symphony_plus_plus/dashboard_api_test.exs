@@ -4219,13 +4219,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
   test "dashboard fixture export builds a deterministic isolated graph ledger" do
     path = Path.join(System.tmp_dir!(), "sympp-dashboard-graph-fixture-#{System.unique_integer([:positive])}.sqlite3")
-    on_exit(fn -> File.rm(path) end)
+    clone_path = path <> ".clone"
+    on_exit(fn -> Enum.each([path, path <> "-wal", path <> "-shm", clone_path, clone_path <> "-wal", clone_path <> "-shm"], &File.rm/1) end)
 
     assert :ok = DashboardFixtureDatabase.export!(path)
-    {:ok, pid} = Repo.start_link(database: path, name: nil, pool_size: 1, log: false)
+    File.cp!(path, clone_path)
+    refute File.exists?(clone_path <> "-wal")
+    refute File.exists?(clone_path <> "-shm")
+
+    {:ok, pid} = Repo.start_link(database: clone_path, name: nil, pool_size: 1, log: false)
     previous_repo = Repo.put_dynamic_repo(pid)
 
     try do
+      assert %{rows: [["ok"]]} = Repo.query!("PRAGMA quick_check")
+
       assert Repo.all(WorkRequest) |> Enum.map(& &1.id) |> Enum.sort() == [
                "WR-FIXTURE-DENSE",
                "WR-FIXTURE-FANOUT",

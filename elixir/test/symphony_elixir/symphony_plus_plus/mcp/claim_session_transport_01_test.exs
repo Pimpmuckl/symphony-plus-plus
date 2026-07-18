@@ -1,7 +1,59 @@
 Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 
+defmodule SymphonyElixir.SymphonyPlusPlus.MCP.StatusUpdateRaceRepo do
+  alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+
+  @race_key :sympp_status_update_race
+
+  def arm(work_package_id, status), do: Process.put(@race_key, {work_package_id, status, 0})
+  def disarm, do: Process.delete(@race_key)
+
+  def transaction(fun), do: Repo.transaction(fun)
+  def rollback(value), do: Repo.rollback(value)
+  def database_path, do: Repo.database_path()
+  def in_transaction?, do: Repo.in_transaction?()
+  def get!(schema, id), do: Repo.get!(schema, id)
+  def one(query), do: Repo.one(query)
+  def all(query), do: Repo.all(query)
+  def insert(changeset), do: Repo.insert(changeset)
+  def update(changeset), do: Repo.update(changeset)
+  def query(sql, params, opts), do: Repo.query(sql, params, opts)
+
+  def get(WorkPackage = schema, id) do
+    case Process.get(@race_key) do
+      {^id, status, 1} ->
+        Process.put(@race_key, {id, status, 2})
+        Repo.get(schema, id)
+
+      {^id, status, 2} ->
+        Repo.get(schema, id) |> Map.put(:status, status)
+
+      _race ->
+        Repo.get(schema, id)
+    end
+  end
+
+  def get(schema, id), do: Repo.get(schema, id)
+
+  def update_all(%Ecto.Query{from: %Ecto.Query.FromExpr{source: {_table, WorkPackage}}} = query, updates) do
+    case Process.get(@race_key) do
+      {id, status, 0} ->
+        Process.put(@race_key, {id, status, 1})
+        {0, nil}
+
+      _race ->
+        Repo.update_all(query, updates)
+    end
+  end
+
+  def update_all(query, updates), do: Repo.update_all(query, updates)
+end
+
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
+
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.StatusUpdateRaceRepo
 
   test "server rejects re-initialize after handshake", %{repo: repo} do
     server = Server.new(Config.default(repo: repo))
@@ -595,6 +647,77 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
       )
 
     assert get_in(stale_status_response, ["error", "data", "reason"]) == "stale_status"
+    assert get_in(stale_status_response, ["error", "data", "current_status"]) == "claimed"
+    assert get_in(stale_status_response, ["error", "data", "allowed_next_statuses"]) == ["planning", "blocked", "abandoned"]
+
+    invalid_transition_response =
+      Server.handle(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "invalid-transition",
+          "method" => "tools/call",
+          "params" => %{"name" => "set_status", "arguments" => %{"status" => "reviewing", "expected_status" => "claimed"}}
+        },
+        claimed_server
+      )
+
+    assert get_in(invalid_transition_response, ["error", "data", "reason"]) == "invalid_transition"
+    assert get_in(invalid_transition_response, ["error", "data", "current_status"]) == "claimed"
+    assert get_in(invalid_transition_response, ["error", "data", "allowed_next_statuses"]) == ["planning", "blocked", "abandoned"]
+
+    assert {:ok, claimed_package} = WorkPackageRepository.get(repo, package.id)
+    repo.update!(Ecto.Changeset.change(claimed_package, status: "ci_waiting"))
+
+    ci_waiting_response =
+      Server.handle(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "ci-waiting-invalid-transition",
+          "method" => "tools/call",
+          "params" => %{"name" => "set_status", "arguments" => %{"status" => "planning", "expected_status" => "ci_waiting"}}
+        },
+        claimed_server
+      )
+
+    assert get_in(ci_waiting_response, ["error", "data", "allowed_next_statuses"]) == ["reviewing", "blocked", "abandoned"]
+  end
+
+  test "set_status reloads lifecycle guidance after a compare-and-swap race", %{repo: repo} do
+    package = create_local_claim_package!(repo, "SYMPP-STATUS-CAS-RACE", status: "planning")
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "race-worker")
+    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+
+    StatusUpdateRaceRepo.arm(package.id, "reviewing")
+
+    try do
+      response =
+        MCPHarness.request(
+          %{
+            "jsonrpc" => "2.0",
+            "id" => "status-cas-race",
+            "method" => "tools/call",
+            "params" => %{
+              "name" => "set_status",
+              "arguments" => %{"status" => "implementing", "expected_status" => "planning"}
+            }
+          },
+          repo: StatusUpdateRaceRepo,
+          session: session
+        )
+
+      assert get_in(response, ["error", "data", "reason"]) == "stale_status"
+      assert get_in(response, ["error", "data", "current_status"]) == "reviewing"
+
+      assert get_in(response, ["error", "data", "allowed_next_statuses"]) == [
+               "implementing",
+               "ci_waiting",
+               "blocked",
+               "abandoned"
+             ]
+    after
+      StatusUpdateRaceRepo.disarm()
+    end
   end
 
   test "claim_local_assignment claims and reconnects a worker session from scoped local identity", %{repo: repo} do
