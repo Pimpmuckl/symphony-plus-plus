@@ -695,7 +695,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
        "tool" => "set_status",
        "reason" => reason_text(reason),
        "current_status" => work_package.status,
-       "allowed_next_statuses" => Enum.filter(WorkPackage.statuses(), &(StateMachine.validate_transition(work_package, &1, actor(session)) == :ok))
+       "allowed_next_statuses" =>
+         Enum.filter(WorkPackage.statuses(), fn status ->
+           reject_ready_status(status) == :ok and
+             StateMachine.validate_transition(work_package, status, actor(session)) == :ok
+         end)
      }}
   end
 
