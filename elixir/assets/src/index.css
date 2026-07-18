@@ -2049,6 +2049,18 @@
     gap: 0.5rem;
   }
 
+  .v3-execution-graph {
+    display: grid;
+    min-width: 0;
+    gap: 0.5rem;
+  }
+
+  .v3-execution-graph-controls {
+    display: flex;
+    min-width: 0;
+    justify-content: flex-end;
+  }
+
   .v3-product-plan,
   .v3-product-tree,
   .v3-product-node-content,
@@ -3948,6 +3960,11 @@
       hsl(var(--background) / 0.76);
     background-size: 1.5rem 1.5rem;
     overscroll-behavior: contain;
+  }
+
+  .execution-graph__viewport:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
   }
 
   .execution-graph__viewport--mobile {

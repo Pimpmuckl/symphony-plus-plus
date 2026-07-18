@@ -87,12 +87,16 @@ function GraphSurface({
   const size = graphCardSize(orientation);
 
   return (
-    <div className={`execution-graph__viewport execution-graph__viewport--${orientation}`} data-orientation={orientation}>
+    <div
+      className={`execution-graph__viewport execution-graph__viewport--${orientation}`}
+      data-orientation={orientation}
+      role="region"
+      tabIndex={0}
+      aria-label={`${orientation === "desktop" ? "Left-to-right" : "Top-to-bottom"} execution order; scroll to inspect`}
+    >
       <div
         className="execution-graph__canvas"
         style={{ width: model.width, height: model.height } as CSSProperties}
-        role="region"
-        aria-label={`${orientation === "desktop" ? "Left-to-right" : "Top-to-bottom"} execution order`}
       >
         <GroupRegions model={model} />
         <GraphWires model={model} orientation={orientation} />
@@ -354,9 +358,15 @@ function dependencyNeedsAttention(dependency?: ExecutionGraphWorkPackageSignals[
 
 function workerLabel(signal: ExecutionGraphWorkPackageSignals | undefined, now?: string | number | Date) {
   const worker = signal?.worker_signal;
-  if (worker?.status !== "active") return undefined;
-  const elapsed = elapsedLabel(worker.active_since, now);
-  return [firstText([worker.run_label]) ?? "Active worker", elapsed].filter(Boolean).join(" · ");
+  if (!worker) return undefined;
+  const label = firstText([worker.run_label]);
+  if (worker.status === "active") {
+    const elapsed = elapsedLabel(worker.active_since, now);
+    return [label ?? "Active worker", elapsed].filter(Boolean).join(" · ");
+  }
+  if (worker.status === "stale") return [label, "Worker stale"].filter(Boolean).join(" · ");
+  if (worker.status === "paused") return [label, "Worker paused"].filter(Boolean).join(" · ");
+  return undefined;
 }
 
 function cardSignals(signal?: ExecutionGraphWorkPackageSignals) {
@@ -376,7 +386,7 @@ function reviewSignalItem(signal: ExecutionGraphWorkPackageSignals): CardSignalI
   if (!review || review.status === "unavailable") return undefined;
   return {
     kind: "review",
-    label: `${humanize(review.type)}${progressText(review.current, review.total)} · ${humanize(review.status)}`,
+    label: `${humanize(review.type || "review")}${progressText(review.current, review.total)} · ${humanize(review.status)}`,
     tone: signalTone(review.status),
   };
 }

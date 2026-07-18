@@ -4239,6 +4239,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert fanout_packages["WP-FANOUT-INDEX"].work_package.review_signal.status == "passed"
       assert fanout_packages["WP-FANOUT-JOIN"].work_package.dependency_signal.required == 2
 
+      assert {:ok, [fanout_detail]} = Dashboard.work_request_board_details(Repo, ["WR-FIXTURE-FANOUT"])
+      assert fanout_detail.product_tree.execution_graph.available
+      assert length(fanout_detail.product_tree.execution_graph.effective_edges) == 5
+      assert length(fanout_detail.product_tree.execution_graph.topological_order) == 5
+
+      projected_parse =
+        Enum.find(fanout_detail.delivery_board["work_packages"], &(&1["id"] == "WP-FANOUT-PARSE"))
+
+      assert get_in(projected_parse, ["work_package", "worker_signal", "status"]) == "active"
+      assert get_in(projected_parse, ["work_package", "pr_signal", "checks", "status"]) == "pending"
+
       parse = Repo.get!(WorkPackage, "WP-FANOUT-PARSE")
       parse_context = Dashboard.work_package_contexts(Repo, [parse])[parse.id]
       assert parse_context.worker_signal.status == "active"

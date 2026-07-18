@@ -64,8 +64,8 @@ export type ExecutionGraphWorkPackageSignals = {
     } | null;
   } | null;
   review_signal?: {
-    type: string;
-    args?: Record<string, unknown>;
+    type?: string | null;
+    args?: Record<string, unknown> | null;
     status: "pending" | "in_progress" | "passed" | "failed" | "unavailable";
     current?: number | null;
     total?: number | null;
