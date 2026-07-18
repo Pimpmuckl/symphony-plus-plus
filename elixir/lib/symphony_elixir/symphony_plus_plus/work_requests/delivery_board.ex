@@ -32,6 +32,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   @attention_details %{
     "active_blocker" => {"Blocker", "critical", "Active blocker."},
     "active_runtime" => {"Active", "info", "Worker activity is still current."},
+    "unmet_dependencies" => {"Dependency Blocked", "warning", "Required WorkPackages are not resolved."},
     "work_package_active_after_delivery" => {"Active After Delivery", "warning", "Worker activity remains after delivery closeout."},
     "work_package_blocked_after_delivery" => {"Blocked After Delivery", "warning", "A blocker remains after delivery closeout."},
     "work_package_status_stale_after_delivery" => {"Status Needs Repair", "warning", "Package status does not match the delivery outcome."},
@@ -497,10 +498,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
         metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events, work_package)
 
         %{
+          id: work_package.id,
           raw_status: work_package.status,
           merge_required: merge_required?(work_package),
           pr_required: pr_required?(work_package),
           pr: pr_summary(legacy_pr_metadata(metadata)),
+          dependency_signal: Signals.dependency(work_package, context),
           blocker_state: Map.fetch!(activity, :blocker_state),
           runtime_state: Map.fetch!(activity, :runtime_state)
         }
@@ -817,6 +820,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp status_work_package_state(%{raw_status: "ci_waiting"}) do
     {"ci_waiting", "Validating", "info", "Waiting on validation.", []}
+  end
+
+  defp status_work_package_state(%{
+         id: work_package_id,
+         raw_status: "ready_for_worker",
+         dependency_signal: %{unmet_work_package_ids: [_ | _] = prerequisite_ids}
+       }) do
+    {
+      "dependency_blocked",
+      "Dependency Blocked",
+      "warning",
+      "WorkPackage #{work_package_id} is waiting for prerequisites: #{Enum.join(prerequisite_ids, ", ")}.",
+      ["unmet_dependencies"]
+    }
   end
 
   defp status_work_package_state(%{raw_status: "ready_for_worker"}) do

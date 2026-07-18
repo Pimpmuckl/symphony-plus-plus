@@ -579,12 +579,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   end
 
   defp dispatch_work_package_error({:unmet_work_package_dependencies, work_package_id, prerequisite_ids}) do
-    {:error, -32_602, "Invalid params",
+    reason = {:unmet_work_package_dependencies, work_package_id, prerequisite_ids}
+
+    {:error, -32_602, WorkPackageDispatch.error_message(reason),
      %{
        "tool" => "dispatch_work_package",
        "reason" => "unmet_work_package_dependencies",
        "work_package_id" => work_package_id,
-       "prerequisite_work_package_ids" => prerequisite_ids
+       "prerequisite_work_package_ids" => prerequisite_ids,
+       "remediation" => "Complete or skip the prerequisite WorkPackages, then retry dispatch_work_package for WorkPackage #{work_package_id}."
      }}
   end
 

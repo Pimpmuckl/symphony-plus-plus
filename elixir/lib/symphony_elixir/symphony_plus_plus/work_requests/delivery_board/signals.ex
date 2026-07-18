@@ -18,11 +18,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   def execution_graphs(_repo, [], _work_packages_by_request, _deliveries_by_slice_id, _opts), do: {:ok, %{}}
 
   def execution_graphs(repo, work_requests, work_packages_by_request, deliveries_by_slice_id, opts) do
-    if Keyword.get(opts, :slice_projection) == :operational_state do
-      {:ok, %{}}
-    else
-      load_execution_graphs(repo, work_requests, work_packages_by_request, deliveries_by_slice_id, opts)
-    end
+    load_execution_graphs(repo, work_requests, work_packages_by_request, deliveries_by_slice_id, opts)
   end
 
   defp load_execution_graphs(repo, work_requests, work_packages_by_request, deliveries_by_slice_id, opts) do

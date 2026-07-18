@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository, as: ProductTreeRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   @repo_name "example/symphony-graph-fixtures"
@@ -21,6 +22,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
     sympp_agent_runs
     sympp_claim_leases
     sympp_work_package_deliveries
+    sympp_access_grants
+    sympp_access_grant_scopes
+    sympp_plan_nodes
   )
 
   @spec export!(Path.t()) :: :ok
@@ -37,6 +41,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
       seed_fanout_join!(Repo)
       seed_recovery!(Repo)
       seed_dense!(Repo)
+      normalize_generated_dispatch!(Repo)
       normalize_timestamps!(Repo)
       :ok
     after
@@ -63,12 +68,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
 
     join = package!(repo, work_request, "WP-FANOUT-JOIN", "Join parsed records and index", "ready_for_worker", output.id, 4)
     publish = package!(repo, work_request, "WP-FANOUT-PUBLISH", "Publish result", "planned", output.id, 5)
+    playtest = package!(repo, work_request, "WP-FANOUT-PLAYTEST", "Claim-ready playtest", "planned", nil, 6, dispatched_at: nil)
 
     depends_on!(repo, work_request.id, parse.id, source.id, 1)
     depends_on!(repo, work_request.id, index.id, source.id, 2)
     depends_on!(repo, work_request.id, join.id, parse.id, 3)
     depends_on!(repo, work_request.id, join.id, index.id, 4)
     depends_on!(repo, work_request.id, publish.id, join.id, 5)
+    depends_on!(repo, work_request.id, playtest.id, source.id, 6)
+
+    {:ok, _dispatch} = WorkPackageDispatch.dispatch(repo, work_request.id, playtest.id, [])
 
     run!(repo, parse.id, "RUN-FANOUT-PARSE", "fictional-parse-worker", 10)
     run!(repo, index.id, "RUN-FANOUT-INDEX", "fictional-index-worker", 20)
@@ -215,7 +224,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
         stop_conditions: [],
         review_requirement: Keyword.get(opts, :review),
         status: status,
-        dispatched_at: at(sequence)
+        dispatched_at: Keyword.get(opts, :dispatched_at, at(sequence))
       })
 
     work_package
@@ -362,6 +371,56 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
     Enum.each(@timestamp_tables, fn table ->
       repo.query!("UPDATE #{table} SET inserted_at = ?, updated_at = ?", [@timestamp, @timestamp])
     end)
+  end
+
+  defp normalize_generated_dispatch!(repo) do
+    {:ok, _result} =
+      repo.transaction(fn ->
+        repo.query!("PRAGMA defer_foreign_keys = ON")
+
+        %{rows: [[grant_id]]} =
+          repo.query!("SELECT id FROM sympp_access_grants WHERE work_package_id = ?", ["WP-FANOUT-PLAYTEST"])
+
+        repo.query!(
+          "UPDATE sympp_access_grants SET id = ?, display_key = ?, secret_hash = ?, expires_at = ? WHERE id = ?",
+          [
+            "GRANT-FANOUT-PLAYTEST",
+            "PLAY",
+            :crypto.hash(:sha256, "fictional-playtest-worker") |> Base.encode16(case: :lower),
+            ~U[2099-01-01 00:00:00.000000Z],
+            grant_id
+          ]
+        )
+
+        repo.query!("UPDATE sympp_access_grant_scopes SET access_grant_id = ? WHERE access_grant_id = ?", [
+          "GRANT-FANOUT-PLAYTEST",
+          grant_id
+        ])
+
+        %{rows: scopes} =
+          repo.query!("SELECT id FROM sympp_access_grant_scopes WHERE access_grant_id = ? ORDER BY scope_key", [
+            "GRANT-FANOUT-PLAYTEST"
+          ])
+
+        scopes
+        |> Enum.with_index()
+        |> Enum.each(fn {[id], index} ->
+          scope_id = "SCOPE-FANOUT-PLAYTEST-#{String.pad_leading(to_string(index), 2, "0")}"
+          repo.query!("UPDATE sympp_access_grant_scopes SET id = ? WHERE id = ?", [scope_id, id])
+        end)
+      end)
+
+    %{rows: plan_nodes} =
+      repo.query!("SELECT id, position FROM sympp_plan_nodes WHERE work_package_id = ? ORDER BY position", [
+        "WP-FANOUT-PLAYTEST"
+      ])
+
+    Enum.each(plan_nodes, fn [id, position] ->
+      deterministic_id = "PLAN-FANOUT-PLAYTEST-#{String.pad_leading(to_string(position), 2, "0")}"
+      repo.query!("UPDATE sympp_plan_nodes SET id = ?, created_at = ? WHERE id = ?", [deterministic_id, at(position), id])
+    end)
+
+    repo.query!("UPDATE sympp_work_packages SET dispatched_at = ? WHERE id = ?", [at(6), "WP-FANOUT-PLAYTEST"])
   end
 
   defp at(offset), do: DateTime.add(@timestamp, offset, :second)

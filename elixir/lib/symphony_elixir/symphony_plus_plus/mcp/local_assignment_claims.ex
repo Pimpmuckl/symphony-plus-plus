@@ -50,7 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
 
         {:error, reason} ->
           release_failed_local_assignment_lease(config.repo, lease, lease_action, reason)
-          local_assignment_claim_error(reason)
+          local_assignment_claim_error(reason, work_package.id)
       end
     else
       {:error, code, message, data} -> {:error, code, message, data}
@@ -1007,6 +1007,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   defp local_assignment_claim_error(reason) do
     {:error, -32_001, "Unauthorized", %{"tool" => @local_assignment_claim_tool, "reason" => reason_text(reason)}}
   end
+
+  defp local_assignment_claim_error(:worker_grant_required, work_package_id) do
+    {:error, -32_001, "Worker grant required for WorkPackage #{work_package_id}",
+     %{
+       "tool" => @local_assignment_claim_tool,
+       "reason" => "worker_grant_required",
+       "work_package_id" => work_package_id,
+       "action" => "dispatch_work_package",
+       "remediation" => "Dispatch WorkPackage #{work_package_id} to create a fresh worker grant, then retry claim_local_assignment for the same WorkPackage."
+     }}
+  end
+
+  defp local_assignment_claim_error(reason, _work_package_id), do: local_assignment_claim_error(reason)
 
   defp local_architect_assignment_claim_error(:database_busy), do: service_error(:database_busy, @local_architect_assignment_claim_tool)
 
