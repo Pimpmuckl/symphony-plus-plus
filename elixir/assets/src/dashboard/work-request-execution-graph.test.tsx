@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -219,6 +220,56 @@ describe("WorkRequestExecutionGraph", () => {
     expect(firstCard(html, "passed")).toContain('data-state="complete"');
     expect(firstCard(html, "ready")).toContain('data-state="waiting"');
     expect(firstCard(render(), "wp-d")).toContain('data-state="blocked"');
+  });
+
+  it("lets dependency actionability override stale worker-pickup copy", () => {
+    const graph: WorkRequestExecutionGraphModel = {
+      work_packages: [
+        {
+          id: "waiting",
+          status: "ready_for_worker",
+          operational_state: { key: "ready", label: "Ready for worker pickup", tone: "success" },
+          dependency_signal: { satisfied: 0, required: 1, active: 0, blocked: 0, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "waiting" }] },
+        },
+        {
+          id: "blocked",
+          status: "ready_for_worker",
+          operational_state: { key: "ready", label: "Ready for worker pickup", tone: "success" },
+          dependency_signal: { satisfied: 0, required: 1, active: 0, blocked: 1, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "blocked" }] },
+        },
+        {
+          id: "merged",
+          status: "merged",
+          operational_state: { key: "merged", label: "Merged", tone: "success" },
+          dependency_signal: { satisfied: 0, required: 1, active: 0, blocked: 1, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "blocked" }] },
+        },
+      ],
+      topological_order: ["waiting", "blocked", "merged"],
+    };
+    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={graph} />);
+
+    expect(firstCard(html, "waiting")).toContain("Waiting on dependencies");
+    expect(firstCard(html, "blocked")).toContain("Dependencies blocked");
+    expect(firstCard(html, "merged")).toContain("Merged");
+    expect(firstCard(html, "merged")).not.toContain("Dependencies blocked");
+    expect(firstCard(html, "merged")).toContain('data-state="complete"');
+    expect(html).not.toContain("Ready for worker pickup");
+  });
+
+  it("keeps mobile graph and summary layout hooks within the narrow viewport", () => {
+    const mobile = buildExecutionGraphLayout(graphFixture, "mobile");
+    const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+    const mediaStart = css.indexOf("@media (max-width: 760px)");
+    const summaryMedia = css.slice(mediaStart, css.indexOf(".workstream-board-aligned", mediaStart));
+
+    expect(mobile.width).toBeLessThanOrEqual(276);
+    expect(summaryMedia).toContain(".v3-request-summary");
+    expect(summaryMedia).toContain("max-width: 100%");
+    expect(summaryMedia).toContain("grid-template-columns: minmax(0, 4.5rem) minmax(0, 1fr)");
+    expect(css).toMatch(/\.execution-graph__group\s*\{[^}]*max-width:\s*100%/s);
+    expect(css).toMatch(/\.execution-graph__card\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%/s);
+    expect(css).toMatch(/\.execution-graph__card-title\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%/s);
+    expect(css).toMatch(/\.execution-graph__status\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*9rem/s);
   });
 
   it("shows stale worker evidence and exposes the scrollable graph to keyboards", () => {

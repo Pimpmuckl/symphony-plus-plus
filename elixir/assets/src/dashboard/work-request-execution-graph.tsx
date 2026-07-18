@@ -14,6 +14,7 @@ import type {
   GraphPoint,
   WorkRequestExecutionGraphModel,
 } from "@/dashboard/execution-graph/model";
+import { isFinishedBoardStatus } from "@/lib/operational-state";
 import { contextPathValue, type ContextPathPart } from "./workstream-context-path";
 
 export type WorkRequestExecutionGraphProps = {
@@ -351,19 +352,37 @@ function cardInteraction(id: string, onSelect?: (id: string) => void) {
 function cardState(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
   const operational = signal?.operational_state ?? ref.operational_state;
   const status = firstText([signal?.raw_status, ref.raw_status, ref.status]) ?? "planned";
-  const label = firstText([operational?.label]) ?? humanize(status);
+  const finished = packageIsFinished(ref, signal);
+  const label = dependencyActionabilityLabel(signal?.dependency_signal, finished) ?? firstText([operational?.label]) ?? humanize(status);
   const source = [operational?.tone, operational?.key, status].filter(Boolean).join(" ").toLowerCase();
-  const blocked = isBlocked(signal, source);
+  const blocked = !finished && isBlocked(signal, source);
   const tone = cardTone(source, blocked);
   return { blocked, label, tone };
+}
+
+function dependencyActionabilityLabel(
+  dependency: ExecutionGraphWorkPackageSignals["dependency_signal"] | undefined,
+  packageFinished: boolean,
+) {
+  if (packageFinished || !dependencyNeedsAttention(dependency)) return undefined;
+  return dependency && dependency.blocked > 0 ? "Dependencies blocked" : "Waiting on dependencies";
 }
 
 function priorityReason(signal: ExecutionGraphWorkPackageSignals | undefined, ref: ExecutionGraphWorkPackageRef) {
   const operational = signal?.operational_state ?? ref.operational_state;
   const reason = firstText([operational?.reason]);
   if (!reason) return undefined;
-  if (dependencyNeedsAttention(signal?.dependency_signal)) return reason;
+  if (dependencyReasonIsActionable(ref, signal)) return reason;
   return /block|wait|pending|ready/i.test(`${operational?.tone ?? ""} ${operational?.key ?? ""}`) ? reason : undefined;
+}
+
+function dependencyReasonIsActionable(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
+  return !packageIsFinished(ref, signal) && dependencyNeedsAttention(signal?.dependency_signal);
+}
+
+function packageIsFinished(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
+  const operational = signal?.operational_state ?? ref.operational_state;
+  return [signal?.raw_status, ref.raw_status, ref.status, operational?.key].some(isFinishedBoardStatus);
 }
 
 function dependencyNeedsAttention(dependency?: ExecutionGraphWorkPackageSignals["dependency_signal"]) {
