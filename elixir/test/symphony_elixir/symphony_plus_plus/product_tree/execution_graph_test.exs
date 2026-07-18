@@ -72,6 +72,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraphTest do
     assert {:error, {:execution_graph_cycle, [["wp_a", "wp_b"]]}} = ExecutionGraph.require_ready(graph, "wp_c")
   end
 
+  test "nested Group dependencies omit overlapping identity pairs" do
+    groups = [group("parent_group"), %Node{id: "child_group", parent_id: "parent_group"}]
+
+    work_packages = [
+      work_package("wp_parent", "parent_group"),
+      work_package("wp_child", "child_group")
+    ]
+
+    graph =
+      ExecutionGraph.evaluate(
+        %{
+          nodes: groups,
+          dependency_edges: [
+            dependency("dep_nested_groups", "product_node", "child_group", "product_node", "parent_group")
+          ]
+        },
+        work_packages,
+        []
+      )
+
+    assert graph.effective_edges == [
+             %{
+               dependent_work_package_id: "wp_child",
+               dependency_ids: ["dep_nested_groups"],
+               prerequisite_work_package_id: "wp_parent"
+             }
+           ]
+
+    assert graph.cycles == []
+    assert graph.topological_order == ["wp_parent", "wp_child"]
+  end
+
   test "skipped, terminal, and every delivery outcome resolve dependencies without trapping dependents" do
     group = group("resolved_group")
 

@@ -135,6 +135,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
 
       for prerequisite_id <- expand_endpoint(prerequisite_endpoint, group_members),
           dependent_id <- expand_endpoint(dependent_endpoint, group_members),
+          prerequisite_id != dependent_id,
           reduce: acc do
         edges ->
           Map.update(edges, {prerequisite_id, dependent_id}, [value(edge, :id)], fn ids ->
