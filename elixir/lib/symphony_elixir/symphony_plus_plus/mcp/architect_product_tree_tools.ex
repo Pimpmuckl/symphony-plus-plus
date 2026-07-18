@@ -331,6 +331,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
          "dependency" => WorkRequestPayloads.dependency_intent(dependency),
          "product_tree" => WorkRequestPayloads.public_product_tree(detail.product_tree),
+         "product_tree_revision" => json_safe_payload(detail.product_tree.latest_revision),
          "scope" => scope,
          "status" => %{"work_request_status" => work_request.status}
        })}
@@ -394,14 +395,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
            mutate_product_tree_with_projection(config.repo, work_request_id, tool, created_by, fn ->
              mutation_fun.(work_request_id, id)
            end) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-         "deleted" => deleted_graph_record_payload(tool, deleted),
-         "product_tree" => WorkRequestPayloads.public_product_tree(detail.product_tree),
-         "scope" => scope,
-         "status" => %{"work_request_status" => work_request.status}
-       })}
+      payload =
+        %{
+          "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+          "deleted" => deleted_graph_record_payload(tool, deleted),
+          "product_tree" => WorkRequestPayloads.public_product_tree(detail.product_tree),
+          "scope" => scope,
+          "status" => %{"work_request_status" => work_request.status}
+        }
+
+      payload =
+        if tool == "delete_dependency",
+          do: Map.put(payload, "product_tree_revision", json_safe_payload(detail.product_tree.latest_revision)),
+          else: payload
+
+      {:ok, ToolResult.tool_result(payload)}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
       {:error, :not_found} -> not_found_error(tool)

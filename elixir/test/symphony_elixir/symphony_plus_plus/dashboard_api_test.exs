@@ -28,6 +28,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Repository, as: GuidanceRequestRepository
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
@@ -4238,11 +4240,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert fanout_packages["WP-FANOUT-SOURCE"].work_package.pr_signal.status == "merged"
       assert fanout_packages["WP-FANOUT-INDEX"].work_package.review_signal.status == "passed"
       assert fanout_packages["WP-FANOUT-JOIN"].work_package.dependency_signal.required == 2
+      assert fanout_packages["WP-FANOUT-JOIN"].operational_state.key == "dependency_blocked"
+      assert fanout_packages["WP-FANOUT-PLAYTEST"].operational_state.key == "ready_for_worker"
+      assert fanout_packages["WP-FANOUT-PLAYTEST"].work_package.dependency_signal.satisfied == 1
 
       assert {:ok, [fanout_detail]} = Dashboard.work_request_board_details(Repo, ["WR-FIXTURE-FANOUT"])
       assert fanout_detail.product_tree.execution_graph.available
-      assert length(fanout_detail.product_tree.execution_graph.effective_edges) == 5
-      assert length(fanout_detail.product_tree.execution_graph.topological_order) == 5
+      assert length(fanout_detail.product_tree.execution_graph.effective_edges) == 6
+      assert length(fanout_detail.product_tree.execution_graph.topological_order) == 6
+      assert fanout_detail.product_tree.root_work_package_ids == ["WP-FANOUT-PLAYTEST"]
 
       projected_parse =
         Enum.find(fanout_detail.delivery_board["work_packages"], &(&1["id"] == "WP-FANOUT-PARSE"))
@@ -4285,7 +4291,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert recovery_packages["WP-RECOVERY-OLD"].successor.work_package_id == "WP-RECOVERY-SUCCESSOR"
       assert recovery_packages["WP-RECOVERY-SKIPPED"].raw_status == "skipped"
       assert recovery_packages["WP-RECOVERY-SUCCESSOR"].work_package.review_signal.status == "failed"
+      assert Enum.count(recovery.work_packages, &(get_in(&1, [:work_package, :blocker_state, :active?]) == true)) == 1
       assert Repo.all(ClaimLease) |> length() == 6
+
+      assert {:ok, [recovery_detail]} = Dashboard.work_request_board_details(Repo, ["WR-FIXTURE-RECOVERY"])
+      assert recovery_detail.product_tree.summary.blocker_count == 1
 
       architect_anchor =
         Repo.get!(WorkPackage, "WP-RECOVERY-OLD")
@@ -4308,6 +4318,39 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert length(dense_tree.nodes) == 3
       assert length(dense_tree.dependency_edges) == 18
       assert Repo.all(AgentRun) |> length() == 6
+
+      assert %AccessGrant{
+               id: "GRANT-FANOUT-PLAYTEST",
+               display_key: "PLAY",
+               claimed_at: nil,
+               grant_role: "worker",
+               expires_at: ~U[2099-01-01 00:00:00.000000Z]
+             } = Repo.get_by(AccessGrant, work_package_id: "WP-FANOUT-PLAYTEST")
+
+      assert Repo.all(PlanNode)
+             |> Enum.filter(&(&1.work_package_id == "WP-FANOUT-PLAYTEST"))
+             |> Enum.map(& &1.id)
+             |> Enum.sort() == ["PLAN-FANOUT-PLAYTEST-01", "PLAN-FANOUT-PLAYTEST-02"]
+
+      {claim_response, _server} =
+        Server.handle_response_state(
+          %{
+            "jsonrpc" => "2.0",
+            "id" => "fixture-playtest-claim",
+            "method" => "tools/call",
+            "params" => %{
+              "name" => "claim_local_assignment",
+              "arguments" => %{
+                "work_package_id" => "WP-FANOUT-PLAYTEST",
+                "claimed_by" => "fictional-playtest-worker"
+              }
+            }
+          },
+          Server.new(Config.default(repo: Repo, repo_root: @repo_root), initialized: true)
+        )
+
+      assert get_in(claim_response, ["result", "structuredContent", "assignment", "work_package_id"]) ==
+               "WP-FANOUT-PLAYTEST"
     after
       Repo.put_dynamic_repo(previous_repo)
       GenServer.stop(pid)

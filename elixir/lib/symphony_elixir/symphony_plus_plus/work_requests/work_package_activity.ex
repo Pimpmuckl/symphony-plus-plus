@@ -126,9 +126,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
     {
       worker_grants,
       Enum.filter(agent_runs, &worker_linked?(&1, worker_grant_ids, unlinked_worker?)),
-      Enum.filter(claim_leases, &worker_linked?(&1, worker_grant_ids, unlinked_worker?))
+      claim_leases
+      |> Enum.reject(&failed_local_assignment_claim_lease?/1)
+      |> Enum.filter(&worker_linked?(&1, worker_grant_ids, unlinked_worker?))
     }
   end
+
+  defp failed_local_assignment_claim_lease?(%ClaimLease{
+         status: "released",
+         release_reason: "local_assignment_claim_failed"
+       }),
+       do: true
+
+  defp failed_local_assignment_claim_lease?(%ClaimLease{}), do: false
 
   defp worker_linked?(%{access_grant_id: access_grant_id}, worker_grant_ids, _unlinked_worker?)
        when is_binary(access_grant_id) and access_grant_id != "" do

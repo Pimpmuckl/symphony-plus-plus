@@ -703,7 +703,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
       linked_slice!(repo, work_request,
         id: "WP-GRAPH-JOIN",
         work_package_id: "WP-GRAPH-JOIN",
-        status: "reviewing",
+        status: "ready_for_worker",
         review_requirement: %{
           "type" => "review-suite",
           "args" => %{"mode" => "normal", "current" => 1, "total" => 2, "step" => "analysis"}
@@ -791,6 +791,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
 
     assert {:ok, board} = DeliveryBoard.project(repo, work_request.id)
     packages = Map.new(board.work_packages, &{&1.id, &1.work_package})
+    projected_join = Enum.find(board.work_packages, &(&1.id == join.id))
+
+    assert projected_join.operational_state.key == "dependency_blocked"
+    assert projected_join.operational_state.attention_reason_codes == ["unmet_dependencies"]
+    assert projected_join.operational_state.reason =~ join.id
+    refute projected_join.operational_state.reason =~ "Ready for worker pickup"
 
     assert %{status: "active", run_label: "fictional-worker-a"} = packages[active.id].worker_signal
     assert packages[active.id].worker_signal.active_since == active_since

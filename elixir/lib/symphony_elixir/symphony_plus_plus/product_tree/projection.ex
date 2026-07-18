@@ -399,9 +399,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
 
   defp work_package_blocker?(work_package) do
     state = map_value(work_package, "operational_state") || %{}
+    reason_codes = map_value(work_package, "attention_reason_codes") || map_value(state, "attention_reason_codes") || []
 
-    map_value(state, "key") == "blocked" or
-      Enum.any?(map_value(state, "attention_items") || [], &attention_item_blocker?/1)
+    "active_blocker" in reason_codes or
+      Enum.any?(map_value(state, "attention_items") || [], &(map_value(&1, "key") == "active_blocker"))
   end
 
   defp work_package_guidance?(work_package) do
@@ -410,14 +411,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
 
     [map_value(state, "key"), map_value(work_package, "status"), map_value(work_package, "work_package_status")]
     |> Enum.any?(&(&1 in @guidance_completion_keys)) or Enum.any?(attention_items, &attention_item_guidance?/1)
-  end
-
-  defp attention_item_blocker?(item) do
-    key = item |> map_value("key") |> downcased()
-    label = item |> map_value("label") |> downcased()
-    tone = item |> map_value("tone") |> downcased()
-
-    String.contains?(key, "blocker") or String.contains?(label, "blocker") or tone in ["critical", "danger", "destructive"]
   end
 
   defp attention_item_guidance?(item) do

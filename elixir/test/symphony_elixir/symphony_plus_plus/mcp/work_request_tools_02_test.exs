@@ -206,8 +206,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       })
 
     dependency = get_in(dependency_response, ["result", "structuredContent", "dependency"])
+    upsert_revision = get_in(dependency_response, ["result", "structuredContent", "product_tree_revision"])
     assert dependency["dependent"] == %{"kind" => "group", "id" => child_group_id}
     assert dependency["prerequisite"] == %{"kind" => "group", "id" => parent_group_id}
+    assert is_integer(upsert_revision["revision_number"])
 
     self_dependency_response =
       mcp_tool(repo, session, "upsert_dependency", %{
@@ -231,6 +233,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     assert get_in(stale_dependency_response, ["error", "data", "reason"]) == "not_found"
 
+    delete_dependency_response =
+      mcp_tool(repo, session, "delete_dependency", %{
+        "work_request_id" => work_request.id,
+        "dependency_id" => dependency["id"]
+      })
+
+    assert get_in(delete_dependency_response, ["result", "structuredContent", "deleted", "id"]) == dependency["id"]
+
+    assert get_in(delete_dependency_response, ["result", "structuredContent", "product_tree_revision", "revision_number"]) ==
+             upsert_revision["revision_number"] + 1
+
     read_response =
       mcp_tool(repo, session, "read_plan", %{
         "work_request_id" => work_request.id,
@@ -244,7 +257,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert Enum.find(product_tree["groups"], &(&1["id"] == child_group_id))["parent_group_id"] == nil
     assert Enum.find(product_tree["groups"], &(&1["id"] == child_group_id))["description"] == nil
     refute Enum.find(product_tree["groups"], &(&1["id"] == child_group_id)) |> Map.has_key?("completion_mark")
-    assert [%{"id" => _dependency_id}] = product_tree["dependency_intents"]
+    assert product_tree["dependency_intents"] == []
     assert product_tree["execution_graph"]["effective_edges"] == []
     refute Map.has_key?(product_tree, "nodes")
   end
@@ -503,9 +516,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
         "work_package_id" => dependent.id
       })
 
+    assert get_in(dispatch_response, ["error", "message"]) ==
+             "WorkPackage #{dependent.id} has unmet dependencies: #{prerequisite.id}"
+
     assert get_in(dispatch_response, ["error", "data"]) == %{
              "prerequisite_work_package_ids" => [prerequisite.id],
              "reason" => "unmet_work_package_dependencies",
+             "remediation" => "Complete or skip the prerequisite WorkPackages, then retry dispatch_work_package for WorkPackage #{dependent.id}.",
              "tool" => "dispatch_work_package",
              "work_package_id" => dependent.id
            }
