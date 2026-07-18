@@ -116,7 +116,7 @@ function graphAvailable(graph?: ProductTreeExecutionGraph) {
 }
 
 function visibleCycles(cycles: string[][] | null | undefined, visibleWorkPackageIds: Set<string>) {
-  return list(cycles).filter((cycle) => cycle.some((id) => visibleWorkPackageIds.has(id)));
+  return list(cycles).filter((cycle) => cycle.every((id) => visibleWorkPackageIds.has(id)));
 }
 
 function list<T>(values?: T[] | null) {

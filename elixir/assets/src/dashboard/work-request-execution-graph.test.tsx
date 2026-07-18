@@ -53,7 +53,7 @@ describe("WorkRequestExecutionGraph", () => {
     ]);
     expect(active.effective_edges).toEqual(detail.product_tree?.execution_graph?.effective_edges);
     expect(active.topological_order).toEqual(["wp-active", "wp-old"]);
-    expect(active.cycles).toEqual([["wp-active", "wp-old"]]);
+    expect(active.cycles).toEqual([]);
     expect(all.work_packages.map((item) => item.id)).toEqual(["wp-active", "wp-old"]);
     expect(all.cycles).toEqual([["wp-old"], ["wp-active", "wp-old"]]);
   });
