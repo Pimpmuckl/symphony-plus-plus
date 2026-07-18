@@ -374,19 +374,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   end
 
   defp set_status_transaction(repo, %Session{} = session, expected_status, status, reason, blocker_closeout_plan) do
-    repo
-    |> run_worker_transaction(fn ->
-      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
-           {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
-           :ok <- require_expected_status(state.work_package, expected_status, session),
-           :ok <- reject_architect_controlled_child(state.work_package, status),
-           {:ok, _event} <- append_status_reason_event(repo, session, expected_status, status, reason),
-           {:ok, work_package} <- transition_status(repo, state.work_package, status, session),
-           {:ok, blocker_closeout} <-
-             ArchitectDeliveryTools.apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan) do
-        {:ok, {work_package, blocker_closeout}}
-      end
-    end)
+    result =
+      repo
+      |> run_worker_transaction(fn ->
+        with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
+             {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
+             :ok <- require_expected_status(state.work_package, expected_status, session),
+             :ok <- reject_architect_controlled_child(state.work_package, status),
+             {:ok, _event} <- append_status_reason_event(repo, session, expected_status, status, reason),
+             {:ok, work_package} <- LifecycleService.transition(repo, state.work_package, status, actor(session)),
+             {:ok, blocker_closeout} <-
+               ArchitectDeliveryTools.apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan) do
+          {:ok, {work_package, blocker_closeout}}
+        end
+      end)
+
+    case result do
+      {:error, reason} when reason in [:invalid_transition, :stale_status] ->
+        reload_lifecycle_conflict_error(repo, reason, session)
+
+      result ->
+        result
+    end
   end
 
   defp append_authenticated_idempotent_finding(repo, %Session{} = session, finding_id, attrs) do
@@ -679,13 +688,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp require_expected_status(%WorkPackage{} = work_package, _expected_status, %Session{} = session),
     do: lifecycle_conflict_error(:stale_status, work_package, session)
 
-  defp transition_status(repo, %WorkPackage{} = work_package, status, %Session{} = session) do
-    case LifecycleService.transition(repo, work_package, status, actor(session)) do
-      {:error, reason} when reason in [:invalid_transition, :stale_status] ->
-        lifecycle_conflict_error(reason, work_package, session)
-
-      result ->
-        result
+  defp reload_lifecycle_conflict_error(repo, reason, %Session{} = session) do
+    case WorkPackageRepository.get(repo, Session.work_package_id(session)) do
+      {:ok, current_work_package} -> lifecycle_conflict_error(reason, current_work_package, session)
+      {:error, reload_reason} -> worker_error(reload_reason, "set_status")
     end
   end
 
