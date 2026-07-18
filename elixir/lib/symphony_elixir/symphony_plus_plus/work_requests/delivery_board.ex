@@ -494,7 +494,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           raw_status: work_package.status,
           merge_required: merge_required?(work_package),
           pr_required: pr_required?(work_package),
-          pr: pr_summary(map_value(metadata, "pr")),
+          pr: pr_summary(legacy_pr_metadata(metadata)),
           blocker_state: Map.fetch!(activity, :blocker_state),
           runtime_state: Map.fetch!(activity, :runtime_state)
         }
@@ -550,7 +550,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           merge_required: merge_required?(work_package),
           pr_required: pr_required?(work_package),
           branch: branch_summary(map_value(metadata, "branch")),
-          pr: pr_summary(map_value(metadata, "pr")),
+          pr: pr_summary(legacy_pr_metadata(metadata)),
           review: review_summary(metadata),
           worker_signal: Map.get(activity, :worker_signal),
           pr_signal: Signals.pr(metadata),
@@ -571,7 +571,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
     %{
       branch: branch,
-      pr: latest_pr_payload(events),
+      pr: map_value(current, "pr"),
+      legacy_pr: latest_pr_payload(events),
       review_package: current_review_package(events, branch, current),
       review_completion: map_value(current, "review_completion")
     }
@@ -584,6 +585,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       latest_payload(events, "review_package", "submit_review_package")
     end
   end
+
+  defp legacy_pr_metadata(metadata), do: map_value(metadata, "legacy_pr") || map_value(metadata, "pr")
 
   defp review_summary(metadata) do
     %{

@@ -742,11 +742,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     assert {:ok, _pr} =
              PlanningRepository.append_progress_event(repo, %{
                work_package_id: join.id,
-               summary: "PR checks running",
-               status: "pr_synced",
+               summary: "PR attached with checks running",
+               status: "pr_attached",
                payload: %{
                  type: "pr",
-                 source_tool: "sync_pr",
+                 source_tool: "attach_pr",
                  url: "https://github.com/example/fictional/pull/42",
                  number: 42,
                  repository: "example/fictional",
