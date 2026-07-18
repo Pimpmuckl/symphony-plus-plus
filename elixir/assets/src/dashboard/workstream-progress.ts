@@ -46,13 +46,12 @@ export function productNodeProgressPercent(
 
 export function productTreeCounts(detail: WorkRequestDetail, activeBlockerCount: number) {
   const summary = detail.product_tree?.summary;
-  const treeBlockerCount = numberValue(summary?.blocker_count);
 
   return {
     nodeCount: numberValue(summary?.node_count, detail.product_tree?.nodes?.length),
     sliceCount: numberValue(summary?.work_package_count, detail.work_packages?.length),
     guidanceCount: numberValue(detail.summary?.open_question_count, detail.work_request.open_question_count, openQuestionCount(detail)),
-    blockerCount: treeBlockerCount + activeBlockerCount,
+    blockerCount: activeBlockerCount,
   };
 }
 

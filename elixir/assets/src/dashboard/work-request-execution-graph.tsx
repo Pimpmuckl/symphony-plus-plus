@@ -268,7 +268,7 @@ function WorkPackageCard({
         <span className="execution-graph__status">{state.label}</span>
       </header>
       <h3 className="execution-graph__card-title" title={title}>{title}</h3>
-      <CardPriority reason={reason} worker={worker} blocked={state.blocked} />
+      <CardPriority reason={reason} worker={worker} prefix={priorityPrefix(state.label, state.blocked)} />
       <CardSignalList items={secondarySignals} />
       <span className="sr-only">{groupLabel}</span>
       <span className="sr-only">{dependencyLabel}</span>
@@ -278,12 +278,12 @@ function WorkPackageCard({
 
 type CardSignalItem = { kind: string; label: string; tone: string };
 
-function CardPriority({ reason, worker, blocked }: { reason?: string; worker?: string; blocked: boolean }) {
+function CardPriority({ reason, worker, prefix }: { reason?: string; worker?: string; prefix: string }) {
   return (
     <div className="execution-graph__card-priority">
       {reason ? (
         <p className="execution-graph__reason" data-priority="reason">
-          <span>{blocked ? "Blocked" : "Waiting"}</span>
+          <span>{prefix}</span>
           <span className="execution-graph__reason-copy" title={reason}>{reason}</span>
         </p>
       ) : null}
@@ -374,6 +374,11 @@ function priorityReason(signal: ExecutionGraphWorkPackageSignals | undefined, re
   if (!reason) return undefined;
   if (dependencyReasonIsActionable(ref, signal)) return reason;
   return /block|wait|pending|ready/i.test(`${operational?.tone ?? ""} ${operational?.key ?? ""}`) ? reason : undefined;
+}
+
+function priorityPrefix(label: string, blocked: boolean) {
+  if (blocked) return "Blocked";
+  return /\bready\b/i.test(label) ? "Ready" : "Waiting";
 }
 
 function dependencyReasonIsActionable(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
@@ -551,7 +556,8 @@ function elapsedLabel(activeSince: string | null | undefined, now?: string | num
 }
 
 function sequenceLabel(ref: ExecutionGraphWorkPackageRef) {
-  return ref.sequence == null ? "WorkPackage" : `WP ${ref.sequence}`;
+  const sequence = ref.sequence == null ? "WorkPackage" : `WP ${ref.sequence}`;
+  return ref.group_id ? sequence : `${sequence} · Ungrouped`;
 }
 
 function humanize(value: string) {

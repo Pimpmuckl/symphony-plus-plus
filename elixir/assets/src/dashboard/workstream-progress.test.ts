@@ -58,7 +58,7 @@ describe("workstream progress", () => {
     expect(requestProgress(detail, packages)).toBe(0);
   });
 
-  it("adds product-tree blockers and explicit blocker edges", () => {
+  it("uses explicit active blocker evidence before product-tree dependency blocker totals", () => {
     const detail = workRequestDetail([]);
     detail.product_tree = {
       ...detail.product_tree,
@@ -69,7 +69,7 @@ describe("workstream progress", () => {
       },
     };
 
-    expect(productTreeCounts(detail, 2).blockerCount).toBe(5);
+    expect(productTreeCounts(detail, 2).blockerCount).toBe(2);
   });
 
   it("counts blocker edges through slice and package endpoints before work request fallbacks", () => {
