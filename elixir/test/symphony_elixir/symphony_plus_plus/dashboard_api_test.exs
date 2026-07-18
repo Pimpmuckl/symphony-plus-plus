@@ -1,3 +1,5 @@
+Code.require_file(Path.expand("../../support/symphony_plus_plus/dashboard_fixture_database.ex", __DIR__))
+
 defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   use ExUnit.Case, async: false
 
@@ -48,6 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -4211,6 +4214,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end
   end
 
+  test "dashboard fixture export builds a deterministic isolated graph ledger" do
+    path = Path.join(System.tmp_dir!(), "sympp-dashboard-graph-fixture-#{System.unique_integer([:positive])}.sqlite3")
+    on_exit(fn -> File.rm(path) end)
+
+    assert :ok = SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase.export!(path)
+    {:ok, pid} = Repo.start_link(database: path, name: nil, pool_size: 1, log: false)
+    previous_repo = Repo.put_dynamic_repo(pid)
+
+    try do
+      assert Repo.all(WorkRequest) |> Enum.map(& &1.id) |> Enum.sort() == [
+               "WR-FIXTURE-DENSE",
+               "WR-FIXTURE-FANOUT",
+               "WR-FIXTURE-RECOVERY"
+             ]
+
+      assert Repo.all(WorkRequest) |> Enum.all?(&(&1.inserted_at == ~U[2026-07-18 08:00:00.000000Z]))
+
+      assert {:ok, fanout} = DeliveryBoard.project(Repo, "WR-FIXTURE-FANOUT")
+      fanout_packages = Map.new(fanout.work_packages, &{&1.id, &1})
+      assert fanout_packages["WP-FANOUT-PARSE"].work_package.worker_signal.status == "active"
+      assert fanout_packages["WP-FANOUT-SOURCE"].work_package.pr_signal.status == "merged"
+      assert fanout_packages["WP-FANOUT-INDEX"].work_package.review_signal.status == "passed"
+      assert fanout_packages["WP-FANOUT-JOIN"].work_package.dependency_signal.required == 2
+
+      assert {:ok, recovery} = DeliveryBoard.project(Repo, "WR-FIXTURE-RECOVERY")
+      recovery_packages = Map.new(recovery.work_packages, &{&1.id, &1})
+      assert recovery_packages["WP-RECOVERY-OLD"].successor.work_package_id == "WP-RECOVERY-SUCCESSOR"
+      assert recovery_packages["WP-RECOVERY-SKIPPED"].raw_status == "skipped"
+      assert recovery_packages["WP-RECOVERY-SUCCESSOR"].work_package.review_signal.status == "failed"
+
+      assert {:ok, dense_tree} = ProductTree.tree_for_work_request(Repo, "WR-FIXTURE-DENSE")
+      assert length(dense_tree.nodes) == 3
+      assert length(dense_tree.dependency_edges) == 18
+      assert Repo.all(AgentRun) |> length() == 6
+    after
+      Repo.put_dynamic_repo(previous_repo)
+      GenServer.stop(pid)
+    end
+  end
+
   test "hydrated dashboard rejects unsupported methods" do
     assert json_response(post(build_conn(), "/api/v1/sympp/operator/dashboard/hydrated", %{}), 405) ==
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
@@ -7739,14 +7782,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     {payload, %{requests: requests, queries: DashboardQueryCountingRepo.count(), settle_ms: elapsed_ms}}
   end
 
-  defp maybe_export_dashboard_fixture(repo) do
+  defp maybe_export_dashboard_fixture(_repo) do
     case System.get_env("SYMPP_DASHBOARD_FIXTURE_DATABASE") do
       path when is_binary(path) and path != "" ->
-        path = Path.expand(path)
-        File.mkdir_p!(Path.dirname(path))
-        if File.exists?(path), do: File.rm!(path)
-        repo.query!("VACUUM INTO ?", [path])
-        :ok
+        SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase.export!(path)
 
       _path ->
         :ok

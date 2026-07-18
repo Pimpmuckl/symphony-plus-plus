@@ -12,6 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
 
   @ready_statuses ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"]
   @terminal_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
@@ -47,12 +48,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   @spec project(repo(), String.t()) :: {:ok, map()} | {:error, error()}
   @spec project(repo(), String.t(), keyword()) :: {:ok, map()} | {:error, error()}
   def project(repo, work_request_id, opts \\ []) when is_atom(repo) and is_binary(work_request_id) and is_list(opts) do
-    with {:ok, _work_request} <- work_request(repo, work_request_id, opts),
+    with {:ok, work_request} <- work_request(repo, work_request_id, opts),
          {:ok, work_packages} <- work_packages(repo, work_request_id, opts),
          {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_request_id, work_packages),
          visible_work_packages = work_packages,
+         {:ok, execution_graphs} <-
+           Signals.execution_graphs(repo, [work_request], %{work_request_id => work_packages}, deliveries_by_slice_id, opts),
          {:ok, context} <- projection_context(repo, visible_work_packages, deliveries_by_slice_id, opts) do
       slices_by_scope = work_packages_by_scope(visible_work_packages)
+      context = Map.put(context, :execution_graphs, execution_graphs)
 
       slices =
         Enum.map(visible_work_packages, fn %WorkPackage{} = work_package ->
@@ -96,7 +100,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
          {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_packages),
          visible_work_packages_by_request = work_packages_by_request,
          visible_work_packages = all_work_packages(work_requests, visible_work_packages_by_request),
+         {:ok, execution_graphs} <-
+           Signals.execution_graphs(repo, work_requests, work_packages_by_request, deliveries_by_slice_id, opts),
          {:ok, context} <- projection_context(repo, visible_work_packages, deliveries_by_slice_id, opts) do
+      context = Map.put(context, :execution_graphs, execution_graphs)
+
       {:ok,
        Map.new(
          work_requests,
@@ -363,16 +371,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp preloaded_metadata_context(_context), do: :error
 
-  defp preloaded_activity_context(%{blocker_state: blocker_state, runtime_state: runtime_state})
+  defp preloaded_activity_context(%{blocker_state: blocker_state, runtime_state: runtime_state} = context)
        when is_map(blocker_state) and is_map(runtime_state) do
-    {:ok, %{blocker_state: blocker_state, runtime_state: runtime_state}}
+    {:ok, %{blocker_state: blocker_state, runtime_state: runtime_state, worker_signal: Map.get(context, :worker_signal)}}
   end
 
-  defp preloaded_activity_context(%{card: %{operational_state: operational_state}}) when is_map(operational_state) do
+  defp preloaded_activity_context(%{card: %{operational_state: operational_state}} = context) when is_map(operational_state) do
     {:ok,
      %{
        blocker_state: %{active?: card_blocked?(operational_state), latest_gate_at: nil},
-       runtime_state: %{active?: map_value(operational_state, "has_active_worker") == true, latest_gate_at: nil}
+       runtime_state: %{active?: map_value(operational_state, "has_active_worker") == true, latest_gate_at: nil},
+       worker_signal: Map.get(context, :worker_signal)
      }}
   end
 
@@ -541,6 +550,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           branch: branch_summary(map_value(metadata, "branch")),
           pr: pr_summary(map_value(metadata, "pr")),
           review: review_summary(metadata),
+          worker_signal: Map.get(activity, :worker_signal),
+          pr_signal: Signals.pr(metadata),
+          review_signal: Signals.review(work_package, metadata),
+          dependency_signal: Signals.dependency(work_package, context),
           blocker_state: Map.fetch!(activity, :blocker_state),
           runtime_state: Map.fetch!(activity, :runtime_state)
         }

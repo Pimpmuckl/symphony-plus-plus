@@ -34,6 +34,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
@@ -1549,7 +1550,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           lineage: lineage
         })
 
-      {work_package.id, %{work_package: work_package, card: %{operational_state: operational_state, metadata: metadata}}}
+      {work_package.id,
+       %{
+         work_package: work_package,
+         worker_signal: WorkPackageActivity.worker_signal(grants, agent_runs, []),
+         card: %{operational_state: operational_state, metadata: metadata}
+       }}
     end)
   end
 

@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   import Ecto.Query, only: [from: 2]
@@ -37,18 +38,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
     Map.new(work_package_ids, fn work_package_id ->
       progress_events = Map.get(progress_events_by_id, work_package_id, [])
       work_package = Map.get(work_packages_by_id, work_package_id)
+      grants = Map.get(grants_by_id, work_package_id, [])
+      agent_runs = Map.get(agent_runs_by_id, work_package_id, [])
+      claim_leases = Map.get(claim_leases_by_id, work_package_id, [])
 
       {work_package_id,
        %{
          blocker_state: blocker_state(progress_events),
-         runtime_state:
-           runtime_state(
-             Map.get(grants_by_id, work_package_id, []),
-             Map.get(agent_runs_by_id, work_package_id, []),
-             Map.get(claim_leases_by_id, work_package_id, []),
-             progress_events,
-             work_package
-           )
+         runtime_state: runtime_state(grants, agent_runs, claim_leases, progress_events, work_package),
+         worker_signal: worker_signal(grants, agent_runs, claim_leases)
        }}
     end)
   end
@@ -75,8 +73,45 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
         lifecycle_state: "idle",
         latest_gate_at: nil,
         reason_codes: []
-      }
+      },
+      worker_signal: nil
     }
+  end
+
+  @spec worker_signal([AccessGrant.t()], [AgentRun.t()], [ClaimLease.t()]) :: map() | nil
+  def worker_signal(grants, agent_runs, claim_leases)
+      when is_list(grants) and is_list(agent_runs) and is_list(claim_leases) do
+    now = DateTime.utc_now(:microsecond)
+    current_claim_leases = Enum.filter(claim_leases, &current_claim_lease?/1)
+    paused? = Enum.any?(current_claim_leases, &paused_claim_lease?/1)
+    stale_claim_leases = Enum.filter(current_claim_leases, &stale_claim_lease?(&1, now))
+    active_claim_leases = Enum.filter(current_claim_leases, &active_claim_lease?(&1, now))
+    active_agent_runs = Enum.filter(agent_runs, &active_agent_run?(&1, now))
+    stale_agent_runs = Enum.filter(agent_runs, &stale_agent_run?(&1, now))
+
+    worker_grants = Enum.filter(grants, &(&1.grant_role == "worker"))
+    active_worker_grants = active_grants(worker_grants, current_claim_leases, now)
+    evidence = worker_grants ++ agent_runs ++ claim_leases
+
+    if evidence == [] do
+      nil
+    else
+      %{
+        status:
+          worker_signal_status(
+            paused?,
+            stale_claim_leases,
+            stale_agent_runs,
+            active_claim_leases,
+            active_agent_runs,
+            active_worker_grants
+          ),
+        active_since: evidence |> Enum.flat_map(&worker_started_at/1) |> earliest_timestamp(),
+        last_activity: evidence |> Enum.flat_map(&worker_activity_at/1) |> latest_timestamp(),
+        run_label: worker_run_label(evidence)
+      }
+      |> reject_nil_values()
+    end
   end
 
   defp grouped_progress_events(repo, work_package_ids) do
@@ -380,6 +415,47 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   defp runtime_lifecycle_state(_active?, _paused?, _stale?, _recycled?, true = _terminal?), do: "terminal"
   defp runtime_lifecycle_state(_active?, _paused?, _stale?, _recycled?, _terminal?), do: "idle"
 
+  defp worker_signal_status(true = _paused?, _stale_claims, _stale_runs, _active_claims, _active_runs, _active_grants),
+    do: "paused"
+
+  defp worker_signal_status(_paused?, stale_claims, stale_runs, _active_claims, _active_runs, _active_grants)
+       when stale_claims != [] or stale_runs != [],
+       do: "stale"
+
+  defp worker_signal_status(_paused?, _stale_claims, _stale_runs, active_claims, active_runs, active_grants)
+       when active_claims != [] or active_runs != [] or active_grants != [],
+       do: "active"
+
+  defp worker_signal_status(_paused?, _stale_claims, _stale_runs, _active_claims, _active_runs, _active_grants),
+    do: "idle"
+
+  defp worker_started_at(%AccessGrant{} = grant), do: [grant.claimed_at || grant.inserted_at]
+  defp worker_started_at(%AgentRun{} = run), do: [run.started_at || run.inserted_at]
+  defp worker_started_at(%ClaimLease{} = lease), do: [lease.lease_started_at || lease.inserted_at]
+
+  defp worker_activity_at(%AccessGrant{} = grant), do: [grant.revoked_at, grant.updated_at, grant.claimed_at, grant.inserted_at]
+  defp worker_activity_at(%AgentRun{} = run), do: [run.finished_at, run.last_seen_at, run.updated_at, run.started_at, run.inserted_at]
+
+  defp worker_activity_at(%ClaimLease{} = lease) do
+    [lease.released_at, lease.reclaimed_at, lease.paused_at, lease.last_seen_at, lease.updated_at, lease.lease_started_at]
+  end
+
+  defp worker_run_label(evidence) do
+    evidence
+    |> Enum.map(&{worker_label_timestamp(&1), worker_label(&1)})
+    |> Enum.filter(fn {timestamp, label} -> match?(%DateTime{}, timestamp) and filled_string?(label) end)
+    |> Enum.max_by(fn {%DateTime{} = timestamp, _label} -> DateTime.to_unix(timestamp, :microsecond) end, fn -> nil end)
+    |> case do
+      {_timestamp, label} -> label |> Redactor.redact_text() |> String.slice(0, 80)
+      nil -> nil
+    end
+  end
+
+  defp worker_label_timestamp(evidence), do: evidence |> worker_activity_at() |> latest_timestamp()
+  defp worker_label(%AgentRun{} = run), do: run.worker_task_handle || run.actor_id
+  defp worker_label(%ClaimLease{} = lease), do: lease.actor_display_name || lease.actor_id
+  defp worker_label(%AccessGrant{} = grant), do: grant.claimed_by
+
   defp claim_lease_gate_at(%ClaimLease{status: "paused"} = claim_lease) do
     latest_timestamp([claim_lease.paused_at, claim_lease.updated_at])
   end
@@ -423,5 +499,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   defp normalize_blocker_id(value) when is_binary(value), do: String.trim(value)
   defp normalize_blocker_id(value), do: to_string(value)
 
+  defp reject_nil_values(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
   defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
 end
