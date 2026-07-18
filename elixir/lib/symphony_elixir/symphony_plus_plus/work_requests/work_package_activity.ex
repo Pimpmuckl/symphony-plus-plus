@@ -82,26 +82,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
         ) :: map()
   def project_context(grants, agent_runs, claim_leases, progress_events, work_package)
       when is_list(grants) and is_list(agent_runs) and is_list(claim_leases) and is_list(progress_events) do
-    runtime_evidence = runtime_evidence(grants, agent_runs, claim_leases, DateTime.utc_now(:microsecond))
+    now = DateTime.utc_now(:microsecond)
+    runtime_evidence = runtime_evidence(grants, agent_runs, claim_leases, now)
+    {worker_grants, worker_runs, worker_leases} = worker_evidence(grants, agent_runs, claim_leases, work_package)
+    worker_runtime_evidence = runtime_evidence(worker_grants, worker_runs, worker_leases, now)
 
     %{
       blocker_state: blocker_state(progress_events),
       runtime_state: runtime_state(runtime_evidence, grants, agent_runs, claim_leases, progress_events, work_package),
-      worker_signal: worker_signal(grants, agent_runs, claim_leases, runtime_evidence)
+      worker_signal: worker_signal(worker_grants, worker_runs, worker_leases, worker_runtime_evidence)
     }
   end
 
-  @spec worker_signal([AccessGrant.t()], [AgentRun.t()], [ClaimLease.t()]) :: map() | nil
-  def worker_signal(grants, agent_runs, claim_leases)
-      when is_list(grants) and is_list(agent_runs) and is_list(claim_leases) do
-    runtime_evidence = runtime_evidence(grants, agent_runs, claim_leases, DateTime.utc_now(:microsecond))
-    worker_signal(grants, agent_runs, claim_leases, runtime_evidence)
-  end
-
   defp worker_signal(grants, agent_runs, claim_leases, runtime_evidence) do
-    worker_grants = Enum.filter(grants, &(&1.grant_role == "worker"))
-    active_worker_grants = Enum.filter(runtime_evidence.active_grants, &(&1.grant_role == "worker"))
-    evidence = worker_grants ++ agent_runs ++ claim_leases
+    evidence = grants ++ agent_runs ++ claim_leases
 
     if evidence == [] do
       nil
@@ -114,7 +108,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
             runtime_evidence.stale_agent_runs,
             runtime_evidence.active_claim_leases,
             runtime_evidence.active_agent_runs,
-            active_worker_grants
+            runtime_evidence.active_grants
           ),
         active_since: evidence |> Enum.flat_map(&worker_started_at/1) |> earliest_timestamp(),
         last_activity: evidence |> Enum.flat_map(&worker_activity_at/1) |> latest_timestamp(),
@@ -123,6 +117,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
       |> reject_nil_values()
     end
   end
+
+  defp worker_evidence(grants, agent_runs, claim_leases, work_package) do
+    worker_grants = Enum.filter(grants, &(&1.grant_role == "worker"))
+    worker_grant_ids = worker_grants |> Enum.map(& &1.id) |> MapSet.new()
+    unlinked_worker? = match?(%WorkPackage{kind: kind} when kind != "delegation", work_package)
+
+    {
+      worker_grants,
+      Enum.filter(agent_runs, &worker_linked?(&1, worker_grant_ids, unlinked_worker?)),
+      Enum.filter(claim_leases, &worker_linked?(&1, worker_grant_ids, unlinked_worker?))
+    }
+  end
+
+  defp worker_linked?(%{access_grant_id: access_grant_id}, worker_grant_ids, _unlinked_worker?)
+       when is_binary(access_grant_id) and access_grant_id != "" do
+    MapSet.member?(worker_grant_ids, access_grant_id)
+  end
+
+  defp worker_linked?(_evidence, _worker_grant_ids, unlinked_worker?), do: unlinked_worker?
 
   defp grouped_progress_events(repo, work_package_ids) do
     repo.all(

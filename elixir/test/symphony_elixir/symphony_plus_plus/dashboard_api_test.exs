@@ -4274,12 +4274,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert recovery_packages["WP-RECOVERY-OLD"].successor.work_package_id == "WP-RECOVERY-SUCCESSOR"
       assert recovery_packages["WP-RECOVERY-SKIPPED"].raw_status == "skipped"
       assert recovery_packages["WP-RECOVERY-SUCCESSOR"].work_package.review_signal.status == "failed"
+      assert Repo.all(ClaimLease) |> length() == 6
+
+      architect_anchor =
+        Repo.get!(WorkPackage, "WP-RECOVERY-OLD")
+        |> Ecto.Changeset.change(kind: "delegation")
+        |> Repo.update!()
+
+      assert {:ok, _architect_lease} =
+               ClaimLeaseService.claim(
+                 Repo,
+                 architect_anchor.id,
+                 %{"actor_kind" => "agent", "actor_id" => "fixture:architect", "actor_display_name" => "fixture-architect"},
+                 stale_after_ms: 60_000
+               )
+
+      architect_context = Dashboard.work_package_contexts(Repo, [architect_anchor])[architect_anchor.id]
+      assert architect_context.runtime_state.active?
+      assert is_nil(architect_context.worker_signal)
 
       assert {:ok, dense_tree} = ProductTree.tree_for_work_request(Repo, "WR-FIXTURE-DENSE")
       assert length(dense_tree.nodes) == 3
       assert length(dense_tree.dependency_edges) == 18
       assert Repo.all(AgentRun) |> length() == 6
-      assert Repo.all(ClaimLease) |> length() == 6
     after
       Repo.put_dynamic_repo(previous_repo)
       GenServer.stop(pid)
