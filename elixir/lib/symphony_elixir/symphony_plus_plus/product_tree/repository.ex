@@ -97,6 +97,95 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
+  @spec upsert_dependency_edge(repo(), map()) :: {:ok, DependencyEdge.t()} | {:error, error()}
+  def upsert_dependency_edge(repo, attrs) when is_atom(repo) and is_map(attrs) do
+    attrs = Attrs.normalize_keys(attrs)
+
+    case Map.get(attrs, "id") do
+      id when is_binary(id) and id != "" -> update_dependency_edge_by_id(repo, id, attrs)
+      _id -> create_dependency_edge(repo, attrs)
+    end
+  end
+
+  @spec delete_dependency_edge(repo(), String.t(), String.t()) :: {:ok, DependencyEdge.t()} | {:error, error()}
+  def delete_dependency_edge(repo, work_request_id, id)
+      when is_atom(repo) and is_binary(work_request_id) and is_binary(id) do
+    case repo.get(DependencyEdge, id) do
+      %DependencyEdge{work_request_id: ^work_request_id} = edge -> repo.delete(edge)
+      _edge -> {:error, :not_found}
+    end
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  @spec delete_group(repo(), String.t(), String.t()) :: {:ok, map()} | {:error, error()}
+  def delete_group(repo, work_request_id, id)
+      when is_atom(repo) and is_binary(work_request_id) and is_binary(id) do
+    case repo.get(Node, id) do
+      %Node{work_request_id: ^work_request_id} = group ->
+        delete_group_record(repo, work_request_id, group)
+
+      _group ->
+        {:error, :not_found}
+    end
+  rescue
+    error in Ecto.ConstraintError -> normalize_constraint_error(error)
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  defp delete_group_record(repo, work_request_id, %Node{} = group) do
+    moved_group_count = reparent_child_groups(repo, work_request_id, group)
+    moved_work_package_count = ungroup_work_packages(repo, work_request_id, group)
+    removed_dependency_count = delete_group_dependencies(repo, work_request_id, group.id)
+
+    with {:ok, deleted_group} <- repo.delete(group) do
+      {:ok,
+       %{
+         group: deleted_group,
+         parent_group_id: group.parent_id,
+         moved_group_count: moved_group_count,
+         moved_work_package_count: moved_work_package_count,
+         removed_dependency_count: removed_dependency_count
+       }}
+    end
+  end
+
+  defp reparent_child_groups(repo, work_request_id, group) do
+    {count, _} =
+      repo.update_all(
+        from(node in Node, where: node.work_request_id == ^work_request_id and node.parent_id == ^group.id),
+        set: [parent_id: group.parent_id]
+      )
+
+    count
+  end
+
+  defp ungroup_work_packages(repo, work_request_id, group) do
+    {count, _} =
+      repo.update_all(
+        from(work_package in WorkPackage,
+          where: work_package.work_request_id == ^work_request_id and work_package.product_tree_node_id == ^group.id
+        ),
+        set: [product_tree_node_id: group.parent_id]
+      )
+
+    count
+  end
+
+  defp delete_group_dependencies(repo, work_request_id, group_id) do
+    {count, _} =
+      repo.delete_all(
+        from(edge in DependencyEdge,
+          where:
+            edge.work_request_id == ^work_request_id and
+              ((edge.source_kind == "product_node" and edge.source_id == ^group_id) or
+                 (edge.target_kind == "product_node" and edge.target_id == ^group_id))
+        )
+      )
+
+    count
+  end
+
   @spec record_revision(repo(), String.t(), map()) :: {:ok, Revision.t()} | {:error, error()}
   def record_revision(repo, work_request_id, attrs) when is_atom(repo) and is_binary(work_request_id) and is_map(attrs) do
     record_revision(repo, work_request_id, attrs, @revision_number_retry_count)
@@ -174,6 +263,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
   end
 
   defp update_node(repo, attrs), do: create_node(repo, attrs)
+
+  defp update_dependency_edge_by_id(repo, id, attrs) do
+    case repo.get(DependencyEdge, id) do
+      nil ->
+        create_dependency_edge(repo, attrs)
+
+      %DependencyEdge{work_request_id: work_request_id} = edge ->
+        update_existing_dependency_edge(repo, edge, Map.put_new(attrs, "work_request_id", work_request_id))
+    end
+  rescue
+    error in Ecto.ConstraintError -> normalize_constraint_error(error)
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  defp update_existing_dependency_edge(
+         repo,
+         %DependencyEdge{work_request_id: work_request_id} = edge,
+         %{"work_request_id" => work_request_id} = attrs
+       ) do
+    with :ok <- validate_dependency_edge_scope(repo, attrs) do
+      edge
+      |> DependencyEdge.update_changeset(attrs)
+      |> repo.update()
+      |> normalize_insert_result()
+    end
+  end
+
+  defp update_existing_dependency_edge(_repo, %DependencyEdge{}, _attrs),
+    do: {:error, {:constraint_failed, "product_tree_dependency_work_request_scope"}}
 
   defp validate_parent_scope(_repo, %{"parent_id" => parent_id}) when parent_id in [nil, ""], do: :ok
   defp validate_parent_scope(_repo, %{"work_request_id" => work_request_id}) when work_request_id in [nil, ""], do: :ok

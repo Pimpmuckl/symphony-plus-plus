@@ -104,9 +104,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
                "record_decision",
                "slice_work_request",
                "update_work_package",
-               "upsert_plan_node",
-               "move_plan_node",
-               "set_plan_node_completion",
+               "upsert_group",
+               "delete_group",
+               "upsert_dependency",
+               "delete_dependency",
                "skip_work_package",
                "dispatch_work_package"
              ],

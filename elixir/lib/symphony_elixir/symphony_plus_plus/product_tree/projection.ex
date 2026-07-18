@@ -32,8 +32,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   @spec project(module(), String.t(), [map()], keyword()) :: map()
   def project(repo, work_request_id, work_package_payloads, opts \\ [])
       when is_atom(repo) and is_binary(work_request_id) and is_list(work_package_payloads) and is_list(opts) do
-    case ProductTree.tree_for_work_request(repo, work_request_id) do
-      {:ok, tree} -> project_tree(tree, work_package_payloads, opts)
+    with {:ok, tree} <- ProductTree.tree_for_work_request(repo, work_request_id),
+         {:ok, execution_graph} <- ProductTree.execution_graph(repo, work_request_id) do
+      project_tree(tree, execution_graph, work_package_payloads, opts)
+    else
       {:error, reason} -> unavailable_projection(reason, work_package_payloads)
     end
   end
@@ -44,6 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
            dependency_edges: dependency_edges,
            latest_revision: latest_revision
          },
+         execution_graph,
          work_package_payloads,
          opts
        ) do
@@ -59,9 +62,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
         opts
       )
 
+    execution_graph = scope_execution_graph(execution_graph, visible_work_package_ids, opts)
+
     node_work_package_ids =
       work_package_payloads
-      |> Enum.filter(&(map_value(&1, "product_tree_node_id") not in [nil, ""]))
+      |> Enum.filter(&(group_id(&1) not in [nil, ""]))
       |> Enum.map(&map_value(&1, "id"))
       |> MapSet.new()
 
@@ -82,9 +87,43 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
       root_work_package_ids: root_work_package_ids,
       nodes: projected_nodes,
       dependency_edges: Enum.map(dependency_edges, &dependency_edge_payload/1),
+      execution_graph: execution_graph,
       summary: summary(projected_nodes, root_work_package_ids, work_package_payloads),
       latest_revision: revision_payload(latest_revision)
     }
+  end
+
+  defp scope_execution_graph(execution_graph, visible_work_package_ids, opts) do
+    if Keyword.get(opts, :visible_only?, false) do
+      visible? = &MapSet.member?(visible_work_package_ids, &1)
+
+      execution_graph
+      |> Map.update!(:work_package_ids, &Enum.filter(&1, visible?))
+      |> Map.update!(:effective_edges, fn edges ->
+        Enum.filter(edges, &(visible?.(&1.prerequisite_work_package_id) and visible?.(&1.dependent_work_package_id)))
+      end)
+      |> Map.update!(:topological_order, &Enum.filter(&1, visible?))
+      |> Map.update!(:cycles, fn cycles ->
+        cycles
+        |> Enum.map(&Enum.filter(&1, visible?))
+        |> Enum.reject(&(&1 == []))
+      end)
+      |> Map.update!(:unmet_dependencies, fn evidence ->
+        scope_unmet_dependencies(evidence, visible?)
+      end)
+      |> Map.update!(:dependency_ready_work_package_ids, &Enum.filter(&1, visible?))
+      |> Map.update!(:resolutions, &Enum.filter(&1, fn resolution -> visible?.(resolution.work_package_id) end))
+    else
+      execution_graph
+    end
+  end
+
+  defp scope_unmet_dependencies(evidence, visible?) do
+    evidence
+    |> Enum.filter(fn item -> visible?.(item.work_package_id) end)
+    |> Enum.map(fn item ->
+      Map.update!(item, :prerequisite_work_package_ids, &Enum.filter(&1, visible?))
+    end)
   end
 
   defp scope_tree_records(nodes, work_packages, dependency_edges, visible_work_package_ids, opts) when is_list(opts) do
@@ -102,7 +141,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
     visible_node_ids =
       visible_work_packages
       |> Enum.reduce(MapSet.new(), fn work_package, node_ids ->
-        add_node_with_ancestors(node_ids, node_ids_by_id, map_value(work_package, "product_tree_node_id"))
+        add_node_with_ancestors(node_ids, node_ids_by_id, group_id(work_package))
       end)
       |> maybe_add_unowned_node_ids(nodes, visible_work_packages, node_ids_by_id, opts)
 
@@ -119,7 +158,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
 
   defp maybe_add_unowned_node_ids(node_ids, nodes, work_packages, nodes_by_id, opts) do
     if Keyword.get(opts, :include_unowned_nodes?, false) do
-      owned_node_ids = work_packages |> Enum.map(&map_value(&1, "product_tree_node_id")) |> MapSet.new()
+      owned_node_ids = work_packages |> Enum.map(&group_id/1) |> MapSet.new()
 
       nodes
       |> Enum.reject(&MapSet.member?(owned_node_ids, &1.id))
@@ -157,11 +196,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   defp node_payload(%Node{} = node, work_packages) do
     node_work_packages =
       work_packages
-      |> Enum.filter(&(map_value(&1, "product_tree_node_id") == node.id))
+      |> Enum.filter(&(group_id(&1) == node.id))
       |> Enum.sort_by(&{map_value(&1, "sequence") || 0, map_value(&1, "id") || ""})
 
     work_package_ids = Enum.map(node_work_packages, &map_value(&1, "id"))
-    computed_mark = computed_completion_mark(node.completion_mark, node_work_packages)
+    computed_mark = computed_completion_mark(node_work_packages)
 
     %{
       id: node.id,
@@ -214,12 +253,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   defp rollup_node(node, _children_by_parent_id, _ancestors), do: node
 
   defp rollup_completion_mark(node, child_marks) do
-    self_marks =
-      cond do
-        (node.work_package_count || 0) > 0 -> [node.computed_completion_mark]
-        node.completion_mark in ["done", "partial", "not_done", "deferred"] -> [node.completion_mark]
-        true -> []
-      end
+    self_marks = if (node.work_package_count || 0) > 0, do: [node.computed_completion_mark], else: []
 
     case self_marks ++ child_marks do
       [] -> node.computed_completion_mark
@@ -258,13 +292,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
     Map.put(node, :child_node_count, Enum.count(nodes, &(&1.parent_id == node.id)))
   end
 
-  defp computed_completion_mark("deferred", []), do: "deferred"
-  defp computed_completion_mark("done", []), do: "done"
-  defp computed_completion_mark("not_done", []), do: "not_done"
-  defp computed_completion_mark("partial", []), do: "partial"
-  defp computed_completion_mark(_mark, []), do: "unknown"
+  defp computed_completion_mark([]), do: "unknown"
 
-  defp computed_completion_mark(_mark, work_packages) do
+  defp computed_completion_mark(work_packages) do
     states = Enum.map(work_packages, &work_package_state/1)
 
     cond do
@@ -335,6 +365,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
       root_work_package_ids: work_package_payloads |> Enum.map(&map_value(&1, "id")) |> Enum.reject(&is_nil/1),
       nodes: [],
       dependency_edges: [],
+      execution_graph: %{
+        available: false,
+        work_package_ids: work_package_payloads |> Enum.map(&map_value(&1, "id")) |> Enum.reject(&is_nil/1),
+        effective_edges: [],
+        topological_order: [],
+        cycles: [],
+        unmet_dependencies: [],
+        dependency_ready_work_package_ids: [],
+        resolutions: []
+      },
       summary: %{
         node_count: 0,
         root_node_count: 0,
@@ -433,6 +473,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
 
   defp map_value(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, maybe_atom(key))
   defp map_value(_map, _key), do: nil
+
+  defp group_id(work_package), do: map_value(work_package, "group_id") || map_value(work_package, "product_tree_node_id")
 
   defp maybe_atom(key) when is_binary(key) do
     String.to_existing_atom(key)

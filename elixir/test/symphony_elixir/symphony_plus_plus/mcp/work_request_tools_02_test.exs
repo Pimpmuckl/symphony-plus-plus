@@ -144,16 +144,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(extra_field_response, ["error", "data", "reason"]) == "invalid_evidence"
   end
 
-  test "product plan node tools reject mixed intent arguments", %{repo: repo} do
+  test "Group and dependency tools expose the atomic public graph contract", %{repo: repo} do
     {anchor, session, _grant} =
-      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-NODE-MIXED-INTENT", [
+      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-GROUP-CONTRACT", [
         "read:work_request",
         "write:work_request"
       ])
 
     work_request =
       create_work_request!(repo,
-        id: "WR-MCP-WR-NODE-MIXED-INTENT",
+        id: "WR-MCP-WR-GROUP-CONTRACT",
         repo: anchor.repo,
         base_branch: anchor.base_branch,
         status: "ready_for_slicing"
@@ -161,37 +161,65 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     grant_work_request_scope!(repo, session, work_request.id)
 
-    content_with_topology =
-      mcp_tool(repo, session, "upsert_plan_node", %{
+    parent_response =
+      mcp_tool(repo, session, "upsert_group", %{
         "work_request_id" => work_request.id,
-        "title" => "Content only",
-        "parent_id" => "ptn-parent"
+        "title" => "Parent Group",
+        "kind" => "capability"
       })
 
-    assert get_in(content_with_topology, ["error", "data", "reason"]) == "unexpected_argument"
-    assert get_in(content_with_topology, ["error", "data", "arguments"]) == ["parent_id"]
+    parent_group_id = get_in(parent_response, ["result", "structuredContent", "group", "id"])
+    assert is_binary(parent_group_id)
 
-    move_with_content =
-      mcp_tool(repo, session, "move_plan_node", %{
+    child_response =
+      mcp_tool(repo, session, "upsert_group", %{
         "work_request_id" => work_request.id,
-        "product_tree_node_id" => "ptn-child",
-        "parent_id" => nil,
-        "title" => "Content belongs in the content tool"
+        "title" => "Child Group",
+        "parent_group_id" => parent_group_id,
+        "position" => 2
       })
 
-    assert get_in(move_with_content, ["error", "data", "reason"]) == "unexpected_argument"
-    assert get_in(move_with_content, ["error", "data", "arguments"]) == ["title"]
+    child_group_id = get_in(child_response, ["result", "structuredContent", "group", "id"])
 
-    completion_with_topology =
-      mcp_tool(repo, session, "set_plan_node_completion", %{
+    moved_response =
+      mcp_tool(repo, session, "upsert_group", %{
         "work_request_id" => work_request.id,
-        "product_tree_node_id" => "ptn-child",
-        "completion_mark" => "done",
-        "parent_id" => nil
+        "group_id" => child_group_id,
+        "title" => "Renamed Group",
+        "parent_group_id" => nil,
+        "position" => 1
       })
 
-    assert get_in(completion_with_topology, ["error", "data", "reason"]) == "unexpected_argument"
-    assert get_in(completion_with_topology, ["error", "data", "arguments"]) == ["parent_id"]
+    assert get_in(moved_response, ["result", "structuredContent", "group", "id"]) == child_group_id
+    assert get_in(moved_response, ["result", "structuredContent", "group", "position"]) == 1
+
+    dependency_response =
+      mcp_tool(repo, session, "upsert_dependency", %{
+        "work_request_id" => work_request.id,
+        "dependent" => %{"kind" => "group", "id" => child_group_id},
+        "prerequisite" => %{"kind" => "group", "id" => parent_group_id},
+        "reason" => "The parent capability lands first."
+      })
+
+    dependency = get_in(dependency_response, ["result", "structuredContent", "dependency"])
+    assert dependency["dependent"] == %{"kind" => "group", "id" => child_group_id}
+    assert dependency["prerequisite"] == %{"kind" => "group", "id" => parent_group_id}
+
+    read_response =
+      mcp_tool(repo, session, "read_plan", %{
+        "work_request_id" => work_request.id,
+        "view" => "groups_with_work_package_refs"
+      })
+
+    product_tree = get_in(read_response, ["result", "structuredContent", "product_tree"])
+    assert product_tree["schema_version"] == "product_tree.v4"
+    assert Enum.map(product_tree["groups"], & &1["id"]) |> Enum.sort() == Enum.sort([parent_group_id, child_group_id])
+    assert Enum.find(product_tree["groups"], &(&1["id"] == child_group_id))["title"] == "Renamed Group"
+    assert Enum.find(product_tree["groups"], &(&1["id"] == child_group_id))["parent_group_id"] == nil
+    refute Enum.find(product_tree["groups"], &(&1["id"] == child_group_id)) |> Map.has_key?("completion_mark")
+    assert [%{"id" => _dependency_id}] = product_tree["dependency_intents"]
+    assert product_tree["execution_graph"]["effective_edges"] == []
+    refute Map.has_key?(product_tree, "nodes")
   end
 
   test "record_work_package_delivery requires active blocker closeout and can preserve blockers", %{repo: repo} do
@@ -301,10 +329,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert Enum.any?(progress_events, &(get_in(&1.payload, ["source_tool"]) == "resolve_blocker" and get_in(&1.payload, ["blocker_id"]) == "resolve-blocker"))
   end
 
-  test "terminal product plan node completion asks for descendant blocker closeout", %{repo: repo} do
+  test "deleting a Group ungroups its direct contents and removes its dependencies", %{repo: repo} do
     {work_request, work_package, work_package} =
       linked_delivery_slice!(repo,
-        id_suffix: "PLAN-NODE",
+        id_suffix: "DELETE-GROUP",
         package_status: "planned"
       )
 
@@ -315,73 +343,138 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
         "dispatch:work_request"
       ])
 
-    node_response =
-      mcp_tool(repo, session, "upsert_plan_node", %{
+    parent_response =
+      mcp_tool(repo, session, "upsert_group", %{
         "work_request_id" => work_request.id,
-        "title" => "Blocked plan node"
+        "title" => "Parent Group"
       })
 
-    product_tree_node_id = get_in(node_response, ["result", "structuredContent", "product_plan_node", "id"])
+    parent_group_id = get_in(parent_response, ["result", "structuredContent", "group", "id"])
+
+    deleted_group_response =
+      mcp_tool(repo, session, "upsert_group", %{
+        "work_request_id" => work_request.id,
+        "title" => "Temporary Group",
+        "parent_group_id" => parent_group_id
+      })
+
+    deleted_group_id = get_in(deleted_group_response, ["result", "structuredContent", "group", "id"])
+
+    child_response =
+      mcp_tool(repo, session, "upsert_group", %{
+        "work_request_id" => work_request.id,
+        "title" => "Preserved Child Group",
+        "parent_group_id" => deleted_group_id
+      })
+
+    child_group_id = get_in(child_response, ["result", "structuredContent", "group", "id"])
+
+    prerequisite_response =
+      mcp_tool(repo, session, "upsert_group", %{
+        "work_request_id" => work_request.id,
+        "title" => "Prerequisite Group"
+      })
+
+    prerequisite_group_id = get_in(prerequisite_response, ["result", "structuredContent", "group", "id"])
 
     move_response =
       mcp_tool(repo, session, "update_work_package", %{
         "work_request_id" => work_request.id,
         "work_package_id" => work_package.id,
         "expected_contract_revision" => work_package.contract_revision,
-        "patch" => %{"product_tree_node_id" => product_tree_node_id}
+        "patch" => %{"group_id" => deleted_group_id}
       })
 
     assert get_in(move_response, ["result", "structuredContent", "work_package_id"]) == work_package.id
-    assert {:ok, _work_package} = WorkPackageRepository.update_status(repo, work_package.id, "planned", "reviewing")
 
-    append_active_blocker!(repo, work_package.id, "node-blocker")
-
-    missing_closeout_response =
-      mcp_tool(repo, session, "set_plan_node_completion", %{
+    dependency_response =
+      mcp_tool(repo, session, "upsert_dependency", %{
         "work_request_id" => work_request.id,
-        "product_tree_node_id" => product_tree_node_id,
-        "completion_mark" => "done"
+        "dependent" => %{"kind" => "group", "id" => deleted_group_id},
+        "prerequisite" => %{"kind" => "group", "id" => prerequisite_group_id},
+        "reason" => "Temporary Group depends on the prerequisite."
       })
 
-    assert get_in(missing_closeout_response, ["error", "data", "reason_code"]) == "blocker_closeout_required"
+    assert is_binary(get_in(dependency_response, ["result", "structuredContent", "dependency", "id"]))
 
-    resolved_response =
-      mcp_tool(repo, session, "set_plan_node_completion", %{
+    delete_response =
+      mcp_tool(repo, session, "delete_group", %{
         "work_request_id" => work_request.id,
-        "product_tree_node_id" => product_tree_node_id,
-        "completion_mark" => "done",
-        "blocker_closeout" => %{
-          "decision" => "resolved",
-          "blocker_ids" => ["node-blocker"],
-          "resolution" => "The node blocker was handled before marking the node done."
-        }
+        "group_id" => deleted_group_id
       })
 
-    assert get_in(resolved_response, ["result", "structuredContent", "product_plan_node", "completion_mark"]) == "done"
-    assert get_in(resolved_response, ["result", "structuredContent", "blocker_closeout", "decision"]) == "resolved"
+    assert get_in(delete_response, ["result", "structuredContent", "deleted"]) == %{
+             "group_id" => deleted_group_id,
+             "moved_group_count" => 1,
+             "moved_work_package_count" => 1,
+             "parent_group_id" => parent_group_id,
+             "removed_dependency_count" => 1
+           }
 
-    assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
-    refute Enum.any?(BlockerProjection.blockers(progress_events), & &1.active)
-    assert length(resolve_blocker_events(progress_events, "node-blocker")) == 1
-
-    append_active_blocker!(repo, work_package.id, "node-blocker", idempotency_key: "node-blocker-reraised")
-
-    reraised_resolved_response =
-      mcp_tool(repo, session, "set_plan_node_completion", %{
+    read_response =
+      mcp_tool(repo, session, "read_plan", %{
         "work_request_id" => work_request.id,
-        "product_tree_node_id" => product_tree_node_id,
-        "completion_mark" => "done",
-        "blocker_closeout" => %{
-          "decision" => "resolved",
-          "blocker_ids" => ["node-blocker"],
-          "resolution" => "The re-raised node blocker was handled too."
-        }
+        "view" => "groups_with_work_package_refs"
       })
 
-    assert get_in(reraised_resolved_response, ["result", "structuredContent", "blocker_closeout", "decision"]) == "resolved"
-    assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
-    refute Enum.any?(BlockerProjection.blockers(progress_events), & &1.active)
-    assert length(resolve_blocker_events(progress_events, "node-blocker")) == 2
+    product_tree = get_in(read_response, ["result", "structuredContent", "product_tree"])
+    refute Enum.any?(product_tree["groups"], &(&1["id"] == deleted_group_id))
+    assert Enum.find(product_tree["groups"], &(&1["id"] == child_group_id))["parent_group_id"] == parent_group_id
+    assert product_tree["dependency_intents"] == []
+    assert repo.get!(WorkPackage, work_package.id).product_tree_node_id == parent_group_id
+  end
+
+  test "dispatch reports exact unmet prerequisites from the public execution graph", %{repo: repo} do
+    {work_request, dependent, dependent} =
+      linked_delivery_slice!(repo,
+        id_suffix: "GRAPH-DISPATCH",
+        package_status: "planned"
+      )
+
+    assert {:ok, prerequisite} =
+             CanonicalWorkPackageFixtures.add_work_package(
+               repo,
+               work_request.id,
+               work_request_work_package_attrs(
+                 id: "WP-MCP-GRAPH-DISPATCH-PREREQUISITE",
+                 base_branch: work_request.base_branch,
+                 branch_pattern: "agent/graph-dispatch-prerequisite",
+                 status: "planned"
+               )
+             )
+
+    {_anchor, session, _grant} =
+      create_work_request_handoff_architect_session(repo, work_request, [
+        "read:work_request",
+        "write:work_request",
+        "dispatch:work_request"
+      ])
+
+    dependency_response =
+      mcp_tool(repo, session, "upsert_dependency", %{
+        "work_request_id" => work_request.id,
+        "dependent" => %{"kind" => "work_package", "id" => dependent.id},
+        "prerequisite" => %{"kind" => "work_package", "id" => prerequisite.id},
+        "reason" => "The shared contract must land first."
+      })
+
+    assert is_binary(get_in(dependency_response, ["result", "structuredContent", "dependency", "id"]))
+    assert {:ok, _work_request} = WorkRequestRepository.update_status(repo, work_request.id, "ready_for_slicing", "sliced")
+
+    dispatch_response =
+      mcp_tool(repo, session, "dispatch_work_package", %{
+        "work_request_id" => work_request.id,
+        "work_package_id" => dependent.id
+      })
+
+    assert get_in(dispatch_response, ["error", "data"]) == %{
+             "prerequisite_work_package_ids" => [prerequisite.id],
+             "reason" => "unmet_work_package_dependencies",
+             "tool" => "dispatch_work_package",
+             "work_package_id" => dependent.id
+           }
+
+    assert repo.get!(WorkPackage, dependent.id).status == "planned"
   end
 
   test "legacy recovered handoff architects read same repo/base without persisted repo scope", %{repo: repo} do
@@ -996,10 +1089,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
              })
 
     event
-  end
-
-  defp resolve_blocker_events(progress_events, blocker_id) do
-    Enum.filter(progress_events, &(get_in(&1.payload, ["source_tool"]) == "resolve_blocker" and get_in(&1.payload, ["blocker_id"]) == blocker_id))
   end
 
   defp legacy_handoff_session_without_repo_scope!(repo, session, grant) do

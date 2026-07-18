@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
   alias SymphonyElixir.SymphonyPlusPlus.CreateWork
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
@@ -30,6 +31,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
     with {:ok, %WorkRequest{status: "sliced"} = work_request} <- Repository.get(repo, work_request_id),
          {:ok, %WorkPackage{status: "planned"} = work_package} <-
            Repository.get_work_package(repo, work_request_id, work_package_id),
+         {:ok, execution_graph} <- ExecutionGraph.evaluate(repo, work_request_id),
+         :ok <- ExecutionGraph.require_ready(execution_graph, work_package_id),
          :ok <- validate_contract(repo, work_request, work_package),
          {:ok, creation} <- CreateWork.activate(repo, work_package) do
       activated = creation.work_package
@@ -61,6 +64,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   def error_message(:not_found), do: "WorkRequest or WorkPackage was not found"
   def error_message(:invalid_work_request_status), do: "Parent WorkRequest must be sliced before dispatch"
   def error_message(:invalid_work_package_status), do: "WorkPackage must be planned before dispatch"
+
+  def error_message({:execution_graph_cycle, cycles}),
+    do: "WorkRequest execution graph contains a cycle across WorkPackages: #{inspect(cycles)}"
+
+  def error_message({:unmet_work_package_dependencies, work_package_id, prerequisite_ids}) do
+    "WorkPackage #{work_package_id} has unmet dependencies: #{Enum.join(prerequisite_ids, ", ")}"
+  end
 
   def error_message({:unsupported_branch_pattern, branch_pattern, reason}) do
     "WorkPackage branch_pattern #{inspect(branch_pattern)} is unsupported: #{BranchPattern.error_message(reason)}"
@@ -150,7 +160,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
     %{
       id: work_package.id,
       work_request_id: work_package.work_request_id,
-      product_tree_node_id: work_package.product_tree_node_id,
+      group_id: work_package.product_tree_node_id,
       sequence: work_package.sequence,
       kind: work_package.kind,
       title: work_package.title,

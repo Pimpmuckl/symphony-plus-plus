@@ -389,9 +389,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   defp work_request_policy_action("record_decision"), do: :decision_record
   defp work_request_policy_action("slice_work_request"), do: :work_package_create
   defp work_request_policy_action("update_work_package"), do: :work_package_update
-  defp work_request_policy_action("upsert_plan_node"), do: :work_request_update
-  defp work_request_policy_action("move_plan_node"), do: :work_request_update
-  defp work_request_policy_action("set_plan_node_completion"), do: :work_request_update
+
+  defp work_request_policy_action(tool) when tool in ["upsert_group", "delete_group", "upsert_dependency", "delete_dependency"],
+    do: :work_request_update
+
   defp work_request_policy_action("skip_work_package"), do: :work_package_skip
   defp work_request_policy_action("dispatch_work_package"), do: :work_package_dispatch
 

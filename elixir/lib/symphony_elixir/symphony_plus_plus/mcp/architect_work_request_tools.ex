@@ -557,6 +557,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     invalid_params_error("dispatch_work_package", {:work_package_scope_violation, errors})
   end
 
+  defp dispatch_work_package_error({:execution_graph_cycle, cycles}) do
+    {:error, -32_602, "Invalid params",
+     %{
+       "tool" => "dispatch_work_package",
+       "reason" => "execution_graph_cycle",
+       "cycles" => cycles
+     }}
+  end
+
+  defp dispatch_work_package_error({:unmet_work_package_dependencies, work_package_id, prerequisite_ids}) do
+    {:error, -32_602, "Invalid params",
+     %{
+       "tool" => "dispatch_work_package",
+       "reason" => "unmet_work_package_dependencies",
+       "work_package_id" => work_package_id,
+       "prerequisite_work_package_ids" => prerequisite_ids
+     }}
+  end
+
   defp dispatch_work_package_error({:unsupported_branch_pattern, branch_pattern, reason}) do
     invalid_params_error("dispatch_work_package", {:branch_pattern, branch_pattern, reason})
   end
@@ -734,7 +753,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp optional_product_tree_view(arguments) do
     case Map.fetch(arguments, "view") do
       :error ->
-        {:ok, "nodes_with_work_package_refs"}
+        {:ok, "groups_with_work_package_refs"}
 
       {:ok, view} when is_binary(view) ->
         view = String.trim(view)

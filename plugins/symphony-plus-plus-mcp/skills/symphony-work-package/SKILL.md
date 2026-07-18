@@ -99,7 +99,7 @@ Before `mark_ready()`:
 - Required tests, static checks, review, and CI/check status are complete or
   accurately reported as absent/blocked.
 - Task plan, findings, progress, branch, PR, and any required review completion are current.
-  Package-depth policies still require at least one terminal package plan node.
+  Package-depth policies still require at least one terminal WorkPackage within a Group.
   Do not add lifecycle calls only to restate facts already present; `mark_ready`
   infers completed plan, PR, branch, and review facts from existing evidence
   when the matching facts are already recorded.

@@ -230,60 +230,58 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
       assert get_in(unbound_tools_by_name, [tool, "inputSchema", "properties", "work_package_id", "type"]) == "string"
     end
 
-    refute Map.has_key?(unbound_tools_by_name, "upsert_work_request_product_plan_node")
+    refute Map.has_key?(unbound_tools_by_name, "upsert_plan_node")
+    refute Map.has_key?(unbound_tools_by_name, "move_plan_node")
+    refute Map.has_key?(unbound_tools_by_name, "set_plan_node_completion")
 
-    assert get_in(unbound_tools_by_name, ["upsert_plan_node", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["upsert_group", "inputSchema", "required"]) == [
              "work_request_id"
            ]
 
-    content_schema = get_in(unbound_tools_by_name, ["upsert_plan_node", "inputSchema"])
-    content_properties = get_in(content_schema, ["properties"])
-    assert get_in(content_properties, ["work_request_id", "description"]) =~ "Required WorkRequest id"
-    assert Map.has_key?(content_properties, "title")
-    refute Map.has_key?(content_properties, "parent_id")
-    refute Map.has_key?(content_properties, "completion_mark")
+    group_schema = get_in(unbound_tools_by_name, ["upsert_group", "inputSchema"])
+    group_properties = get_in(group_schema, ["properties"])
+    assert get_in(group_properties, ["work_request_id", "description"]) =~ "Required WorkRequest id"
+    assert Map.has_key?(group_properties, "group_id")
+    assert Map.has_key?(group_properties, "title")
+    assert Map.has_key?(group_properties, "parent_group_id")
+    assert Map.has_key?(group_properties, "position")
+    refute Map.has_key?(group_properties, "completion_mark")
 
-    assert get_in(content_schema, ["then", "allOf"]) == [
-             %{"anyOf" => [%{"required" => ["product_tree_node_id"]}, %{"required" => ["title"]}]},
-             %{"anyOf" => [%{"required" => ["title"]}, %{"required" => ["description"]}, %{"required" => ["node_kind"]}]}
+    assert get_in(group_schema, ["then", "allOf"]) == [
+             %{"anyOf" => [%{"required" => ["group_id"]}, %{"required" => ["title"]}]},
+             %{
+               "anyOf" => [
+                 %{"required" => ["title"]},
+                 %{"required" => ["description"]},
+                 %{"required" => ["kind"]},
+                 %{"required" => ["parent_group_id"]},
+                 %{"required" => ["position"]}
+               ]
+             }
            ]
 
-    assert get_in(unbound_tools_by_name, ["upsert_plan_node", "description"]) =~ "explicit WorkRequest"
-    refute get_in(unbound_tools_by_name, ["upsert_plan_node", "description"]) =~ "claimed current WorkRequest"
+    assert get_in(unbound_tools_by_name, ["upsert_group", "description"]) =~ "explicit WorkRequest"
+    assert get_in(unbound_tools_by_name, ["upsert_group", "description"]) =~ "no lifecycle"
 
-    assert get_in(unbound_tools_by_name, ["upsert_plan_node", "description"]) =~
-             "Do not create a plan node solely to wrap one WorkPackage."
-
-    assert get_in(unbound_tools_by_name, ["move_plan_node", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["delete_group", "inputSchema", "required"]) == [
              "work_request_id",
-             "product_tree_node_id"
+             "group_id"
            ]
 
-    move_node_schema = get_in(unbound_tools_by_name, ["move_plan_node", "inputSchema"])
-    move_node_properties = get_in(move_node_schema, ["properties"])
-    assert get_in(move_node_properties, ["product_tree_node_id", "minLength"]) == 1
-    assert get_in(move_node_properties, ["product_tree_node_id", "pattern"]) == "\\S"
-    assert Map.has_key?(move_node_properties, "parent_id")
-    assert Map.has_key?(move_node_properties, "position")
-    refute Map.has_key?(move_node_properties, "title")
-
-    assert get_in(move_node_schema, ["then", "anyOf"]) == [
-             %{"required" => ["parent_id"]},
-             %{"required" => ["position"]}
-           ]
-
-    assert get_in(unbound_tools_by_name, ["set_plan_node_completion", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["upsert_dependency", "inputSchema", "required"]) == [
              "work_request_id",
-             "product_tree_node_id",
-             "completion_mark"
+             "dependent",
+             "prerequisite"
            ]
 
-    completion_properties = get_in(unbound_tools_by_name, ["set_plan_node_completion", "inputSchema", "properties"])
-    assert get_in(completion_properties, ["product_tree_node_id", "minLength"]) == 1
-    assert get_in(completion_properties, ["product_tree_node_id", "pattern"]) == "\\S"
-    assert Map.has_key?(completion_properties, "blocker_closeout")
-    refute Map.has_key?(completion_properties, "title")
-    refute Map.has_key?(completion_properties, "parent_id")
+    dependency_properties = get_in(unbound_tools_by_name, ["upsert_dependency", "inputSchema", "properties"])
+    assert get_in(dependency_properties, ["dependent", "properties", "kind", "enum"]) == ["work_package", "group"]
+    assert get_in(dependency_properties, ["prerequisite", "properties", "id", "pattern"]) == "\\S"
+
+    assert get_in(unbound_tools_by_name, ["delete_dependency", "inputSchema", "required"]) == [
+             "work_request_id",
+             "dependency_id"
+           ]
 
     assert get_in(unbound_tools_by_name, ["update_work_package", "inputSchema", "required"]) == [
              "work_request_id",

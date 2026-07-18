@@ -58,7 +58,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge do
       |> Attrs.put_new_value("id", Attrs.stable_id("ptde"))
       |> Attrs.put_new_value("created_at", DateTime.utc_now(:microsecond))
 
-    %__MODULE__{}
+    changeset(%__MODULE__{}, attrs)
+  end
+
+  @spec update_changeset(t(), map()) :: Ecto.Changeset.t()
+  def update_changeset(%__MODULE__{} = edge, attrs) do
+    edge
+    |> changeset(attrs |> Attrs.normalize_keys() |> redact_attrs())
+  end
+
+  defp changeset(edge, attrs) do
+    edge
     |> cast(attrs, [
       :id,
       :work_request_id,

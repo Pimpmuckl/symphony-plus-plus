@@ -5,7 +5,7 @@ description: Use when assigned a Symphony++ WorkRequest, product-tree planning l
 
 # Symphony++ Architect
 
-Own product clarification, optional product-tree organization, WorkPackage planning, worker
+Own product clarification, optional Group organization, WorkPackage planning, worker
 dispatch, guidance routing, and delivery closeout. Do not implement worker
 packages yourself.
 
@@ -25,7 +25,7 @@ packages yourself.
 2. For WorkRequest lanes, read `read_work_request(work_request_id)`,
    `read_plan(work_request_id, view?)`, and
    `list_guidance_requests(work_request_id?)` before planning WorkPackages or rearranging
-   product nodes. The WorkRequest guidance filter requires the usual
+   Groups. The WorkRequest guidance filter requires the usual
    `read:work_request` grant.
 3. If MCP/session/scope state is unavailable, record/report the blocker. Do not
    invent state.
@@ -56,14 +56,14 @@ that as presentation only: tool arguments remain JSON/schema-native, and
 
 ## Plan WorkPackages
 
-For larger WorkRequests, use product plan nodes to make human progress legible
-before or alongside WorkPackage planning. Product plan nodes are optional and may be
-nested however the product needs; do not force a fixed layer/capability shape.
+For larger WorkRequests, use optional Groups to make product structure legible
+before or alongside WorkPackage planning. Groups may be nested however the
+product needs; they organize WorkPackages but have no lifecycle or completion step.
 Use `read_plan` instead of direct ledger queries when you
-need existing node/package state; choose `nodes_only` for the product plan outline,
-`nodes_with_work_package_refs` for id mapping, and `nodes_with_work_packages` when
-package bodies are needed. Product-tree rollups reflect scoped delivery-board
-operational state for canonical WorkPackages.
+need existing Group/package state; choose `groups_only` for the outline,
+`groups_with_work_package_refs` for id mapping, and `groups_with_work_packages`
+when package bodies are needed. The projection includes effective WorkPackage
+edges, cycle/topology evidence, and unmet dependencies.
 
 Design one PR-sized WorkPackage per worker unless the operator approves
 another shape. Each WorkPackage needs:
@@ -85,12 +85,18 @@ another shape. Each WorkPackage needs:
 - Stop conditions and guidance routing.
 - Dependencies and recorded decisions needed to avoid scope drift.
 
+Express execution order with `upsert_dependency`. Either endpoint may be a
+WorkPackage or Group; the backend expands Group membership into the effective
+WorkPackage graph. Use `delete_dependency` to remove intent. Do not derive or
+store a second graph in prompts or planning notes.
+
 After claiming a WorkRequest, current-WR lifecycle tools may omit
 `work_request_id`: `slice_work_request`,
 `update_work_package`,
-`upsert_plan_node`,
-`move_plan_node`,
-`set_plan_node_completion`, and
+`upsert_group`,
+`delete_group`,
+`upsert_dependency`,
+`delete_dependency`, and
 `skip_work_package`, plus delivery board/reconcile, work-package
 delivery closeout, runtime cleanup, worker-key revocation, and dispatch. Keep
 intentional sibling reads, status/question tools, durable decisions, and package
@@ -101,22 +107,25 @@ WorkPackages. The selected WorkRequest supplies the default primary delivery
 repo and target base branch. Pass the target base branch with a secondary
 delivery repo. Package kind defaults to `standard_pr`; title, goal, owned
 globs, acceptance criteria, validation, and stop conditions remain explicit.
-Assign `product_tree_node_id` only when the WorkPackage belongs beneath a real
-product plan node; root-level WorkPackages need no synthetic wrapper node.
+Assign `group_id` only when the WorkPackage belongs in a real Group; root-level
+WorkPackages need no synthetic wrapper Group.
 
 Use `update_work_package` with `expected_contract_revision` to edit a planned
-contract or move it between the WorkRequest root and an existing product node.
+contract or move it between the WorkRequest root and an existing Group.
 
-Use product-plan node content, move, and completion tools separately: content
-changes title/description/kind, move changes parent/position, and completion
-sets completion marks plus any required blocker closeout.
+Use `upsert_group` for create, rename, reparent, and reorder. `delete_group`
+ungroups its direct WorkPackages and child Groups into the deleted Group's
+parent and removes dependency intents that named it. Groups never need manual
+completion or blocker closeout.
 
 Skip stale or superseded planned WorkPackages. The atomic planning call advances
 the WorkRequest to its planned state; there is no separate approval or finish step.
 
 ## Dispatch
 
-Dispatch planned WorkPackages with `dispatch_work_package`.
+Dispatch planned WorkPackages with `dispatch_work_package`. Dispatch uses the
+same effective graph shown by `read_plan` and rejects cycles or unmet
+dependencies with WorkPackage-id evidence.
 For normal work-package dispatch, worker bootstrap is ledger-backed:
 `worker_bootstrap.type=ledger_claim`, `mode=local_assignment`, and
 `claim.tool=claim_local_assignment`. Dispatch activates the same canonical
