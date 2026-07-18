@@ -32,11 +32,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   @spec project(module(), String.t(), [map()], keyword()) :: map()
   def project(repo, work_request_id, work_package_payloads, opts \\ [])
       when is_atom(repo) and is_binary(work_request_id) and is_list(work_package_payloads) and is_list(opts) do
+    case repo.transaction(fn -> project_transaction(repo, work_request_id, work_package_payloads, opts) end) do
+      {:ok, projection} -> projection
+      {:error, reason} -> unavailable_projection(reason, work_package_payloads)
+    end
+  end
+
+  defp project_transaction(repo, work_request_id, work_package_payloads, opts) do
     with {:ok, tree} <- ProductTree.tree_for_work_request(repo, work_request_id),
          {:ok, execution_graph} <- ProductTree.execution_graph(repo, work_request_id) do
       project_tree(tree, execution_graph, work_package_payloads, opts)
     else
-      {:error, reason} -> unavailable_projection(reason, work_package_payloads)
+      {:error, reason} -> repo.rollback(reason)
     end
   end
 
@@ -81,7 +88,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
 
     %{
       available: true,
-      schema_version: "product_tree.v3",
+      schema_version: "product_tree.v4",
       mode: if(nodes == [], do: "direct_work_packages", else: "product_tree"),
       root_node_ids: root_node_ids(projected_nodes),
       root_work_package_ids: root_work_package_ids,
@@ -334,7 +341,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   defp unavailable_projection(reason, work_package_payloads) do
     %{
       available: false,
-      schema_version: "product_tree.v3",
+      schema_version: "product_tree.v4",
       mode: "unavailable",
       root_node_ids: [],
       root_work_package_ids: work_package_payloads |> Enum.map(&map_value(&1, "id")) |> Enum.reject(&is_nil/1),

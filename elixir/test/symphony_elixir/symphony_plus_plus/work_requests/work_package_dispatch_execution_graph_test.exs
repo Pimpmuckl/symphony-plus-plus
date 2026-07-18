@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkPackageDispatchExecut
   use ExUnit.Case, async: false
 
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge
   alias SymphonyElixir.SymphonyPlusPlus.Repo
@@ -48,9 +49,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkPackageDispatchExecut
 
     assert repo.get!(WorkPackage, dependent.id).status == "planned"
     assert {:ok, %{status: "skipped"}} = Repository.skip_work_package(repo, work_request.id, prerequisite.id, "planned")
+    assert :ok = DashboardPubSub.subscribe()
 
     assert {:ok, %{work_package: %{id: "wp_dependent", status: "ready_for_worker"}}} =
              WorkPackageDispatch.dispatch(repo, work_request.id, dependent.id, database: database_path)
+
+    assert_receive :operator_dashboard_changed
+    refute_receive :operator_dashboard_changed, 50
   end
 
   defp work_request!(repo) do

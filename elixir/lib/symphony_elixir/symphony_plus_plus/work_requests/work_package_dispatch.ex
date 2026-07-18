@@ -3,6 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
 
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
   alias SymphonyElixir.SymphonyPlusPlus.CreateWork
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -41,6 +42,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
       {:ok, result} -> {:ok, result}
       {:error, reason} -> {:error, reason}
     end
+    |> DashboardPubSub.broadcast_changed_on_success()
   end
 
   defp dispatch_transaction(repo, work_request_id, work_package_id, handoff_opts) do
@@ -50,7 +52,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
          {:ok, execution_graph} <- ExecutionGraph.evaluate(repo, work_request_id),
          :ok <- ExecutionGraph.require_ready(execution_graph, work_package_id),
          :ok <- validate_contract(repo, work_request, work_package),
-         {:ok, creation} <- CreateWork.activate(repo, work_package) do
+         {:ok, creation} <- CreateWork.activate(repo, work_package, broadcast?: false) do
       activated = creation.work_package
       bootstrap = worker_bootstrap(work_request, activated, handoff_opts)
 
