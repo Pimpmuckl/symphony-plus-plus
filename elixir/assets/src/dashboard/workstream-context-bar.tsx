@@ -212,7 +212,9 @@ function contextPartSlot(index: number) {
 function activeContextPath(board: HTMLDivElement | null) {
   if (!board) return [];
 
-  const markers = [...board.querySelectorAll<HTMLElement>("[data-v3-context-path]")].filter(elementIsVisible);
+  const markers = [...board.querySelectorAll<HTMLElement>("[data-v3-context-path]")]
+    .filter(elementIsVisible)
+    .sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top);
   if (markers.length === 0) return [];
 
   const boardRect = board.getBoundingClientRect();
