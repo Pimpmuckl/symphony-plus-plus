@@ -226,6 +226,12 @@ describe("WorkRequestExecutionGraph", () => {
     const graph: WorkRequestExecutionGraphModel = {
       work_packages: [
         {
+          id: "ready",
+          status: "ready_for_worker",
+          operational_state: { key: "ready", label: "Ready for worker pickup", tone: "success", reason: "All dependencies are satisfied." },
+          dependency_signal: { satisfied: 1, required: 1, active: 0, blocked: 0, unmet_work_package_ids: [], inputs: [{ work_package_id: "input", status: "satisfied" }] },
+        },
+        {
           id: "waiting",
           status: "ready_for_worker",
           operational_state: { key: "ready", label: "Ready for worker pickup", tone: "success" },
@@ -244,16 +250,29 @@ describe("WorkRequestExecutionGraph", () => {
           dependency_signal: { satisfied: 0, required: 1, active: 0, blocked: 1, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "blocked" }] },
         },
       ],
-      topological_order: ["waiting", "blocked", "merged"],
+      topological_order: ["ready", "waiting", "blocked", "merged"],
     };
     const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={graph} />);
 
+    expect(firstCard(html, "ready")).toContain("Ready for worker pickup");
+    expect(firstCard(html, "ready")).toContain("<span>Ready</span>");
+    expect(firstCard(html, "ready")).not.toContain("<span>Waiting</span>");
     expect(firstCard(html, "waiting")).toContain("Waiting on dependencies");
     expect(firstCard(html, "blocked")).toContain("Dependencies blocked");
     expect(firstCard(html, "merged")).toContain("Merged");
     expect(firstCard(html, "merged")).not.toContain("Dependencies blocked");
     expect(firstCard(html, "merged")).toContain('data-state="complete"');
-    expect(html).not.toContain("Ready for worker pickup");
+    for (const id of ["waiting", "blocked", "merged"]) {
+      expect(firstCard(html, id)).not.toContain("Ready for worker pickup");
+    }
+  });
+
+  it("visibly labels ungrouped packages without rendering an executable Group", () => {
+    const html = render();
+
+    expect(firstCard(html, "wp-d")).toContain("WP 4 · Ungrouped");
+    expect(firstCard(html, "wp-b")).not.toContain("Ungrouped");
+    expect(html).not.toContain('data-group-id="ungrouped"');
   });
 
   it("keeps mobile graph and summary layout hooks within the narrow viewport", () => {
