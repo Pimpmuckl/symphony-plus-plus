@@ -17,7 +17,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
-  alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
 
@@ -524,14 +523,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp run_architect_transaction(repo, fun) do
     case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do
       {:ok, result} -> {:ok, result}
-      {:error, {:tool_error, reason}} -> {:tool_error, reason}
       {:error, {:error, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp rollback_architect_transaction_result(_repo, {:ok, result}), do: result
-  defp rollback_architect_transaction_result(repo, {:tool_error, reason}), do: repo.rollback({:tool_error, reason})
   defp rollback_architect_transaction_result(repo, {:error, reason}), do: repo.rollback({:error, reason})
 
   defp optional_decision_prompt_argument(arguments, key) do
@@ -643,44 +640,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
        "tool" => tool,
        "reason" => "work_package_scope_violation",
        "validation_errors" => scope_validation_details(errors)
-     }}
-  end
-
-  defp invalid_params_error(tool, {:branch_pattern, value, reason}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => Atom.to_string(reason),
-       "validation_errors" => [
-         %{
-           "field" => "branch_pattern",
-           "value" => value,
-           "reason" => Atom.to_string(reason),
-           "message" => BranchPattern.error_message(reason)
-         }
-       ]
-     }}
-  end
-
-  defp invalid_params_error(tool, {:blocker_closeout_required, blockers}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "blocker_closeout_required",
-       "reason_code" => "blocker_closeout_required",
-       "message" => "Active blockers exist in this finish scope. Pass blocker_closeout with decision resolved or still_active.",
-       "active_blockers" => blockers
-     }}
-  end
-
-  defp invalid_params_error(tool, {:blocker_closeout_scope_mismatch, active_ids, requested_ids}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "blocker_closeout_scope_mismatch",
-       "reason_code" => "blocker_closeout_scope_mismatch",
-       "active_blocker_ids" => active_ids,
-       "requested_blocker_ids" => requested_ids
      }}
   end
 

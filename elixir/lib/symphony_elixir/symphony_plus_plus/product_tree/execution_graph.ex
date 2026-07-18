@@ -105,15 +105,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
 
     Map.new(nodes, fn node ->
       id = value(node, :id)
-      {id, descendant_members(id, children, direct_members, MapSet.new())}
+      {id, descendant_members(id, children, direct_members, [])}
     end)
   end
 
   defp descendant_members(group_id, children, direct_members, visited) do
-    if MapSet.member?(visited, group_id) do
+    if group_id in visited do
       []
     else
-      visited = MapSet.put(visited, group_id)
+      visited = [group_id | visited]
 
       (Map.get(direct_members, group_id, []) ++
          Enum.flat_map(Map.get(children, group_id, []), &descendant_members(&1, children, direct_members, visited)))
@@ -135,11 +135,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
 
       prerequisite_ids = expand_endpoint(prerequisite_endpoint, group_members)
       dependent_ids = expand_endpoint(dependent_endpoint, group_members)
-      shared_ids = MapSet.intersection(MapSet.new(prerequisite_ids), MapSet.new(dependent_ids))
+      shared_ids = Enum.filter(prerequisite_ids, &(&1 in dependent_ids))
 
       for prerequisite_id <- prerequisite_ids,
           dependent_id <- dependent_ids,
-          not (MapSet.member?(shared_ids, prerequisite_id) and MapSet.member?(shared_ids, dependent_id)),
+          not (prerequisite_id in shared_ids and dependent_id in shared_ids),
           reduce: acc do
         edges ->
           Map.update(edges, {prerequisite_id, dependent_id}, [value(edge, :id)], fn ids ->
