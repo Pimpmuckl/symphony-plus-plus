@@ -94,9 +94,11 @@ export function WorkstreamContextBar({
     update();
     window.addEventListener("scroll", update, { passive: true });
     window.addEventListener("resize", update);
-    if (boardRef.current) {
-      resizeObserver?.observe(boardRef.current);
-      mutationObserver?.observe(boardRef.current, {
+    const board = boardRef.current;
+    if (board) {
+      board.addEventListener("scroll", update, { capture: true, passive: true });
+      resizeObserver?.observe(board);
+      mutationObserver?.observe(board, {
         attributeFilter: ["data-v3-context-path", "hidden"],
         attributes: true,
         childList: true,
@@ -108,6 +110,7 @@ export function WorkstreamContextBar({
       window.cancelAnimationFrame(frame);
       window.removeEventListener("scroll", update);
       window.removeEventListener("resize", update);
+      board?.removeEventListener("scroll", update, true);
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
     };
@@ -209,24 +212,49 @@ function contextPartSlot(index: number) {
   return `plan-${index - 2}`;
 }
 
-function activeContextPath(board: HTMLDivElement | null) {
+export function activeContextPath(board: HTMLDivElement | null) {
   if (!board) return [];
 
   const markers = [...board.querySelectorAll<HTMLElement>("[data-v3-context-path]")]
-    .filter(elementIsVisible)
-    .sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top);
+    .map((element) => contextMarker(element))
+    .filter((marker) => elementIsVisible(marker.element) && markerIsWithinGraphViewport(marker));
   if (markers.length === 0) return [];
 
   const boardRect = board.getBoundingClientRect();
   if (boardRect.top > STICKY_CONTEXT_VISIBILITY_THRESHOLD || boardRect.bottom <= STICKY_CONTEXT_VISIBILITY_THRESHOLD) return [];
 
-  let active = markers[0];
-  for (const marker of markers) {
-    if (marker.getBoundingClientRect().top > STICKY_CONTEXT_ACTIVE_THRESHOLD) break;
-    active = marker;
-  }
+  const reachedMarkers = markers.filter((marker) => marker.rect.top <= STICKY_CONTEXT_ACTIVE_THRESHOLD);
+  const activeTop = reachedMarkers.length
+    ? Math.max(...reachedMarkers.map((marker) => marker.rect.top))
+    : Math.min(...markers.map((marker) => marker.rect.top));
+  const active = (reachedMarkers.length ? reachedMarkers : markers)
+    .filter((marker) => marker.rect.top === activeTop)
+    .reduce((closest, marker) => markerLeadingDistance(marker) < markerLeadingDistance(closest) ? marker : closest);
 
-  return parseContextPath(active.dataset.v3ContextPath);
+  return parseContextPath(active.element.dataset.v3ContextPath);
+}
+
+type ContextMarker = {
+  element: HTMLElement;
+  rect: DOMRect;
+  viewportRect?: DOMRect;
+};
+
+function contextMarker(element: HTMLElement): ContextMarker {
+  const viewport = element.closest<HTMLElement>(".execution-graph__viewport");
+  return {
+    element,
+    rect: element.getBoundingClientRect(),
+    viewportRect: viewport?.getBoundingClientRect(),
+  };
+}
+
+function markerIsWithinGraphViewport({ rect, viewportRect }: ContextMarker) {
+  return !viewportRect || (rect.right > viewportRect.left && rect.left < viewportRect.right);
+}
+
+function markerLeadingDistance({ rect, viewportRect }: ContextMarker) {
+  return viewportRect ? Math.max(0, rect.left - viewportRect.left) : rect.left;
 }
 
 function elementIsVisible(element: HTMLElement) {
