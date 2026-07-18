@@ -121,7 +121,7 @@ export type ExecutionGraphLayoutModel = {
 
 const card = {
   desktop: { width: 264, height: 240, xGap: 96, yGap: 48, x: 56, y: 54 },
-  mobile: { width: 272, height: 240, xGap: 0, yGap: 74, x: 32, y: 58 },
+  mobile: { width: 232, height: 240, xGap: 0, yGap: 74, x: 16, y: 58 },
 } as const;
 
 export function graphCardSize(orientation: GraphOrientation) {
@@ -233,7 +233,9 @@ function layoutGroupBounds(groups: ExecutionGraphGroup[], points: GraphPoint[], 
     if (!groupPoints.length) return [];
     const memberIds = new Set(groupPoints.map((point) => point.id));
     const depth = depths.get(group.id) ?? 0;
-    const padding = maxDepth ? 18 + Math.round((12 * (maxDepth - depth)) / maxDepth) : 18;
+    const padding = orientation === "mobile"
+      ? maxDepth ? 8 + Math.round((4 * (maxDepth - depth)) / maxDepth) : 8
+      : maxDepth ? 18 + Math.round((12 * (maxDepth - depth)) / maxDepth) : 18;
     const runs = memberRuns(points, memberIds, orientation);
     const bounds = mergeSafeBounds(runs.map((run) => pointBounds(run, metrics, padding)), points, memberIds, metrics);
     return bounds.map((bound, index) => ({

@@ -351,11 +351,16 @@ function cardInteraction(id: string, onSelect?: (id: string) => void) {
 function cardState(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
   const operational = signal?.operational_state ?? ref.operational_state;
   const status = firstText([signal?.raw_status, ref.raw_status, ref.status]) ?? "planned";
-  const label = firstText([operational?.label]) ?? humanize(status);
+  const label = dependencyActionabilityLabel(signal?.dependency_signal) ?? firstText([operational?.label]) ?? humanize(status);
   const source = [operational?.tone, operational?.key, status].filter(Boolean).join(" ").toLowerCase();
   const blocked = isBlocked(signal, source);
   const tone = cardTone(source, blocked);
   return { blocked, label, tone };
+}
+
+function dependencyActionabilityLabel(dependency?: ExecutionGraphWorkPackageSignals["dependency_signal"]) {
+  if (!dependencyNeedsAttention(dependency)) return undefined;
+  return dependency && dependency.blocked > 0 ? "Dependencies blocked" : "Waiting on dependencies";
 }
 
 function priorityReason(signal: ExecutionGraphWorkPackageSignals | undefined, ref: ExecutionGraphWorkPackageRef) {

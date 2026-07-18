@@ -104,6 +104,7 @@ async function loadOperatorPayload<T>(path: string, signal: AbortSignal, fallbac
 export function CardDetailDialog({
   selection,
   onOpenChange,
+  onCloseAutoFocus,
   onSelectGuidance,
   onCopyArchitectHandoff,
   onArchiveWorkRequest,
@@ -120,6 +121,7 @@ export function CardDetailDialog({
 }: {
   selection: CardDetailSelection | null;
   onOpenChange: (open: boolean) => void;
+  onCloseAutoFocus?: React.ComponentProps<typeof DialogContent>["onCloseAutoFocus"];
   onSelectGuidance: (item: GuidanceItem) => void;
   onCopyArchitectHandoff: CopyArchitectHandoff;
   onArchiveWorkRequest: WorkRequestMutation;
@@ -284,7 +286,7 @@ export function CardDetailDialog({
 
   return (
     <Dialog open={Boolean(selection)} onOpenChange={onOpenChange}>
-      <DialogContent className="dashboard-dialog-content card-detail-dialog" data-detail-stage={activeDetailStage} resizeKey={`${activeDetailStage}:${detailMotionKey}`}>
+      <DialogContent className="dashboard-dialog-content card-detail-dialog" data-detail-stage={activeDetailStage} onCloseAutoFocus={onCloseAutoFocus} resizeKey={`${activeDetailStage}:${detailMotionKey}`}>
         <NaturalDetailBody motionKey={detailMotionKey}>
           {selection && showStagedLoadingHeader ? <CardDetailLoadingContent selection={selection} stage={activeDetailStage} /> : null}
           {!showStagedLoadingHeader ? (

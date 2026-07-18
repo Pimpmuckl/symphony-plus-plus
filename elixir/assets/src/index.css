@@ -2142,8 +2142,47 @@
       --v3-row-status-width: calc(var(--v3-row-status-leading-space) + 4.5rem + var(--v3-row-badge-width) + 0.7rem);
     }
 
-    .v3-row-status {
-      grid-template-columns: 4.5rem minmax(var(--v3-row-badge-width), auto);
+    .v3-request-header {
+      grid-template-columns: 1.75rem minmax(0, 1fr) var(--v3-row-kind-width);
+    }
+
+    .v3-request-header > .v3-request-main {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    .v3-request-header > .v3-entity-kind-slot {
+      grid-column: 3;
+      grid-row: 1;
+    }
+
+    .v3-request-header > .v3-row-actions,
+    .v3-request-summary,
+    .v3-request-header > .v3-row-status {
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      grid-column: 1 / -1;
+    }
+
+    .v3-request-header > .v3-row-actions {
+      grid-row: 2;
+    }
+
+    .v3-request-summary {
+      grid-row: 3;
+      flex-wrap: wrap;
+    }
+
+    .v3-request-header > .v3-row-status {
+      grid-row: 4;
+      grid-template-columns: minmax(0, 4.5rem) minmax(0, 1fr);
+    }
+
+    .v3-request-header .v3-row-badge-slot,
+    .v3-request-header .v3-row-status-badge {
+      width: 100%;
+      max-width: 100%;
     }
 
     .v3-unlinked-package-row {
@@ -3684,6 +3723,7 @@
   .execution-graph__group {
     position: absolute;
     z-index: 0;
+    max-width: 100%;
     border: 1px dashed hsl(var(--border) / 0.86);
     border-radius: calc(var(--radius) + 0.25rem);
     background: hsl(var(--muted) / 0.26);
@@ -3778,6 +3818,7 @@
     z-index: 2;
     display: flex;
     min-width: 0;
+    max-width: 100%;
     flex-direction: column;
     gap: 0.625rem;
     overflow: hidden;
@@ -3857,6 +3898,7 @@
   }
 
   .execution-graph__sequence {
+    min-width: 0;
     overflow: hidden;
     color: hsl(var(--muted-foreground));
     font-family: var(--font-geist-mono);
@@ -3867,6 +3909,7 @@
   }
 
   .execution-graph__status {
+    min-width: 0;
     max-width: 9rem;
     overflow: hidden;
     border: 1px solid hsl(var(--border) / 0.75);
@@ -3884,6 +3927,7 @@
   .execution-graph__card-title {
     display: -webkit-box;
     min-width: 0;
+    max-width: 100%;
     overflow: hidden;
     font-size: 0.9375rem;
     font-weight: 720;
