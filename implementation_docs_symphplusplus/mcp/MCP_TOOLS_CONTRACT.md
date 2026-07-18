@@ -219,7 +219,8 @@ Groups organize WorkPackages but have no lifecycle or completion mark. Use
 `delete_group` to remove one while reparenting its direct contents. Use
 `upsert_dependency` and `delete_dependency` to author execution intent between
 Groups or WorkPackages. The backend expands Group membership into deterministic
-WorkPackage edges and omits identity pairs when endpoint memberships overlap.
+WorkPackage edges. When endpoint memberships overlap, it omits every pair whose
+two endpoints both belong to that shared membership.
 
 `dispatch_work_package` requires only `work_package_id` once a single current
 WorkRequest is claimed; `claimed_by` is optional. It activates the same row,
