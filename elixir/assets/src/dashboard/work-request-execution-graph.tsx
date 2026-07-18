@@ -352,9 +352,10 @@ function cardInteraction(id: string, onSelect?: (id: string) => void) {
 function cardState(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
   const operational = signal?.operational_state ?? ref.operational_state;
   const status = firstText([signal?.raw_status, ref.raw_status, ref.status]) ?? "planned";
-  const label = dependencyActionabilityLabel(signal?.dependency_signal, packageIsFinished(ref, signal)) ?? firstText([operational?.label]) ?? humanize(status);
+  const finished = packageIsFinished(ref, signal);
+  const label = dependencyActionabilityLabel(signal?.dependency_signal, finished) ?? firstText([operational?.label]) ?? humanize(status);
   const source = [operational?.tone, operational?.key, status].filter(Boolean).join(" ").toLowerCase();
-  const blocked = isBlocked(signal, source);
+  const blocked = !finished && isBlocked(signal, source);
   const tone = cardTone(source, blocked);
   return { blocked, label, tone };
 }

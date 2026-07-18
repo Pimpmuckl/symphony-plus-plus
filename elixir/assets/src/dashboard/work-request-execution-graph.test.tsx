@@ -252,6 +252,7 @@ describe("WorkRequestExecutionGraph", () => {
     expect(firstCard(html, "blocked")).toContain("Dependencies blocked");
     expect(firstCard(html, "merged")).toContain("Merged");
     expect(firstCard(html, "merged")).not.toContain("Dependencies blocked");
+    expect(firstCard(html, "merged")).toContain('data-state="complete"');
     expect(html).not.toContain("Ready for worker pickup");
   });
 
