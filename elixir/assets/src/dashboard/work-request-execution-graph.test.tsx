@@ -1,11 +1,63 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { workRequestExecutionGraphModel } from "@/dashboard/execution-graph/adapter";
 import { buildExecutionGraphLayout } from "@/dashboard/execution-graph/model";
 import type { WorkRequestExecutionGraphModel } from "@/dashboard/execution-graph/model";
 import { WorkRequestExecutionGraph } from "@/dashboard/work-request-execution-graph";
+import type { WorkRequestDetail } from "@/types/dashboard";
 
 describe("WorkRequestExecutionGraph", () => {
+  it("maps backend graph and DeliveryBoard fields without recomputing graph semantics", () => {
+    const detail: WorkRequestDetail = {
+      work_request: { id: "wr-adapter", title: "Adapter fixture" },
+      work_packages: [
+        { id: "wp-active", work_request_id: "wr-adapter", product_tree_node_id: "group-a", sequence: 1, title: "Active", status: "implementing" },
+        { id: "wp-old", work_request_id: "wr-adapter", product_tree_node_id: "group-a", sequence: 2, title: "Old", status: "implementing" },
+      ],
+      product_tree: {
+        available: true,
+        nodes: [{ id: "group-a", title: "Group A", work_package_ids: ["wp-active", "wp-old"] }],
+        execution_graph: {
+          available: true,
+          work_package_ids: ["wp-active", "wp-old"],
+          effective_edges: [{ prerequisite_work_package_id: "wp-active", dependent_work_package_id: "wp-old", dependency_ids: ["edge-a"] }],
+          topological_order: ["wp-active", "wp-old"],
+          cycles: [["wp-old"], ["wp-active", "wp-old"]],
+        },
+      },
+      delivery_board: {
+        work_packages: [
+          {
+            id: "wp-active",
+            operational_state: { key: "implementing", label: "Implementing", tone: "info" },
+            work_package: {
+              id: "wp-active",
+              title: "Active projection",
+              raw_status: "implementing",
+              worker_signal: { status: "active", run_label: "fixture-worker" },
+              dependency_signal: { satisfied: 0, required: 0, active: 0, blocked: 0, unmet_work_package_ids: [], inputs: [] },
+            },
+          },
+          { id: "wp-old", delivery_outcome: "superseded", work_package: { id: "wp-old", raw_status: "implementing" } },
+        ],
+      },
+    };
+
+    const active = workRequestExecutionGraphModel(detail);
+    const all = workRequestExecutionGraphModel(detail, { includeHistorical: true });
+
+    expect(active.groups).toEqual([{ id: "group-a", title: "Group A", work_package_ids: ["wp-active", "wp-old"] }]);
+    expect(active.work_packages).toEqual([
+      expect.objectContaining({ id: "wp-active", group_id: "group-a", title: "Active projection", worker_signal: { status: "active", run_label: "fixture-worker" } }),
+    ]);
+    expect(active.effective_edges).toEqual(detail.product_tree?.execution_graph?.effective_edges);
+    expect(active.topological_order).toEqual(["wp-active", "wp-old"]);
+    expect(active.cycles).toEqual([["wp-old"], ["wp-active", "wp-old"]]);
+    expect(all.work_packages.map((item) => item.id)).toEqual(["wp-active", "wp-old"]);
+    expect(all.cycles).toEqual([["wp-old"], ["wp-active", "wp-old"]]);
+  });
+
   it("lays out the backend topological order left-to-right on desktop and top-to-bottom on mobile", () => {
     const desktop = buildExecutionGraphLayout(graphFixture, "desktop");
     const mobile = buildExecutionGraphLayout(graphFixture, "mobile");
@@ -142,7 +194,7 @@ describe("WorkRequestExecutionGraph", () => {
 
     expect(html).toContain(`title="${longTitle}"`);
     expect(html).toContain('<article class="execution-graph__card"');
-    expect(html).not.toContain('tabindex="0"');
+    expect(firstCard(html, "long")).not.toContain('tabindex="0"');
     expect(renderToStaticMarkup(<WorkRequestExecutionGraph model={simpleGraph} onSelectWorkPackage={() => {}} />)).toContain('role="button" tabindex="0"');
     expect(html).toContain("No prerequisites.");
     expect(html).not.toContain("execution-graph__signals");
@@ -167,6 +219,17 @@ describe("WorkRequestExecutionGraph", () => {
     expect(firstCard(html, "passed")).toContain('data-state="complete"');
     expect(firstCard(html, "ready")).toContain('data-state="waiting"');
     expect(firstCard(render(), "wp-d")).toContain('data-state="blocked"');
+  });
+
+  it("shows stale worker evidence and exposes the scrollable graph to keyboards", () => {
+    const graph: WorkRequestExecutionGraphModel = {
+      work_packages: [{ id: "stale", worker_signal: { status: "stale", run_label: "worker-9" } }],
+      topological_order: ["stale"],
+    };
+    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={graph} />);
+
+    expect(firstCard(html, "stale")).toContain("worker-9 · Worker stale");
+    expect(html).toContain('role="region" tabindex="0"');
   });
 
   it("renders unavailable and cyclic projections as explicit non-order states", () => {

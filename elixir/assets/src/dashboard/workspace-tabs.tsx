@@ -23,6 +23,7 @@ export function WorkstreamsPane({
   hiddenRepoCount,
   searchActive,
   requestDetailsByRepo,
+  now,
   activeBlockingEdges,
   guidanceItems,
   onSelectGuidance,
@@ -36,6 +37,7 @@ export function WorkstreamsPane({
   hiddenRepoCount: number;
   searchActive: boolean;
   requestDetailsByRepo: Map<string, WorkRequestDetail[]>;
+  now?: string;
   activeBlockingEdges: ActiveBlockingEdge[];
   guidanceItems: GuidanceItem[];
   onSelectGuidance: (item: GuidanceItem) => void;
@@ -82,6 +84,7 @@ export function WorkstreamsPane({
           key={repoWorkstreamStateKey(repo)}
           repo={repo}
           requestDetailsByRepo={requestDetailsByRepo}
+          now={now}
           activeBlockingEdges={activeBlockingEdges}
           guidanceItems={guidanceItems}
           onSelectGuidance={onSelectGuidance}

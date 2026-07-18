@@ -1,47 +1,30 @@
-import type { ActiveBlockingEdge, CopyArchitectHandoff, GuidanceItem, WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
-import type { ProductTreeNode } from "@/types/product-tree";
+import type { ActiveBlockingEdge, CopyArchitectHandoff, GuidanceItem, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import { AlertTriangle, ChevronRight, CircleDashed, GitBranch, Layers3, MessageSquareText, Split } from "lucide-react";
 import type { CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
 import { clarificationGuidanceItem } from "./dashboard-data";
-import { firstParagraph, stripMarkdown } from "./dashboard-text";
 import { finishedRequestChildrenStorageKey, sortWorkRequestPackages, sortWorkRequestDetails } from "./workstream-data";
-import { activeBlockerEntityCounts, productTreeCounts, requestProgress, rootProductSliceIds } from "./workstream-progress";
-import { productNodeState, requestBoardState, rowProgressAttentionState, rowProgressIconState } from "./workstream-row-state";
-import { EntityCountChips, EntityKindSlot, ProductNodeHeader, ProgressPill, RequestHeaderActions, RowBadgeSlot } from "./workstream-row-ui";
-import { openBlockersForRequest, openBlockersForSlices, openGuidanceForSlices, productNodeSubtreeSlices, requestGuidanceItem } from "./workstream-board-actions";
+import { activeBlockerEntityCounts, productTreeCounts, requestProgress } from "./workstream-progress";
+import { requestBoardState, rowProgressAttentionState, rowProgressIconState } from "./workstream-row-state";
+import { EntityCountChips, EntityKindSlot, ProgressPill, RequestHeaderActions, RowBadgeSlot } from "./workstream-row-ui";
+import { openBlockersForRequest, requestGuidanceItem } from "./workstream-board-actions";
 import { requestUpdateKey } from "./update-animations";
 import { dashboardPrefersReducedMotion, updateMotionAttributes } from "@/components/dashboard/motion-utils";
 import { useAutoCollapseWhenDone } from "./workstream-auto-collapse";
 import { WorkstreamContextBar } from "./workstream-context-bar";
-import { contextPathValue } from "./workstream-context-path";
-import type { ContextPathPart } from "./workstream-context-path";
-import { DirectSliceGroup, ProductSliceRow } from "./workstream-slice-row";
-import { buildTreeIndex } from "./workstream-tree-index";
-import type { TreeIndex } from "./workstream-tree-index";
+import { contextPathValue, type ContextPathPart } from "./workstream-context-path";
+import { workRequestExecutionGraphModel } from "./execution-graph/adapter";
+import { WorkRequestExecutionGraph } from "./work-request-execution-graph";
 
 const REQUEST_EXIT_MOTION_MS = 320;
-
-type ProductTreeRenderContext = {
-  detail: WorkRequestDetail;
-  treeIndex: TreeIndex;
-  slicesById: Map<string, WorkRequestPackage>;
-  packageById: Map<string, WorkPackageCard>;
-  activeBlockerCountBySliceId: Map<string, number>;
-  activeBlockerKeysBySliceId: Map<string, Set<string>>;
-  activeBlockingEdges: ActiveBlockingEdge[];
-  guidanceItems: GuidanceItem[];
-  onSelectCard: CardDetailSelect;
-  onSelectGuidance: (item: GuidanceItem) => void;
-  updateAnimations: DashboardUpdateAnimations;
-};
 
 export function WorkstreamBoard({
   repoLabel,
   repoDetails,
+  now,
   packages,
   activeBlockingEdges,
   guidanceItems,
@@ -57,6 +40,7 @@ export function WorkstreamBoard({
 }: {
   repoLabel: string;
   repoDetails: WorkRequestDetail[];
+  now?: string;
   packages: WorkPackageCard[];
   activeBlockingEdges: ActiveBlockingEdge[];
   guidanceItems: GuidanceItem[];
@@ -91,12 +75,12 @@ export function WorkstreamBoard({
             <ProductRequestRow
               key={exiting ? `${detail.work_request.id}:exiting` : detail.work_request.id}
               detail={detail}
+              now={now}
               exiting={exiting}
               packageById={packageById}
               activeBlockerCount={blockerCounts.requests.get(detail.work_request.id) ?? 0}
               activeBlockingEdges={activeBlockingEdges}
               activeBlockerCountBySliceId={blockerCounts.slices}
-              activeBlockerKeysBySliceId={blockerCounts.sliceBlockerKeys}
               guidanceItems={guidanceItems}
               expanded={expanded}
               index={index}
@@ -184,12 +168,12 @@ function workstreamContextSignature(details: WorkRequestDetail[]) {
 
 function ProductRequestRow({
   detail,
+  now,
   exiting = false,
   packageById,
   activeBlockerCount,
   activeBlockingEdges,
   activeBlockerCountBySliceId,
-  activeBlockerKeysBySliceId,
   guidanceItems,
   expanded,
   index,
@@ -201,12 +185,12 @@ function ProductRequestRow({
   updateAnimations,
 }: {
   detail: WorkRequestDetail;
+  now?: string;
   exiting?: boolean;
   packageById: Map<string, WorkPackageCard>;
   activeBlockerCount: number;
   activeBlockingEdges: ActiveBlockingEdge[];
   activeBlockerCountBySliceId: Map<string, number>;
-  activeBlockerKeysBySliceId: Map<string, Set<string>>;
   guidanceItems: GuidanceItem[];
   expanded: boolean;
   index: number;
@@ -294,17 +278,11 @@ function ProductRequestRow({
             openQuestion={openQuestion}
             onSelectGuidance={onSelectGuidance}
           />
-          <ProductPlanBody
+          <ExecutionGraphBody
             detail={detail}
+            now={now}
             packageById={packageById}
-            slices={slices}
-            activeBlockerCountBySliceId={activeBlockerCountBySliceId}
-            activeBlockerKeysBySliceId={activeBlockerKeysBySliceId}
-            activeBlockingEdges={activeBlockingEdges}
-            guidanceItems={guidanceItems}
-            onSelectGuidance={onSelectGuidance}
             onSelectCard={onSelectCard}
-            updateAnimations={updateAnimations}
             requestPath={requestPath}
           />
         </div>
@@ -373,213 +351,53 @@ function RequestActions({
   );
 }
 
-function ProductPlanBody({
+function ExecutionGraphBody({
   detail,
+  now,
   packageById,
-  slices,
-  guidanceItems,
-  onSelectGuidance,
   onSelectCard,
-  updateAnimations,
   requestPath,
-  activeBlockerCountBySliceId,
-  activeBlockerKeysBySliceId,
-  activeBlockingEdges,
 }: {
   detail: WorkRequestDetail;
+  now?: string;
   packageById: Map<string, WorkPackageCard>;
-  slices: WorkRequestPackage[];
-  guidanceItems: GuidanceItem[];
-  onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
-  updateAnimations: DashboardUpdateAnimations;
   requestPath: ContextPathPart[];
-  activeBlockerCountBySliceId: Map<string, number>;
-  activeBlockerKeysBySliceId: Map<string, Set<string>>;
-  activeBlockingEdges: ActiveBlockingEdge[];
 }) {
-  const treeIndex = useMemo(() => buildTreeIndex(detail.product_tree?.nodes ?? [], detail.product_tree?.root_node_ids ?? []), [detail.product_tree]);
-  const slicesById = useMemo(() => new Map(slices.map((slice) => [slice.id, slice])), [slices]);
-  const rootSliceIds = useMemo(() => rootProductSliceIds(detail, slices), [detail, slices]);
-  const hasVisiblePlan = treeIndex.rootNodes.length > 0 || rootSliceIds.some((sliceId) => slicesById.has(sliceId));
-  const treeContext: ProductTreeRenderContext = {
-    detail,
-    treeIndex,
-    slicesById,
-    packageById,
-    activeBlockerCountBySliceId,
-    activeBlockerKeysBySliceId,
-    activeBlockingEdges,
-    guidanceItems,
-    onSelectCard,
-    onSelectGuidance,
-    updateAnimations,
+  const [showHistorical, setShowHistorical] = useState(false);
+  const slicesById = useMemo(() => new Map((detail.work_packages ?? []).map((slice) => [slice.id, slice])), [detail.work_packages]);
+  const models = useMemo(
+    () => ({
+      active: workRequestExecutionGraphModel(detail),
+      all: workRequestExecutionGraphModel(detail, { includeHistorical: true }),
+    }),
+    [detail],
+  );
+  const hiddenHistoricalCount = models.all.work_packages.length - models.active.work_packages.length;
+  const model = showHistorical ? models.all : models.active;
+  const selectWorkPackage = (workPackageId: string) => {
+    const slice = slicesById.get(workPackageId);
+    const pkg = packageById.get(slice?.work_package_id || workPackageId);
+    if (slice) onSelectCard({ kind: "slice", detail, slice, pkg });
+    else if (pkg) onSelectCard({ kind: "package", detail, pkg });
   };
 
   return (
-    <div className="v3-product-plan">
-      {treeIndex.rootNodes.length > 0 ? (
-        <div className="v3-product-tree">
-          {treeIndex.rootNodes.map((node) => (
-            <ProductTreeNodeRow
-              key={node.id}
-              node={node}
-              depth={0}
-              path={requestPath}
-              context={treeContext}
-            />
-          ))}
+    <div className="v3-execution-graph" data-show-historical={showHistorical ? "true" : "false"}>
+      {hiddenHistoricalCount > 0 ? (
+        <div className="v3-execution-graph-controls">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-pressed={showHistorical}
+            onClick={() => setShowHistorical((visible) => !visible)}
+          >
+            {showHistorical ? "Hide history" : `Show history (${hiddenHistoricalCount})`}
+          </Button>
         </div>
       ) : null}
-      <DirectSliceGroup
-        detail={detail}
-        sliceIds={rootSliceIds}
-        slicesById={slicesById}
-        packageById={packageById}
-        activeBlockerCountBySliceId={activeBlockerCountBySliceId}
-        activeBlockingEdges={activeBlockingEdges}
-        guidanceItems={guidanceItems}
-        onSelectGuidance={onSelectGuidance}
-        onSelectCard={onSelectCard}
-        requestPath={requestPath}
-        updateAnimations={updateAnimations}
-      />
-      {!hasVisiblePlan ? <UnplannedRequestNote /> : null}
-    </div>
-  );
-}
-
-function UnplannedRequestNote() {
-  return (
-    <div className="v3-empty-plan-note">
-      <CircleDashed className="size-4" />
-      <span>No product plan or slices attached yet.</span>
-    </div>
-  );
-}
-
-function ProductTreeNodeRow({
-  node,
-  depth,
-  context,
-  path,
-}: {
-  node: ProductTreeNode;
-  depth: number;
-  path: ContextPathPart[];
-  context: ProductTreeRenderContext;
-}) {
-  const { activeBlockerCountBySliceId, activeBlockerKeysBySliceId, activeBlockingEdges, detail, guidanceItems, onSelectCard, onSelectGuidance, packageById, treeIndex, slicesById } = context;
-  const childNodes = treeIndex.childrenByParent.get(node.id) ?? [];
-  const nodeTitle = node.title || node.id;
-  const nodePath = [...path, { id: node.id, label: nodeTitle }];
-  const nodeSlices = (node.work_package_ids ?? []).map((sliceId) => slicesById.get(sliceId)).filter((slice): slice is WorkRequestPackage => Boolean(slice));
-  const nodeSubtreeSlices = productNodeSubtreeSlices(node, treeIndex, slicesById);
-  const nodeState = productNodeState(node, nodeSlices.length, treeIndex, activeBlockerCountBySliceId, activeBlockerKeysBySliceId, nodeSubtreeSlices, packageById);
-  const nodeFinished = nodeState.statusKind === "done";
-  const contentId = useId();
-  const hasDisclosureContent = productNodeHasDisclosureContent(node, nodeSlices, childNodes);
-  const [expanded, setExpanded] = useState(() => !nodeFinished);
-  const openGuidance = () => openGuidanceForSlices(detail, nodeSubtreeSlices, packageById, guidanceItems, onSelectGuidance, onSelectCard);
-  const openBlockers = () => openBlockersForSlices(detail, nodeSubtreeSlices, packageById, activeBlockerCountBySliceId, activeBlockingEdges, onSelectCard);
-  const collapseNode = useCallback(() => setExpanded(false), [setExpanded]);
-  useAutoCollapseWhenDone(nodeFinished, expanded, collapseNode, nodeFinished);
-
-  return (
-    <div className="v3-product-node" style={{ "--tree-depth": depth } as CSSProperties} data-tone={nodeState.tone} data-v3-context-path={contextPathValue(nodePath)}>
-      <ProductNodeHeader
-        node={node}
-        nodeSliceCount={nodeState.nodeSliceCount}
-        visibleNodeKind={nodeState.visibleNodeKind}
-        progress={nodeState.progress}
-        statusBadgeVariant={nodeState.badgeVariant}
-        statusActive={nodeState.statusKind === "active"}
-        tone={nodeState.tone}
-        statusLabel={nodeState.statusLabel}
-        guidanceCount={nodeState.guidanceCount}
-        blockerCount={nodeState.blockerCount}
-        collapsible={hasDisclosureContent}
-        expanded={expanded}
-        contentId={hasDisclosureContent ? contentId : undefined}
-        onOpenGuidance={openGuidance}
-        onOpenBlockers={openBlockers}
-        onToggle={() => setExpanded((open) => !open)}
-      />
-      {hasDisclosureContent ? (
-        <ProductTreeNodeContent
-          contentId={contentId}
-          hidden={!expanded}
-          node={node}
-          nodeSlices={nodeSlices}
-          childNodes={childNodes}
-          depth={depth}
-          path={nodePath}
-          context={context}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-function productNodeHasDisclosureContent(node: ProductTreeNode, nodeSlices: WorkRequestPackage[], childNodes: ProductTreeNode[]) {
-  return Boolean(node.description) || nodeSlices.length > 0 || childNodes.length > 0;
-}
-
-function ProductTreeNodeContent({
-  contentId,
-  hidden,
-  node,
-  nodeSlices,
-  childNodes,
-  depth,
-  context,
-  path,
-}: {
-  contentId: string;
-  hidden: boolean;
-  node: ProductTreeNode;
-  nodeSlices: WorkRequestPackage[];
-  childNodes: ProductTreeNode[];
-  depth: number;
-  path: ContextPathPart[];
-  context: ProductTreeRenderContext;
-}) {
-  const { activeBlockerCountBySliceId, activeBlockingEdges, detail, guidanceItems, packageById, onSelectCard, onSelectGuidance, updateAnimations } = context;
-
-  return (
-    <div id={contentId} className="v3-product-node-content" hidden={hidden}>
-      {node.description ? <p className="v3-product-node-description">{stripMarkdown(firstParagraph(node.description) || node.description)}</p> : null}
-      {nodeSlices.length > 0 ? (
-        <div className="v3-slice-list">
-          {nodeSlices.map((slice) => (
-            <ProductSliceRow
-              key={slice.id}
-              detail={detail}
-              slice={slice}
-              pkg={packageById.get(slice.work_package_id || "")}
-              activeBlockerCountBySliceId={activeBlockerCountBySliceId}
-              activeBlockingEdges={activeBlockingEdges}
-              guidanceItems={guidanceItems}
-              onSelectGuidance={onSelectGuidance}
-              onSelectCard={onSelectCard}
-              updateAnimations={updateAnimations}
-            />
-          ))}
-        </div>
-      ) : null}
-      {childNodes.length > 0 ? (
-        <div className="v3-product-node-children">
-          {childNodes.map((child) => (
-            <ProductTreeNodeRow
-              key={child.id}
-              node={child}
-              depth={depth + 1}
-              path={path}
-              context={context}
-            />
-          ))}
-        </div>
-      ) : null}
+      <WorkRequestExecutionGraph model={model} now={now} onSelectWorkPackage={selectWorkPackage} contextPath={requestPath} />
     </div>
   );
 }

@@ -1,6 +1,5 @@
-import type { CopyArchitectHandoff, WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
-import type { ProductTreeNode } from "@/types/product-tree";
-import { AlertTriangle, CheckCircle2, ChevronRight, CircleAlert, CircleDashed, CircleHelp, Circle, ClipboardCopy, Info, Layers3, MessageSquareText, Package, Split } from "lucide-react";
+import type { CopyArchitectHandoff, WorkRequestDetail } from "@/types/dashboard";
+import { CheckCircle2, CircleAlert, CircleDashed, CircleHelp, Circle, ClipboardCopy, Info } from "lucide-react";
 import type { ComponentProps, CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -9,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { architectHandoffEligibleRequest } from "@/lib/operational-state";
 import { cn } from "@/lib/utils";
 import type { CardDetailSelect } from "./runtime";
-import { rowProgressAttentionState, rowProgressIconState, type RowProgressAttentionState, type RowProgressIconState } from "./workstream-row-state";
+import type { RowProgressAttentionState, RowProgressIconState } from "./workstream-row-state";
 
 type EntityCountChip = {
   key: string;
@@ -256,124 +255,6 @@ export function ProgressStateIcon({
         </span>
       ) : null}
     </span>
-  );
-}
-
-export function SliceKindSlot({
-  detail,
-  slice,
-  pkg,
-  onSelectCard,
-}: {
-  detail: WorkRequestDetail;
-  slice: WorkRequestPackage;
-  pkg?: WorkPackageCard;
-  onSelectCard: CardDetailSelect;
-}) {
-  if (pkg) {
-    return (
-      <Button
-        type="button"
-        size="icon"
-        variant="ghost"
-        className="v3-entity-kind-button v3-slice-package-button"
-        title={pkg.title || pkg.id}
-        aria-label={`Open execution details for ${pkg.title || pkg.id}`}
-        onClick={() => onSelectCard({ kind: "package", pkg, detail, slice })}
-      >
-        <Package className="size-4" />
-      </Button>
-    );
-  }
-
-  return (
-    <EntityKindSlot
-      icon={<Split className="size-3.5" />}
-      title="Subwork placeholder"
-      muted
-    />
-  );
-}
-
-export function ProductNodeHeader({
-  node,
-  nodeSliceCount,
-  visibleNodeKind,
-  progress,
-  statusBadgeVariant,
-  statusActive,
-  tone,
-  statusLabel,
-  guidanceCount,
-  blockerCount,
-  collapsible,
-  expanded,
-  contentId,
-  onOpenGuidance,
-  onOpenBlockers,
-  onToggle,
-}: {
-  node: ProductTreeNode;
-  nodeSliceCount: number;
-  visibleNodeKind?: string | null;
-  progress: number;
-  statusBadgeVariant?: ComponentProps<typeof AnimatedBadge>["variant"];
-  statusActive: boolean;
-  tone: string;
-  statusLabel: string;
-  guidanceCount: number;
-  blockerCount: number;
-  collapsible: boolean;
-  expanded: boolean;
-  contentId?: string;
-  onOpenGuidance?: () => void;
-  onOpenBlockers?: () => void;
-  onToggle: () => void;
-}) {
-  const progressIconState = rowProgressIconState({ blockerCount, guidanceCount, progress, tone });
-  const progressAttentionState = rowProgressAttentionState({ blockerCount, guidanceCount, tone });
-  const nodeTitle = node.title || node.id;
-
-  return (
-    <div className="v3-product-node-header v3-entity-row" data-tone={tone}>
-      {collapsible ? (
-        <button
-          type="button"
-          className="v3-product-node-chevron-button"
-          aria-controls={contentId}
-          aria-expanded={expanded}
-          aria-label={`${expanded ? "Collapse" : "Expand"} ${nodeTitle}`}
-          data-expanded={expanded ? "true" : "false"}
-          onClick={onToggle}
-        >
-          <ChevronRight className="size-4" />
-        </button>
-      ) : (
-        <span className="v3-product-node-chevron-placeholder" aria-hidden="true" />
-      )}
-      <ProgressStateIcon state={progressIconState} attentionState={progressAttentionState} progress={progress} label={statusLabel} />
-      <span className="v3-product-node-title-group">
-        <span className="v3-product-node-title" title={nodeTitle}>
-          {nodeTitle}
-        </span>
-        <span className="v3-product-node-meta">
-          {visibleNodeKind ? <span>{visibleNodeKind}</span> : null}
-          <span>{nodeSliceCount} slices</span>
-        </span>
-      </span>
-      <EntityCountChips
-        reserveEmpty
-        items={[
-          { key: "guidance", icon: <MessageSquareText className="size-3.5" />, count: guidanceCount, label: "guidance needed", onClick: guidanceCount > 0 ? onOpenGuidance : undefined, tone: "guidance" },
-          { key: "blockers", icon: <AlertTriangle className="size-3.5" />, count: blockerCount, label: "active blockers", onClick: blockerCount > 0 ? onOpenBlockers : undefined, tone: "blocker" },
-        ]}
-      />
-      <span className="v3-row-status">
-        <ProgressPill progress={progress} />
-        <RowBadgeSlot active={statusActive} label={statusLabel} variant={statusBadgeVariant} />
-      </span>
-      <EntityKindSlot icon={<Layers3 className="size-3.5" />} title="Product plan node" />
-    </div>
   );
 }
 

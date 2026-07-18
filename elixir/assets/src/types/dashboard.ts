@@ -286,6 +286,7 @@ export type ClarificationQuestion = {
 export type WorkRequestPackage = {
   id: string;
   work_request_id: string;
+  product_tree_node_id?: string | null;
   sequence?: number;
   title?: string | null;
   goal?: MarkdownText | null;
