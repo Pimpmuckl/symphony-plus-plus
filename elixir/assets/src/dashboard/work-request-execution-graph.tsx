@@ -245,6 +245,9 @@ function WorkPackageCard({
   const reason = priorityReason(signal, ref);
   const worker = workerLabel(signal, now);
   const secondarySignals = cardSignals(signal);
+  const satisfiedDependencyLabel = progress.required > 0 && progress.satisfied === progress.required
+    ? `${progress.satisfied}/${progress.required} satisfied`
+    : undefined;
   const dependencyLabel = accessibleDependencyLabel(model, point.id, progress.satisfied, progress.required);
   const groupLabel = groupAncestryLabel(model, ref.group_id);
   const cardContextPath = contextPath ? contextPathValue([...contextPath, ...groupAncestryPath(model, ref.group_id)]) : undefined;
@@ -269,7 +272,7 @@ function WorkPackageCard({
       </header>
       <h3 className="execution-graph__card-title" title={title}>{title}</h3>
       <CardPriority reason={reason} worker={worker} prefix={priorityPrefix(state.label, state.blocked)} />
-      <CardSignalList items={secondarySignals} />
+      <CardSignalList items={secondarySignals} dependencyLabel={satisfiedDependencyLabel} />
       <span className="sr-only">{groupLabel}</span>
       <span className="sr-only">{dependencyLabel}</span>
     </article>
@@ -297,10 +300,11 @@ function CardPriority({ reason, worker, prefix }: { reason?: string; worker?: st
   );
 }
 
-function CardSignalList({ items }: { items: CardSignalItem[] }) {
-  if (!items.length) return null;
+function CardSignalList({ items, dependencyLabel }: { items: CardSignalItem[]; dependencyLabel?: string }) {
+  if (!items.length && !dependencyLabel) return null;
   return (
     <ul className="execution-graph__signals" aria-label="Delivery signals">
+      {dependencyLabel ? <li data-signal="dependencies" data-tone="success" aria-hidden="true">{dependencyLabel}</li> : null}
       {items.map((item) => (
         <li key={item.kind} data-signal={item.kind} data-tone={item.tone}>
           {item.label}

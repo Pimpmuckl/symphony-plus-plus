@@ -199,6 +199,7 @@ describe("WorkRequestExecutionGraph", () => {
     expect(renderToStaticMarkup(<WorkRequestExecutionGraph model={simpleGraph} onSelectWorkPackage={() => {}} />)).toContain('role="button" tabindex="0"');
     expect(html).toContain("No prerequisites.");
     expect(html).not.toContain("execution-graph__signals");
+    expect(firstCard(html, "long")).not.toContain('data-signal="dependencies"');
     expect(render()).toContain('data-group-id="group-parent"');
     expect(firstCard(render(), "wp-b")).toContain("Group path Build › Verification");
     const interactive = renderToStaticMarkup(
@@ -257,6 +258,7 @@ describe("WorkRequestExecutionGraph", () => {
     expect(firstCard(html, "ready")).toContain("Ready for worker pickup");
     expect(firstCard(html, "ready")).toContain("<span>Ready</span>");
     expect(firstCard(html, "ready")).not.toContain("<span>Waiting</span>");
+    expect(firstCard(html, "ready")).toContain('data-signal="dependencies" data-tone="success" aria-hidden="true">1/1 satisfied');
     expect(firstCard(html, "waiting")).toContain("Waiting on dependencies");
     expect(firstCard(html, "blocked")).toContain("Dependencies blocked");
     expect(firstCard(html, "merged")).toContain("Merged");
@@ -264,6 +266,7 @@ describe("WorkRequestExecutionGraph", () => {
     expect(firstCard(html, "merged")).toContain('data-state="complete"');
     for (const id of ["waiting", "blocked", "merged"]) {
       expect(firstCard(html, id)).not.toContain("Ready for worker pickup");
+      expect(firstCard(html, id)).not.toContain('data-signal="dependencies"');
     }
   });
 
