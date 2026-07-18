@@ -14,12 +14,14 @@ import type {
   GraphPoint,
   WorkRequestExecutionGraphModel,
 } from "@/dashboard/execution-graph/model";
+import { contextPathValue, type ContextPathPart } from "./workstream-context-path";
 
 export type WorkRequestExecutionGraphProps = {
   model: WorkRequestExecutionGraphModel;
   now?: string | number | Date;
   ariaLabel?: string;
   onSelectWorkPackage?: (workPackageId: string) => void;
+  contextPath?: ContextPathPart[];
 };
 
 export function WorkRequestExecutionGraph({
@@ -27,6 +29,7 @@ export function WorkRequestExecutionGraph({
   now,
   ariaLabel = "WorkRequest execution graph",
   onSelectWorkPackage,
+  contextPath,
 }: WorkRequestExecutionGraphProps) {
   const notice = executionGraphNotice(graph);
   if (notice) return <GraphNotice ariaLabel={ariaLabel} title={notice.title} detail={notice.detail} />;
@@ -44,8 +47,8 @@ export function WorkRequestExecutionGraph({
 
   return (
     <section className="execution-graph" aria-label={ariaLabel}>
-      <GraphSurface model={desktop} orientation="desktop" now={now} onSelectWorkPackage={onSelectWorkPackage} />
-      <GraphSurface model={mobile} orientation="mobile" now={now} onSelectWorkPackage={onSelectWorkPackage} />
+      <GraphSurface model={desktop} orientation="desktop" now={now} onSelectWorkPackage={onSelectWorkPackage} contextPath={contextPath} />
+      <GraphSurface model={mobile} orientation="mobile" now={now} onSelectWorkPackage={onSelectWorkPackage} contextPath={contextPath} />
     </section>
   );
 }
@@ -78,11 +81,13 @@ function GraphSurface({
   orientation,
   now,
   onSelectWorkPackage,
+  contextPath,
 }: {
   model: ExecutionGraphLayoutModel;
   orientation: GraphOrientation;
   now?: string | number | Date;
   onSelectWorkPackage?: (workPackageId: string) => void;
+  contextPath?: ContextPathPart[];
 }) {
   const size = graphCardSize(orientation);
 
@@ -109,6 +114,7 @@ function GraphSurface({
             model={model}
             now={now}
             onSelectWorkPackage={onSelectWorkPackage}
+            contextPath={contextPath}
           />
         ))}
       </div>
@@ -220,6 +226,7 @@ function WorkPackageCard({
   model,
   now,
   onSelectWorkPackage,
+  contextPath,
 }: {
   point: GraphPoint;
   width: number;
@@ -227,6 +234,7 @@ function WorkPackageCard({
   model: ExecutionGraphLayoutModel;
   now?: string | number | Date;
   onSelectWorkPackage?: (workPackageId: string) => void;
+  contextPath?: ContextPathPart[];
 }) {
   const ref = model.refs.get(point.id) ?? { id: point.id };
   const signal = model.signals.get(point.id);
@@ -238,6 +246,7 @@ function WorkPackageCard({
   const secondarySignals = cardSignals(signal);
   const dependencyLabel = accessibleDependencyLabel(model, point.id, progress.satisfied, progress.required);
   const groupLabel = groupAncestryLabel(model, ref.group_id);
+  const cardContextPath = contextPath ? contextPathValue([...contextPath, ...groupAncestryPath(model, ref.group_id)]) : undefined;
   const interaction = cardInteraction(point.id, onSelectWorkPackage);
 
   return (
@@ -249,6 +258,7 @@ function WorkPackageCard({
       data-layout-order={point.order}
       data-state={state.tone}
       data-has-reason={reason ? "true" : undefined}
+      data-v3-context-path={cardContextPath}
       aria-label={sentenceLabel([title, groupLabel, state.label, reason, worker, ...secondarySignals.map((item) => item.label), dependencyLabel])}
       {...interaction}
     >
@@ -309,18 +319,23 @@ function accessibleDependencyLabel(model: ExecutionGraphLayoutModel, dependentId
 }
 
 function groupAncestryLabel(model: ExecutionGraphLayoutModel, groupId?: string | null) {
+  const names = groupAncestryPath(model, groupId).map((part) => part.label);
+  return names.length ? `Group path ${names.join(" › ")}` : "Ungrouped";
+}
+
+function groupAncestryPath(model: ExecutionGraphLayoutModel, groupId?: string | null): ContextPathPart[] {
   const groups = new Map(model.groups.map((group) => [group.id, group]));
-  const names: string[] = [];
+  const path: ContextPathPart[] = [];
   const seen = new Set<string>();
   let currentId = groupId;
   while (currentId && !seen.has(currentId)) {
     seen.add(currentId);
     const group = groups.get(currentId);
     if (!group) break;
-    names.unshift(group.title?.trim() || "Untitled group");
+    path.unshift({ id: group.id, label: group.title?.trim() || "Untitled group" });
     currentId = group.parent_group_id;
   }
-  return names.length ? `Group path ${names.join(" › ")}` : "Ungrouped";
+  return path;
 }
 
 function cardInteraction(id: string, onSelect?: (id: string) => void) {

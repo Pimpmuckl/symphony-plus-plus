@@ -48,6 +48,8 @@ describe("workstream board removal rendering", () => {
     expect(expanded).toContain('data-expanded="true"');
     expect(expanded).toContain('data-work-package-id="wp-active"');
     expect(expanded).toContain("fixture-worker · 1h 30m");
+    expect(expanded).toContain('data-v3-context-path=');
+    expect(expanded).toContain("Graph group");
     expect(expanded).not.toContain('data-work-package-id="wp-old"');
     expect(expanded).toContain("Show history (1)");
     expect(expanded).not.toContain("v3-product-node");
@@ -71,8 +73,8 @@ function graphRequestDetail(): WorkRequestDetail {
   return {
     work_request: { id: "wr-graph", title: "Graph request", repo: "fixture/repo", base_branch: "main", status: "implementing" },
     work_packages: [
-      { id: "wp-active", work_request_id: "wr-graph", sequence: 1, title: "Active package", status: "implementing" },
-      { id: "wp-old", work_request_id: "wr-graph", sequence: 2, title: "Old package", status: "skipped" },
+      { id: "wp-active", work_request_id: "wr-graph", product_tree_node_id: "group-a", sequence: 1, title: "Active package", status: "implementing" },
+      { id: "wp-old", work_request_id: "wr-graph", product_tree_node_id: "group-a", sequence: 2, title: "Old package", status: "skipped" },
     ],
     product_tree: {
       available: true,
@@ -83,7 +85,7 @@ function graphRequestDetail(): WorkRequestDetail {
         effective_edges: [],
         cycles: [],
       },
-      nodes: [],
+      nodes: [{ id: "group-a", title: "Graph group", work_package_ids: ["wp-active", "wp-old"] }],
     },
     delivery_board: {
       work_packages: [

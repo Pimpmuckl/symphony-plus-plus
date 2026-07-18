@@ -15,7 +15,7 @@ import { requestUpdateKey } from "./update-animations";
 import { dashboardPrefersReducedMotion, updateMotionAttributes } from "@/components/dashboard/motion-utils";
 import { useAutoCollapseWhenDone } from "./workstream-auto-collapse";
 import { WorkstreamContextBar } from "./workstream-context-bar";
-import { contextPathValue } from "./workstream-context-path";
+import { contextPathValue, type ContextPathPart } from "./workstream-context-path";
 import { workRequestExecutionGraphModel } from "./execution-graph/adapter";
 import { WorkRequestExecutionGraph } from "./work-request-execution-graph";
 
@@ -283,6 +283,7 @@ function ProductRequestRow({
             now={now}
             packageById={packageById}
             onSelectCard={onSelectCard}
+            requestPath={requestPath}
           />
         </div>
       ) : null}
@@ -355,11 +356,13 @@ function ExecutionGraphBody({
   now,
   packageById,
   onSelectCard,
+  requestPath,
 }: {
   detail: WorkRequestDetail;
   now?: string;
   packageById: Map<string, WorkPackageCard>;
   onSelectCard: CardDetailSelect;
+  requestPath: ContextPathPart[];
 }) {
   const [showHistorical, setShowHistorical] = useState(false);
   const slicesById = useMemo(() => new Map((detail.work_packages ?? []).map((slice) => [slice.id, slice])), [detail.work_packages]);
@@ -394,7 +397,7 @@ function ExecutionGraphBody({
           </Button>
         </div>
       ) : null}
-      <WorkRequestExecutionGraph model={model} now={now} onSelectWorkPackage={selectWorkPackage} />
+      <WorkRequestExecutionGraph model={model} now={now} onSelectWorkPackage={selectWorkPackage} contextPath={requestPath} />
     </div>
   );
 }
