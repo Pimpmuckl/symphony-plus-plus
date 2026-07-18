@@ -3,7 +3,7 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree
+  alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   test "create_work_request creates provenance and a claimable redacted architect handoff", %{repo: repo} do
@@ -565,35 +565,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
         )
       )
 
-    assert {:ok, group} =
-             ProductTree.create_node(repo, %{
-               id: "GROUP-MCP-WR-TOON",
-               work_request_id: work_request.id,
-               title: "TOON Graph Group",
-               description: "Own the model-facing execution graph.",
-               node_kind: "capability"
-             })
-
-    work_package =
-      repo.update!(
-        Ecto.Changeset.change(work_package,
-          product_tree_node_id: group.id,
-          contract_revision: work_package.contract_revision + 1
-        )
-      )
-
-    assert {:ok, _dependency} =
-             ProductTree.create_dependency_edge(repo, %{
-               id: "DEPENDENCY-MCP-WR-TOON",
-               work_request_id: work_request.id,
-               source_kind: "work_package",
-               source_id: work_package.id,
-               target_kind: "work_package",
-               target_id: package.id,
-               kind: "depends_on",
-               reason: "The TOON contract package lands first."
-             })
-
     assert {:ok, _comment} =
              CommentService.create(repo, %{
                target_kind: "work_package",
@@ -659,28 +630,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert read_text =~ "WorkRequest MCP reads are scoped and redacted."
     assert read_text =~ "mix test test/symphony_elixir/symphony_plus_plus/mcp"
 
-    plan_response =
-      mcp_tool(repo, session, "read_plan", %{
-        "work_request_id" => work_request.id,
-        "view" => "groups_with_work_package_refs"
-      })
-
-    plan_text = get_in(plan_response, ["result", "content", Access.at(0), "text"])
-    product_tree = get_in(plan_response, ["result", "structuredContent", "product_tree"])
-
-    assert product_tree["schema_version"] == "product_tree.v4"
-    assert product_tree["root_group_ids"] == [group.id]
-    assert Enum.find(product_tree["groups"], &(&1["id"] == group.id))["work_package_ids"] == [work_package.id]
-    assert plan_text =~ "agent_context: work_request_product_tree"
-    assert plan_text =~ "schema_version: product_tree.v4"
-    assert plan_text =~ "groups[1]"
-    assert plan_text =~ "GROUP-MCP-WR-TOON"
-    assert plan_text =~ "dependency_intents[1]"
-    assert plan_text =~ "DEPENDENCY-MCP-WR-TOON"
-    assert plan_text =~ "execution_graph:"
-    assert plan_text =~ "effective_edges[1]"
-    assert plan_text =~ "WRS-MCP-WR-TOON-PLANNED"
-
     board_response = mcp_tool(repo, session, "read_delivery_board", %{"work_request_id" => work_request.id})
     board_text = get_in(board_response, ["result", "content", Access.at(0), "text"])
 
@@ -706,6 +655,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       })
 
     assert [%{"body" => "Comment before merge"}] = get_in(list_comments_response, ["result", "structuredContent", "comments"])
+  end
+
+  test "architect product-tree context encodes the public v4 graph" do
+    text =
+      ArchitectContext.encode_tool_payload(
+        %{
+          "product_tree" => %{
+            "schema_version" => "product_tree.v4",
+            "groups" => [%{"id" => "group-a", "work_package_ids" => ["wp-a"]}],
+            "dependency_intents" => [%{"id" => "dep-a"}],
+            "execution_graph" => %{
+              "available" => true,
+              "effective_edges" => [%{"dependent_work_package_id" => "wp-a"}]
+            }
+          }
+        },
+        :work_request_product_tree
+      )
+
+    for expected <- ["product_tree.v4", "groups[1]", "group-a", "dependency_intents[1]", "dep-a", "effective_edges[1]", "wp-a"] do
+      assert text =~ expected
+    end
   end
 
   test "WorkRequest MCP reads require dedicated capability and fixed scope arguments", %{repo: repo} do

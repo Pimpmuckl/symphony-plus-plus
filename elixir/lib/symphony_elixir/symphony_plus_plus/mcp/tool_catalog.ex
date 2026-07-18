@@ -951,35 +951,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("upsert_group") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "group_id" => described_string_schema("Optional existing Group id. Omit to create a Group."),
-        "title" => nonblank_string_schema(),
-        "description" => markdown_nullable_string_schema("Optional human-facing Group description."),
-        "kind" => described_string_schema("Optional loose organization hint such as capability, milestone, or risk."),
-        "parent_group_id" => nullable_string_schema() |> Map.put("description", "Optional parent Group id; pass null to move the Group to the WorkRequest root."),
-        "position" => nonnegative_integer_schema(),
-        "created_by" => described_string_schema("Optional architect identity for audit display.")
-      },
-      []
-    )
-    |> always_validate(%{
-      "allOf" => [
-        %{"anyOf" => [%{"required" => ["group_id"]}, %{"required" => ["title"]}]},
-        %{
-          "anyOf" => [
-            %{"required" => ["title"]},
-            %{"required" => ["description"]},
-            %{"required" => ["kind"]},
-            %{"required" => ["parent_group_id"]},
-            %{"required" => ["position"]}
-          ]
-        }
-      ]
-    })
-  end
+  def architect_tool_input_schema("upsert_group"), do: upsert_group_schema()
 
   def architect_tool_input_schema("delete_group") do
     schema(
@@ -991,21 +963,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("upsert_dependency") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "dependency_id" => described_string_schema("Optional existing dependency id. Omit to create a dependency."),
-        "dependent" => dependency_endpoint_schema(),
-        "prerequisite" => dependency_endpoint_schema(),
-        "reason" => markdown_string_schema("Why this dependency exists."),
-        "decision_ref" => object_schema(),
-        "created_by" => described_string_schema("Optional architect identity for audit display.")
-      },
-      ["dependent", "prerequisite"]
-    )
-    |> always_validate(%{"anyOf" => [%{"required" => ["reason"]}, %{"required" => ["decision_ref"]}]})
-  end
+  def architect_tool_input_schema("upsert_dependency"), do: upsert_dependency_schema()
 
   def architect_tool_input_schema("delete_dependency") do
     schema(
@@ -1426,6 +1384,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
       },
       "required" => ["kind", "id"]
     }
+  end
+
+  defp upsert_group_schema do
+    schema(
+      %{
+        "work_request_id" => current_work_request_id_schema(),
+        "group_id" => described_string_schema("Optional existing Group id. Omit to create a Group."),
+        "title" => nonblank_string_schema(),
+        "description" => markdown_nullable_string_schema("Optional human-facing Group description."),
+        "kind" => described_string_schema("Optional loose organization hint such as capability, milestone, or risk."),
+        "parent_group_id" => nullable_string_schema() |> Map.put("description", "Optional parent Group id; pass null to move the Group to the WorkRequest root."),
+        "position" => nonnegative_integer_schema(),
+        "created_by" => described_string_schema("Optional architect identity for audit display.")
+      },
+      []
+    )
+    |> always_validate(%{
+      "allOf" => [
+        %{"anyOf" => [%{"required" => ["group_id"]}, %{"required" => ["title"]}]},
+        %{
+          "anyOf" => Enum.map(["title", "description", "kind", "parent_group_id", "position"], &%{"required" => [&1]})
+        }
+      ]
+    })
+  end
+
+  defp upsert_dependency_schema do
+    schema(
+      %{
+        "work_request_id" => current_work_request_id_schema(),
+        "dependency_id" => described_string_schema("Optional existing dependency id. Omit to create a dependency."),
+        "dependent" => dependency_endpoint_schema(),
+        "prerequisite" => dependency_endpoint_schema(),
+        "reason" => markdown_string_schema("Why this dependency exists."),
+        "decision_ref" => object_schema(),
+        "created_by" => described_string_schema("Optional architect identity for audit display.")
+      },
+      ["dependent", "prerequisite"]
+    )
+    |> always_validate(%{"anyOf" => [%{"required" => ["reason"]}, %{"required" => ["decision_ref"]}]})
   end
 
   defp blocker_closeout_schema do
