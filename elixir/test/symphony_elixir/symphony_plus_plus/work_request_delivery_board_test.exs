@@ -751,7 +751,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                  number: 42,
                  repository: "example/fictional",
                  head_sha: "0123456789abcdef0123456789abcdef01234567",
-                 check_summary: %{status: "pending", completed: 1, total: 3},
+                 check_summary: %{status: "completed", conclusion: "failure", completed: 1, total: 3},
                  merge_state: %{merged: false}
                },
                created_at: ~U[2026-07-18 08:04:00.000000Z]
@@ -799,7 +799,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     assert %{status: "open", number: 42, current_head_sha: "0123456", head_matches: true} =
              packages[join.id].pr_signal
 
-    assert packages[join.id].pr_signal.checks == %{status: "pending", current: 1, total: 3}
+    assert packages[join.id].pr_signal.checks == %{status: "failing", current: 1, total: 3}
 
     assert %{type: "review-suite", status: "in_progress", current: 1, total: 2, step: "analysis", evidence_id: "review-join-42"} =
              packages[join.id].review_signal

@@ -218,7 +218,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
 
   defp checks(value) do
     %{
-      status: value |> first_map_value(["status", "state", "conclusion"]) |> check_status(),
+      status: value |> first_map_value(["conclusion", "state", "status"]) |> check_status(),
       current: integer_value(first_map_value(value, ["current", "completed", "completed_count"])),
       total: integer_value(first_map_value(value, ["total", "total_count", "check_count"]))
     }
