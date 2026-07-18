@@ -116,7 +116,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
   end
 
   defp append_plan_node_from_arguments(repo, work_package_id, arguments) do
-    with {:ok, title} <- required_argument(arguments, "title"),
+    with :ok <- require_plan_node_status(arguments),
+         {:ok, title} <- required_argument(arguments, "title"),
          attrs = %{
            "work_package_id" => work_package_id,
            "title" => title,
@@ -161,6 +162,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
     updates = Map.take(attrs, ["title", "body", "status"])
 
     with :ok <- require_known_plan_node_patch_keys(attrs),
+         :ok <- require_plan_node_status(attrs),
          true <- id != "" || {:tool_error, "invalid_patch_node"},
          {:ok, existing_nodes} <- PlanningRepository.list_plan_nodes(repo, work_package_id) do
       existing_node = Enum.find(existing_nodes, &(&1.id == id))
@@ -175,6 +177,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
 
   defp apply_plan_node_patch(repo, work_package_id, attrs) when is_map(attrs) do
     with :ok <- require_known_plan_node_patch_keys(attrs),
+         :ok <- require_plan_node_status(attrs),
          {:ok, title} <- required_argument(attrs, "title") do
       PlanningRepository.append_plan_node(repo, %{
         "work_package_id" => work_package_id,
@@ -215,6 +218,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
 
   defp require_plan_node_updates(updates) when map_size(updates) == 0, do: {:tool_error, "invalid_patch_node"}
   defp require_plan_node_updates(_updates), do: :ok
+
+  defp require_plan_node_status(arguments) do
+    case Map.fetch(arguments, "status") do
+      :error ->
+        :ok
+
+      {:ok, status} ->
+        if status in PlanNode.statuses(),
+          do: :ok,
+          else: {:tool_error, {:invalid_enum, "status", PlanNode.statuses()}}
+    end
+  end
 
   defp require_plan_version(plan_nodes, expected_version) do
     if plan_version(plan_nodes) == expected_version, do: :ok, else: {:tool_error, "stale_plan_version"}

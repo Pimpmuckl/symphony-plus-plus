@@ -595,6 +595,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
       )
 
     assert get_in(stale_status_response, ["error", "data", "reason"]) == "stale_status"
+    assert get_in(stale_status_response, ["error", "data", "current_status"]) == "claimed"
+    assert get_in(stale_status_response, ["error", "data", "allowed_next_statuses"]) == ["planning", "blocked", "abandoned"]
+
+    invalid_transition_response =
+      Server.handle(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "invalid-transition",
+          "method" => "tools/call",
+          "params" => %{"name" => "set_status", "arguments" => %{"status" => "reviewing", "expected_status" => "claimed"}}
+        },
+        claimed_server
+      )
+
+    assert get_in(invalid_transition_response, ["error", "data", "reason"]) == "invalid_transition"
+    assert get_in(invalid_transition_response, ["error", "data", "current_status"]) == "claimed"
+    assert get_in(invalid_transition_response, ["error", "data", "allowed_next_statuses"]) == ["planning", "blocked", "abandoned"]
   end
 
   test "claim_local_assignment claims and reconnects a worker session from scoped local identity", %{repo: repo} do

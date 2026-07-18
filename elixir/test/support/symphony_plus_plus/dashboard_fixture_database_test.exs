@@ -31,7 +31,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
   def export!(path) do
     path = Path.expand(path)
     File.mkdir_p!(Path.dirname(path))
-    if File.exists?(path), do: File.rm!(path)
+
+    Enum.each([path, path <> "-wal", path <> "-shm"], fn stale_path ->
+      if File.exists?(stale_path), do: File.rm!(stale_path)
+    end)
 
     {:ok, pid} = Repo.start_link(database: path, name: nil, pool_size: 1, log: false)
     previous_repo = Repo.put_dynamic_repo(pid)
@@ -43,10 +46,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
       seed_dense!(Repo)
       normalize_generated_dispatch!(Repo)
       normalize_timestamps!(Repo)
+      Repo.query!("PRAGMA wal_checkpoint(TRUNCATE)")
       :ok
     after
       Repo.put_dynamic_repo(previous_repo)
       GenServer.stop(pid)
+      Enum.each([path <> "-wal", path <> "-shm"], &File.rm/1)
     end
   end
 

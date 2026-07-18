@@ -11,6 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   import Ecto.Query, only: [from: 2]
 
   @active_grant_roles ["worker", "architect"]
+  @ready_package_statuses ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"]
   @terminal_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
   @recycle_source_tools ["claim_local_assignment", "revoke_child_worker_key", "revoke_work_package_worker_key", "cleanup_work_request_work_package_runtime"]
   @stale_heartbeat_after_seconds 300
@@ -83,9 +84,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   def project_context(grants, agent_runs, claim_leases, progress_events, work_package)
       when is_list(grants) and is_list(agent_runs) and is_list(claim_leases) and is_list(progress_events) do
     now = DateTime.utc_now(:microsecond)
-    runtime_evidence = runtime_evidence(grants, agent_runs, claim_leases, now)
+    runtime_evidence = runtime_evidence(grants, agent_runs, claim_leases, work_package, now)
     {worker_grants, worker_runs, worker_leases} = worker_evidence(grants, agent_runs, claim_leases, work_package)
-    worker_runtime_evidence = runtime_evidence(worker_grants, worker_runs, worker_leases, now)
+    worker_runtime_evidence = runtime_evidence(worker_grants, worker_runs, worker_leases, work_package, now)
 
     %{
       blocker_state: blocker_state(progress_events),
@@ -231,13 +232,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
     {event.sequence || 0, timestamp_sort_value(event.created_at), event.id || ""}
   end
 
-  defp runtime_evidence(grants, agent_runs, claim_leases, %DateTime{} = now) do
+  defp runtime_evidence(grants, agent_runs, claim_leases, work_package, %DateTime{} = now) do
     current_claim_leases = Enum.filter(claim_leases, &current_claim_lease?/1)
     paused? = Enum.any?(current_claim_leases, &paused_claim_lease?/1)
     stale_claim_leases = Enum.filter(current_claim_leases, &stale_claim_lease?(&1, now))
     active_claim_leases = Enum.filter(current_claim_leases, &active_claim_lease?(&1, now))
     {active_agent_runs, stale_agent_runs} = agent_runtime_evidence(agent_runs, paused?, now)
-    active_grants = active_grants(grants, current_claim_leases, now)
+
+    active_grants =
+      grants
+      |> active_grants(current_claim_leases, now)
+      |> suppress_grant_only_worker_activity(work_package, active_claim_leases, active_agent_runs)
 
     %{
       now: now,
@@ -355,6 +360,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   end
 
   defp superseded_worker_grant?(%AccessGrant{}, _superseded_worker_claimants), do: false
+
+  defp suppress_grant_only_worker_activity(grants, %WorkPackage{status: status}, [], [])
+       when status in @ready_package_statuses or status in @terminal_package_statuses,
+       do: Enum.reject(grants, &(&1.grant_role == "worker"))
+
+  defp suppress_grant_only_worker_activity(grants, _work_package, _active_claim_leases, _active_agent_runs), do: grants
 
   defp recycled_runtime?(claim_leases, progress_events) do
     Enum.any?(claim_leases, &reclaimed_claim_lease?/1) or Enum.any?(progress_events, &recycle_event?/1)

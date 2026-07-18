@@ -20,11 +20,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
+  alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     ArchitectDeliveryTools,
     Auth,
     Config,
+    ErrorDetails,
     ProgressEvents,
     PullRequestMetadata,
     ReviewReadiness,
@@ -130,6 +132,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
           "blocker_id" => blocker_id,
           "active" => true
         })
+        |> expose_blocker_id(blocker_id)
 
       {:error, reason} ->
         worker_error(reason, "report_blocker")
@@ -281,7 +284,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   end
 
   defp normalize_update_task_plan_result({:tool_error, reason}),
-    do: {:error, -32_602, "Invalid params", %{"tool" => "update_task_plan", "reason" => reason}}
+    do: invalid_params_error("update_task_plan", reason)
 
   defp normalize_update_task_plan_result({:error, reason}), do: worker_error(reason, "update_task_plan")
   defp normalize_update_task_plan_result(result), do: result
@@ -375,10 +378,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     |> run_worker_transaction(fn ->
       with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
            {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
-           :ok <- require_expected_status(state.work_package, expected_status),
+           :ok <- require_expected_status(state.work_package, expected_status, session),
            :ok <- reject_architect_controlled_child(state.work_package, status),
            {:ok, _event} <- append_status_reason_event(repo, session, expected_status, status, reason),
-           {:ok, work_package} <- LifecycleService.transition(repo, state.work_package, status, actor(session)),
+           {:ok, work_package} <- transition_status(repo, state.work_package, status, session),
            {:ok, blocker_closeout} <-
              ArchitectDeliveryTools.apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan) do
         {:ok, {work_package, blocker_closeout}}
@@ -671,8 +674,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp reject_ready_status(status) when status in ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"], do: {:tool_error, "use_mark_ready"}
   defp reject_ready_status(_status), do: :ok
 
-  defp require_expected_status(%WorkPackage{status: expected_status}, expected_status), do: :ok
-  defp require_expected_status(%WorkPackage{}, _expected_status), do: {:tool_error, "stale_status"}
+  defp require_expected_status(%WorkPackage{status: expected_status}, expected_status, %Session{}), do: :ok
+
+  defp require_expected_status(%WorkPackage{} = work_package, _expected_status, %Session{} = session),
+    do: lifecycle_conflict_error(:stale_status, work_package, session)
+
+  defp transition_status(repo, %WorkPackage{} = work_package, status, %Session{} = session) do
+    case LifecycleService.transition(repo, work_package, status, actor(session)) do
+      {:error, reason} when reason in [:invalid_transition, :stale_status] ->
+        lifecycle_conflict_error(reason, work_package, session)
+
+      result ->
+        result
+    end
+  end
+
+  defp lifecycle_conflict_error(reason, %WorkPackage{} = work_package, %Session{} = session) do
+    {:error, -32_602, "Invalid params",
+     %{
+       "tool" => "set_status",
+       "reason" => reason_text(reason),
+       "current_status" => work_package.status,
+       "allowed_next_statuses" => Enum.filter(WorkPackage.statuses(), &(StateMachine.validate_transition(work_package, &1, actor(session)) == :ok))
+     }}
+  end
 
   defp reject_architect_controlled_child(%WorkPackage{kind: "phase_child", status: "merging_into_phase"}, "blocked"), do: :ok
 
@@ -710,6 +735,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   defp normalize_blocker_id(value) when is_binary(value), do: String.trim(value)
   defp normalize_blocker_id(value), do: value
+
+  defp expose_blocker_id({:ok, %{"structuredContent" => structured_content}}, blocker_id) do
+    {:ok, structured_content |> Map.put("blocker_id", blocker_id) |> ToolResult.agent_tool_result()}
+  end
+
+  defp expose_blocker_id(result, _blocker_id), do: result
 
   defp normalize_optional_value(value) when is_binary(value) do
     case String.trim(value) do
@@ -764,6 +795,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
        "requested_blocker_ids" => requested_ids
      }}
   end
+
+  defp invalid_params_error(tool, {:invalid_enum, _field, _allowed_values} = reason),
+    do: ErrorDetails.invalid_params_error(tool, reason)
 
   defp invalid_params_error(tool, reason), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 

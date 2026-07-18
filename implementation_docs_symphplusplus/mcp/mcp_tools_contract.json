@@ -1,6 +1,6 @@
 {
   "version": 6,
-  "mcp_contract_fingerprint": "2706b8b4a78add959b0699a8064a5f20e7ed0c8bd3cb6712516e705712710d04",
+  "mcp_contract_fingerprint": "aedcff5fef6c8d4fb5d0a831ee7c662754b4139e97d087341a2e9b18ff090c1c",
   "schema_source": "ToolCatalog owns the live runtime tool surfaces. This JSON publishes those names plus the canonical MCP contract fingerprint for scripts, docs, and release artifacts.",
   "compatibility_policy": "Version 6 atomically replaces public product plan nodes with optional Groups and dependency intents. Groups organize WorkPackages but have no lifecycle; one backend evaluator derives deterministic effective WorkPackage edges, cycles, topology, and unmet prerequisite evidence. Consumers should read role tool names from discovery_policy and per-tool arguments from tool_schemas.",
   "human_text_policy": "Human-facing long text fields are Markdown unless a field is explicitly a compact label, status, identifier, branch, PR URL, or other machine-readable value. Dashboard renderers must not turn raw Markdown HTML into executable or trusted HTML.",

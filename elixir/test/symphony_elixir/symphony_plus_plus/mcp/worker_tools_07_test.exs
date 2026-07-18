@@ -654,10 +654,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
       )
 
     assert event_id = get_in(blocker_response, ["result", "structuredContent", "progress_event", "id"])
+    assert get_in(blocker_response, ["result", "structuredContent", "blocker_id"]) == "blocker-protected"
     assert {:ok, events} = PlanningRepository.list_progress_events(repo, package.id)
     event = Enum.find(events, &(&1.id == event_id))
     assert event.payload["type"] == "blocker"
     assert event.payload["source_tool"] == "report_blocker"
+    assert event.payload["blocker_id"] == "blocker-protected"
     assert event.payload["active"] == true
 
     invalid_response =

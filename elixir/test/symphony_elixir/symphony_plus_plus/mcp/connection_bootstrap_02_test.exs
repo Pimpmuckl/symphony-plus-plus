@@ -393,8 +393,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     assert get_in(tools_by_name, ["read_guidance_request", "inputSchema", "required"]) == ["guidance_request_id"]
     assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "required"]) == ["expected_version"]
     assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties", "expected_version", "type"]) == "integer"
+    assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties", "status", "enum"]) == ["pending", "done", "skipped"]
     assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties", "patch", "required"]) == ["nodes"]
     assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties", "patch", "properties", "nodes", "minItems"]) == 1
+
+    assert get_in(tools_by_name, [
+             "update_task_plan",
+             "inputSchema",
+             "properties",
+             "patch",
+             "properties",
+             "nodes",
+             "items",
+             "properties",
+             "status",
+             "enum"
+           ]) == ["pending", "done", "skipped"]
+
     refute Map.has_key?(get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties"]), "work_package_id")
     assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "then", "oneOf"]) != nil
 
@@ -405,6 +420,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
 
     assert get_in(tools_by_name, ["set_status", "inputSchema", "required"]) == ["status", "expected_status"]
     assert get_in(tools_by_name, ["report_blocker", "inputSchema", "properties", "blocker_id", "type"]) == "string"
+    assert get_in(tools_by_name, ["report_blocker", "inputSchema", "properties", "blocker_id", "description"]) =~ "returned in structured output"
     assert get_in(tools_by_name, ["resolve_blocker", "inputSchema", "required"]) == ["blocker_id", "resolution", "summary", "idempotency_key"]
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "required"]) == ["body"]
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "properties", "target_kind", "enum"]) == ["work_request", "work_package"]

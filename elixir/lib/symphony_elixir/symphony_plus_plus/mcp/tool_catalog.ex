@@ -3,6 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, SoloTools}
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
@@ -523,7 +524,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         "expected_version" => integer_schema(),
         "id" => string_schema(),
         "patch" => plan_patch_schema(),
-        "status" => string_schema(),
+        "status" => string_enum_schema(PlanNode.statuses()),
         "title" => string_schema()
       }),
       ["expected_version"]
@@ -557,7 +558,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   end
 
   def worker_tool_input_schema("report_blocker") do
-    schema(Map.put(progress_properties(), "blocker_id", string_schema()), ["summary", "idempotency_key"])
+    schema(
+      Map.put(
+        progress_properties(),
+        "blocker_id",
+        described_string_schema("Optional stable blocker id returned in structured output; defaults to idempotency_key.")
+      ),
+      ["summary", "idempotency_key"]
+    )
   end
 
   def worker_tool_input_schema("resolve_blocker") do
@@ -1530,7 +1538,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
               "id" => string_schema(),
               "title" => string_schema(),
               "body" => nullable_string_schema(),
-              "status" => string_schema()
+              "status" => string_enum_schema(PlanNode.statuses())
             },
             "anyOf" => [
               %{"required" => ["title"]},
