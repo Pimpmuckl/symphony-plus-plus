@@ -32,18 +32,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   @spec project(module(), String.t(), [map()], keyword()) :: map()
   def project(repo, work_request_id, work_package_payloads, opts \\ [])
       when is_atom(repo) and is_binary(work_request_id) and is_list(work_package_payloads) and is_list(opts) do
-    case repo.transaction(fn -> project_transaction(repo, work_request_id, work_package_payloads, opts) end) do
-      {:ok, projection} -> projection
-      {:error, reason} -> unavailable_projection(reason, work_package_payloads)
-    end
-  end
+    case ProductTree.tree_for_work_request(repo, work_request_id) do
+      {:ok, tree} ->
+        execution_graph = ExecutionGraph.evaluate(tree, work_package_payloads, [])
+        project_tree(tree, execution_graph, work_package_payloads, opts)
 
-  defp project_transaction(repo, work_request_id, work_package_payloads, opts) do
-    with {:ok, tree} <- ProductTree.tree_for_work_request(repo, work_request_id),
-         {:ok, execution_graph} <- ProductTree.execution_graph(repo, work_request_id) do
-      project_tree(tree, execution_graph, work_package_payloads, opts)
-    else
-      {:error, reason} -> repo.rollback(reason)
+      {:error, reason} ->
+        unavailable_projection(reason, work_package_payloads)
     end
   end
 

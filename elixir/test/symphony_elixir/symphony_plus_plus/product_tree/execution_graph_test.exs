@@ -171,6 +171,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraphTest do
            } = ExecutionGraph.scope(graph, ["wp_visible"])
   end
 
+  test "uses projected Group and delivery evidence without rereading packages" do
+    graph =
+      ExecutionGraph.evaluate(
+        %{
+          nodes: [group("group_source")],
+          dependency_edges: [dependency("dep_projected", "work_package", "wp_target", "product_node", "group_source")]
+        },
+        [
+          %{id: "wp_source", group_id: "group_source", status: "planned", operational_state: %{delivery_outcome: "pr_merged"}},
+          %{id: "wp_target", group_id: nil, status: "planned"}
+        ],
+        []
+      )
+
+    assert graph.unmet_dependencies == []
+    assert :ok = ExecutionGraph.require_ready(graph, "wp_target")
+
+    assert %{delivery_outcome: "pr_merged", resolved: true} =
+             Enum.find(graph.resolutions, &(&1.work_package_id == "wp_source"))
+  end
+
   defp group(id), do: %Node{id: id, parent_id: nil}
 
   defp work_package(id, group_id \\ nil, status \\ "planned") do

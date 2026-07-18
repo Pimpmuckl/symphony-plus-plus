@@ -100,7 +100,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
   end
 
   defp group_members(nodes, work_packages) do
-    direct_members = Enum.group_by(work_packages, &value(&1, :product_tree_node_id), &value(&1, :id))
+    direct_members = Enum.group_by(work_packages, &package_group_id/1, &value(&1, :id))
     children = Enum.group_by(nodes, &value(&1, :parent_id), &value(&1, :id))
 
     Map.new(nodes, fn node ->
@@ -108,6 +108,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
       {id, descendant_members(id, children, direct_members, [])}
     end)
   end
+
+  defp package_group_id(work_package), do: value(work_package, :group_id) || value(work_package, :product_tree_node_id)
 
   defp descendant_members(group_id, children, direct_members, visited) do
     if group_id in visited do
@@ -217,6 +219,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
 
     delivery_outcome =
       value(work_package, :delivery_outcome) ||
+        work_package |> value(:operational_state) |> value(:delivery_outcome) ||
         deliveries_by_work_package_id |> Map.get(work_package_id) |> value(:outcome)
 
     resolved = status in @resolved_statuses or delivery_outcome in WorkPackageDelivery.outcomes()
