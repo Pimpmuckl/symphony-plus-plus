@@ -24,6 +24,7 @@ const REQUEST_EXIT_MOTION_MS = 320;
 export function WorkstreamBoard({
   repoLabel,
   repoDetails,
+  now,
   packages,
   activeBlockingEdges,
   guidanceItems,
@@ -39,6 +40,7 @@ export function WorkstreamBoard({
 }: {
   repoLabel: string;
   repoDetails: WorkRequestDetail[];
+  now?: string;
   packages: WorkPackageCard[];
   activeBlockingEdges: ActiveBlockingEdge[];
   guidanceItems: GuidanceItem[];
@@ -73,6 +75,7 @@ export function WorkstreamBoard({
             <ProductRequestRow
               key={exiting ? `${detail.work_request.id}:exiting` : detail.work_request.id}
               detail={detail}
+              now={now}
               exiting={exiting}
               packageById={packageById}
               activeBlockerCount={blockerCounts.requests.get(detail.work_request.id) ?? 0}
@@ -165,6 +168,7 @@ function workstreamContextSignature(details: WorkRequestDetail[]) {
 
 function ProductRequestRow({
   detail,
+  now,
   exiting = false,
   packageById,
   activeBlockerCount,
@@ -181,6 +185,7 @@ function ProductRequestRow({
   updateAnimations,
 }: {
   detail: WorkRequestDetail;
+  now?: string;
   exiting?: boolean;
   packageById: Map<string, WorkPackageCard>;
   activeBlockerCount: number;
@@ -275,6 +280,7 @@ function ProductRequestRow({
           />
           <ExecutionGraphBody
             detail={detail}
+            now={now}
             packageById={packageById}
             onSelectCard={onSelectCard}
           />
@@ -346,10 +352,12 @@ function RequestActions({
 
 function ExecutionGraphBody({
   detail,
+  now,
   packageById,
   onSelectCard,
 }: {
   detail: WorkRequestDetail;
+  now?: string;
   packageById: Map<string, WorkPackageCard>;
   onSelectCard: CardDetailSelect;
 }) {
@@ -386,7 +394,7 @@ function ExecutionGraphBody({
           </Button>
         </div>
       ) : null}
-      <WorkRequestExecutionGraph model={model} onSelectWorkPackage={selectWorkPackage} />
+      <WorkRequestExecutionGraph model={model} now={now} onSelectWorkPackage={selectWorkPackage} />
     </div>
   );
 }

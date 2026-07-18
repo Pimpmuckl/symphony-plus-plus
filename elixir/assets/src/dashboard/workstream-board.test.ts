@@ -47,6 +47,7 @@ describe("workstream board removal rendering", () => {
 
     expect(expanded).toContain('data-expanded="true"');
     expect(expanded).toContain('data-work-package-id="wp-active"');
+    expect(expanded).toContain("fixture-worker · 1h 30m");
     expect(expanded).not.toContain('data-work-package-id="wp-old"');
     expect(expanded).toContain("Show history (1)");
     expect(expanded).not.toContain("v3-product-node");
@@ -86,7 +87,7 @@ function graphRequestDetail(): WorkRequestDetail {
     },
     delivery_board: {
       work_packages: [
-        { id: "wp-active", work_package: { id: "wp-active", raw_status: "implementing", worker_signal: { status: "active" } } },
+        { id: "wp-active", work_package: { id: "wp-active", raw_status: "implementing", worker_signal: { status: "active", active_since: "2026-07-18T08:00:00Z", run_label: "fixture-worker" } } },
         { id: "wp-old", raw_status: "skipped", work_package: { id: "wp-old", raw_status: "skipped" } },
       ],
     },
@@ -98,6 +99,7 @@ function renderBoard(detail: WorkRequestDetail, expandedFinishedRequests: Record
     createElement(WorkstreamBoard, {
       repoLabel: "repo",
       repoDetails: [detail],
+      now: "2026-07-18T09:30:00Z",
       packages: [],
       activeBlockingEdges: [],
       guidanceItems: [],

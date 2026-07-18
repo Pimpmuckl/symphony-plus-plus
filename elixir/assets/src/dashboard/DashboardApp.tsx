@@ -505,6 +505,7 @@ function useDashboardController() {
           hiddenRepoCount={hiddenWorkstreamCount}
           searchActive={searchedWorkstreams.active}
           requestDetailsByRepo={searchedWorkstreams.requestDetailsByRepo}
+          now={dashboard?.generated_at}
           activeBlockingEdges={dashboard?.active_blocking_edges ?? []}
           guidanceItems={guidanceItems}
           onSelectGuidance={setSelectedGuidance}
@@ -521,6 +522,7 @@ function useDashboardController() {
       copyArchitectHandoff,
       canMutateOperatorActions,
       dashboard?.active_blocking_edges,
+      dashboard?.generated_at,
       guidanceItems,
       hiddenWorkstreamCount,
       searchedWorkstreams,

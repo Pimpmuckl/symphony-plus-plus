@@ -17,6 +17,7 @@ import { repoSummaryMetrics, type RepoSummaryMetricKey } from "./repo-summary-st
 export function RepoWorkstream({
   repo,
   requestDetailsByRepo,
+  now,
   activeBlockingEdges,
   guidanceItems,
   onSelectGuidance,
@@ -28,6 +29,7 @@ export function RepoWorkstream({
 }: {
   repo: RepoSummary;
   requestDetailsByRepo: Map<string, WorkRequestDetail[]>;
+  now?: string;
   activeBlockingEdges: ActiveBlockingEdge[];
   guidanceItems: GuidanceItem[];
   onSelectGuidance: (item: GuidanceItem) => void;
@@ -130,6 +132,7 @@ export function RepoWorkstream({
             <WorkstreamBoard
               repoLabel={repo.repo}
               repoDetails={repoDetails}
+              now={now}
               packages={repo.packages}
               activeBlockingEdges={activeBlockingEdges}
               guidanceItems={guidanceItems}
