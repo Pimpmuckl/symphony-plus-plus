@@ -157,7 +157,7 @@ request = fn id, name, arguments ->
   }
 end
 
-plan_request = request.("read-plan-perf", "read_plan", %{"work_request_id" => plan_id, "view" => "nodes_only"})
+plan_request = request.("read-plan-perf", "read_plan", %{"work_request_id" => plan_id, "view" => "groups_only"})
 list_request = request.("list-work-requests-perf", "list_work_requests", %{"status" => "ready_for_slicing"})
 
 server_call = fn config, payload ->

@@ -109,7 +109,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   end
 
   @spec activate(module(), WorkPackage.t()) :: {:ok, creation()} | {:error, error()}
-  def activate(repo, %WorkPackage{status: "planned"} = work_package) when is_atom(repo) do
+  def activate(repo, %WorkPackage{} = work_package), do: activate(repo, work_package, [])
+
+  @spec activate(module(), WorkPackage.t(), keyword()) :: {:ok, creation()} | {:error, error()}
+  def activate(repo, %WorkPackage{status: "planned"} = work_package, opts) when is_atom(repo) and is_list(opts) do
     with {:ok, policy} <- Templates.expand(work_package.policy_template || work_package.kind),
          policy = effective_policy(policy, work_package.review_requirement),
          {:ok, acceptance_criteria} <- normalize_acceptance_criteria(work_package.acceptance_criteria),
@@ -122,11 +125,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
         {:ok, creation} -> {:ok, creation}
         {:error, reason} -> {:error, reason}
       end
-      |> DashboardPubSub.broadcast_changed_on_success()
+      |> maybe_broadcast_changed(opts)
     end
   end
 
-  def activate(_repo, %WorkPackage{}), do: {:error, :invalid_status}
+  def activate(_repo, %WorkPackage{}, _opts), do: {:error, :invalid_status}
+
+  defp maybe_broadcast_changed(result, opts) do
+    if Keyword.get(opts, :broadcast?, true) do
+      DashboardPubSub.broadcast_changed_on_success(result)
+    else
+      result
+    end
+  end
 
   defp activate_transaction(repo, work_package, policy) do
     with {:ok, activated} <-

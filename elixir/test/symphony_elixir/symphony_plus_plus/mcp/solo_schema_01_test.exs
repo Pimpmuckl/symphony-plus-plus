@@ -837,9 +837,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert get_in(tools_by_name, ["read_plan", "inputSchema", "required"]) == ["work_request_id"]
 
     assert get_in(tools_by_name, ["read_plan", "inputSchema", "properties", "view", "enum"]) == [
-             "nodes_only",
-             "nodes_with_work_package_refs",
-             "nodes_with_work_packages"
+             "groups_only",
+             "groups_with_work_package_refs",
+             "groups_with_work_packages"
            ]
 
     refute Map.has_key?(get_in(tools_by_name, ["read_plan", "inputSchema", "properties"]), "include_planning_scratch")

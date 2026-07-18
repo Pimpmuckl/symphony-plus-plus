@@ -1750,9 +1750,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_tool_capability("record_decision"), do: "write:work_request"
   defp architect_tool_capability("slice_work_request"), do: "write:work_request"
   defp architect_tool_capability("update_work_package"), do: "write:work_request"
-  defp architect_tool_capability("upsert_plan_node"), do: "write:work_request"
-  defp architect_tool_capability("move_plan_node"), do: "write:work_request"
-  defp architect_tool_capability("set_plan_node_completion"), do: "write:work_request"
+
+  defp architect_tool_capability(tool) when tool in ["upsert_group", "delete_group", "upsert_dependency", "delete_dependency"],
+    do: "write:work_request"
+
   defp architect_tool_capability("skip_work_package"), do: "write:work_request"
   defp architect_tool_capability("dispatch_work_package"), do: "dispatch:work_request"
   defp architect_tool_capability("prepare_work_package_worktree"), do: "dispatch:work_request"

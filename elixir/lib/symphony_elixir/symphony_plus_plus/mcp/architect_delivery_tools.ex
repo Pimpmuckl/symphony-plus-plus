@@ -1206,6 +1206,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     product_tree
     |> json_safe_payload()
     |> Map.delete("latest_revision")
+    |> Map.delete("execution_graph")
   end
 
   defp product_tree_revision_reason("record_work_package_delivery"),

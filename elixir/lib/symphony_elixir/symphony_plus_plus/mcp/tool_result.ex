@@ -181,8 +181,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult do
   defp compact_tool_entry("decision_log_entry", key, value),
     do: {key, compact_status_payload(value, ["id", "sequence", "source_type", "source_id", "decision", "created_by"])}
 
-  defp compact_tool_entry("product_plan_node", key, value),
-    do: {key, compact_status_payload(value, ["id", "work_request_id", "parent_id", "position", "completion_mark"])}
+  defp compact_tool_entry("group", key, value),
+    do: {key, compact_status_payload(value, ["id", "work_request_id", "parent_group_id", "position"])}
 
   defp compact_tool_entry("work_package_delivery", key, value),
     do:

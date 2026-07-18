@@ -3,6 +3,7 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   test "create_work_request creates provenance and a claimable redacted architect handoff", %{repo: repo} do
@@ -104,9 +105,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
                "record_decision",
                "slice_work_request",
                "update_work_package",
-               "upsert_plan_node",
-               "move_plan_node",
-               "set_plan_node_completion",
+               "upsert_group",
+               "delete_group",
+               "upsert_dependency",
+               "delete_dependency",
                "skip_work_package",
                "dispatch_work_package"
              ],
@@ -653,6 +655,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
       })
 
     assert [%{"body" => "Comment before merge"}] = get_in(list_comments_response, ["result", "structuredContent", "comments"])
+  end
+
+  test "architect product-tree context encodes the public v4 graph" do
+    text =
+      ArchitectContext.encode_tool_payload(
+        %{
+          "product_tree" => %{
+            "schema_version" => "product_tree.v4",
+            "groups" => [%{"id" => "group-a", "work_package_ids" => ["wp-a"]}],
+            "dependency_intents" => [%{"id" => "dep-a"}],
+            "execution_graph" => %{
+              "available" => true,
+              "effective_edges" => [%{"dependent_work_package_id" => "wp-a"}]
+            }
+          }
+        },
+        :work_request_product_tree
+      )
+
+    for expected <- ["product_tree.v4", "groups[1]", "group-a", "dependency_intents[1]", "dep-a", "effective_edges[1]", "wp-a"] do
+      assert text =~ expected
+    end
   end
 
   test "WorkRequest MCP reads require dedicated capability and fixed scope arguments", %{repo: repo} do

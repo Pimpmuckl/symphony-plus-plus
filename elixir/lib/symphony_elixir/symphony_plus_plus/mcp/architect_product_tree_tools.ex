@@ -17,12 +17,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
-  alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
-    ArchitectDeliveryTools,
     Auth,
     Config,
     CurrentWorkRequest,
@@ -34,7 +32,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
 
   @tools [
@@ -42,9 +39,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     "record_decision",
     "slice_work_request",
     "update_work_package",
-    "upsert_plan_node",
-    "move_plan_node",
-    "set_plan_node_completion",
+    "upsert_group",
+    "delete_group",
+    "upsert_dependency",
+    "delete_dependency",
     "skip_work_package"
   ]
   @required_work_package_string_fields ["title", "goal"]
@@ -54,7 +52,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     "validation_steps",
     "stop_conditions"
   ]
-  @terminal_product_tree_completion_marks ["done", "deferred"]
 
   @spec tools() :: [String.t()]
   def tools, do: @tools
@@ -167,7 +164,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              work_request_id,
              tool,
              session_claimed_by(session),
-             fn -> WorkRequestService.slice_work_request(config.repo, work_request_id, work_packages) end
+             fn ->
+               WorkRequestService.slice_work_request(
+                 config.repo,
+                 work_request_id,
+                 Enum.map(work_packages, &internal_work_package_contract/1)
+               )
+             end
            ) do
       {:ok,
        ToolResult.tool_result(%{
@@ -211,7 +214,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
                work_request_id,
                work_package_id,
                expected_revision,
-               patch
+               internal_work_package_contract(patch)
              )
            end) do
       {:ok,
@@ -229,83 +232,79 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  def call("upsert_plan_node", %Config{} = config, session, arguments) do
-    tool = "upsert_plan_node"
+  def call("upsert_group", %Config{} = config, session, arguments) do
+    tool = "upsert_group"
+    parent_group_id_supplied? = Map.has_key?(arguments, "parent_group_id")
+    description_supplied? = Map.has_key?(arguments, "description")
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
-         {:ok, product_tree_node_id} <- optional_string_argument(arguments, "product_tree_node_id"),
+         {:ok, group_id} <- optional_string_argument(arguments, "group_id"),
          {:ok, title} <- optional_string_argument(arguments, "title"),
          {:ok, description} <- optional_string_argument(arguments, "description"),
-         {:ok, node_kind} <- optional_string_argument(arguments, "node_kind"),
-         {:ok, created_by} <- optional_string_argument(arguments, "created_by", session_claimed_by(session)),
-         :ok <- require_product_plan_node_content(product_tree_node_id, title, description, node_kind),
-         {:ok, work_request, _filters, scope} <-
-           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
-         :ok <- require_work_package_authoring_status(work_request.status),
-         {:ok, current_parent_id} <- product_plan_node_current_parent_id(config.repo, work_request_id, product_tree_node_id),
-         attrs =
-           %{
-             "work_request_id" => work_request_id
-           }
-           |> optional_put("id", product_tree_node_id)
-           |> optional_put("parent_id", current_parent_id)
-           |> optional_put("title", title)
-           |> optional_put("description", description)
-           |> optional_put("node_kind", node_kind)
-           |> optional_put("created_by", created_by),
-         {:ok, {{product_tree_node, blocker_closeout}, detail}} <-
-           mutate_product_plan_node(config.repo, session, work_request_id, tool, created_by, attrs, :not_needed) do
-      {:ok, product_plan_node_tool_result(work_request, product_tree_node, blocker_closeout, detail, scope)}
-    else
-      {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_product_plan_node", changeset)
-      {:error, :not_found} -> not_found_error(tool)
-      {:error, reason} -> architect_error(reason, tool)
-    end
-  end
-
-  def call("move_plan_node", %Config{} = config, session, arguments) do
-    tool = "move_plan_node"
-    parent_id_supplied? = Map.has_key?(arguments, "parent_id")
-
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
-         {:ok, product_tree_node_id} <- required_argument(arguments, "product_tree_node_id"),
-         {:ok, parent_id} <- optional_string_argument(arguments, "parent_id"),
+         {:ok, kind} <- optional_string_argument(arguments, "kind"),
+         {:ok, parent_group_id} <- optional_string_argument(arguments, "parent_group_id"),
          {:ok, position} <- optional_nonnegative_integer_argument(arguments, "position"),
          {:ok, created_by} <- optional_string_argument(arguments, "created_by", session_claimed_by(session)),
-         :ok <- require_product_plan_node_topology(parent_id_supplied?, position),
+         :ok <-
+           require_group_mutation(
+             group_id,
+             title,
+             description_supplied?,
+             kind,
+             parent_group_id_supplied?,
+             position
+           ),
          {:ok, work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
          :ok <- require_work_package_authoring_status(work_request.status),
          attrs =
-           %{
-             "work_request_id" => work_request_id,
-             "id" => product_tree_node_id
-           }
-           |> optional_put_present("parent_id", parent_id, parent_id_supplied?)
+           %{"work_request_id" => work_request_id}
+           |> optional_put("id", group_id)
+           |> optional_put("title", title)
+           |> optional_put_present("description", description, description_supplied?)
+           |> optional_put("node_kind", kind)
+           |> optional_put_present("parent_id", parent_group_id, parent_group_id_supplied?)
            |> optional_put("position", position)
            |> optional_put("created_by", created_by),
-         {:ok, {{product_tree_node, blocker_closeout}, detail}} <-
-           mutate_product_plan_node(config.repo, session, work_request_id, tool, created_by, attrs, :not_needed) do
-      {:ok, product_plan_node_tool_result(work_request, product_tree_node, blocker_closeout, detail, scope)}
+         {:ok, {group, detail}} <-
+           mutate_product_tree_with_projection(config.repo, work_request_id, tool, created_by, fn ->
+             ProductTree.upsert_node(config.repo, attrs)
+           end) do
+      {:ok,
+       ToolResult.tool_result(%{
+         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+         "group" => WorkRequestPayloads.group(group),
+         "product_tree" => WorkRequestPayloads.public_product_tree(detail.product_tree),
+         "scope" => scope,
+         "status" => %{"work_request_status" => work_request.status}
+       })}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_product_plan_node", changeset)
+      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_group", changeset)
       {:error, :not_found} -> not_found_error(tool)
       {:error, reason} -> architect_error(reason, tool)
     end
   end
 
-  def call("set_plan_node_completion", %Config{} = config, session, arguments) do
-    tool = "set_plan_node_completion"
+  def call("delete_group", %Config{} = config, session, arguments) do
+    mutate_graph_record(config, session, arguments, "delete_group", "group_id", fn work_request_id, group_id ->
+      ProductTree.delete_group(config.repo, work_request_id, group_id)
+    end)
+  end
+
+  def call("upsert_dependency", %Config{} = config, session, arguments) do
+    tool = "upsert_dependency"
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
-         {:ok, product_tree_node_id} <- required_argument(arguments, "product_tree_node_id"),
-         {:ok, completion_mark} <- required_argument(arguments, "completion_mark"),
-         :ok <- require_product_tree_completion_mark(completion_mark),
+         {:ok, dependency_id} <- optional_string_argument(arguments, "dependency_id"),
+         {:ok, dependent} <- required_object(arguments, "dependent"),
+         {:ok, prerequisite} <- required_object(arguments, "prerequisite"),
+         {:ok, {source_kind, source_id}} <- dependency_endpoint(dependent),
+         {:ok, {target_kind, target_id}} <- dependency_endpoint(prerequisite),
+         {:ok, reason} <- optional_string_argument(arguments, "reason"),
+         {:ok, decision_ref} <- optional_object_argument(arguments, "decision_ref"),
          {:ok, created_by} <- optional_string_argument(arguments, "created_by", session_claimed_by(session)),
          {:ok, work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
@@ -313,29 +312,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          attrs =
            %{
              "work_request_id" => work_request_id,
-             "id" => product_tree_node_id,
-             "completion_mark" => completion_mark
+             "source_kind" => source_kind,
+             "source_id" => source_id,
+             "target_kind" => target_kind,
+             "target_id" => target_id,
+             "kind" => "depends_on"
            }
+           |> optional_put("id", dependency_id)
+           |> optional_put("reason", reason)
+           |> optional_put("decision_ref", decision_ref)
            |> optional_put("created_by", created_by),
-         {:ok, blocker_closeout_plan} <-
-           maybe_prepare_product_plan_node_blocker_closeout(
-             config.repo,
-             session,
-             work_request_id,
-             product_tree_node_id,
-             completion_mark,
-             arguments,
-             tool
-           ),
-         {:ok, {{product_tree_node, blocker_closeout}, detail}} <-
-           mutate_product_plan_node(config.repo, session, work_request_id, tool, created_by, attrs, blocker_closeout_plan) do
-      {:ok, product_plan_node_tool_result(work_request, product_tree_node, blocker_closeout, detail, scope)}
+         {:ok, {dependency, detail}} <-
+           mutate_product_tree_with_projection(config.repo, work_request_id, tool, created_by, fn ->
+             ProductTree.upsert_dependency_edge(config.repo, attrs)
+           end) do
+      {:ok,
+       ToolResult.tool_result(%{
+         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+         "dependency" => WorkRequestPayloads.dependency_intent(dependency),
+         "product_tree" => WorkRequestPayloads.public_product_tree(detail.product_tree),
+         "scope" => scope,
+         "status" => %{"work_request_status" => work_request.status}
+       })}
     else
       {:tool_error, reason} -> invalid_params_error(tool, reason)
-      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_product_plan_node", changeset)
+      {:error, %Ecto.Changeset{} = changeset} -> changeset_invalid_params_error(tool, "invalid_dependency", changeset)
       {:error, :not_found} -> not_found_error(tool)
       {:error, reason} -> architect_error(reason, tool)
     end
+  end
+
+  def call("delete_dependency", %Config{} = config, session, arguments) do
+    mutate_graph_record(config, session, arguments, "delete_dependency", "dependency_id", fn work_request_id, dependency_id ->
+      ProductTree.delete_dependency_edge(config.repo, work_request_id, dependency_id)
+    end)
   end
 
   def call("skip_work_package", %Config{} = config, session, arguments) do
@@ -372,105 +382,66 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     end
   end
 
-  defp upsert_product_plan_node_with_blocker_closeout(repo, %Session{} = session, attrs, blocker_closeout_plan) do
-    with {:ok, product_tree_node} <- ProductTree.upsert_node(repo, attrs),
-         {:ok, blocker_closeout} <-
-           ArchitectDeliveryTools.apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan) do
-      {:ok, {product_tree_node, blocker_closeout}}
+  defp mutate_graph_record(%Config{} = config, session, arguments, tool, id_key, mutation_fun) do
+    with {:ok, session} <- Auth.require_session(session, config.repo),
+         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
+         {:ok, id} <- required_argument(arguments, id_key),
+         {:ok, work_request, _filters, scope} <-
+           WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
+         :ok <- require_work_package_authoring_status(work_request.status),
+         created_by = session_claimed_by(session),
+         {:ok, {deleted, detail}} <-
+           mutate_product_tree_with_projection(config.repo, work_request_id, tool, created_by, fn ->
+             mutation_fun.(work_request_id, id)
+           end) do
+      {:ok,
+       ToolResult.tool_result(%{
+         "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
+         "deleted" => deleted_graph_record_payload(tool, deleted),
+         "product_tree" => WorkRequestPayloads.public_product_tree(detail.product_tree),
+         "scope" => scope,
+         "status" => %{"work_request_status" => work_request.status}
+       })}
+    else
+      {:tool_error, reason} -> invalid_params_error(tool, reason)
+      {:error, :not_found} -> not_found_error(tool)
+      {:error, reason} -> architect_error(reason, tool)
     end
   end
 
-  defp mutate_product_plan_node(repo, %Session{} = session, work_request_id, tool, created_by, attrs, blocker_closeout_plan) do
-    mutate_product_tree_with_projection(repo, work_request_id, tool, created_by, fn ->
-      upsert_product_plan_node_with_blocker_closeout(repo, session, attrs, blocker_closeout_plan)
-    end)
+  defp deleted_graph_record_payload("delete_group", result) do
+    %{
+      "group_id" => result.group.id,
+      "parent_group_id" => result.parent_group_id,
+      "moved_group_count" => result.moved_group_count,
+      "moved_work_package_count" => result.moved_work_package_count,
+      "removed_dependency_count" => result.removed_dependency_count
+    }
   end
 
-  defp product_plan_node_tool_result(work_request, product_tree_node, blocker_closeout, detail, scope) do
-    ToolResult.tool_result(%{
-      "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-      "product_plan_node" => WorkRequestPayloads.product_tree_node(product_tree_node),
-      "blocker_closeout" => blocker_closeout,
-      "product_tree" => json_safe_payload(detail.product_tree),
-      "scope" => scope,
-      "status" => %{"work_request_status" => work_request.status}
-    })
-  end
-
-  defp product_plan_node_current_parent_id(_repo, _work_request_id, nil), do: {:ok, nil}
-
-  defp product_plan_node_current_parent_id(repo, work_request_id, product_tree_node_id) do
-    with {:ok, tree} <- ProductTree.tree_for_work_request(repo, work_request_id) do
-      case Enum.find(tree.nodes, &(&1.id == product_tree_node_id)) do
-        %Node{} = node -> {:ok, node.parent_id}
-        nil -> {:error, :not_found}
-      end
-    end
-  end
-
-  defp maybe_prepare_product_plan_node_blocker_closeout(_repo, %Session{}, _work_request_id, _node_id, completion_mark, _arguments, _tool)
-       when completion_mark not in @terminal_product_tree_completion_marks do
-    {:ok, :not_needed}
-  end
-
-  defp maybe_prepare_product_plan_node_blocker_closeout(repo, %Session{} = session, work_request_id, product_tree_node_id, _completion_mark, arguments, tool) do
-    with {:ok, work_package_ids} <- product_plan_node_work_package_ids(repo, work_request_id, product_tree_node_id) do
-      ArchitectDeliveryTools.prepare_scoped_blocker_closeout(repo, session, work_package_ids, arguments, tool)
-    end
-  end
-
-  defp product_plan_node_work_package_ids(repo, work_request_id, product_tree_node_id) do
-    with {:ok, tree} <- ProductTree.tree_for_work_request(repo, work_request_id),
-         {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request_id) do
-      subtree_node_ids = product_tree_subtree_node_ids(tree.nodes, product_tree_node_id)
-
-      package_ids =
-        work_packages
-        |> Enum.filter(&(&1.product_tree_node_id in subtree_node_ids))
-        |> Enum.map(& &1.id)
-
-      {:ok, package_ids}
-    end
-  end
-
-  defp product_tree_subtree_node_ids(nodes, product_tree_node_id) do
-    children_by_parent = Enum.group_by(nodes, & &1.parent_id)
-
-    Stream.unfold([product_tree_node_id], fn
-      [] ->
-        nil
-
-      [node_id | rest] ->
-        child_ids = children_by_parent |> Map.get(node_id, []) |> Enum.map(& &1.id)
-        {node_id, rest ++ child_ids}
-    end)
-    |> Enum.to_list()
+  defp deleted_graph_record_payload("delete_dependency", dependency) do
+    WorkRequestPayloads.dependency_intent(dependency)
   end
 
   defp require_work_package_authoring_status(status) when status in ["ready_for_slicing", "sliced"], do: :ok
   defp require_work_package_authoring_status(_status), do: {:tool_error, "invalid_status"}
 
-  defp require_product_plan_node_content(nil, title, _description, _node_kind) do
+  defp require_group_mutation(nil, title, _description_supplied?, _kind, _parent_supplied?, _position) do
     if filled_string?(title), do: :ok, else: {:tool_error, "missing_title"}
   end
 
-  defp require_product_plan_node_content(_product_tree_node_id, title, description, node_kind) do
-    if Enum.any?([title, description, node_kind], &filled_string?/1),
+  defp require_group_mutation(_group_id, title, description_supplied?, kind, parent_supplied?, position) do
+    if Enum.any?([title, kind], &filled_string?/1) or description_supplied? or parent_supplied? or is_integer(position),
       do: :ok,
-      else: {:tool_error, "missing_product_plan_node_content"}
+      else: {:tool_error, "missing_group_mutation"}
   end
 
-  defp require_product_plan_node_topology(parent_id_supplied?, position) do
-    if parent_id_supplied? or is_integer(position),
-      do: :ok,
-      else: {:tool_error, "missing_product_plan_node_topology"}
+  defp dependency_endpoint(%{"kind" => kind, "id" => id})
+       when kind in ["group", "work_package"] and is_binary(id) and id != "" do
+    {:ok, {if(kind == "group", do: "product_node", else: kind), id}}
   end
 
-  defp require_product_tree_completion_mark(completion_mark) do
-    if completion_mark in Node.completion_marks(),
-      do: :ok,
-      else: {:tool_error, "invalid_completion_mark"}
-  end
+  defp dependency_endpoint(_endpoint), do: {:tool_error, "invalid_dependency_endpoint"}
 
   defp mutate_product_tree(repo, work_request_id, tool, created_by, mutation_fun) do
     run_architect_transaction(repo, fn ->
@@ -538,26 +509,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     product_tree
     |> json_safe_payload()
     |> Map.delete("latest_revision")
+    |> Map.delete("execution_graph")
   end
 
   defp product_tree_revision_reason("slice_work_request"), do: "WorkRequest sliced into canonical WorkPackages through MCP."
   defp product_tree_revision_reason("update_work_package"), do: "WorkPackage contract updated through MCP."
-  defp product_tree_revision_reason("upsert_plan_node"), do: "Product plan node content changed through MCP."
-  defp product_tree_revision_reason("move_plan_node"), do: "Product plan node rearranged through MCP."
-  defp product_tree_revision_reason("set_plan_node_completion"), do: "Product plan node completion changed through MCP."
+  defp product_tree_revision_reason("upsert_group"), do: "Group content or placement changed through MCP."
+  defp product_tree_revision_reason("delete_group"), do: "Group removed through MCP."
+  defp product_tree_revision_reason("upsert_dependency"), do: "Execution dependency changed through MCP."
+  defp product_tree_revision_reason("delete_dependency"), do: "Execution dependency removed through MCP."
   defp product_tree_revision_reason("skip_work_package"), do: "WorkPackage skipped in product tree through MCP."
 
   defp run_architect_transaction(repo, fun) do
     case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do
       {:ok, result} -> {:ok, result}
-      {:error, {:tool_error, reason}} -> {:tool_error, reason}
       {:error, {:error, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp rollback_architect_transaction_result(_repo, {:ok, result}), do: result
-  defp rollback_architect_transaction_result(repo, {:tool_error, reason}), do: repo.rollback({:tool_error, reason})
   defp rollback_architect_transaction_result(repo, {:error, reason}), do: repo.rollback({:error, reason})
 
   defp optional_decision_prompt_argument(arguments, key) do
@@ -617,6 +588,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     |> Map.merge(patch)
   end
 
+  defp internal_work_package_contract(contract) do
+    if Map.has_key?(contract, "group_id") do
+      contract
+      |> Map.put("product_tree_node_id", Map.get(contract, "group_id"))
+      |> Map.delete("group_id")
+    else
+      contract
+    end
+  end
+
   defp string_list?(values) when is_list(values), do: Enum.all?(values, &filled_string?/1)
   defp string_list?(_values), do: false
 
@@ -659,44 +640,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
        "tool" => tool,
        "reason" => "work_package_scope_violation",
        "validation_errors" => scope_validation_details(errors)
-     }}
-  end
-
-  defp invalid_params_error(tool, {:branch_pattern, value, reason}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => Atom.to_string(reason),
-       "validation_errors" => [
-         %{
-           "field" => "branch_pattern",
-           "value" => value,
-           "reason" => Atom.to_string(reason),
-           "message" => BranchPattern.error_message(reason)
-         }
-       ]
-     }}
-  end
-
-  defp invalid_params_error(tool, {:blocker_closeout_required, blockers}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "blocker_closeout_required",
-       "reason_code" => "blocker_closeout_required",
-       "message" => "Active blockers exist in this finish scope. Pass blocker_closeout with decision resolved or still_active.",
-       "active_blockers" => blockers
-     }}
-  end
-
-  defp invalid_params_error(tool, {:blocker_closeout_scope_mismatch, active_ids, requested_ids}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "blocker_closeout_scope_mismatch",
-       "reason_code" => "blocker_closeout_scope_mismatch",
-       "active_blocker_ids" => active_ids,
-       "requested_blocker_ids" => requested_ids
      }}
   end
 

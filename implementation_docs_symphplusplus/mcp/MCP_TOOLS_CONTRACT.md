@@ -172,8 +172,8 @@ target-scope checks.
 
 WorkRequests use one canonical WorkPackage identity from planning through
 delivery. `slice_work_request` atomically creates one or more planned
-WorkPackages beneath the WorkRequest root or optional existing product plan
-nodes. It returns only the WorkPackage ids and one product-tree revision.
+WorkPackages beneath the WorkRequest root or an optional existing Group. It
+returns only the WorkPackage ids and one product-tree revision.
 `update_work_package` edits the same row with optimistic contract revision;
 `skip_work_package` marks that row skipped; `dispatch_work_package` activates
 that row and atomically creates its worker grant, resources, and claim bootstrap.
@@ -188,9 +188,10 @@ Current-WorkRequest lifecycle tools may omit `work_request_id` after
 `claim_local_architect_assignment` has bound the session to exactly one
 WorkRequest. This compact path applies to `slice_work_request`,
 `update_work_package`,
-`upsert_plan_node`,
-`move_plan_node`,
-`set_plan_node_completion`,
+`upsert_group`,
+`delete_group`,
+`upsert_dependency`,
+`delete_dependency`,
 `skip_work_package`, plus delivery board/reconcile, work-package delivery
 closeout, runtime cleanup, worker-key revocation, and dispatch. Supplying
 `work_request_id` is still allowed and is checked against the same architect
@@ -209,15 +210,17 @@ Each `slice_work_request.work_packages` item defaults ordinary PR-backed work
 to `standard_pr`; reserve `mcp` for MCP servers, protocols, tools, or plugins.
 The selected WorkRequest supplies the default delivery repo and target base
 branch for its primary repo; pass the target base branch when selecting a
-secondary delivery repo. Branch pattern, forbidden globs, product node, and
+secondary delivery repo. Branch pattern, forbidden globs, Group, and
 provider-agnostic review requirement are optional. Title, goal, owned globs,
 acceptance criteria, validation, and stop conditions remain required.
 
-Product-plan node authoring is split by intent: use
-`upsert_plan_node` for title, description, or kind,
-`move_plan_node` for parent or position, and
-`set_plan_node_completion` for completion marks and
-required blocker closeout.
+Groups organize WorkPackages but have no lifecycle or completion mark. Use
+`upsert_group` to create, rename, reparent, or reorder a Group and
+`delete_group` to remove one while reparenting its direct contents. Use
+`upsert_dependency` and `delete_dependency` to author execution intent between
+Groups or WorkPackages. The backend expands Group membership into deterministic
+WorkPackage edges. When endpoint memberships overlap, it omits every pair whose
+two endpoints both belong to that shared membership.
 
 `dispatch_work_package` requires only `work_package_id` once a single current
 WorkRequest is claimed; `claimed_by` is optional. It activates the same row,

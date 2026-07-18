@@ -156,6 +156,39 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTreeTest do
              })
   end
 
+  test "dependency updates preserve hard-edge context invariants", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-DEPENDENCY-CONTEXT")
+    source = add_work_package!(repo, work_request, id: "wp_context_source")
+    target = add_work_package!(repo, work_request, id: "wp_context_target")
+
+    assert {:ok, edge} =
+             ProductTree.create_dependency_edge(repo, %{
+               work_request_id: work_request.id,
+               source_kind: "work_package",
+               source_id: source.id,
+               target_kind: "work_package",
+               target_id: target.id,
+               kind: "depends_on",
+               decision_ref: %{"id" => "WRD-CONTEXT"}
+             })
+
+    assert {:error, changeset} =
+             ProductTree.upsert_dependency_edge(repo, %{
+               id: edge.id,
+               work_request_id: work_request.id,
+               source_kind: edge.source_kind,
+               source_id: edge.source_id,
+               target_kind: edge.target_kind,
+               target_id: edge.target_id,
+               kind: edge.kind,
+               reason: "",
+               decision_ref: %{}
+             })
+
+    assert {"hard dependency edges require a reason or decision reference", _metadata} = changeset.errors[:kind]
+    assert repo.get!(DependencyEdge, edge.id).decision_ref == %{"id" => "WRD-CONTEXT"}
+  end
+
   test "records revisions and no removed product-tree linkage table remains", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-REVISION")
     node = create_node!(repo, work_request, id: "node_revision")

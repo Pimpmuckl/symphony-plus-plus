@@ -9,9 +9,8 @@ Current contract:
 - `implementation_docs_symphplusplus/mcp/MCP_TOOLS_CONTRACT.md`
 - `plugins/symphony-plus-plus-mcp/skills/symphony-architect/SKILL.md`
 
-Architects may create or edit optional product plan node content with
-`upsert_plan_node`, rearrange product plan nodes
-with `move_plan_node`, set node completion marks with
-`set_plan_node_completion`, and assign planned WorkPackages with
-`update_work_package`. These are agent-facing
-control-plane tools and do not dispatch WorkPackages.
+Architects may create, edit, reparent, or reorder optional Groups with
+`upsert_group`, remove them with `delete_group`, maintain execution intent with
+`upsert_dependency` and `delete_dependency`, and assign planned WorkPackages
+with `update_work_package`. These are agent-facing control-plane tools and do
+not dispatch WorkPackages.

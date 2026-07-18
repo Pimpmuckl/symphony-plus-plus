@@ -3,7 +3,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, SoloTools}
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
@@ -102,9 +101,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "record_decision",
     "slice_work_request",
     "update_work_package",
-    "upsert_plan_node",
-    "move_plan_node",
-    "set_plan_node_completion",
+    "upsert_group",
+    "delete_group",
+    "upsert_dependency",
+    "delete_dependency",
     "skip_work_package",
     "dispatch_work_package",
     "prepare_work_package_worktree",
@@ -128,18 +128,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "record_decision",
     "slice_work_request",
     "update_work_package",
-    "upsert_plan_node",
-    "move_plan_node",
-    "set_plan_node_completion",
+    "upsert_group",
+    "delete_group",
+    "upsert_dependency",
+    "delete_dependency",
     "skip_work_package",
     "dispatch_work_package"
   ]
   @current_work_request_write_tools [
     "slice_work_request",
     "update_work_package",
-    "upsert_plan_node",
-    "move_plan_node",
-    "set_plan_node_completion",
+    "upsert_group",
+    "delete_group",
+    "upsert_dependency",
+    "delete_dependency",
     "skip_work_package"
   ]
   @current_work_request_tools @current_work_request_write_tools ++
@@ -157,7 +159,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "record_work_package_delivery",
     "revoke_work_package_worker_key"
   ]
-  @work_request_product_tree_views ["nodes_only", "nodes_with_work_package_refs", "nodes_with_work_packages"]
+  @work_request_product_tree_views ["groups_only", "groups_with_work_package_refs", "groups_with_work_packages"]
   @type tool_name :: String.t()
   @type input_schema :: map()
   @type tool_spec :: map()
@@ -332,7 +334,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp architect_tool_description("revoke_child_worker_key"), do: "Revoke one live child-worker grant for a same-phase child package in the architect grant's current phase."
   defp architect_tool_description("list_work_requests"), do: "List WorkRequests scoped to the architect grant's repo and base branch."
   defp architect_tool_description("read_work_request"), do: "Read a scoped WorkRequest with clarification questions, decisions, visible WorkPackages, and status summaries."
-  defp architect_tool_description("read_plan"), do: "Read the scoped WorkRequest V3 product-tree projection, with optional WorkPackage refs or full visible WorkPackage payloads."
+
+  defp architect_tool_description("read_plan"),
+    do: "Read the scoped WorkRequest execution graph, Groups, effective WorkPackage dependencies, and optional WorkPackage payloads."
+
   defp architect_tool_description("add_comment"), do: "Add a policy-scoped comment to a claimed WorkRequest descendant package surface, or a narrow external comment to a visible WorkRequest."
   defp architect_tool_description("list_comments"), do: "List comments attached to a scoped WorkRequest or WorkPackage."
   defp architect_tool_description("resolve_comment"), do: "Resolve a policy-scoped comment attached to a claimed WorkRequest descendant package surface."
@@ -366,17 +371,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   defp architect_tool_description("update_work_package"),
     do: "Update one canonical WorkPackage contract using its optimistic contract revision."
 
-  defp architect_tool_description("upsert_plan_node") do
-    "Create or edit V3 product plan node content inside the claimed current WorkRequest. Do not create a plan node solely to wrap one WorkPackage."
+  defp architect_tool_description("upsert_group") do
+    "Create, rename, reparent, or reorder an optional Group inside the claimed current WorkRequest. Groups organize WorkPackages and have no lifecycle."
   end
 
-  defp architect_tool_description("move_plan_node") do
-    "Reparent or reorder a V3 product plan node inside the claimed current WorkRequest."
-  end
+  defp architect_tool_description("delete_group"),
+    do: "Remove a Group, move its direct child Groups and WorkPackages to its parent, and remove dependencies that name it."
 
-  defp architect_tool_description("set_plan_node_completion") do
-    "Set a V3 product plan node completion mark inside the claimed current WorkRequest. If setting completion_mark to done or deferred and descendant blockers are active, answer blocker_closeout before completing the node."
-  end
+  defp architect_tool_description("upsert_dependency"),
+    do: "Create or edit one dependency intent between WorkPackage or Group endpoints; the backend derives effective WorkPackage edges."
+
+  defp architect_tool_description("delete_dependency"), do: "Remove one dependency intent from the claimed current WorkRequest."
 
   defp architect_tool_description("skip_work_package") do
     "Skip a WorkPackage that belongs to the claimed current WorkRequest."
@@ -702,7 +707,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
         "view" =>
           @work_request_product_tree_views
           |> string_enum_schema()
-          |> Map.put("description", "Projection size. Defaults to nodes_with_work_package_refs.")
+          |> Map.put("description", "Projection size. Defaults to groups_with_work_package_refs.")
       },
       ["work_request_id"]
     )
@@ -946,52 +951,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     )
   end
 
-  def architect_tool_input_schema("upsert_plan_node") do
+  def architect_tool_input_schema("upsert_group"), do: upsert_group_schema()
+
+  def architect_tool_input_schema("delete_group") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
-        "product_tree_node_id" => described_string_schema("Optional existing product plan node id. Omit to create a new node."),
-        "title" => nonblank_string_schema(),
-        "description" => markdown_nullable_string_schema("Optional human-facing product plan node description."),
-        "node_kind" => described_string_schema("Optional loose architect-facing grouping hint such as layer, capability, milestone, or risk."),
-        "created_by" => described_string_schema("Optional architect identity for audit display.")
+        "group_id" => nonblank_string_schema()
       },
-      []
+      ["group_id"]
     )
-    |> always_validate(%{
-      "allOf" => [
-        %{"anyOf" => [%{"required" => ["product_tree_node_id"]}, %{"required" => ["title"]}]},
-        %{"anyOf" => [%{"required" => ["title"]}, %{"required" => ["description"]}, %{"required" => ["node_kind"]}]}
-      ]
-    })
   end
 
-  def architect_tool_input_schema("move_plan_node") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "product_tree_node_id" => nonblank_string_schema(),
-        "parent_id" =>
-          nullable_string_schema()
-          |> Map.put("description", "Target parent product plan node id. Omit to keep the current parent; pass null or an empty string to move the node to the WorkRequest root."),
-        "position" => nonnegative_integer_schema(),
-        "created_by" => described_string_schema("Optional architect identity for audit display.")
-      },
-      ["product_tree_node_id"]
-    )
-    |> always_validate(%{"anyOf" => [%{"required" => ["parent_id"]}, %{"required" => ["position"]}]})
-  end
+  def architect_tool_input_schema("upsert_dependency"), do: upsert_dependency_schema()
 
-  def architect_tool_input_schema("set_plan_node_completion") do
+  def architect_tool_input_schema("delete_dependency") do
     schema(
       %{
         "work_request_id" => current_work_request_id_schema(),
-        "product_tree_node_id" => nonblank_string_schema(),
-        "completion_mark" => string_enum_schema(Node.completion_marks()),
-        "created_by" => described_string_schema("Optional architect identity for audit display."),
-        "blocker_closeout" => blocker_closeout_schema()
+        "dependency_id" => nonblank_string_schema()
       },
-      ["product_tree_node_id", "completion_mark"]
+      ["dependency_id"]
     )
   end
 
@@ -1365,7 +1345,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   defp work_package_contract_properties do
     %{
-      "product_tree_node_id" => nullable_string_schema(),
+      "group_id" => nullable_string_schema(),
       "title" => nonblank_string_schema(),
       "goal" => nonblank_string_schema(),
       "kind" => Map.put(string_enum_schema(WorkPackage.executable_kinds()), "default", "standard_pr"),
@@ -1392,6 +1372,58 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
       },
       "required" => ["type"]
     }
+  end
+
+  defp dependency_endpoint_schema do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{
+        "kind" => string_enum_schema(["work_package", "group"]),
+        "id" => nonblank_string_schema()
+      },
+      "required" => ["kind", "id"]
+    }
+  end
+
+  defp upsert_group_schema do
+    schema(
+      %{
+        "work_request_id" => current_work_request_id_schema(),
+        "group_id" => described_string_schema("Optional existing Group id. Omit to create a Group."),
+        "title" => nonblank_string_schema(),
+        "description" => markdown_nullable_string_schema("Optional human-facing Group description."),
+        "kind" => described_string_schema("Optional loose organization hint such as capability, milestone, or risk."),
+        "parent_group_id" => nullable_string_schema() |> Map.put("description", "Optional parent Group id; pass null to move the Group to the WorkRequest root."),
+        "position" => nonnegative_integer_schema(),
+        "created_by" => described_string_schema("Optional architect identity for audit display.")
+      },
+      []
+    )
+    |> always_validate(%{
+      "allOf" => [
+        %{"anyOf" => [%{"required" => ["group_id"]}, %{"required" => ["title"]}]},
+        %{
+          "anyOf" => Enum.map(["title", "description", "kind", "parent_group_id", "position"], &%{"required" => [&1]})
+        }
+      ]
+    })
+  end
+
+  defp upsert_dependency_schema do
+    schema(
+      %{
+        "work_request_id" => current_work_request_id_schema(),
+        "dependency_id" => described_string_schema("Optional existing dependency id. Omit to create a dependency."),
+        "dependent" => dependency_endpoint_schema(),
+        "prerequisite" => dependency_endpoint_schema(),
+        "reason" => markdown_string_schema("Why this dependency exists."),
+        "decision_ref" => object_schema(),
+        "created_by" => described_string_schema("Optional architect identity for audit display.")
+      },
+      ["dependent", "prerequisite"]
+    )
+    |> always_validate(%{"anyOf" => [%{"required" => ["reason"]}, %{"required" => ["decision_ref"]}]})
   end
 
   defp blocker_closeout_schema do
