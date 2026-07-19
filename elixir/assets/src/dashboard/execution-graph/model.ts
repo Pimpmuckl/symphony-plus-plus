@@ -287,7 +287,7 @@ function groupState(
   signals: Map<string, ExecutionGraphWorkPackageSignals>,
 ): ExecutionGraphEntityState {
   const completed = memberIds.filter((id) => workPackageIsFinished(refs.get(id), signals.get(id))).length;
-  const paths = memberIds.map((id) => workPackagePathState(refs.get(id), signals.get(id)));
+  const paths = memberIds.map((id) => workPackageEntityState(refs.get(id), signals.get(id)));
   if (memberIds.length > 0 && completed === memberIds.length) return { label: "Complete", tone: "complete", completed, total: memberIds.length };
   if (paths.includes("active")) return { label: "Active", tone: "active", completed, total: memberIds.length };
   if (paths.includes("blocked")) return { label: "Blocked", tone: "blocked", completed, total: memberIds.length };
@@ -295,7 +295,9 @@ function groupState(
   return { label: "Empty", tone: "neutral", completed: 0, total: 0 };
 }
 
-function workPackagePathState(ref?: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals): DependencyPathState {
+function workPackagePathState(ref?: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals): DependencyPathState { const state = workPackageEntityState(ref, signal); return state === "blocked" ? "waiting" : state; }
+
+function workPackageEntityState(ref?: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals): DependencyPathState {
   if (workPackageIsFinished(ref, signal)) return "satisfied";
   const status = workPackageStatusText(ref, signal);
   if (deliverySignalFailed(signal)) return "blocked";
@@ -528,13 +530,11 @@ function endpointPathState(endpoint: ExecutionGraphDependencyEndpoint, context: 
   const tone = context.groupStates.get(endpoint.id)?.tone;
   if (tone === "complete") return "satisfied";
   if (tone === "active") return "active";
-  if (tone === "blocked") return "blocked";
   return "waiting";
 }
 
 function combinedPathState(states: DependencyPathState[]): DependencyPathState {
   if (states.length > 0 && states.every((state) => state === "satisfied")) return "satisfied";
-  if (states.includes("blocked")) return "blocked";
   if (states.includes("active")) return "active";
   return "waiting";
 }

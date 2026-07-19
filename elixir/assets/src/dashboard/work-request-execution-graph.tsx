@@ -137,7 +137,7 @@ function GraphSurface({
 }
 function GroupCard({ rect, model, onToggle, children }: { rect: GraphEntityRect; model: ExecutionGraphLayoutModel; onToggle: (id: string) => void; children?: ReactNode }) {
   const group = model.groups.get(rect.id);
-  const state = model.groupStates.get(rect.id) ?? { label: "Planned", tone: "waiting", completed: 0, total: 0 };
+  const state = model.groupStates.get(rect.id) ?? { label: "Planned", tone: "neutral", completed: 0, total: 0 };
   const title = group?.title?.trim() || "Untitled group";
   const status = state.total ? `${state.label} · ${state.completed}/${state.total}` : state.label;
   const style = { left: rect.x, top: rect.y, width: rect.width, height: rect.height } as CSSProperties;

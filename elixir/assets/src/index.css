@@ -3780,6 +3780,10 @@
     animation: execution-graph-wire-snap-out 150ms cubic-bezier(0.4, 0, 1, 1) 40ms both;
   }
 
+  .execution-graph__wire-layer[data-motion="morphing"] .execution-graph__edge {
+    animation: execution-graph-wire-morph var(--wire-snap-duration) cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
   .execution-graph__wire-layer[data-motion="entering"] .execution-graph__join-label {
     animation: execution-graph-wire-label-in 160ms ease-out both;
   }
@@ -3802,6 +3806,8 @@
 
   .execution-graph__card,
   .execution-graph__group-card {
+    --graph-hover-color: hsl(var(--ring));
+
     position: absolute;
     z-index: 2;
     display: grid;
@@ -3927,11 +3933,11 @@
 
   .execution-graph__card:hover,
   .execution-graph__card:focus-visible,
-  .execution-graph__group-card:hover,
-  .execution-graph__group-card:focus-within {
-    border-color: hsl(var(--ring) / 0.62);
+  .execution-graph__group-card:has(> .execution-graph__group-header:hover),
+  .execution-graph__group-card:has(> .execution-graph__group-header:focus-visible) {
+    border-color: color-mix(in oklch, var(--graph-hover-color) 62%, transparent);
     box-shadow:
-      0 0 0 3px hsl(var(--ring) / 0.14),
+      0 0 0 3px color-mix(in oklch, var(--graph-hover-color) 14%, transparent),
       0 9px 24px hsl(224 27% 12% / 0.1);
   }
 
@@ -3945,28 +3951,39 @@
 
   .execution-graph__card[data-state="active"],
   .execution-graph__group-card[data-state="active"] {
+    --graph-hover-color: oklch(66% 0.15 225);
+
     border-color: hsl(199 89% 48% / 0.48);
     background: hsl(199 72% 97%);
   }
 
   .execution-graph__card[data-state="ready"] {
+    --graph-hover-color: oklch(59% 0.18 264);
+
     border-color: hsl(221 72% 52% / 0.34);
     background: hsl(220 48% 98%);
   }
 
   .execution-graph__card[data-state="waiting"],
   .execution-graph__group-card[data-state="waiting"] {
-    background: hsl(43 96% 97%);
+    --graph-hover-color: oklch(64% 0.12 274);
+
+    border-color: oklch(64% 0.12 274 / 0.34);
+    background: oklch(97% 0.018 274);
   }
 
   .execution-graph__card[data-state="blocked"],
   .execution-graph__group-card[data-state="blocked"] {
+    --graph-hover-color: oklch(60% 0.2 15);
+
     border-color: hsl(348 77% 52% / 0.44);
     background: hsl(348 64% 98%);
   }
 
   .execution-graph__card[data-state="complete"],
   .execution-graph__group-card[data-state="complete"] {
+    --graph-hover-color: oklch(59% 0.13 164);
+
     border-color: hsl(158 64% 40% / 0.38);
     background: hsl(158 54% 97%);
   }
@@ -3983,7 +4000,8 @@
 
   .dark .execution-graph__card[data-state="waiting"],
   .dark .execution-graph__group-card[data-state="waiting"] {
-    background: hsl(43 38% 13%);
+    border-color: oklch(64% 0.1 274 / 0.38);
+    background: oklch(20% 0.035 274);
   }
 
   .dark .execution-graph__card[data-state="blocked"],
@@ -4013,48 +4031,72 @@
     white-space: nowrap;
   }
 
-  :is(.execution-graph__card, .execution-graph__group-card)[data-state="active"] .execution-graph__status {
+  :is(
+    .execution-graph__card[data-state="active"] > .execution-graph__status,
+    .execution-graph__group-card[data-state="active"] > .execution-graph__group-header > .execution-graph__status
+  ) {
     border-color: hsl(199 89% 48% / 0.32);
     color: hsl(199 72% 34%);
   }
 
-  .execution-graph__card[data-state="ready"] .execution-graph__status {
+  .execution-graph__card[data-state="ready"] > .execution-graph__status {
     border-color: hsl(221 72% 52% / 0.34);
     color: hsl(221 70% 38%);
   }
 
-  :is(.execution-graph__card, .execution-graph__group-card)[data-state="waiting"] .execution-graph__status {
-    border-color: hsl(43 82% 46% / 0.34);
-    color: hsl(34 76% 31%);
+  :is(
+    .execution-graph__card[data-state="waiting"] > .execution-graph__status,
+    .execution-graph__group-card[data-state="waiting"] > .execution-graph__group-header > .execution-graph__status
+  ) {
+    border-color: oklch(64% 0.12 274 / 0.38);
+    color: oklch(45% 0.12 274);
   }
 
-  :is(.execution-graph__card, .execution-graph__group-card)[data-state="blocked"] .execution-graph__status {
+  :is(
+    .execution-graph__card[data-state="blocked"] > .execution-graph__status,
+    .execution-graph__group-card[data-state="blocked"] > .execution-graph__group-header > .execution-graph__status
+  ) {
     border-color: hsl(348 77% 52% / 0.34);
     color: hsl(348 77% 40%);
   }
 
-  :is(.execution-graph__card, .execution-graph__group-card)[data-state="complete"] .execution-graph__status {
+  :is(
+    .execution-graph__card[data-state="complete"] > .execution-graph__status,
+    .execution-graph__group-card[data-state="complete"] > .execution-graph__group-header > .execution-graph__status
+  ) {
     border-color: hsl(158 64% 40% / 0.32);
     color: hsl(158 64% 30%);
   }
 
-  .dark :is(.execution-graph__card, .execution-graph__group-card)[data-state="active"] .execution-graph__status {
+  .dark :is(
+    .execution-graph__card[data-state="active"] > .execution-graph__status,
+    .execution-graph__group-card[data-state="active"] > .execution-graph__group-header > .execution-graph__status
+  ) {
     color: hsl(190 90% 72%);
   }
 
-  .dark .execution-graph__card[data-state="ready"] .execution-graph__status {
+  .dark .execution-graph__card[data-state="ready"] > .execution-graph__status {
     color: hsl(216 92% 75%);
   }
 
-  .dark :is(.execution-graph__card, .execution-graph__group-card)[data-state="waiting"] .execution-graph__status {
-    color: hsl(43 88% 72%);
+  .dark :is(
+    .execution-graph__card[data-state="waiting"] > .execution-graph__status,
+    .execution-graph__group-card[data-state="waiting"] > .execution-graph__group-header > .execution-graph__status
+  ) {
+    color: oklch(80% 0.1 274);
   }
 
-  .dark :is(.execution-graph__card, .execution-graph__group-card)[data-state="blocked"] .execution-graph__status {
+  .dark :is(
+    .execution-graph__card[data-state="blocked"] > .execution-graph__status,
+    .execution-graph__group-card[data-state="blocked"] > .execution-graph__group-header > .execution-graph__status
+  ) {
     color: hsl(350 82% 72%);
   }
 
-  .dark :is(.execution-graph__card, .execution-graph__group-card)[data-state="complete"] .execution-graph__status {
+  .dark :is(
+    .execution-graph__card[data-state="complete"] > .execution-graph__status,
+    .execution-graph__group-card[data-state="complete"] > .execution-graph__group-header > .execution-graph__status
+  ) {
     color: hsl(158 64% 72%);
   }
 
@@ -4155,6 +4197,15 @@
     }
   }
 
+  @keyframes execution-graph-wire-morph {
+    from {
+      d: var(--wire-from);
+    }
+    to {
+      d: var(--wire-to);
+    }
+  }
+
   @keyframes execution-graph-wire-label-in {
     from {
       opacity: 0;
@@ -4184,7 +4235,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .execution-graph__wire-layer[data-motion="leaving"] {
+    .execution-graph__wire-layer[data-motion="leaving"],
+    .execution-graph__wire-layer[data-motion="morphing"] {
       display: none;
     }
 

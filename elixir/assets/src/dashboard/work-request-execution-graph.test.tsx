@@ -5,6 +5,8 @@ import { workRequestExecutionGraphModel } from "@/dashboard/execution-graph/adap
 import { buildExecutionGraphLayout, defaultExpandedGroupIds } from "@/dashboard/execution-graph/model";
 import type { WorkRequestExecutionGraphModel } from "@/dashboard/execution-graph/model";
 import { graphWireRoutes } from "@/dashboard/execution-graph/router";
+import type { WirePath } from "@/dashboard/execution-graph/router";
+import { wireMorphs } from "@/dashboard/execution-graph/wires";
 import { WorkRequestExecutionGraph } from "@/dashboard/work-request-execution-graph";
 import type { WorkRequestDetail } from "@/types/dashboard";
 
@@ -139,6 +141,15 @@ describe("WorkRequestExecutionGraph", () => {
     expect(routes.gates.find((gate) => gate.targetKey === "work_package:validate")?.path).toContain(`M ${gateX}`);
     expect(routes.paths.find((route) => route.edge === "group:history:work_package:validate")?.path).toMatch(new RegExp(`H ${gateX}$`));
     expect(routes.paths.find((route) => route.edge === "work_package:successor:work_package:validate")?.path).toMatch(new RegExp(`^M ${validate.x} `));
+    expect(routes.paths.find((route) => route.edge === "work_package:successor:work_package:validate")?.state).toBe("waiting");
+  });
+
+  it("keeps a blocker local while its dependent package remains waiting", () => {
+    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={recoveryGraphFixture} />);
+
+    expect(firstCard(html, "successor")).toContain('data-state="blocked"');
+    expect(firstCard(html, "validate")).toContain('data-state="waiting"');
+    expect(firstCard(html, "validate")).toContain("Waiting 1/2");
   });
 
   it("keeps dense fan-in lanes monotonic by source order", () => {
@@ -150,6 +161,15 @@ describe("WorkRequestExecutionGraph", () => {
       .map((dependency) => firstHorizontalTrack(paths.find((route) => route.edge === dependency.key)?.path));
 
     expect(tracks).toEqual([...tracks].sort((left, right) => left - right));
+  });
+
+  it("duplicates an existing collapsed wire when child routes expand", () => {
+    const route = (key: string, intentIds: string[]): WirePath => ({ key, edge: key, state: "waiting", path: `M ${key.length} 0 H 10 V 10 H 20`, intentIds, intentCount: intentIds.length });
+    const collapsed = [route("group", ["parse", "index"])];
+    const expanded = [route("parse", ["parse"]), route("index", ["index"])];
+
+    expect(wireMorphs(collapsed, expanded).map(({ from, to }) => `${from.key}:${to.key}`)).toEqual(["group:parse", "group:index"]);
+    expect(wireMorphs(expanded, collapsed).map(({ from, to }) => `${from.key}:${to.key}`)).toEqual(["parse:group", "index:group"]);
   });
 
   it("renders line-only connectors and a green-check state for a satisfied gate", () => {
@@ -283,7 +303,13 @@ const recoveryGraphFixture: WorkRequestExecutionGraphModel = {
   work_packages: [
     { id: "old", group_id: "history", title: "Old attempt", status: "merged" },
     { id: "successor", group_id: "retry", title: "Narrow successor", status: "blocked" },
-    { id: "validate", group_id: "retry", title: "Validate recovery", status: "ready_for_worker" },
+    {
+      id: "validate",
+      group_id: "retry",
+      title: "Validate recovery",
+      status: "ready_for_worker",
+      dependency_signal: { satisfied: 1, required: 2, active: 0, blocked: 1, unmet_work_package_ids: ["successor"], inputs: [{ work_package_id: "successor", status: "blocked" }] },
+    },
   ],
   dependency_intents: [
     { id: "history-validate", prerequisite: { kind: "group", id: "history" }, dependent: { kind: "work_package", id: "validate" } },

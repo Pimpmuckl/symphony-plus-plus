@@ -12,6 +12,7 @@ export type WirePath = {
   edge: string;
   state: DependencyPathState;
   path: string;
+  intentIds: string[];
   intentCount: number;
   bundle?: boolean;
 };
@@ -66,6 +67,7 @@ export function graphWireRoutes(model: ExecutionGraphLayoutModel, orientation: G
         edge: bundle.dependencies.map((dependency) => dependency.key).join(" "),
         state: bundle.state,
         path: straightPath(port, branch, orientation),
+        intentIds: [...new Set(bundle.dependencies.flatMap((dependency) => dependency.intent_ids))],
         intentCount: bundle.dependencies.reduce((sum, dependency) => sum + dependency.intent_ids.length, 0),
         bundle: true,
       });
@@ -101,6 +103,7 @@ export function graphWireRoutes(model: ExecutionGraphLayoutModel, orientation: G
     edge: candidate.dependency.key,
     state: candidate.dependency.state,
     path: routedPath(candidate.start, candidate.end, orientation, reservations, candidate.laneBias),
+    intentIds: candidate.dependency.intent_ids,
     intentCount: candidate.dependency.intent_ids.length,
     bundle: false,
   }));
@@ -214,7 +217,7 @@ function routedPath(start: Point, end: Point, orientation: GraphOrientation, res
   const crossStart = Math.min(from.cross, to.cross);
   const crossEnd = Math.max(from.cross, to.cross);
   const track = reserveLane(from.primary, to.primary, to.primary - from.primary, crossStart, crossEnd, reservations, laneBias);
-  return `M ${pointValue(start)} ${primaryCommand(orientation)} ${number(track)} ${crossCommand(orientation)} ${number(to.cross)} ${primaryCommand(orientation)} ${number(to.primary)}`;
+  return orthogonalPath(start, track, to, orientation);
 }
 
 function reserveLane(
@@ -300,8 +303,13 @@ function movePrimary(point: Point, orientation: GraphOrientation, amount: number
 }
 
 function straightPath(start: Point, end: Point, orientation: GraphOrientation) {
+  const from = toAxis(start, orientation);
   const to = toAxis(end, orientation);
-  return `M ${pointValue(start)} ${primaryCommand(orientation)} ${number(to.primary)}`;
+  return orthogonalPath(start, (from.primary + to.primary) / 2, to, orientation);
+}
+
+function orthogonalPath(start: Point, track: number, end: AxisPoint, orientation: GraphOrientation) {
+  return `M ${pointValue(start)} ${primaryCommand(orientation)} ${number(track)} ${crossCommand(orientation)} ${number(end.cross)} ${primaryCommand(orientation)} ${number(end.primary)}`;
 }
 
 function linePath(start: AxisPoint, end: AxisPoint, orientation: GraphOrientation) {
