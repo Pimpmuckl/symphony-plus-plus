@@ -47,11 +47,12 @@ describe("workstream board removal rendering", () => {
 
     expect(expanded).toContain('data-expanded="true"');
     expect(expanded).toContain('data-work-package-id="wp-active"');
-    expect(expanded).toContain("fixture-worker · 1h 30m");
+    expect(expanded).toContain("Active · 1h 30m");
+    expect(expanded).not.toContain("fixture-worker");
     expect(expanded).toContain('data-v3-context-path=');
     expect(expanded).toContain("Graph group");
-    expect(expanded).not.toContain('data-work-package-id="wp-old"');
-    expect(expanded).toContain("Show history (1)");
+    expect(expanded).toContain('data-work-package-id="wp-old"');
+    expect(expanded).not.toContain("Show history");
     expect(expanded).not.toContain("v3-product-node");
     expect(collapsed).toContain("Graph request");
     expect(collapsed).toContain("fixture/repo");

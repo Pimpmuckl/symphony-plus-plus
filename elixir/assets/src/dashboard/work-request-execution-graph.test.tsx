@@ -1,30 +1,33 @@
-import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { workRequestExecutionGraphModel } from "@/dashboard/execution-graph/adapter";
-import { buildExecutionGraphLayout } from "@/dashboard/execution-graph/model";
+import { buildExecutionGraphLayout, defaultExpandedGroupIds } from "@/dashboard/execution-graph/model";
 import type { WorkRequestExecutionGraphModel } from "@/dashboard/execution-graph/model";
+import { graphWireRoutes } from "@/dashboard/execution-graph/router";
 import { WorkRequestExecutionGraph } from "@/dashboard/work-request-execution-graph";
 import type { WorkRequestDetail } from "@/types/dashboard";
 
 describe("WorkRequestExecutionGraph", () => {
-  it("maps backend graph and DeliveryBoard fields without recomputing graph semantics", () => {
+  it("maps original dependency intent and DeliveryBoard state without replacing it with effective edges", () => {
     const detail: WorkRequestDetail = {
       work_request: { id: "wr-adapter", title: "Adapter fixture" },
       work_packages: [
-        { id: "wp-active", work_request_id: "wr-adapter", product_tree_node_id: "group-a", sequence: 1, title: "Active", status: "implementing" },
-        { id: "wp-old", work_request_id: "wr-adapter", product_tree_node_id: "group-a", sequence: 2, title: "Old", status: "implementing" },
+        { id: "wp-active", work_request_id: "wr-adapter", product_tree_node_id: "group-a", title: "Active", status: "implementing" },
+        { id: "wp-old", work_request_id: "wr-adapter", product_tree_node_id: "group-a", title: "Old", status: "merged" },
       ],
       product_tree: {
         available: true,
         nodes: [{ id: "group-a", title: "Group A", work_package_ids: ["wp-active", "wp-old"] }],
+        dependency_edges: [
+          { id: "depends", kind: "depends_on", source: { kind: "work_package", id: "wp-active" }, target: { kind: "product_node", id: "group-a" } },
+          { id: "blocks", kind: "blocks", source: { kind: "product_node", id: "group-a" }, target: { kind: "work_package", id: "wp-old" } },
+        ],
         execution_graph: {
           available: true,
           work_package_ids: ["wp-active", "wp-old"],
-          effective_edges: [{ prerequisite_work_package_id: "wp-active", dependent_work_package_id: "wp-old", dependency_ids: ["edge-a"] }],
-          topological_order: ["wp-active", "wp-old"],
-          cycles: [["wp-old"], ["wp-active", "wp-old"]],
+          effective_edges: [{ prerequisite_work_package_id: "wp-old", dependent_work_package_id: "wp-active", dependency_ids: ["expanded"] }],
+          topological_order: ["wp-old", "wp-active"],
         },
       },
       delivery_board: {
@@ -32,15 +35,9 @@ describe("WorkRequestExecutionGraph", () => {
           {
             id: "wp-active",
             operational_state: { key: "implementing", label: "Implementing", tone: "info" },
-            work_package: {
-              id: "wp-active",
-              title: "Active projection",
-              raw_status: "implementing",
-              worker_signal: { status: "active", run_label: "fixture-worker" },
-              dependency_signal: { satisfied: 0, required: 0, active: 0, blocked: 0, unmet_work_package_ids: [], inputs: [] },
-            },
+            work_package: { id: "wp-active", title: "Active projection", raw_status: "implementing", worker_signal: { status: "active", run_label: "fixture-worker" } },
           },
-          { id: "wp-old", delivery_outcome: "superseded", work_package: { id: "wp-old", raw_status: "implementing" } },
+          { id: "wp-old", delivery_outcome: "superseded", work_package: { id: "wp-old", raw_status: "merged" } },
         ],
       },
     };
@@ -48,270 +45,183 @@ describe("WorkRequestExecutionGraph", () => {
     const active = workRequestExecutionGraphModel(detail);
     const all = workRequestExecutionGraphModel(detail, { includeHistorical: true });
 
-    expect(active.groups).toEqual([{ id: "group-a", title: "Group A", work_package_ids: ["wp-active", "wp-old"] }]);
     expect(active.work_packages).toEqual([
       expect.objectContaining({ id: "wp-active", group_id: "group-a", title: "Active projection", worker_signal: { status: "active", run_label: "fixture-worker" } }),
     ]);
+    expect(active.dependency_intents).toEqual([
+      { id: "depends", prerequisite: { kind: "group", id: "group-a" }, dependent: { kind: "work_package", id: "wp-active" } },
+      { id: "blocks", prerequisite: { kind: "group", id: "group-a" }, dependent: { kind: "work_package", id: "wp-old" } },
+    ]);
     expect(active.effective_edges).toEqual(detail.product_tree?.execution_graph?.effective_edges);
-    expect(active.topological_order).toEqual(["wp-active", "wp-old"]);
-    expect(active.cycles).toEqual([["wp-old"], ["wp-active", "wp-old"]]);
     expect(all.work_packages.map((item) => item.id)).toEqual(["wp-active", "wp-old"]);
-    expect(all.cycles).toEqual([["wp-old"], ["wp-active", "wp-old"]]);
   });
 
-  it("lays out the backend topological order left-to-right on desktop and top-to-bottom on mobile", () => {
-    const desktop = buildExecutionGraphLayout(graphFixture, "desktop");
-    const mobile = buildExecutionGraphLayout(graphFixture, "mobile");
-    const desktopPoints = points(desktop.positions);
-
-    expect(desktop.ids).toEqual(["wp-a", "wp-b", "wp-c", "wp-d", "wp-e"]);
-    expect(desktopPoints["wp-a"].x).toBeLessThan(desktopPoints["wp-b"].x);
-    expect(desktopPoints["wp-b"].x).toBe(desktopPoints["wp-c"].x);
-    expect(desktopPoints["wp-b"].x).toBeLessThan(desktopPoints["wp-d"].x);
-    expect(mobile.positions.map((point) => point.id)).toEqual(desktop.ids);
-    expect(mobile.positions.map((point) => point.y)).toEqual([...mobile.positions.map((point) => point.y)].sort((a, b) => a - b));
-  });
-
-  it("bounds nested Groups around their descendants without absorbing ungrouped packages", () => {
+  it("uses Groups as the root graph entities and gives dependent roots greater desktop depth", () => {
     const model = buildExecutionGraphLayout(graphFixture, "desktop");
-    const parent = model.groupBounds.find((group) => group.id === "group-parent");
-    const child = model.groupBounds.find((group) => group.id === "group-child");
-    const ungrouped = model.positions.find((point) => point.id === "wp-d");
+    const source = rect(model, "group:source");
+    const workers = rect(model, "group:workers");
+    const output = rect(model, "group:output");
 
-    expect(parent).toMatchObject({ title: "Build", nestingDepth: 0 });
-    expect(child).toMatchObject({ title: "Verification", nestingDepth: 1 });
-    expect(parent && child && parent.x <= child.x && parent.x + parent.width >= child.x + child.width).toBe(true);
-    expect(parent && ungrouped && ungrouped.x >= parent.x + parent.width).toBe(true);
+    expect(source.x).toBeLessThan(workers.x);
+    expect(workers.x).toBeLessThan(output.x);
+    expect(rect(model, "work_package:parse").parent_group_id).toBe("workers");
+    expect(model.rects.some((item) => item.key === "work_package:snapshot")).toBe(false);
   });
 
-  it("splits a Group region rather than enclosing an unrelated package between its members", () => {
-    const graph: WorkRequestExecutionGraphModel = {
-      groups: [{ id: "split", title: "Split", work_package_ids: ["first", "last"] }],
-      work_packages: [{ id: "first" }, { id: "outside" }, { id: "last" }],
-      topological_order: ["first", "outside", "last"],
-      effective_edges: [
-        { prerequisite_work_package_id: "first", dependent_work_package_id: "outside" },
-        { prerequisite_work_package_id: "outside", dependent_work_package_id: "last" },
-      ],
-    };
-    const model = buildExecutionGraphLayout(graph, "desktop");
-    const outside = model.positions.find((point) => point.id === "outside")!;
+  it("expands active Groups by default and keeps finished or planned Groups compact", () => {
+    expect([...defaultExpandedGroupIds(graphFixture)]).toEqual(["workers"]);
+    const model = buildExecutionGraphLayout(graphFixture, "desktop");
+    const collapsed = buildExecutionGraphLayout(graphFixture, "desktop", new Set());
+    const exiting = buildExecutionGraphLayout(graphFixture, "desktop", new Set(), new Set(["workers"]));
 
-    expect(model.groupBounds.filter((bound) => bound.id === "split")).toHaveLength(2);
-    expect(model.groupBounds.some((bound) => cardOverlaps(bound, outside))).toBe(false);
+    expect(rect(model, "group:source")).toMatchObject({ expanded: false, height: 62 });
+    expect(rect(model, "group:workers")).toMatchObject({ expanded: true });
+    expect(rect(model, "group:workers").height).toBeGreaterThan(62);
+    expect(rect(model, "group:output")).toMatchObject({ expanded: false, height: 62 });
+    expect(exiting.rects.some((item) => item.key === "work_package:parse")).toBe(true);
+    expect(exiting.height).toBe(collapsed.height);
   });
 
-  it("reserves visible padding between a parent Group and its child-only region", () => {
-    const graph: WorkRequestExecutionGraphModel = {
-      groups: [
-        { id: "parent", title: "Parent" },
-        { id: "child", parent_group_id: "parent", title: "Child", work_package_ids: ["wp"] },
-      ],
-      work_packages: [{ id: "wp" }],
-      topological_order: ["wp"],
-    };
-    const bounds = buildExecutionGraphLayout(graph, "desktop").groupBounds;
-    const parent = bounds.find((bound) => bound.id === "parent")!;
-    const child = bounds.find((bound) => bound.id === "child")!;
+  it("keeps group-intent edges on the shell and proxies hidden WP endpoints to their collapsed Group", () => {
+    const model = buildExecutionGraphLayout(graphFixture, "desktop");
+    const edges = model.dependencies.map((edge) => [edge.source_key, edge.target_key]);
+    const collapsedEdges = buildExecutionGraphLayout(graphFixture, "desktop", new Set()).dependencies.map((edge) => [edge.source_key, edge.target_key]);
 
-    expect(parent.x).toBeLessThan(child.x);
-    expect(parent.width).toBeGreaterThan(child.width);
+    expect(edges).toContainEqual(["group:source", "work_package:parse"]);
+    expect(edges).toContainEqual(["group:source", "work_package:index"]);
+    expect(edges).toContainEqual(["work_package:parse", "group:output"]);
+    expect(edges).toContainEqual(["work_package:index", "group:output"]);
+    expect(edges).toContainEqual(["group:source", "work_package:playtest"]);
+    expect(collapsedEdges).toContainEqual(["group:source", "group:workers"]);
+    expect(collapsedEdges).toContainEqual(["group:workers", "group:output"]);
+    expect(collapsedEdges.some(([source, target]) => source.includes("work_package:parse") || target.includes("work_package:parse"))).toBe(false);
   });
 
-  it("keeps deeply nested Group padding inside the fixed card gaps", () => {
-    const graph: WorkRequestExecutionGraphModel = {
-      groups: [
-        { id: "g0", title: "G0" },
-        { id: "g1", parent_group_id: "g0", title: "G1" },
-        { id: "g2", parent_group_id: "g1", title: "G2" },
-        { id: "g3", parent_group_id: "g2", title: "G3", work_package_ids: ["member"] },
-      ],
-      work_packages: [{ id: "member", group_id: "g3" }, { id: "outside" }],
-      topological_order: ["member", "outside"],
-    };
-    const model = buildExecutionGraphLayout(graph, "desktop");
-    const outside = model.positions.find((point) => point.id === "outside")!;
+  it("reveals WP-specific endpoints when a Group expands without moving Group-intent edges off its shell", () => {
+    const expanded = new Set(["workers", "output"]);
+    const model = buildExecutionGraphLayout(graphFixture, "desktop", expanded);
+    const edges = model.dependencies.map((edge) => [edge.source_key, edge.target_key]);
 
-    expect(model.groupBounds.every((bound) => bound.x >= 0 && bound.y >= 0)).toBe(true);
-    expect(model.groupBounds.some((bound) => cardOverlaps(bound, outside))).toBe(false);
+    expect(edges).toContainEqual(["work_package:parse", "work_package:join"]);
+    expect(edges).toContainEqual(["work_package:index", "work_package:join"]);
+    expect(edges).toContainEqual(["work_package:join", "work_package:publish"]);
+    expect(edges).toContainEqual(["group:source", "work_package:playtest"]);
+    expect(rect(model, "work_package:join").parent_group_id).toBe("output");
   });
 
-  it("renders fan-out and one segmented N/M join rail for a multi-input target", () => {
+  it("renders one static N/M gate for fan-in and leaves only active paths dashed by state", () => {
     const html = render();
-    const mobile = html.slice(html.indexOf('data-orientation="mobile"'));
 
-    expect(html.match(/data-edge="wp-a:wp-b"/g)).toHaveLength(2);
-    expect(html.match(/data-edge="wp-a:wp-c"/g)).toHaveLength(2);
-    expect(html.match(/data-join-for="wp-d"/g)).toHaveLength(2);
-    expect(html.match(/data-progress="1\/2"/g)).toHaveLength(2);
-    expect(html).toContain('data-input="wp-b" data-state="active"');
-    expect(html).toContain('data-input="wp-c" data-state="blocked"');
-    expect(edgeTag(html, "wp-a:wp-b")).toContain('data-state="waiting"');
-    expect(edgeTag(mobile, "wp-b:wp-d")).toContain('data-route="gutter"');
-    expect(edgeTag(mobile, "wp-c:wp-d")).toContain('data-route="direct"');
-    expect(html).not.toContain("execution-graph__column-header");
+    expect(html.match(/data-join-for="group:output"/g)).toHaveLength(2);
+    expect(html.match(/data-progress="0\/2"/g)).toHaveLength(2);
+    expect(html).toContain('data-edge="work_package:parse:group:output" data-state="active"');
+    expect(html).toContain('data-edge="work_package:index:group:output" data-state="active"');
+    expect(html).toContain('class="execution-graph__join-trunk" data-state="waiting"');
+    expect(html).not.toContain("execution-graph__group-label");
   });
 
-  it("keeps high-fan-in desktop joins within the target card edge", () => {
-    const prerequisiteIds = Array.from({ length: 20 }, (_, index) => `input-${index}`);
-    const graph: WorkRequestExecutionGraphModel = {
-      work_packages: [...prerequisiteIds.map((id) => ({ id })), { id: "target" }],
-      topological_order: [...prerequisiteIds, "target"],
-      effective_edges: prerequisiteIds.map((id) => ({ prerequisite_work_package_id: id, dependent_work_package_id: "target" })),
-    };
-    const model = buildExecutionGraphLayout(graph, "desktop");
-    const target = model.positions.find((point) => point.id === "target")!;
-    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={graph} />).split('data-orientation="mobile"')[0];
-    const targetYs = prerequisiteIds.map((id) => pathEnd(edgeTag(html, `${id}:target`)).y);
+  it("orders fan-out lanes toward their destinations and routes mixed fan-in around the target", () => {
+    const fanoutModel = buildExecutionGraphLayout(graphFixture, "desktop");
+    const fanout = graphWireRoutes(fanoutModel, "desktop").paths;
+    const tracks = fanoutModel.dependencies
+      .filter((dependency) => dependency.source_key === "group:source")
+      .sort((left, right) => rect(fanoutModel, left.target_key).y - rect(fanoutModel, right.target_key).y)
+      .map((dependency) => firstHorizontalTrack(fanout.find((route) => route.edge === dependency.key)?.path));
 
-    expect(Math.min(...targetYs)).toBeGreaterThan(target.y);
-    expect(Math.max(...targetYs)).toBeLessThan(target.y + 240);
+    expect(tracks[0]).toBeGreaterThan(tracks[1] as number);
+    expect(tracks[1]).toBeGreaterThan(tracks[2] as number);
+
+    const recovery = buildExecutionGraphLayout(recoveryGraphFixture, "desktop");
+    const routes = graphWireRoutes(recovery, "desktop");
+    const validate = rect(recovery, "work_package:validate");
+    const gateX = validate.x - 22;
+
+    expect(routes.gates.find((gate) => gate.targetKey === "work_package:validate")?.path).toContain(`M ${gateX}`);
+    expect(routes.paths.find((route) => route.edge === "group:history:work_package:validate")?.path).toMatch(new RegExp(`H ${gateX}$`));
+    expect(routes.paths.find((route) => route.edge === "work_package:successor:work_package:validate")?.path).toMatch(new RegExp(`^M ${validate.x} `));
   });
 
-  it("prioritizes an exact wait reason, active worker elapsed time, then optional delivery signals", () => {
+  it("keeps dense fan-in lanes monotonic by source order", () => {
+    const model = buildExecutionGraphLayout(denseFanInGraphFixture, "desktop");
+    const paths = graphWireRoutes(model, "desktop").paths;
+    const tracks = model.dependencies
+      .filter((dependency) => dependency.target_key === "group:target")
+      .sort((left, right) => rect(model, left.source_key).y - rect(model, right.source_key).y)
+      .map((dependency) => firstHorizontalTrack(paths.find((route) => route.edge === dependency.key)?.path));
+
+    expect(tracks).toEqual([...tracks].sort((left, right) => left - right));
+  });
+
+  it("renders line-only connectors and a green-check state for a satisfied gate", () => {
+    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={satisfiedGateGraphFixture} />);
+
+    expect(html).not.toContain("<marker");
+    expect(html).toContain('class="execution-graph__join" data-join-for="work_package:target" data-progress="2/2" data-state="satisfied"');
+    expect(html).toContain(">✓</text>");
+  });
+
+  it("renders Groups with the same compact status contract and no redundant completion sentence", () => {
     const html = render();
-    const card = firstCard(html, "wp-d");
-    const reason = card.indexOf('data-priority="reason"');
-    const worker = card.indexOf('data-priority="worker"');
-    const pr = card.indexOf('data-signal="pr"');
-    const review = card.indexOf('data-signal="review"');
-    const checks = card.indexOf('data-signal="checks"');
+    const model = buildExecutionGraphLayout(graphFixture, "desktop");
 
-    expect(card).toContain("Waiting for the fixture review to pass.");
-    expect(card).toContain("worker-7 · 1h 30m");
-    expect(card).toContain("PR #514 Open");
-    expect(card).toContain("Review github 4/4 · In progress");
-    expect(card).toContain("Checks 3/4 · Failing");
-    expect([reason, worker, pr, review, checks]).toEqual([...new Set([reason, worker, pr, review, checks])].sort((a, b) => a - b));
+    expect(html).toContain('data-group-id="source" data-state="complete" data-expanded="false"');
+    expect(html).toContain("Complete · 1/1");
+    expect(html).toContain('data-group-id="workers" data-state="active"');
+    expect(html).toContain('data-group-id="output" data-state="neutral"');
+    expect(html).toContain("ingestion-workers · release");
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).not.toContain("WorkPackage complete");
+    expect(firstCard(html, "playtest")).toContain('data-state="ready"');
+    expect(rect(model, "work_package:playtest").width).toBe(rect(model, "group:workers").width);
+    expect(rect(model, "work_package:parse").width).toBeLessThan(rect(model, "group:workers").width);
   });
 
-  it("keeps long titles, dependency states, Groups, and cards accessible without dead tab stops or empty signal chrome", () => {
-    const simpleGraph: WorkRequestExecutionGraphModel = {
-      work_packages: [{ id: "long", title: longTitle, status: "planned" }],
-      topological_order: ["long"],
-      effective_edges: [],
-    };
-    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={simpleGraph} />);
+  it("shows compact clickable PR badges and only exceptional repo context", () => {
+    const html = render();
+    const parse = firstCard(html, "parse");
+    const playtest = firstCard(html, "playtest");
+
+    expect(parse).toContain('class="execution-graph__pr-badge" href="https://github.com/example/ingestion-workers/pull/101"');
+    expect(parse).toContain("PR #101");
+    expect(parse).not.toContain("ingestion-workers · release");
+    expect(playtest).toContain("playtest-runner · main");
+    expect(html).not.toContain("execution-graph__signals");
+  });
+
+  it("keeps cards accessible and avoids empty signal chrome", () => {
+    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ work_packages: [{ id: "long", title: longTitle, status: "planned" }], topological_order: ["long"] }} />);
 
     expect(html).toContain(`title="${longTitle}"`);
-    expect(html).toContain('<article class="execution-graph__card"');
     expect(firstCard(html, "long")).not.toContain('tabindex="0"');
-    expect(renderToStaticMarkup(<WorkRequestExecutionGraph model={simpleGraph} onSelectWorkPackage={() => {}} />)).toContain('role="button" tabindex="0"');
-    expect(html).toContain("No prerequisites.");
+    expect(renderToStaticMarkup(<WorkRequestExecutionGraph model={{ work_packages: [{ id: "long" }], topological_order: ["long"] }} onSelectWorkPackage={() => {}} />)).toContain('role="button" tabindex="0"');
+    expect(html).toContain("No prerequisites");
     expect(html).not.toContain("execution-graph__signals");
-    expect(firstCard(html, "long")).not.toContain('data-signal="dependencies"');
-    expect(render()).toContain('data-group-id="group-parent"');
-    expect(firstCard(render(), "wp-b")).toContain("Group path Build › Verification");
-    const interactive = renderToStaticMarkup(
-      <WorkRequestExecutionGraph model={graphFixture} onSelectWorkPackage={() => {}} />,
-    );
-    expect(firstCard(interactive, "wp-d")).toContain("PR #514 Open. Review github 4/4 · In progress. Checks 3/4 · Failing.");
-  });
-
-  it("gives blocked and completed states precedence over active or waiting status words", () => {
-    const graph: WorkRequestExecutionGraphModel = {
-      work_packages: [
-        { id: "passed", title: "Passed review", status: "review_passed" },
-        { id: "ready", title: "Ready merge", status: "ready_for_architect_merge" },
-      ],
-      topological_order: ["passed", "ready"],
-    };
-    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={graph} />);
-
-    expect(firstCard(html, "passed")).toContain('data-state="complete"');
-    expect(firstCard(html, "ready")).toContain('data-state="waiting"');
-    expect(firstCard(render(), "wp-d")).toContain('data-state="blocked"');
-  });
-
-  it("lets dependency actionability override stale worker-pickup copy", () => {
-    const graph: WorkRequestExecutionGraphModel = {
-      work_packages: [
-        {
-          id: "ready",
-          status: "ready_for_worker",
-          operational_state: { key: "ready", label: "Ready for worker pickup", tone: "success", reason: "All dependencies are satisfied." },
-          dependency_signal: { satisfied: 1, required: 1, active: 0, blocked: 0, unmet_work_package_ids: [], inputs: [{ work_package_id: "input", status: "satisfied" }] },
-        },
-        {
-          id: "waiting",
-          status: "ready_for_worker",
-          operational_state: { key: "ready", label: "Ready for worker pickup", tone: "success" },
-          dependency_signal: { satisfied: 0, required: 1, active: 0, blocked: 0, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "waiting" }] },
-        },
-        {
-          id: "blocked",
-          status: "ready_for_worker",
-          operational_state: { key: "ready", label: "Ready for worker pickup", tone: "success" },
-          dependency_signal: { satisfied: 0, required: 1, active: 0, blocked: 1, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "blocked" }] },
-        },
-        {
-          id: "merged",
-          status: "merged",
-          operational_state: { key: "merged", label: "Merged", tone: "success" },
-          dependency_signal: { satisfied: 0, required: 1, active: 0, blocked: 1, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "blocked" }] },
-        },
-      ],
-      topological_order: ["ready", "waiting", "blocked", "merged"],
-    };
-    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={graph} />);
-
-    expect(firstCard(html, "ready")).toContain("Ready for worker pickup");
-    expect(firstCard(html, "ready")).toContain("<span>Ready</span>");
-    expect(firstCard(html, "ready")).not.toContain("<span>Waiting</span>");
-    expect(firstCard(html, "ready")).toContain('data-signal="dependencies" data-tone="success" aria-hidden="true">1/1 satisfied');
-    expect(firstCard(html, "waiting")).toContain("Waiting on dependencies");
-    expect(firstCard(html, "blocked")).toContain("Dependencies blocked");
-    expect(firstCard(html, "merged")).toContain("Merged");
-    expect(firstCard(html, "merged")).not.toContain("Dependencies blocked");
-    expect(firstCard(html, "merged")).toContain('data-state="complete"');
-    for (const id of ["waiting", "blocked", "merged"]) {
-      expect(firstCard(html, id)).not.toContain("Ready for worker pickup");
-      expect(firstCard(html, id)).not.toContain('data-signal="dependencies"');
-    }
-  });
-
-  it("visibly labels ungrouped packages without rendering an executable Group", () => {
-    const html = render();
-
-    expect(firstCard(html, "wp-d")).toContain("WP 4 · Ungrouped");
-    expect(firstCard(html, "wp-b")).not.toContain("Ungrouped");
-    expect(html).not.toContain('data-group-id="ungrouped"');
-  });
-
-  it("keeps mobile graph and summary layout hooks within the narrow viewport", () => {
-    const mobile = buildExecutionGraphLayout(graphFixture, "mobile");
-    const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
-    const mediaStart = css.indexOf("@media (max-width: 760px)");
-    const summaryMedia = css.slice(mediaStart, css.indexOf(".workstream-board-aligned", mediaStart));
-
-    expect(mobile.width).toBeLessThanOrEqual(276);
-    expect(summaryMedia).toContain(".v3-request-summary");
-    expect(summaryMedia).toContain("max-width: 100%");
-    expect(summaryMedia).toContain("grid-template-columns: minmax(0, 4.5rem) minmax(0, 1fr)");
-    expect(css).toMatch(/\.execution-graph__group\s*\{[^}]*max-width:\s*100%/s);
-    expect(css).toMatch(/\.execution-graph__card\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%/s);
-    expect(css).toMatch(/\.execution-graph__card-title\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%/s);
-    expect(css).toMatch(/\.execution-graph__status\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*9rem/s);
-  });
-
-  it("shows stale worker evidence and exposes the scrollable graph to keyboards", () => {
-    const graph: WorkRequestExecutionGraphModel = {
-      work_packages: [{ id: "stale", worker_signal: { status: "stale", run_label: "worker-9" } }],
-      topological_order: ["stale"],
-    };
-    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={graph} />);
-
-    expect(firstCard(html, "stale")).toContain("worker-9 · Worker stale");
     expect(html).toContain('role="region" tabindex="0"');
   });
 
+  it("treats unmet dependencies as waiting rather than a true blocker", () => {
+    const waitingGraph: WorkRequestExecutionGraphModel = {
+      groups: [{ id: "waiting", title: "Waiting group", work_package_ids: ["wp"] }],
+      work_packages: [{
+        id: "wp",
+        group_id: "waiting",
+        status: "ready_for_worker",
+        operational_state: { key: "blocked_by_dependencies", label: "Waiting", tone: "warning" },
+        dependency_signal: { satisfied: 0, required: 1, active: 0, blocked: 1, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "blocked" }] },
+      }],
+      topological_order: ["wp"],
+    };
+    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={waitingGraph} />);
+
+    expect(html).toContain('data-group-id="waiting" data-state="neutral"');
+    expect(firstCard(html, "wp")).toContain('data-state="waiting"');
+    expect(html).toContain("Planned · 0/1");
+    expect(html).not.toContain('data-group-id="waiting" data-state="blocked"');
+  });
+
   it("renders unavailable and cyclic projections as explicit non-order states", () => {
-    const unavailable = renderToStaticMarkup(
-      <WorkRequestExecutionGraph model={{ available: false, work_packages: [{ id: "wp" }], topological_order: ["wp"] }} />,
-    );
-    const cyclic = renderToStaticMarkup(
-      <WorkRequestExecutionGraph model={{ available: true, work_packages: [{ id: "wp" }], topological_order: ["wp"], cycles: [["wp"]] }} />,
-    );
+    const unavailable = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ available: false, work_packages: [{ id: "wp" }], topological_order: ["wp"] }} />);
+    const cyclic = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ available: true, work_packages: [{ id: "wp" }], topological_order: ["wp"], cycles: [["wp"]] }} />);
 
     expect(unavailable).toContain("Execution order unavailable");
     expect(unavailable).not.toContain('data-work-package-id="wp"');
@@ -324,59 +234,108 @@ const longTitle = "Coordinate the exceptionally long renderer package title acro
 
 const graphFixture: WorkRequestExecutionGraphModel = {
   available: true,
+  base_repo: "example/symphony-graph-fixtures",
+  base_branch: "main",
   groups: [
-    { id: "group-parent", title: "Build", position: 0, work_package_ids: ["wp-a"] },
-    { id: "group-child", parent_group_id: "group-parent", title: "Verification", position: 0, work_package_ids: ["wp-b", "wp-c"] },
+    { id: "source", title: "Inputs", position: 1, work_package_ids: ["snapshot"] },
+    { id: "workers", title: "Parallel workers", position: 2, work_package_ids: ["parse", "index"] },
+    { id: "output", title: "Output", position: 3, work_package_ids: ["join", "publish"] },
   ],
   work_packages: [
-    { id: "wp-a", group_id: "group-parent", sequence: 1, title: "Define contract", status: "merged" },
-    { id: "wp-b", group_id: "group-child", sequence: 2, title: "Render cards", status: "implementing" },
-    { id: "wp-c", group_id: "group-child", sequence: 3, title: "Project signals", status: "blocked" },
+    { id: "snapshot", group_id: "source", title: "Source snapshot", status: "merged" },
     {
-      id: "wp-d",
-      sequence: 4,
-      title: longTitle,
-      status: "reviewing",
-      operational_state: { key: "blocked", label: "Review blocked", tone: "danger", reason: "Waiting for the fixture review to pass." },
-      worker_signal: { status: "active", active_since: "2026-07-18T08:00:00Z", run_label: "worker-7" },
-      pr_signal: {
-        status: "open",
-        number: 514,
-        checks: { status: "failing", current: 3, total: 4 },
-      },
-      review_signal: { type: "review-github", status: "in_progress", current: 4, total: 4 },
-      dependency_signal: {
-        satisfied: 1,
-        required: 2,
-        active: 1,
-        blocked: 1,
-        unmet_work_package_ids: ["wp-b", "wp-c"],
-        inputs: [
-          { work_package_id: "wp-b", status: "active" },
-          { work_package_id: "wp-c", status: "blocked" },
-        ],
-      },
+      id: "parse",
+      group_id: "workers",
+      title: "Parse records",
+      repo: "example/ingestion-workers",
+      base_branch: "release",
+      status: "implementing",
+      worker_signal: { status: "active" },
+      pr_signal: { status: "open", number: 101, url: "https://github.com/example/ingestion-workers/pull/101" },
     },
-    { id: "wp-e", sequence: 5, title: "Publish fixture", status: "planned" },
+    { id: "index", group_id: "workers", title: "Build index", repo: "example/ingestion-workers", base_branch: "release", status: "ready_for_merge", review_signal: { status: "in_progress", type: "human" } },
+    {
+      id: "join",
+      group_id: "output",
+      title: "Join records",
+      status: "ready_for_worker",
+      dependency_signal: { satisfied: 0, required: 2, active: 2, blocked: 0, unmet_work_package_ids: ["parse", "index"], inputs: [{ work_package_id: "parse", status: "active" }, { work_package_id: "index", status: "active" }] },
+    },
+    { id: "publish", group_id: "output", title: "Publish result", status: "planned" },
+    { id: "playtest", title: "Claim-ready playtest", repo: "example/playtest-runner", base_branch: "main", status: "ready_for_worker" },
   ],
-  topological_order: ["wp-a", "wp-b", "wp-c", "wp-d", "wp-e"],
-  effective_edges: [
-    { prerequisite_work_package_id: "wp-a", dependent_work_package_id: "wp-b" },
-    { prerequisite_work_package_id: "wp-a", dependent_work_package_id: "wp-c" },
-    { prerequisite_work_package_id: "wp-b", dependent_work_package_id: "wp-d" },
-    { prerequisite_work_package_id: "wp-c", dependent_work_package_id: "wp-d" },
-    { prerequisite_work_package_id: "wp-d", dependent_work_package_id: "wp-e" },
+  dependency_intents: [
+    { id: "source-parse", prerequisite: { kind: "group", id: "source" }, dependent: { kind: "work_package", id: "parse" } },
+    { id: "source-index", prerequisite: { kind: "work_package", id: "snapshot" }, dependent: { kind: "work_package", id: "index" } },
+    { id: "parse-join", prerequisite: { kind: "work_package", id: "parse" }, dependent: { kind: "work_package", id: "join" } },
+    { id: "index-join", prerequisite: { kind: "work_package", id: "index" }, dependent: { kind: "work_package", id: "join" } },
+    { id: "join-publish", prerequisite: { kind: "work_package", id: "join" }, dependent: { kind: "work_package", id: "publish" } },
+    { id: "source-playtest", prerequisite: { kind: "group", id: "source" }, dependent: { kind: "work_package", id: "playtest" } },
   ],
+  topological_order: ["snapshot", "parse", "index", "join", "publish", "playtest"],
+};
+
+const recoveryGraphFixture: WorkRequestExecutionGraphModel = {
+  groups: [
+    { id: "history", title: "History", position: 1, work_package_ids: ["old"] },
+    { id: "retry", title: "Retry", position: 2, work_package_ids: ["successor", "validate"] },
+  ],
+  work_packages: [
+    { id: "old", group_id: "history", title: "Old attempt", status: "merged" },
+    { id: "successor", group_id: "retry", title: "Narrow successor", status: "blocked" },
+    { id: "validate", group_id: "retry", title: "Validate recovery", status: "ready_for_worker" },
+  ],
+  dependency_intents: [
+    { id: "history-validate", prerequisite: { kind: "group", id: "history" }, dependent: { kind: "work_package", id: "validate" } },
+    { id: "successor-validate", prerequisite: { kind: "work_package", id: "successor" }, dependent: { kind: "work_package", id: "validate" } },
+  ],
+  topological_order: ["old", "successor", "validate"],
+};
+
+const denseFanInGraphFixture: WorkRequestExecutionGraphModel = {
+  groups: [
+    { id: "sources", title: "Sources", position: 1, work_package_ids: ["one", "two", "three", "four"] },
+    { id: "target", title: "Target", position: 2, work_package_ids: ["target-wp"] },
+  ],
+  work_packages: [
+    ...["one", "two", "three", "four"].map((id, index) => ({
+      id,
+      group_id: "sources",
+      title: id,
+      sequence: index,
+      status: index === 2 ? "implementing" : "ready_for_worker",
+    })),
+    { id: "target-wp", group_id: "target", title: "Target work", status: "planned" },
+  ],
+  dependency_intents: ["one", "two", "three", "four"].map((id) => ({
+    id: `${id}-target`,
+    prerequisite: { kind: "work_package" as const, id },
+    dependent: { kind: "group" as const, id: "target" },
+  })),
+  topological_order: ["one", "two", "three", "four", "target-wp"],
+};
+
+const satisfiedGateGraphFixture: WorkRequestExecutionGraphModel = {
+  work_packages: [
+    { id: "source-a", title: "Source A", status: "merged" },
+    { id: "source-b", title: "Source B", status: "merged" },
+    { id: "target", title: "Target", status: "planned" },
+  ],
+  dependency_intents: [
+    { id: "a-target", prerequisite: { kind: "work_package", id: "source-a" }, dependent: { kind: "work_package", id: "target" } },
+    { id: "b-target", prerequisite: { kind: "work_package", id: "source-b" }, dependent: { kind: "work_package", id: "target" } },
+  ],
+  topological_order: ["source-a", "source-b", "target"],
 };
 
 function render() {
-  return renderToStaticMarkup(
-    <WorkRequestExecutionGraph model={graphFixture} now="2026-07-18T09:30:00Z" />,
-  );
+  return renderToStaticMarkup(<WorkRequestExecutionGraph model={graphFixture} now="2026-07-18T09:30:00Z" />);
 }
 
-function points(items: Array<{ id: string; x: number; y: number }>) {
-  return Object.fromEntries(items.map((item) => [item.id, item]));
+function rect(model: ReturnType<typeof buildExecutionGraphLayout>, key: string) {
+  const value = model.rects.find((item) => item.key === key);
+  expect(value).toBeDefined();
+  return value!;
 }
 
 function firstCard(html: string, id: string) {
@@ -385,16 +344,8 @@ function firstCard(html: string, id: string) {
   return html.slice(start, end);
 }
 
-function edgeTag(html: string, edge: string) {
-  const start = html.indexOf(`data-edge="${edge}"`);
-  return html.slice(start, html.indexOf("></path>", start));
-}
-
-function pathEnd(path: string) {
-  const values = path.match(/-?\d+(?:\.\d+)?/g)?.map(Number) ?? [];
-  return { x: values.at(-2)!, y: values.at(-1)! };
-}
-
-function cardOverlaps(bound: { x: number; y: number; width: number; height: number }, point: { x: number; y: number }) {
-  return point.x < bound.x + bound.width && point.x + 264 > bound.x && point.y < bound.y + bound.height && point.y + 240 > bound.y;
+function firstHorizontalTrack(path?: string) {
+  const value = path?.match(/ H ([\d.]+) V /)?.[1];
+  expect(value).toBeDefined();
+  return Number(value);
 }

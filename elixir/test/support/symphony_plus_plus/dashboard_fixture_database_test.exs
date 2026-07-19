@@ -65,13 +65,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
 
     parse =
       package!(repo, work_request, "WP-FANOUT-PARSE", "Parse records", "implementing", workers.id, 2,
+        repo: "example/ingestion-workers",
+        base_branch: "release",
         review: %{"type" => "review-suite", "args" => %{"mode" => "normal", "current" => 1, "total" => 2, "step" => "analysis"}}
       )
 
     index =
-      package!(repo, work_request, "WP-FANOUT-INDEX", "Build index", "ready_for_merge", workers.id, 3, review: %{"type" => "human", "args" => %{"team" => "fixture-reviewers"}})
+      package!(repo, work_request, "WP-FANOUT-INDEX", "Build index", "ready_for_merge", workers.id, 3,
+        repo: "example/ingestion-workers",
+        base_branch: "release",
+        review: %{"type" => "human", "args" => %{"team" => "fixture-reviewers"}}
+      )
 
-    join = package!(repo, work_request, "WP-FANOUT-JOIN", "Join parsed records and index", "ready_for_worker", output.id, 4)
+    join =
+      package!(repo, work_request, "WP-FANOUT-JOIN", "Join parsed records and index", "ready_for_worker", output.id, 4,
+        repo: "example/publish-service",
+        base_branch: "main"
+      )
     publish = package!(repo, work_request, "WP-FANOUT-PUBLISH", "Publish result", "planned", output.id, 5)
     playtest = package!(repo, work_request, "WP-FANOUT-PLAYTEST", "Claim-ready playtest", "planned", nil, 6, dispatched_at: nil)
 
@@ -145,9 +155,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
     work_request = request!(repo, "WR-FIXTURE-DENSE", "Fictional dense dependency layout")
 
     groups =
-      for {suffix, title, position} <- [{"A", "Sources", 1}, {"B", "Transforms", 2}, {"C", "Sinks", 3}], into: %{} do
+      for {suffix, title, position} <- [{"A", "Baseline", 1}, {"B", "Runtime changes", 2}, {"C", "Cutover", 3}], into: %{} do
         {suffix, group!(repo, work_request.id, "GROUP-DENSE-#{suffix}", title, position)}
       end
+
+    titles = %{
+      1 => "Snapshot installed plugin state",
+      2 => "Resolve marketplace revision",
+      3 => "Audit runtime leases",
+      4 => "Capture startup baseline",
+      5 => "Unify source resolution",
+      6 => "Batch cache validation",
+      7 => "Harden singleton startup",
+      8 => "Optimize dashboard bootstrap",
+      9 => "Publish marketplace package",
+      10 => "Validate fresh Codex session",
+      11 => "Run parallel agent smoke",
+      12 => "Cut over local runtime"
+    }
 
     packages =
       for index <- 1..12, into: %{} do
@@ -160,7 +185,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
 
         status = if index in [3, 6, 10], do: "implementing", else: "ready_for_worker"
         id = "WP-DENSE-#{String.pad_leading(to_string(index), 2, "0")}"
-        {index, package!(repo, work_request, id, "Dense node #{index}", status, groups[suffix].id, index)}
+        {index, package!(repo, work_request, id, titles[index], status, groups[suffix].id, index)}
       end
 
     dense_pairs = [
@@ -219,6 +244,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
         title: title,
         goal: "Exercise a fictional execution-graph state.",
         kind: "standard_pr",
+        repo: Keyword.get(opts, :repo, work_request.repo),
+        base_branch: Keyword.get(opts, :base_branch, work_request.base_branch),
         sequence: sequence,
         product_tree_node_id: group_id,
         branch_pattern: "feat/#{String.downcase(id)}",

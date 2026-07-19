@@ -364,17 +364,8 @@ function ExecutionGraphBody({
   onSelectCard: CardDetailSelect;
   requestPath: ContextPathPart[];
 }) {
-  const [showHistorical, setShowHistorical] = useState(false);
   const slicesById = useMemo(() => new Map((detail.work_packages ?? []).map((slice) => [slice.id, slice])), [detail.work_packages]);
-  const models = useMemo(
-    () => ({
-      active: workRequestExecutionGraphModel(detail),
-      all: workRequestExecutionGraphModel(detail, { includeHistorical: true }),
-    }),
-    [detail],
-  );
-  const hiddenHistoricalCount = models.all.work_packages.length - models.active.work_packages.length;
-  const model = showHistorical ? models.all : models.active;
+  const model = useMemo(() => workRequestExecutionGraphModel(detail, { includeHistorical: true }), [detail]);
   const selectWorkPackage = (workPackageId: string) => {
     const slice = slicesById.get(workPackageId);
     const pkg = packageById.get(slice?.work_package_id || workPackageId);
@@ -383,20 +374,7 @@ function ExecutionGraphBody({
   };
 
   return (
-    <div className="v3-execution-graph" data-show-historical={showHistorical ? "true" : "false"}>
-      {hiddenHistoricalCount > 0 ? (
-        <div className="v3-execution-graph-controls">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            aria-pressed={showHistorical}
-            onClick={() => setShowHistorical((visible) => !visible)}
-          >
-            {showHistorical ? "Hide history" : `Show history (${hiddenHistoricalCount})`}
-          </Button>
-        </div>
-      ) : null}
+    <div className="v3-execution-graph">
       <WorkRequestExecutionGraph model={model} now={now} onSelectWorkPackage={selectWorkPackage} contextPath={requestPath} />
     </div>
   );

@@ -1,20 +1,22 @@
-import type { CSSProperties, KeyboardEvent } from "react";
+import { useMemo, useState } from "react";
+import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 
 import {
   buildExecutionGraphLayout,
+  defaultExpandedGroupIds,
   dependencyProgress,
-  dependencyState,
-  graphCardSize,
+  graphGroupHeaderSize,
+  workPackageIsFinished,
 } from "@/dashboard/execution-graph/model";
 import type {
   ExecutionGraphLayoutModel,
   ExecutionGraphWorkPackageRef,
   ExecutionGraphWorkPackageSignals,
+  GraphEntityRect,
   GraphOrientation,
-  GraphPoint,
   WorkRequestExecutionGraphModel,
 } from "@/dashboard/execution-graph/model";
-import { isFinishedBoardStatus } from "@/lib/operational-state";
+import { GraphWires } from "@/dashboard/execution-graph/wires";
 import { contextPathValue, type ContextPathPart } from "./workstream-context-path";
 
 export type WorkRequestExecutionGraphProps = {
@@ -24,7 +26,6 @@ export type WorkRequestExecutionGraphProps = {
   onSelectWorkPackage?: (workPackageId: string) => void;
   contextPath?: ContextPathPart[];
 };
-
 export function WorkRequestExecutionGraph({
   model: graph,
   now,
@@ -32,13 +33,25 @@ export function WorkRequestExecutionGraph({
   onSelectWorkPackage,
   contextPath,
 }: WorkRequestExecutionGraphProps) {
+  const [groupOverrides, setGroupOverrides] = useState<Record<string, boolean>>({});
   const notice = executionGraphNotice(graph);
+  const expandedGroupIds = useMemo(() => {
+    const expanded = defaultExpandedGroupIds(graph);
+    Object.entries(groupOverrides).forEach(([id, value]) => value ? expanded.add(id) : expanded.delete(id));
+    return expanded;
+  }, [graph, groupOverrides]);
+  const renderedGroupIds = useMemo(() => new Set((graph.groups ?? []).map((group) => group.id)), [graph.groups]);
+
   if (notice) return <GraphNotice ariaLabel={ariaLabel} title={notice.title} detail={notice.detail} />;
 
-  const desktop = buildExecutionGraphLayout(graph, "desktop");
-  const mobile = buildExecutionGraphLayout(graph, "mobile");
+  const desktop = buildExecutionGraphLayout(graph, "desktop", expandedGroupIds, renderedGroupIds);
+  const mobile = buildExecutionGraphLayout(graph, "mobile", expandedGroupIds, renderedGroupIds);
+  const toggleGroup = (id: string) => {
+    const current = expandedGroupIds.has(id);
+    setGroupOverrides((values) => ({ ...values, [id]: !current }));
+  };
 
-  if (!desktop.ids.length) {
+  if (!desktop.rects.length) {
     return (
       <section className="execution-graph execution-graph--empty" aria-label={ariaLabel}>
         <p>No execution packages to show.</p>
@@ -48,12 +61,11 @@ export function WorkRequestExecutionGraph({
 
   return (
     <section className="execution-graph" aria-label={ariaLabel}>
-      <GraphSurface model={desktop} orientation="desktop" now={now} onSelectWorkPackage={onSelectWorkPackage} contextPath={contextPath} />
-      <GraphSurface model={mobile} orientation="mobile" now={now} onSelectWorkPackage={onSelectWorkPackage} contextPath={contextPath} />
+      <GraphSurface model={desktop} orientation="desktop" now={now} onSelectWorkPackage={onSelectWorkPackage} onToggleGroup={toggleGroup} contextPath={contextPath} />
+      <GraphSurface model={mobile} orientation="mobile" now={now} onSelectWorkPackage={onSelectWorkPackage} onToggleGroup={toggleGroup} contextPath={contextPath} />
     </section>
   );
 }
-
 function GraphNotice({ ariaLabel, title, detail }: { ariaLabel: string; title: string; detail: string }) {
   return (
     <section className="execution-graph execution-graph--empty" aria-label={ariaLabel} role="status">
@@ -64,7 +76,6 @@ function GraphNotice({ ariaLabel, title, detail }: { ariaLabel: string; title: s
     </section>
   );
 }
-
 function executionGraphNotice(graph: WorkRequestExecutionGraphModel) {
   if (graph.available === false) {
     return { title: "Execution order unavailable", detail: "Dependency information could not be loaded for this WorkRequest." };
@@ -76,21 +87,38 @@ function executionGraphNotice(graph: WorkRequestExecutionGraphModel) {
   }
   return undefined;
 }
-
 function GraphSurface({
   model,
   orientation,
   now,
   onSelectWorkPackage,
+  onToggleGroup,
   contextPath,
 }: {
   model: ExecutionGraphLayoutModel;
   orientation: GraphOrientation;
   now?: string | number | Date;
   onSelectWorkPackage?: (workPackageId: string) => void;
+  onToggleGroup: (groupId: string) => void;
   contextPath?: ContextPathPart[];
 }) {
-  const size = graphCardSize(orientation);
+  const children = new Map<string, GraphEntityRect[]>();
+  model.rects.forEach((rect) => {
+    if (!rect.parent_group_id) return;
+    children.set(rect.parent_group_id, [...(children.get(rect.parent_group_id) ?? []), rect]);
+  });
+  const renderNode = (rect: GraphEntityRect, parent?: GraphEntityRect): ReactNode => {
+    const localRect = parent ? { ...rect, x: rect.x - parent.x, y: rect.y - parent.y - graphGroupHeaderSize(orientation) } : rect;
+    if (rect.kind === "group") {
+      return (
+        <GroupCard key={rect.key} rect={localRect} model={model} onToggle={onToggleGroup}>
+          {(children.get(rect.id) ?? []).map((child) => renderNode(child, rect))}
+        </GroupCard>
+      );
+    }
+    return <WorkPackageCard key={rect.key} rect={localRect} model={model} now={now} onSelectWorkPackage={onSelectWorkPackage} contextPath={contextPath} />;
+  };
+  const roots = model.rects.filter((rect) => !rect.parent_group_id);
 
   return (
     <div
@@ -100,227 +128,126 @@ function GraphSurface({
       tabIndex={0}
       aria-label={`${orientation === "desktop" ? "Left-to-right" : "Top-to-bottom"} execution order; scroll to inspect`}
     >
-      <div
-        className="execution-graph__canvas"
-        style={{ width: model.width, height: model.height } as CSSProperties}
-      >
-        <GroupRegions model={model} />
+      <div className="execution-graph__canvas" style={{ width: model.width, height: model.height } as CSSProperties}>
+        {roots.map((rect) => renderNode(rect))}
         <GraphWires model={model} orientation={orientation} />
-        {model.positions.map((point) => (
-          <WorkPackageCard
-            key={point.id}
-            point={point}
-            width={size.width}
-            height={size.height}
-            model={model}
-            now={now}
-            onSelectWorkPackage={onSelectWorkPackage}
-            contextPath={contextPath}
-          />
-        ))}
       </div>
     </div>
   );
 }
+function GroupCard({ rect, model, onToggle, children }: { rect: GraphEntityRect; model: ExecutionGraphLayoutModel; onToggle: (id: string) => void; children?: ReactNode }) {
+  const group = model.groups.get(rect.id);
+  const state = model.groupStates.get(rect.id) ?? { label: "Planned", tone: "waiting", completed: 0, total: 0 };
+  const title = group?.title?.trim() || "Untitled group";
+  const status = state.total ? `${state.label} · ${state.completed}/${state.total}` : state.label;
+  const style = { left: rect.x, top: rect.y, width: rect.width, height: rect.height } as CSSProperties;
+  const scope = scopeLabel(model.groupScopes.get(rect.id));
 
-function GroupRegions({ model }: { model: ExecutionGraphLayoutModel }) {
-  return model.groupBounds.map((group) => (
-    <div
-      key={group.key}
-      className="execution-graph__group"
-      data-group-id={group.id}
-      data-nesting-depth={group.nestingDepth}
-      style={{
-        left: group.x,
-        top: group.y,
-        width: group.width,
-        height: group.height,
-        "--execution-graph-group-offset": `${Math.min(group.nestingDepth, 6) * 0.75}rem`,
-      } as CSSProperties}
-      aria-hidden="true"
-      title={group.description || undefined}
+  return (
+    <section
+      className="execution-graph__group-card"
+      style={style}
+      data-group-id={rect.id}
+      data-state={state.tone}
+      data-expanded={rect.expanded ? "true" : "false"}
+      data-parent-group-id={rect.parent_group_id}
+      title={group?.description || undefined}
     >
-      <span className="execution-graph__group-label">{group.title}</span>
-    </div>
-  ));
-}
-
-function GraphWires({ model, orientation }: { model: ExecutionGraphLayoutModel; orientation: GraphOrientation }) {
-  const pointById = new Map(model.positions.map((point) => [point.id, point]));
-
-  return (
-    <svg className="execution-graph__wires" width={model.width} height={model.height} aria-hidden="true" role="presentation" focusable="false">
-      {model.ids.flatMap((dependentId) => {
-        const target = pointById.get(dependentId);
-        const incoming = model.incoming.get(dependentId) ?? [];
-        if (!target) return [];
-
-        return [
-          ...incoming.flatMap((edge, index) => {
-            const source = pointById.get(edge.prerequisite_work_package_id);
-            if (!source) return [];
-            const state = dependencyState(model, dependentId, edge.prerequisite_work_package_id);
-            const targetPoint = wireTarget(target, index, incoming.length, orientation);
-            const route = edgeRoute(source, targetPoint, orientation);
-            return [
-              <path
-                key={`${edge.prerequisite_work_package_id}-${dependentId}`}
-                className="execution-graph__edge"
-                data-edge={`${edge.prerequisite_work_package_id}:${dependentId}`}
-                data-state={state}
-                data-route={route}
-                d={edgePath(source, targetPoint, orientation, route)}
-              />,
-            ];
-          }),
-          incoming.length > 1 ? <JoinRail key={`join-${dependentId}`} model={model} target={target} orientation={orientation} /> : null,
-        ];
-      })}
-    </svg>
+      <button className="execution-graph__group-header" type="button" aria-expanded={rect.expanded} onClick={() => onToggle(rect.id)}>
+        <span className="execution-graph__card-title" title={title}>{title}</span>
+        <span className="execution-graph__status">{status}</span>
+        {scope ? <span className="execution-graph__scope execution-graph__group-scope" title={scope}>{scope}</span> : null}
+      </button>
+      <div className="execution-graph__group-contents" aria-hidden={rect.expanded ? undefined : true} inert={rect.expanded ? undefined : true}>
+        <div className="execution-graph__group-stack">{children}</div>
+      </div>
+    </section>
   );
 }
-
-function JoinRail({
-  model,
-  target,
-  orientation,
-}: {
-  model: ExecutionGraphLayoutModel;
-  target: GraphPoint;
-  orientation: GraphOrientation;
-}) {
-  const incoming = model.incoming.get(target.id) ?? [];
-  const progress = dependencyProgress(model, target.id);
-  const points = incoming.map((_, index) => wireTarget(target, index, incoming.length, orientation));
-  const rail = joinRail(points, target, orientation);
-
-  return (
-    <g className="execution-graph__join" data-join-for={target.id} data-progress={`${progress.satisfied}/${progress.required}`}>
-      <path className="execution-graph__join-trunk" d={rail.trunk} />
-      {incoming.map((edge, index) => {
-        const point = points[index];
-        const state = dependencyState(model, target.id, edge.prerequisite_work_package_id);
-        return (
-          <line
-            key={edge.prerequisite_work_package_id}
-            className="execution-graph__join-segment"
-            data-input={edge.prerequisite_work_package_id}
-            data-state={state}
-            x1={point.x - rail.segmentX}
-            x2={point.x + rail.segmentX}
-            y1={point.y - rail.segmentY}
-            y2={point.y + rail.segmentY}
-          />
-        );
-      })}
-      <text className="execution-graph__join-label" x={rail.label.x} y={rail.label.y} textAnchor={rail.label.anchor}>
-        {progress.satisfied}/{progress.required}
-      </text>
-    </g>
-  );
-}
-
 function WorkPackageCard({
-  point,
-  width,
-  height,
+  rect,
   model,
   now,
   onSelectWorkPackage,
   contextPath,
 }: {
-  point: GraphPoint;
-  width: number;
-  height: number;
+  rect: GraphEntityRect;
   model: ExecutionGraphLayoutModel;
   now?: string | number | Date;
   onSelectWorkPackage?: (workPackageId: string) => void;
   contextPath?: ContextPathPart[];
 }) {
-  const ref = model.refs.get(point.id) ?? { id: point.id };
-  const signal = model.signals.get(point.id);
-  const state = cardState(ref, signal);
+  const ref = model.refs.get(rect.id) ?? { id: rect.id };
+  const signal = model.signals.get(rect.id);
+  const state = cardState(ref, signal, now);
   const title = ref.title?.trim() || ref.id;
-  const progress = dependencyProgress(model, point.id);
-  const reason = priorityReason(signal, ref);
-  const worker = workerLabel(signal, now);
-  const secondarySignals = cardSignals(signal);
-  const satisfiedDependencyLabel = progress.required > 0 && progress.satisfied === progress.required
-    ? `${progress.satisfied}/${progress.required} satisfied`
-    : undefined;
-  const dependencyLabel = accessibleDependencyLabel(model, point.id, progress.satisfied, progress.required);
+  const progress = dependencyProgress(model, rect.key);
+  const reason = firstText([(signal?.operational_state ?? ref.operational_state)?.reason]);
+  const dependencyLabel = accessibleDependencyLabel(model, rect.key, progress.satisfied, progress.required);
   const groupLabel = groupAncestryLabel(model, ref.group_id);
   const cardContextPath = contextPath ? contextPathValue([...contextPath, ...groupAncestryPath(model, ref.group_id)]) : undefined;
-  const interaction = cardInteraction(point.id, onSelectWorkPackage);
+  const interaction = cardInteraction(rect.id, onSelectWorkPackage);
+  const scope = scopeLabel(model.packageScopes.get(ref.id));
+  const pr = signal?.pr_signal;
+  const prLabel = prBadgeLabel(pr);
 
   return (
     <article
       className="execution-graph__card"
-      style={{ left: point.x, top: point.y, width, height } as CSSProperties}
-      data-work-package-id={point.id}
-      data-depth={point.depth}
-      data-layout-order={point.order}
+      style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height } as CSSProperties}
+      data-work-package-id={rect.id}
+      data-depth={rect.depth}
+      data-layout-order={rect.order}
       data-state={state.tone}
-      data-has-reason={reason ? "true" : undefined}
+      data-parent-group-id={rect.parent_group_id}
       data-v3-context-path={cardContextPath}
-      aria-label={sentenceLabel([title, groupLabel, state.label, reason, worker, ...secondarySignals.map((item) => item.label), dependencyLabel])}
+      aria-label={sentenceLabel([title, groupLabel, scope, state.label, reason, prLabel, dependencyLabel])}
       {...interaction}
     >
-      <header className="execution-graph__card-header">
-        <span className="execution-graph__sequence">{sequenceLabel(ref)}</span>
-        <span className="execution-graph__status">{state.label}</span>
-      </header>
-      <h3 className="execution-graph__card-title" title={title}>{title}</h3>
-      <CardPriority reason={reason} worker={worker} prefix={priorityPrefix(state.label, state.blocked)} />
-      <CardSignalList items={secondarySignals} dependencyLabel={satisfiedDependencyLabel} />
+      <span className="execution-graph__title-stack">
+        <h3 className="execution-graph__card-title" title={title}>{title}</h3>
+        {scope ? <span className="execution-graph__scope" title={scope}>{scope}</span> : null}
+      </span>
+      <span className="execution-graph__status">{state.label}</span>
+      {prLabel ? <PrBadge signal={pr} label={prLabel} /> : null}
       <span className="sr-only">{groupLabel}</span>
       <span className="sr-only">{dependencyLabel}</span>
     </article>
   );
 }
 
-type CardSignalItem = { kind: string; label: string; tone: string };
-
-function CardPriority({ reason, worker, prefix }: { reason?: string; worker?: string; prefix: string }) {
+function PrBadge({ signal, label }: { signal: ExecutionGraphWorkPackageSignals["pr_signal"]; label: string }) {
+  if (!signal?.url) return <span className="execution-graph__pr-badge">{label}</span>;
   return (
-    <div className="execution-graph__card-priority">
-      {reason ? (
-        <p className="execution-graph__reason" data-priority="reason">
-          <span>{prefix}</span>
-          <span className="execution-graph__reason-copy" title={reason}>{reason}</span>
-        </p>
-      ) : null}
-      {worker ? (
-        <p className="execution-graph__worker" data-priority="worker">
-          <span className="execution-graph__activity-dot" aria-hidden="true" />
-          {worker}
-        </p>
-      ) : null}
-    </div>
+    <a className="execution-graph__pr-badge" href={signal.url} target="_blank" rel="noreferrer" title={`Open ${label}`} onClick={(event) => event.stopPropagation()}>
+      {label}
+    </a>
   );
 }
 
-function CardSignalList({ items, dependencyLabel }: { items: CardSignalItem[]; dependencyLabel?: string }) {
-  if (!items.length && !dependencyLabel) return null;
-  return (
-    <ul className="execution-graph__signals" aria-label="Delivery signals">
-      {dependencyLabel ? <li data-signal="dependencies" data-tone="success" aria-hidden="true">{dependencyLabel}</li> : null}
-      {items.map((item) => (
-        <li key={item.kind} data-signal={item.kind} data-tone={item.tone}>
-          {item.label}
-        </li>
-      ))}
-    </ul>
-  );
+function prBadgeLabel(signal?: ExecutionGraphWorkPackageSignals["pr_signal"]) {
+  if (!signal || ["none", "unavailable"].includes(signal.status)) return undefined;
+  return signal.number == null ? "PR" : `PR #${signal.number}`;
 }
 
-function accessibleDependencyLabel(model: ExecutionGraphLayoutModel, dependentId: string, satisfied: number, required: number) {
-  const incoming = model.incoming.get(dependentId) ?? [];
-  if (!incoming.length) return "No prerequisites.";
-  const inputs = incoming
-    .map((edge) => `${edge.prerequisite_work_package_id} ${dependencyState(model, dependentId, edge.prerequisite_work_package_id)}`)
-    .join(", ");
-  return `Dependencies ${satisfied} of ${required} satisfied. ${inputs}.`;
+function scopeLabel(scope?: { repo: string; branch?: string | null }) {
+  return scope ? [compactRepoLabel(scope.repo), scope.branch].filter(Boolean).join(" · ") : undefined;
+}
+
+function compactRepoLabel(repo: string) {
+  return repo.trim().replaceAll("\\", "/").replace(/\/$/, "").split("/").at(-1) || repo;
+}
+
+function accessibleDependencyLabel(model: ExecutionGraphLayoutModel, targetKey: string, satisfied: number, required: number) {
+  const incoming = model.incoming.get(targetKey) ?? [];
+  if (!incoming.length) return "No prerequisites";
+  const names = incoming.map((dependency) => entityTitle(model, dependency.source_key)).join(", ");
+  return `Dependencies ${satisfied} of ${required} satisfied: ${names}`;
+}
+
+function entityTitle(model: ExecutionGraphLayoutModel, key: string) {
+  const [kind, id] = key.split(":", 2);
+  return kind === "group" ? model.groups.get(id)?.title?.trim() || id : model.refs.get(id)?.title?.trim() || id;
 }
 
 function groupAncestryLabel(model: ExecutionGraphLayoutModel, groupId?: string | null) {
@@ -329,13 +256,12 @@ function groupAncestryLabel(model: ExecutionGraphLayoutModel, groupId?: string |
 }
 
 function groupAncestryPath(model: ExecutionGraphLayoutModel, groupId?: string | null): ContextPathPart[] {
-  const groups = new Map(model.groups.map((group) => [group.id, group]));
   const path: ContextPathPart[] = [];
   const seen = new Set<string>();
   let currentId = groupId;
   while (currentId && !seen.has(currentId)) {
     seen.add(currentId);
-    const group = groups.get(currentId);
+    const group = model.groups.get(currentId);
     if (!group) break;
     path.unshift({ id: group.id, label: group.title?.trim() || "Untitled group" });
     currentId = group.parent_group_id;
@@ -353,198 +279,66 @@ function cardInteraction(id: string, onSelect?: (id: string) => void) {
   };
 }
 
-function cardState(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
-  const operational = signal?.operational_state ?? ref.operational_state;
-  const status = firstText([signal?.raw_status, ref.raw_status, ref.status]) ?? "planned";
-  const finished = packageIsFinished(ref, signal);
-  const label = dependencyActionabilityLabel(signal?.dependency_signal, finished) ?? firstText([operational?.label]) ?? humanize(status);
-  const source = [operational?.tone, operational?.key, status].filter(Boolean).join(" ").toLowerCase();
-  const blocked = !finished && isBlocked(signal, source);
-  const tone = cardTone(source, blocked);
-  return { blocked, label, tone };
-}
-
-function dependencyActionabilityLabel(
-  dependency: ExecutionGraphWorkPackageSignals["dependency_signal"] | undefined,
-  packageFinished: boolean,
-) {
-  if (packageFinished || !dependencyNeedsAttention(dependency)) return undefined;
-  return dependency && dependency.blocked > 0 ? "Dependencies blocked" : "Waiting on dependencies";
-}
-
-function priorityReason(signal: ExecutionGraphWorkPackageSignals | undefined, ref: ExecutionGraphWorkPackageRef) {
-  const operational = signal?.operational_state ?? ref.operational_state;
-  const reason = firstText([operational?.reason]);
-  if (!reason) return undefined;
-  if (dependencyReasonIsActionable(ref, signal)) return reason;
-  return /block|wait|pending|ready/i.test(`${operational?.tone ?? ""} ${operational?.key ?? ""}`) ? reason : undefined;
-}
-
-function priorityPrefix(label: string, blocked: boolean) {
-  if (blocked) return "Blocked";
-  return /\bready\b/i.test(label) ? "Ready" : "Waiting";
-}
-
-function dependencyReasonIsActionable(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
-  return !packageIsFinished(ref, signal) && dependencyNeedsAttention(signal?.dependency_signal);
-}
-
-function packageIsFinished(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
-  const operational = signal?.operational_state ?? ref.operational_state;
-  return [signal?.raw_status, ref.raw_status, ref.status, operational?.key].some(isFinishedBoardStatus);
-}
-
-function dependencyNeedsAttention(dependency?: ExecutionGraphWorkPackageSignals["dependency_signal"]) {
-  if (!dependency) return false;
-  return dependency.required > dependency.satisfied || dependency.blocked > 0;
-}
-
-function workerLabel(signal: ExecutionGraphWorkPackageSignals | undefined, now?: string | number | Date) {
-  const worker = signal?.worker_signal;
-  if (!worker) return undefined;
-  const label = firstText([worker.run_label]);
-  if (worker.status === "active") {
-    const elapsed = elapsedLabel(worker.active_since, now);
-    return [label ?? "Active worker", elapsed].filter(Boolean).join(" · ");
-  }
-  if (worker.status === "stale") return [label, "Worker stale"].filter(Boolean).join(" · ");
-  if (worker.status === "paused") return [label, "Worker paused"].filter(Boolean).join(" · ");
-  return undefined;
-}
-
-function cardSignals(signal?: ExecutionGraphWorkPackageSignals) {
-  if (!signal) return [];
-  return [prSignalItem(signal), reviewSignalItem(signal), checkSignalItem(signal)].filter(isSignalItem);
-}
-
-function prSignalItem(signal: ExecutionGraphWorkPackageSignals): CardSignalItem | undefined {
-  const pr = signal.pr_signal;
-  if (!pr || ["none", "unavailable"].includes(pr.status)) return undefined;
-  const number = pr.number == null ? "" : ` #${pr.number}`;
-  return { kind: "pr", label: `PR${number} ${humanize(pr.status)}`, tone: pr.status === "merged" ? "success" : "info" };
-}
-
-function reviewSignalItem(signal: ExecutionGraphWorkPackageSignals): CardSignalItem | undefined {
-  const review = signal.review_signal;
-  if (!review || review.status === "unavailable") return undefined;
-  return {
-    kind: "review",
-    label: `${humanize(review.type || "review")}${progressText(review.current, review.total)} · ${humanize(review.status)}`,
-    tone: signalTone(review.status),
-  };
-}
-
-function checkSignalItem(signal: ExecutionGraphWorkPackageSignals): CardSignalItem | undefined {
-  const checks = signal.pr_signal?.checks;
-  if (!checks || checks.status === "unavailable") return undefined;
-  return {
-    kind: "checks",
-    label: `Checks${progressText(checks.current, checks.total)} · ${humanize(checks.status)}`,
-    tone: signalTone(checks.status),
-  };
-}
-
-function progressText(current?: number | null, total?: number | null) {
-  return current == null || total == null ? "" : ` ${current}/${total}`;
-}
-
-function signalTone(status: string) {
-  if (["passed", "passing", "merged"].includes(status)) return "success";
-  if (["failed", "failing"].includes(status)) return "danger";
-  return "info";
-}
-
-function isSignalItem(item: CardSignalItem | undefined): item is CardSignalItem {
-  return Boolean(item);
-}
-
-function isBlocked(signal: ExecutionGraphWorkPackageSignals | undefined, source: string) {
-  if ((signal?.dependency_signal?.blocked ?? 0) > 0) return true;
-  return /block|danger|error|fail/.test(source);
-}
-
-function cardTone(source: string, blocked: boolean) {
-  if (blocked) return "blocked";
-  if (/wait|ready|pending|queued|planned/.test(source)) return "waiting";
-  if (/pass|merge|finish|done|success|complete/.test(source)) return "complete";
-  if (/active|implement|reviewing|in progress/.test(source)) return "active";
-  return "neutral";
-}
-
-function firstText(values: Array<string | null | undefined>) {
-  return values.map((value) => value?.trim()).find(Boolean);
-}
-
-function sentenceLabel(values: Array<string | null | undefined>) {
-  const text = values.map((value) => value?.trim().replace(/[.]+$/, "")).filter(Boolean).join(". ");
-  return text ? `${text}.` : undefined;
-}
-
-function wireTarget(target: GraphPoint, index: number, count: number, orientation: GraphOrientation) {
-  const size = graphCardSize(orientation);
-  if (count <= 1) return orientation === "desktop" ? { x: target.x, y: target.y + size.height / 2 } : { x: target.x + size.width / 2, y: target.y };
-  if (orientation === "desktop") {
-    const span = Math.min((count - 1) * 14, size.height - 72);
-    return { x: target.x - 28, y: target.y + (size.height - span) / 2 + (index * span) / (count - 1) };
-  }
-  return { x: target.x + 36 + (index * (size.width - 72)) / (count - 1), y: target.y - 28 };
-}
-
-function edgeRoute(source: GraphPoint, target: { x: number; y: number }, orientation: GraphOrientation) {
-  if (orientation === "desktop") return "direct" as const;
-  const size = graphCardSize(orientation);
-  return target.y - (source.y + size.height) > size.yGap + 1 ? "gutter" as const : "direct" as const;
-}
-
-function edgePath(
-  source: GraphPoint,
-  target: { x: number; y: number },
-  orientation: GraphOrientation,
-  route: "direct" | "gutter",
-) {
-  const size = graphCardSize(orientation);
-  if (orientation === "desktop") {
-    const start = { x: source.x + size.width, y: source.y + size.height / 2 };
-    const bend = Math.max(32, (target.x - start.x) / 2);
-    return `M ${start.x} ${start.y} C ${start.x + bend} ${start.y}, ${target.x - bend} ${target.y}, ${target.x} ${target.y}`;
-  }
-  const start = { x: source.x + size.width / 2, y: source.y + size.height };
-  if (route === "gutter") {
-    const gutterX = 16 + (source.order % 3) * 5;
-    return `M ${start.x} ${start.y} C ${start.x} ${start.y + 24}, ${gutterX} ${start.y + 24}, ${gutterX} ${start.y + 48} L ${gutterX} ${target.y - 48} C ${gutterX} ${target.y - 24}, ${target.x} ${target.y - 24}, ${target.x} ${target.y}`;
-  }
-  const bend = Math.max(32, (target.y - start.y) / 2);
-  return `M ${start.x} ${start.y} C ${start.x} ${start.y + bend}, ${target.x} ${target.y - bend}, ${target.x} ${target.y}`;
-}
-
-function joinRail(points: Array<{ x: number; y: number }>, target: GraphPoint, orientation: GraphOrientation) {
-  const size = graphCardSize(orientation);
-  if (orientation === "desktop") {
-    const top = points[0];
-    const bottom = points.at(-1) ?? top;
-    const center = target.y + size.height / 2;
-    return {
-      trunk: `M ${top.x} ${top.y - 6} L ${bottom.x} ${bottom.y + 6} M ${top.x} ${center} L ${target.x} ${center}`,
-      segmentX: 0,
-      segmentY: 5,
-      label: { x: top.x - 4, y: top.y - 12, anchor: "end" as const },
-    };
-  }
-  const left = points[0];
-  const right = points.at(-1) ?? left;
-  const center = target.x + size.width / 2;
-  return {
-    trunk: `M ${left.x - 6} ${left.y} L ${right.x + 6} ${right.y} M ${center} ${left.y} L ${center} ${target.y}`,
-    segmentX: 5,
-    segmentY: 0,
-    label: { x: center, y: right.y - 11, anchor: "middle" as const },
-  };
-}
-
 function activateCard(event: KeyboardEvent<HTMLElement>, id: string, onSelect: (id: string) => void) {
   if (event.key !== "Enter" && event.key !== " ") return;
   event.preventDefault();
   onSelect(id);
+}
+
+function cardState(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals, now?: string | number | Date) {
+  const operational = signal?.operational_state ?? ref.operational_state;
+  const status = firstText([signal?.raw_status, ref.raw_status, ref.status]) ?? "planned";
+  return terminalCardState(ref, signal, status)
+    ?? failedCardState(status, signal)
+    ?? activeCardState(signal, now)
+    ?? dependencyCardState(signal)
+    ?? fallbackCardState(status, operational);
+}
+
+type CardState = {
+  label: string;
+  tone: "active" | "ready" | "waiting" | "blocked" | "complete" | "neutral";
+};
+
+function terminalCardState(ref: ExecutionGraphWorkPackageRef, signal: ExecutionGraphWorkPackageSignals | undefined, status: string): CardState | undefined {
+  if (!workPackageIsFinished(ref, signal)) return undefined;
+  return { label: /merge/i.test(status) ? "Merged" : "Complete", tone: "complete" };
+}
+
+function failedCardState(status: string, signal?: ExecutionGraphWorkPackageSignals): CardState | undefined {
+  if (/block|error|fail/.test(status.toLowerCase())) return { label: humanize(status), tone: "blocked" };
+  if (signal?.review_signal?.status === "failed") return { label: "Review failed", tone: "blocked" };
+  const checks = signal?.pr_signal?.checks;
+  if (checks?.status === "failing") return { label: `CI${progressText(checks.current, checks.total)} failed`, tone: "blocked" };
+  return undefined;
+}
+
+function activeCardState(signal?: ExecutionGraphWorkPackageSignals, now?: string | number | Date): CardState | undefined {
+  const review = signal?.review_signal;
+  if (review?.status === "in_progress") return { label: `Review${progressText(review.current, review.total)}`, tone: "active" };
+  const checks = signal?.pr_signal?.checks;
+  if (checks?.status === "pending") return { label: `CI${progressText(checks.current, checks.total)}`, tone: "active" };
+  const worker = signal?.worker_signal;
+  if (worker?.status !== "active") return undefined;
+  return { label: ["Active", elapsedLabel(worker.active_since, now)].filter(Boolean).join(" · "), tone: "active" };
+}
+
+function dependencyCardState(signal?: ExecutionGraphWorkPackageSignals): CardState | undefined {
+  const dependency = signal?.dependency_signal;
+  if (!dependency || (dependency.required <= dependency.satisfied && dependency.blocked <= 0)) return undefined;
+  return { label: `Waiting ${dependency.satisfied}/${dependency.required}`, tone: "waiting" };
+}
+
+function fallbackCardState(status: string, operational?: ExecutionGraphWorkPackageRef["operational_state"]): CardState {
+  const source = [status, operational?.key].filter(Boolean).join(" ").toLowerCase();
+  return { label: operationalCardLabel(status, operational?.label), tone: cardTone(source) };
+}
+
+function operationalCardLabel(status: string, label?: string | null) {
+  const operationalLabel = firstText([label]);
+  if (!operationalLabel) return humanize(status);
+  if (/block/i.test(operationalLabel) && !/block/i.test(status)) return humanize(status);
+  return operationalLabel;
 }
 
 function elapsedLabel(activeSince: string | null | undefined, now?: string | number | Date) {
@@ -559,9 +353,27 @@ function elapsedLabel(activeSince: string | null | undefined, now?: string | num
   return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
-function sequenceLabel(ref: ExecutionGraphWorkPackageRef) {
-  const sequence = ref.sequence == null ? "WorkPackage" : `WP ${ref.sequence}`;
-  return ref.group_id ? sequence : `${sequence} · Ungrouped`;
+function progressText(current?: number | null, total?: number | null) {
+  return current == null || total == null ? "" : ` ${current}/${total}`;
+}
+
+function cardTone(source: string) {
+  if (/ready/.test(source)) return "ready" as const;
+  if (/planned/.test(source)) return "neutral" as const;
+  if (/wait|pending|queued/.test(source)) return "waiting" as const;
+  if (/pass|merge|finish|done|success|complete/.test(source)) return "complete" as const;
+  if (/active|implement|reviewing|in progress/.test(source)) return "active" as const;
+  if (/block|error|fail/.test(source)) return "blocked" as const;
+  return "neutral" as const;
+}
+
+function firstText(values: Array<string | null | undefined>) {
+  return values.map((value) => value?.trim()).find(Boolean);
+}
+
+function sentenceLabel(values: Array<string | null | undefined>) {
+  const text = values.map((value) => value?.trim().replace(/[.]+$/, "")).filter(Boolean).join(". ");
+  return text ? `${text}.` : undefined;
 }
 
 function humanize(value: string) {

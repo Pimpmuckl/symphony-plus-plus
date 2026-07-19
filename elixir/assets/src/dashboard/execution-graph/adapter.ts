@@ -1,5 +1,10 @@
 import type { WorkRequestDetail, WorkRequestPackage } from "@/types/dashboard";
-import type { ProductTreeExecutionGraph, ProductTreeNode } from "@/types/product-tree";
+import type {
+  ProductTreeDependencyEdge,
+  ProductTreeDependencyEndpoint,
+  ProductTreeExecutionGraph,
+  ProductTreeNode,
+} from "@/types/product-tree";
 
 import type { WorkRequestExecutionGraphModel } from "./model";
 
@@ -21,12 +26,34 @@ export function workRequestExecutionGraphModel(
 
   return {
     available: graphAvailable(graph),
+    base_repo: firstValue(detail.work_request.repo_key, detail.work_request.repo),
+    base_branch: detail.work_request.base_branch,
     groups: list(productTree?.nodes).map(mapGroup),
     work_packages: workPackageIds.map((id) => mapWorkPackage(id, slices.get(id), delivery.get(id))),
+    dependency_intents: list(productTree?.dependency_edges).flatMap(mapDependencyIntent),
     effective_edges: list(graph?.effective_edges),
     topological_order: list(graph?.topological_order),
     cycles: list(graph?.cycles),
   };
+}
+
+function mapDependencyIntent(edge: ProductTreeDependencyEdge) {
+  const kind = edge.kind?.trim().toLowerCase();
+  const source = mapDependencyEndpoint(edge.source);
+  const target = mapDependencyEndpoint(edge.target);
+  if (!source || !target || !["depends_on", "blocks"].includes(kind ?? "")) return [];
+
+  const prerequisite = kind === "blocks" ? source : target;
+  const dependent = kind === "blocks" ? target : source;
+  return [{ id: edge.id, prerequisite, dependent }];
+}
+
+function mapDependencyEndpoint(endpoint?: ProductTreeDependencyEndpoint) {
+  const id = endpoint?.id?.trim();
+  if (!id) return undefined;
+  if (endpoint?.kind === "work_package") return { kind: "work_package" as const, id };
+  if (endpoint?.kind === "product_node") return { kind: "group" as const, id };
+  return undefined;
 }
 
 function mapGroup(group: ProductTreeNode) {
@@ -53,6 +80,8 @@ function workPackageReference(slice?: WorkRequestPackage, item?: DeliveryItem) {
   return {
     ...sliceReference(slice),
     title: firstValue(signal?.title, slice?.title),
+    repo: signal?.repo,
+    base_branch: firstValue(signal?.base_branch, slice?.base_branch),
     status: firstValue(signal?.status, slice?.status),
     raw_status: projectedRawStatus(signal, item, slice),
     operational_state: projectedOperationalState(item, slice),

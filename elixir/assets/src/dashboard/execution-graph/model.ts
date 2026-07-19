@@ -1,4 +1,8 @@
+import { isFinishedBoardStatus } from "@/lib/operational-state";
+
 export type DependencyPathState = "satisfied" | "active" | "waiting" | "blocked";
+export type GraphOrientation = "desktop" | "mobile";
+export type GraphEntityKind = "group" | "work_package";
 
 export type ExecutionGraphGroup = {
   id: string;
@@ -14,6 +18,8 @@ export type ExecutionGraphWorkPackageRef = {
   group_id?: string | null;
   sequence?: number;
   title?: string | null;
+  repo?: string | null;
+  base_branch?: string | null;
   status?: string | null;
   raw_status?: string | null;
   operational_state?: {
@@ -23,22 +29,31 @@ export type ExecutionGraphWorkPackageRef = {
     reason?: string | null;
   } | null;
 };
-
 export type ExecutionGraphEffectiveEdge = {
   prerequisite_work_package_id: string;
   dependent_work_package_id: string;
   dependency_ids?: string[];
 };
-
+export type ExecutionGraphDependencyEndpoint = {
+  kind: GraphEntityKind;
+  id: string;
+};
+export type ExecutionGraphDependencyIntent = {
+  id: string;
+  prerequisite: ExecutionGraphDependencyEndpoint;
+  dependent: ExecutionGraphDependencyEndpoint;
+};
 export type WorkRequestExecutionGraphModel = {
   available?: boolean;
+  base_repo?: string | null;
+  base_branch?: string | null;
   groups?: ExecutionGraphGroup[];
   work_packages: Array<ExecutionGraphWorkPackageRef & ExecutionGraphWorkPackageSignals>;
+  dependency_intents?: ExecutionGraphDependencyIntent[];
   effective_edges?: ExecutionGraphEffectiveEdge[];
   topological_order: string[];
   cycles?: string[][];
 };
-
 export type ExecutionGraphWorkPackageSignals = {
   id: string;
   raw_status?: string | null;
@@ -84,252 +99,501 @@ export type ExecutionGraphWorkPackageSignals = {
     }>;
   } | null;
 };
-
-export type GraphOrientation = "desktop" | "mobile";
-
-export type GraphPoint = {
-  id: string;
-  x: number;
-  y: number;
-  depth: number;
-  order: number;
+export type ExecutionGraphEntityState = {
+  label: string;
+  tone: "active" | "waiting" | "blocked" | "complete" | "neutral";
+  completed: number;
+  total: number;
 };
-
-export type GraphGroupBounds = {
+export type ExecutionGraphRepoScope = {
+  repo: string;
+  branch?: string | null;
+};
+export type GraphEntityRect = {
   key: string;
   id: string;
-  title: string;
-  description?: string | null;
-  nestingDepth: number;
+  kind: GraphEntityKind;
+  parent_group_id?: string | null;
   x: number;
   y: number;
   width: number;
   height: number;
+  depth: number;
+  order: number;
+  expanded?: boolean;
 };
-
+export type VisibleGraphDependency = {
+  key: string;
+  source_key: string;
+  target_key: string;
+  state: DependencyPathState;
+  intent_ids: string[];
+};
 export type ExecutionGraphLayoutModel = {
-  ids: string[];
+  groups: Map<string, ExecutionGraphGroup>;
   refs: Map<string, ExecutionGraphWorkPackageRef>;
   signals: Map<string, ExecutionGraphWorkPackageSignals>;
-  incoming: Map<string, ExecutionGraphEffectiveEdge[]>;
-  groups: ExecutionGraphGroup[];
-  positions: GraphPoint[];
-  groupBounds: GraphGroupBounds[];
+  groupStates: Map<string, ExecutionGraphEntityState>;
+  groupScopes: Map<string, ExecutionGraphRepoScope>;
+  packageScopes: Map<string, ExecutionGraphRepoScope>;
+  baseRepo?: string | null;
+  baseBranch?: string | null;
+  rects: GraphEntityRect[];
+  dependencies: VisibleGraphDependency[];
+  incoming: Map<string, VisibleGraphDependency[]>;
   width: number;
   height: number;
 };
-
-const card = {
-  desktop: { width: 264, height: 240, xGap: 96, yGap: 48, x: 56, y: 54 },
-  mobile: { width: 232, height: 240, xGap: 0, yGap: 74, x: 16, y: 58 },
+const metrics = {
+  desktop: { cardWidth: 268, childCardWidth: 244, cardHeight: 62, scopedCardHeight: 76, groupWidth: 268, xGap: 92, yGap: 20, x: 36, y: 34, groupHeader: 62, groupPadding: 12, childGap: 8 },
+  mobile: { cardWidth: 256, childCardWidth: 232, cardHeight: 62, scopedCardHeight: 76, groupWidth: 256, xGap: 0, yGap: 44, x: 16, y: 24, groupHeader: 62, groupPadding: 12, childGap: 8 },
 } as const;
-
 export function graphCardSize(orientation: GraphOrientation) {
-  return card[orientation];
+  const value = metrics[orientation];
+  return { width: value.cardWidth, height: value.cardHeight, xGap: value.xGap, yGap: value.yGap };
 }
+export function graphGroupHeaderSize(orientation: GraphOrientation) { return metrics[orientation].groupHeader; }
+export function defaultExpandedGroupIds(graph: WorkRequestExecutionGraphModel) {
+  const context = graphContext(graph);
+  return new Set(
+    [...context.groups.values()]
+      .filter((group) => ["active", "blocked"].includes(context.groupStates.get(group.id)?.tone ?? ""))
+      .map((group) => group.id),
+  );
+}
+export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel, orientation: GraphOrientation, expandedGroupIds = defaultExpandedGroupIds(graph), renderedGroupIds = expandedGroupIds): ExecutionGraphLayoutModel {
+  const context = graphContext(graph);
+  const rootKeys = rootEntityKeys(context);
+  const rootDependencies = projectedRootDependencies(graphDependencies(graph), context);
+  const order = topologicalEntityOrder(rootKeys, rootDependencies, context);
+  const depths = entityDepths(order, rootDependencies);
+  const sizes = new Map(order.map((key) => [key, entitySize(key, orientation, expandedGroupIds, context)]));
+  const rootRects = layoutRootEntities(order, depths, sizes, orientation).map((rect) => ({
+    ...rect,
+    expanded: rect.kind === "group" && expandedGroupIds.has(rect.id),
+  }));
+  const visibleRects = rootRects.flatMap((rect) => [rect, ...layoutExpandedChildren(rect, orientation, expandedGroupIds, context)]);
+  const rects = rootRects.flatMap((rect) => [rect, ...layoutExpandedChildren(rect, orientation, renderedGroupIds, context, expandedGroupIds)]);
+  const rectByKey = new Map(visibleRects.map((rect) => [rect.key, rect]));
+  const dependencies = visibleDependencies(graphDependencies(graph), rectByKey, context);
+  const incoming = groupBy(dependencies, (dependency) => dependency.target_key);
+  const edge = Math.max(0, ...visibleRects.map((rect) => rect.x + rect.width));
+  const bottom = Math.max(0, ...visibleRects.map((rect) => rect.y + rect.height));
 
-export function buildExecutionGraphLayout(
-  graph: WorkRequestExecutionGraphModel,
-  orientation: GraphOrientation,
-): ExecutionGraphLayoutModel {
+  return {
+    groups: context.groups,
+    refs: context.refs,
+    signals: context.signals,
+    groupStates: context.groupStates,
+    groupScopes: context.groupScopes,
+    packageScopes: context.packageScopes,
+    baseRepo: graph.base_repo,
+    baseBranch: graph.base_branch,
+    rects,
+    dependencies,
+    incoming,
+    width: Math.ceil(edge + (orientation === "mobile" ? 16 : 28)),
+    height: Math.ceil(bottom + 28),
+  };
+}
+export function dependencyProgress(model: ExecutionGraphLayoutModel, targetKey: string) {
+  const incoming = model.incoming.get(targetKey) ?? [];
+  return { satisfied: incoming.filter((dependency) => dependency.state === "satisfied").length, required: incoming.length };
+}
+export function workPackageIsFinished(ref?: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
+  const operational = signal?.operational_state ?? ref?.operational_state;
+  return [signal?.raw_status, ref?.raw_status, ref?.status, operational?.key].some(isFinishedBoardStatus);
+}
+function graphContext(graph: WorkRequestExecutionGraphModel) {
+  const groups = new Map((graph.groups ?? []).map((group) => [group.id, group]));
   const refs = new Map(graph.work_packages.map((item) => [item.id, item]));
   const signals = new Map(graph.work_packages.map((item) => [item.id, item]));
-  const ids = orderedIds(graph.topological_order, refs);
-  const idSet = new Set(ids);
-  const edges = (graph.effective_edges ?? []).filter(
-    (edge) => idSet.has(edge.prerequisite_work_package_id) && idSet.has(edge.dependent_work_package_id),
+  const childGroups = groupBy([...groups.values()].filter((group) => group.parent_group_id), (group) => group.parent_group_id as string);
+  const directPackages = groupBy(graph.work_packages.filter((item) => item.group_id), (item) => item.group_id as string);
+  const groupMembers = new Map<string, string[]>();
+  const members = (groupId: string, seen = new Set<string>()): string[] => {
+    if (groupMembers.has(groupId)) return groupMembers.get(groupId) ?? [];
+    if (seen.has(groupId)) return [];
+    const nextSeen = new Set(seen).add(groupId);
+    const ids = [
+      ...(directPackages.get(groupId) ?? []).map((item) => item.id),
+      ...(childGroups.get(groupId) ?? []).flatMap((group) => members(group.id, nextSeen)),
+    ];
+    const result = [...new Set(ids)];
+    groupMembers.set(groupId, result);
+    return result;
+  };
+  groups.forEach((_group, id) => members(id));
+  const groupStates = new Map([...groups].map(([id]) => [id, groupState(groupMembers.get(id) ?? [], refs, signals)]));
+  const groupScopes = new Map(
+    [...groups]
+      .map(([id]) => [id, sharedExternalScope(groupMembers.get(id) ?? [], refs, graph)] as const)
+      .filter((entry): entry is readonly [string, ExecutionGraphRepoScope] => Boolean(entry[1])),
   );
-  const incoming = groupBy(edges, (edge) => edge.dependent_work_package_id);
-  const depths = dependencyDepths(ids, incoming);
-  const positions = layoutPoints(ids, depths, orientation);
-  const groups = [...(graph.groups ?? [])].sort(compareGroups);
-  const groupBounds = layoutGroupBounds(groups, positions, orientation);
-  const size = canvasSize(positions, groupBounds, orientation);
+  const packageScopes = new Map(
+    [...refs]
+      .map(([id, ref]) => [id, visiblePackageScope(ref, groupScopes, groups, graph)] as const)
+      .filter((entry): entry is readonly [string, ExecutionGraphRepoScope] => Boolean(entry[1])),
+  );
 
-  return { ids, refs, signals, incoming, groups, positions, groupBounds, ...size };
+  return { groups, refs, signals, childGroups, directPackages, groupMembers, groupStates, groupScopes, packageScopes };
 }
 
-export function dependencyState(model: ExecutionGraphLayoutModel, dependentId: string, prerequisiteId: string): DependencyPathState {
-  const input = model.signals
-    .get(dependentId)
-    ?.dependency_signal?.inputs.find((candidate) => candidate.work_package_id === prerequisiteId);
+type GraphContext = ReturnType<typeof graphContext>;
 
-  if (input) return input.status;
+function sharedExternalScope(
+  memberIds: string[],
+  refs: Map<string, ExecutionGraphWorkPackageRef>,
+  graph: WorkRequestExecutionGraphModel,
+): ExecutionGraphRepoScope | undefined {
+  if (!memberIds.length) return undefined;
+  const baseRepo = normalizedRepo(graph.base_repo);
+  const scopes = memberIds.map((id) => packageRepoScope(refs.get(id), graph));
+  const first = scopes[0];
+  if (!first || normalizedRepo(first.repo) === baseRepo) return undefined;
+  if (!scopes.every((scope) => scope && normalizedRepo(scope.repo) === normalizedRepo(first.repo) && scope.branch === first.branch)) return undefined;
+  return first;
+}
+
+function packageRepoScope(ref: ExecutionGraphWorkPackageRef | undefined, graph: WorkRequestExecutionGraphModel): ExecutionGraphRepoScope | undefined {
+  const repo = ref?.repo?.trim() || graph.base_repo?.trim();
+  if (!repo) return undefined;
+  return { repo, branch: ref?.base_branch?.trim() || graph.base_branch?.trim() };
+}
+
+function visiblePackageScope(
+  ref: ExecutionGraphWorkPackageRef,
+  groupScopes: Map<string, ExecutionGraphRepoScope>,
+  groups: Map<string, ExecutionGraphGroup>,
+  graph: WorkRequestExecutionGraphModel,
+) {
+  const scope = packageRepoScope(ref, graph);
+  if (!scope || normalizedRepo(scope.repo) === normalizedRepo(graph.base_repo)) return undefined;
+  let groupId = ref.group_id;
+  while (groupId) {
+    if (groupScopes.has(groupId)) return undefined;
+    groupId = groups.get(groupId)?.parent_group_id;
+  }
+  return scope;
+}
+
+function normalizedRepo(value?: string | null) {
+  return value?.trim().replaceAll("\\", "/").replace(/\.git$/i, "").toLowerCase();
+}
+
+function groupState(
+  memberIds: string[],
+  refs: Map<string, ExecutionGraphWorkPackageRef>,
+  signals: Map<string, ExecutionGraphWorkPackageSignals>,
+): ExecutionGraphEntityState {
+  const completed = memberIds.filter((id) => workPackageIsFinished(refs.get(id), signals.get(id))).length;
+  const paths = memberIds.map((id) => workPackagePathState(refs.get(id), signals.get(id)));
+  if (memberIds.length > 0 && completed === memberIds.length) return { label: "Complete", tone: "complete", completed, total: memberIds.length };
+  if (paths.includes("active")) return { label: "Active", tone: "active", completed, total: memberIds.length };
+  if (paths.includes("blocked")) return { label: "Blocked", tone: "blocked", completed, total: memberIds.length };
+  if (memberIds.length > 0) return { label: completed > 0 ? "In progress" : "Planned", tone: completed > 0 ? "waiting" : "neutral", completed, total: memberIds.length };
+  return { label: "Empty", tone: "neutral", completed: 0, total: 0 };
+}
+
+function workPackagePathState(ref?: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals): DependencyPathState {
+  if (workPackageIsFinished(ref, signal)) return "satisfied";
+  const status = workPackageStatusText(ref, signal);
+  if (deliverySignalFailed(signal)) return "blocked";
+  if (waitingOnDependencies(signal)) return "waiting";
+  if (/block|error|fail/.test(status)) return "blocked";
+  if (deliverySignalActive(signal) || /active|implement|review|claim|progress/.test(status)) return "active";
   return "waiting";
 }
 
-export function dependencyProgress(model: ExecutionGraphLayoutModel, dependentId: string) {
-  const incoming = model.incoming.get(dependentId) ?? [];
-  const signal = model.signals.get(dependentId)?.dependency_signal;
-  const satisfied = signal?.satisfied ?? 0;
-  return { satisfied, required: signal?.required ?? incoming.length };
+function workPackageStatusText(ref?: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
+  return [signal?.raw_status, ref?.raw_status, ref?.status, ref?.operational_state?.key].filter(Boolean).join(" ").toLowerCase();
 }
 
-function orderedIds(topologicalOrder: string[], refs: Map<string, ExecutionGraphWorkPackageRef>) {
-  return [...new Set(topologicalOrder)].filter((id) => refs.has(id));
+function deliverySignalFailed(signal?: ExecutionGraphWorkPackageSignals) {
+  return signal?.review_signal?.status === "failed" || signal?.pr_signal?.checks?.status === "failing";
 }
 
-function dependencyDepths(ids: string[], incoming: Map<string, ExecutionGraphEffectiveEdge[]>) {
-  const depth = new Map(ids.map((id) => [id, 0]));
-  const visited = new Set<string>();
-
-  for (const id of ids) {
-    const prerequisiteDepths = (incoming.get(id) ?? [])
-      .map((edge) => edge.prerequisite_work_package_id)
-      .filter((prerequisiteId) => visited.has(prerequisiteId))
-      .map((prerequisiteId) => depth.get(prerequisiteId) ?? 0);
-    depth.set(id, prerequisiteDepths.length ? Math.max(...prerequisiteDepths) + 1 : 0);
-    visited.add(id);
-  }
-
-  return depth;
+function waitingOnDependencies(signal?: ExecutionGraphWorkPackageSignals) {
+  const dependency = signal?.dependency_signal;
+  return Boolean(dependency && dependency.required > dependency.satisfied);
 }
 
-function layoutPoints(ids: string[], depths: Map<string, number>, orientation: GraphOrientation) {
-  const metrics = card[orientation];
+function deliverySignalActive(signal?: ExecutionGraphWorkPackageSignals) {
+  return signal?.worker_signal?.status === "active" || signal?.review_signal?.status === "in_progress";
+}
 
-  if (orientation === "mobile") {
-    return ids.map((id, order) => ({ id, x: metrics.x, y: metrics.y + order * (metrics.height + metrics.yGap), depth: depths.get(id) ?? 0, order }));
-  }
+function graphDependencies(graph: WorkRequestExecutionGraphModel): ExecutionGraphDependencyIntent[] {
+  if (graph.dependency_intents?.length) return graph.dependency_intents;
+  return (graph.effective_edges ?? []).map((edge, index) => ({
+    id: edge.dependency_ids?.join(":") || `effective:${index}`,
+    prerequisite: { kind: "work_package", id: edge.prerequisite_work_package_id },
+    dependent: { kind: "work_package", id: edge.dependent_work_package_id },
+  }));
+}
 
-  const columnCounts = new Map<number, number>();
-  return ids.map((id, order) => {
-    const depth = depths.get(id) ?? 0;
-    const row = columnCounts.get(depth) ?? 0;
-    columnCounts.set(depth, row + 1);
-    return {
-      id,
-      x: metrics.x + depth * (metrics.width + metrics.xGap),
-      y: metrics.y + row * (metrics.height + metrics.yGap),
-      depth,
-      order,
-    };
+function rootEntityKeys(context: GraphContext) {
+  return [
+    ...[...context.groups.values()].filter((group) => !group.parent_group_id).map((group) => groupKey(group.id)),
+    ...[...context.refs.values()].filter((ref) => !ref.group_id).map((ref) => packageKey(ref.id)),
+  ];
+}
+
+function projectedRootDependencies(intents: ExecutionGraphDependencyIntent[], context: GraphContext) {
+  const keys = new Set<string>();
+  return intents.flatMap((intent) => {
+    const source = rootKey(intent.prerequisite, context);
+    const target = rootKey(intent.dependent, context);
+    const key = `${source}:${target}`;
+    if (!source || !target || source === target || keys.has(key)) return [];
+    keys.add(key);
+    return [{ source, target }];
   });
 }
 
-function layoutGroupBounds(groups: ExecutionGraphGroup[], points: GraphPoint[], orientation: GraphOrientation) {
-  const metrics = card[orientation];
-  const pointById = new Map(points.map((point) => [point.id, point]));
-  const groupById = new Map(groups.map((group) => [group.id, group]));
-  const children = groupBy(groups.filter((group) => group.parent_group_id), (group) => group.parent_group_id as string);
-  const memo = new Map<string, string[]>();
-  const depths = new Map(groups.map((group) => [group.id, nestingDepth(group, groupById)]));
-  const maxDepth = Math.max(0, ...depths.values());
-
-  const members = (groupId: string, seen = new Set<string>()): string[] => {
-    if (memo.has(groupId)) return memo.get(groupId) ?? [];
-    if (seen.has(groupId)) return [];
-    const group = groupById.get(groupId);
-    if (!group) return [];
-    const nextSeen = new Set(seen).add(groupId);
-    const ids = [...(group.work_package_ids ?? []), ...(children.get(groupId) ?? []).flatMap((child) => members(child.id, nextSeen))];
-    const result = [...new Set(ids)].filter((id) => pointById.has(id));
-    memo.set(groupId, result);
-    return result;
-  };
-
-  return groups.flatMap((group) => {
-    const groupPoints = members(group.id).map((id) => pointById.get(id)).filter((point): point is GraphPoint => Boolean(point));
-    if (!groupPoints.length) return [];
-    const memberIds = new Set(groupPoints.map((point) => point.id));
-    const depth = depths.get(group.id) ?? 0;
-    const padding = orientation === "mobile"
-      ? maxDepth ? 8 + Math.round((4 * (maxDepth - depth)) / maxDepth) : 8
-      : maxDepth ? 18 + Math.round((12 * (maxDepth - depth)) / maxDepth) : 18;
-    const runs = memberRuns(points, memberIds, orientation);
-    const bounds = mergeSafeBounds(runs.map((run) => pointBounds(run, metrics, padding)), points, memberIds, metrics);
-    return bounds.map((bound, index) => ({
-      ...bound,
-      key: `${group.id}:${index}`,
-      id: group.id,
-      title: group.title?.trim() || "Untitled group",
-      description: group.description,
-      nestingDepth: depth,
-    }));
-  }).sort((left, right) => left.nestingDepth - right.nestingDepth || left.key.localeCompare(right.key));
-}
-
-function memberRuns(points: GraphPoint[], memberIds: Set<string>, orientation: GraphOrientation) {
-  const lanes = orientation === "mobile" ? [points] : [...groupBy(points, (point) => String(point.depth)).values()];
-  return lanes.flatMap((lane) => contiguousRuns([...lane].sort((left, right) => left.y - right.y), memberIds));
-}
-
-function contiguousRuns(points: GraphPoint[], memberIds: Set<string>) {
-  const runs: GraphPoint[][] = [];
-  let current: GraphPoint[] = [];
-  for (const point of points) {
-    if (memberIds.has(point.id)) current.push(point);
-    if (!memberIds.has(point.id) && current.length) {
-      runs.push(current);
-      current = [];
+function topologicalEntityOrder(
+  keys: string[],
+  dependencies: Array<{ source: string; target: string }>,
+  context: GraphContext,
+) {
+  const incoming = new Map(keys.map((key) => [key, 0]));
+  const outgoing = groupBy(dependencies, (dependency) => dependency.source);
+  dependencies.forEach((dependency) => incoming.set(dependency.target, (incoming.get(dependency.target) ?? 0) + 1));
+  const ready = keys.filter((key) => (incoming.get(key) ?? 0) === 0).sort((left, right) => compareEntityKeys(left, right, context));
+  const order: string[] = [];
+  while (ready.length) {
+    const key = ready.shift() as string;
+    order.push(key);
+    for (const dependency of outgoing.get(key) ?? []) {
+      const next = (incoming.get(dependency.target) ?? 0) - 1;
+      incoming.set(dependency.target, next);
+      if (next === 0) {
+        ready.push(dependency.target);
+        ready.sort((left, right) => compareEntityKeys(left, right, context));
+      }
     }
   }
-  if (current.length) runs.push(current);
-  return runs;
+  return order.length === keys.length ? order : [...keys].sort((left, right) => compareEntityKeys(left, right, context));
 }
 
-function pointBounds(points: GraphPoint[], metrics: (typeof card)[GraphOrientation], padding: number) {
-  const left = Math.min(...points.map((point) => point.x)) - padding;
-  const top = Math.min(...points.map((point) => point.y)) - padding - 16;
-  const right = Math.max(...points.map((point) => point.x + metrics.width)) + padding;
-  const bottom = Math.max(...points.map((point) => point.y + metrics.height)) + padding;
-  return { x: left, y: top, width: right - left, height: bottom - top };
+function entityDepths(order: string[], dependencies: Array<{ source: string; target: string }>) {
+  const incoming = groupBy(dependencies, (dependency) => dependency.target);
+  const depths = new Map(order.map((key) => [key, 0]));
+  const visited = new Set<string>();
+  for (const key of order) {
+    const sourceDepths = (incoming.get(key) ?? [])
+      .filter((dependency) => visited.has(dependency.source))
+      .map((dependency) => depths.get(dependency.source) ?? 0);
+    depths.set(key, sourceDepths.length ? Math.max(...sourceDepths) + 1 : 0);
+    visited.add(key);
+  }
+  return depths;
 }
 
-function mergeSafeBounds(
-  bounds: Array<{ x: number; y: number; width: number; height: number }>,
-  points: GraphPoint[],
-  memberIds: Set<string>,
-  metrics: (typeof card)[GraphOrientation],
+function entitySize(
+  key: string,
+  orientation: GraphOrientation,
+  expandedGroupIds: Set<string>,
+  context: GraphContext,
+  seen = new Set<string>(),
+): { width: number; height: number } {
+  const value = metrics[orientation];
+  if (!key.startsWith("group:")) {
+    const id = key.slice("work_package:".length);
+    const width = context.refs.get(id)?.group_id ? value.childCardWidth : value.cardWidth;
+    return { width, height: context.packageScopes.has(id) ? value.scopedCardHeight : value.cardHeight };
+  }
+  const groupId = key.slice("group:".length);
+  if (!expandedGroupIds.has(groupId) || seen.has(groupId)) return { width: value.cardWidth, height: value.cardHeight };
+  const nextSeen = new Set(seen).add(groupId);
+  const children = directChildKeys(groupId, context);
+  const childSizes = children.map((child) => entitySize(child, orientation, expandedGroupIds, context, nextSeen));
+  const childHeight = childSizes.reduce((sum, child) => sum + child.height, 0) + Math.max(0, childSizes.length - 1) * value.childGap;
+  return {
+    width: Math.max(value.groupWidth, ...childSizes.map((child) => child.width + value.groupPadding * 2)),
+    height: value.groupHeader + value.groupPadding * 2 + childHeight,
+  };
+}
+
+function layoutRootEntities(
+  order: string[],
+  depths: Map<string, number>,
+  sizes: Map<string, { width: number; height: number }>,
+  orientation: GraphOrientation,
 ) {
-  const merged: typeof bounds = [];
-  for (const bound of bounds.sort((left, right) => left.x - right.x || left.y - right.y)) {
-    const previous = merged.at(-1);
-    const candidate = previous ? unionBounds(previous, bound) : bound;
-    const absorbsOutsider = points.some((point) => !memberIds.has(point.id) && intersects(candidate, point, metrics));
-    if (previous && !absorbsOutsider) merged[merged.length - 1] = candidate;
-    else merged.push(bound);
+  const value = metrics[orientation];
+  if (orientation === "mobile") {
+    let y = value.y;
+    return order.map((key, index) => {
+      const size = sizes.get(key) ?? { width: value.cardWidth, height: value.cardHeight };
+      const rect = entityRect(key, value.x, y, size, 0, index);
+      y += size.height + value.yGap;
+      return rect;
+    });
   }
-  return merged;
-}
 
-function unionBounds(left: { x: number; y: number; width: number; height: number }, right: typeof left) {
-  const x = Math.min(left.x, right.x);
-  const y = Math.min(left.y, right.y);
-  const farX = Math.max(left.x + left.width, right.x + right.width);
-  const farY = Math.max(left.y + left.height, right.y + right.height);
-  return { x, y, width: farX - x, height: farY - y };
-}
-
-function intersects(bound: { x: number; y: number; width: number; height: number }, point: GraphPoint, metrics: (typeof card)[GraphOrientation]) {
-  return point.x < bound.x + bound.width && point.x + metrics.width > bound.x && point.y < bound.y + bound.height && point.y + metrics.height > bound.y;
-}
-
-function nestingDepth(group: ExecutionGraphGroup, groups: Map<string, ExecutionGraphGroup>) {
-  let depth = 0;
-  let parentId = group.parent_group_id;
-  const seen = new Set([group.id]);
-  while (parentId && !seen.has(parentId)) {
-    seen.add(parentId);
-    depth += 1;
-    parentId = groups.get(parentId)?.parent_group_id;
+  const columnWidths = new Map<number, number>();
+  order.forEach((key) => {
+    const depth = depths.get(key) ?? 0;
+    columnWidths.set(depth, Math.max(columnWidths.get(depth) ?? 0, sizes.get(key)?.width ?? value.cardWidth));
+  });
+  const columnX = new Map<number, number>();
+  let x = value.x;
+  for (let depth = 0; depth <= Math.max(0, ...columnWidths.keys()); depth += 1) {
+    columnX.set(depth, x);
+    x += (columnWidths.get(depth) ?? value.cardWidth) + value.xGap;
   }
-  return depth;
+  const columnY = new Map<number, number>();
+  return order.map((key, index) => {
+    const depth = depths.get(key) ?? 0;
+    const size = sizes.get(key) ?? { width: value.cardWidth, height: value.cardHeight };
+    const y = columnY.get(depth) ?? value.y;
+    columnY.set(depth, y + size.height + value.yGap);
+    return entityRect(key, columnX.get(depth) ?? value.x, y, size, depth, index);
+  });
 }
 
-function canvasSize(points: GraphPoint[], bounds: GraphGroupBounds[], orientation: GraphOrientation) {
-  const metrics = card[orientation];
-  const right = Math.max(0, ...points.map((point) => point.x + metrics.width), ...bounds.map((bound) => bound.x + bound.width));
-  const bottom = Math.max(0, ...points.map((point) => point.y + metrics.height), ...bounds.map((bound) => bound.y + bound.height));
-  return { width: Math.ceil(right + (orientation === "mobile" ? 16 : 56)), height: Math.ceil(bottom + 54) };
+function layoutExpandedChildren(
+  parent: GraphEntityRect,
+  orientation: GraphOrientation,
+  renderedGroupIds: Set<string>,
+  context: GraphContext,
+  expandedGroupIds = renderedGroupIds,
+): GraphEntityRect[] {
+  if (parent.kind !== "group" || !renderedGroupIds.has(parent.id)) return [];
+  const value = metrics[orientation];
+  let y = parent.y + value.groupHeader + value.groupPadding;
+  return directChildKeys(parent.id, context).flatMap((key, index) => {
+    const size = entitySize(key, orientation, expandedGroupIds, context);
+    const rect = entityRect(key, parent.x + value.groupPadding, y, size, parent.depth, index, parent.id, key.startsWith("group:") && expandedGroupIds.has(key.slice("group:".length)));
+    y += size.height + value.childGap;
+    return [rect, ...layoutExpandedChildren(rect, orientation, renderedGroupIds, context, expandedGroupIds)];
+  });
+}
+
+function entityRect(
+  key: string,
+  x: number,
+  y: number,
+  size: { width: number; height: number },
+  depth: number,
+  order: number,
+  parentGroupId?: string,
+  expanded = false,
+): GraphEntityRect {
+  const kind = key.startsWith("group:") ? "group" : "work_package";
+  return { key, id: key.slice(key.indexOf(":") + 1), kind, parent_group_id: parentGroupId, x, y, ...size, depth, order, expanded };
+}
+
+function visibleDependencies(
+  intents: ExecutionGraphDependencyIntent[],
+  rects: Map<string, GraphEntityRect>,
+  context: GraphContext,
+) {
+  const grouped = new Map<string, { source: string; target: string; states: DependencyPathState[]; ids: string[] }>();
+  for (const intent of intents) {
+    const source = visibleEndpointKey(intent.prerequisite, rects, context);
+    const target = visibleEndpointKey(intent.dependent, rects, context);
+    if (!source || !target || source === target) continue;
+    const key = `${source}:${target}`;
+    const value = grouped.get(key) ?? { source, target, states: [], ids: [] };
+    value.states.push(endpointPathState(intent.prerequisite, context));
+    value.ids.push(intent.id);
+    grouped.set(key, value);
+  }
+  return [...grouped].map(([key, value]) => ({
+    key,
+    source_key: value.source,
+    target_key: value.target,
+    state: combinedPathState(value.states),
+    intent_ids: [...new Set(value.ids)],
+  }));
+}
+
+function visibleEndpointKey(endpoint: ExecutionGraphDependencyEndpoint, rects: Map<string, GraphEntityRect>, context: GraphContext) {
+  const key = endpointKey(endpoint);
+  if (rects.has(key)) return key;
+  let groupId = endpoint.kind === "group" ? endpoint.id : context.refs.get(endpoint.id)?.group_id;
+  const seen = new Set<string>();
+  while (groupId && !seen.has(groupId)) {
+    seen.add(groupId);
+    const candidate = groupKey(groupId);
+    if (rects.has(candidate)) return candidate;
+    groupId = context.groups.get(groupId)?.parent_group_id;
+  }
+  return undefined;
+}
+
+function endpointPathState(endpoint: ExecutionGraphDependencyEndpoint, context: GraphContext): DependencyPathState {
+  if (endpoint.kind === "work_package") return workPackagePathState(context.refs.get(endpoint.id), context.signals.get(endpoint.id));
+  const tone = context.groupStates.get(endpoint.id)?.tone;
+  if (tone === "complete") return "satisfied";
+  if (tone === "active") return "active";
+  if (tone === "blocked") return "blocked";
+  return "waiting";
+}
+
+function combinedPathState(states: DependencyPathState[]): DependencyPathState {
+  if (states.length > 0 && states.every((state) => state === "satisfied")) return "satisfied";
+  if (states.includes("blocked")) return "blocked";
+  if (states.includes("active")) return "active";
+  return "waiting";
+}
+
+function rootKey(endpoint: ExecutionGraphDependencyEndpoint, context: GraphContext) {
+  if (endpoint.kind === "work_package") {
+    const groupId = context.refs.get(endpoint.id)?.group_id;
+    return groupId ? groupKey(rootGroupId(groupId, context.groups)) : packageKey(endpoint.id);
+  }
+  return groupKey(rootGroupId(endpoint.id, context.groups));
+}
+
+function rootGroupId(groupId: string, groups: Map<string, ExecutionGraphGroup>) {
+  const seen = new Set<string>();
+  let current = groupId;
+  while (!seen.has(current)) {
+    seen.add(current);
+    const parent = groups.get(current)?.parent_group_id;
+    if (!parent) return current;
+    current = parent;
+  }
+  return groupId;
+}
+
+function directChildKeys(groupId: string, context: GraphContext) {
+  return [
+    ...(context.childGroups.get(groupId) ?? []).sort(compareGroups).map((group) => groupKey(group.id)),
+    ...(context.directPackages.get(groupId) ?? []).sort(comparePackages).map((ref) => packageKey(ref.id)),
+  ];
+}
+
+function compareEntityKeys(left: string, right: string, context: GraphContext) {
+  if (left.startsWith("group:") && right.startsWith("group:")) return compareGroups(context.groups.get(left.slice(6)), context.groups.get(right.slice(6)));
+  if (left.startsWith("work_package:") && right.startsWith("work_package:")) return comparePackages(context.refs.get(left.slice(13)), context.refs.get(right.slice(13)));
+  return left.startsWith("group:") ? -1 : 1;
+}
+
+function compareGroups(left?: ExecutionGraphGroup, right?: ExecutionGraphGroup) {
+  return (left?.position ?? Number.MAX_SAFE_INTEGER) - (right?.position ?? Number.MAX_SAFE_INTEGER) || (left?.id ?? "").localeCompare(right?.id ?? "");
+}
+
+function comparePackages(left?: ExecutionGraphWorkPackageRef, right?: ExecutionGraphWorkPackageRef) {
+  return (left?.sequence ?? Number.MAX_SAFE_INTEGER) - (right?.sequence ?? Number.MAX_SAFE_INTEGER) || (left?.id ?? "").localeCompare(right?.id ?? "");
+}
+
+function endpointKey(endpoint: ExecutionGraphDependencyEndpoint) {
+  return endpoint.kind === "group" ? groupKey(endpoint.id) : packageKey(endpoint.id);
+}
+
+function groupKey(id: string) {
+  return `group:${id}`;
+}
+
+function packageKey(id: string) {
+  return `work_package:${id}`;
 }
 
 function groupBy<T>(items: T[], key: (item: T) => string) {
   const grouped = new Map<string, T[]>();
   for (const item of items) grouped.set(key(item), [...(grouped.get(key(item)) ?? []), item]);
   return grouped;
-}
-
-function compareGroups(left: ExecutionGraphGroup, right: ExecutionGraphGroup) {
-  return (left.position ?? Number.MAX_SAFE_INTEGER) - (right.position ?? Number.MAX_SAFE_INTEGER) || left.id.localeCompare(right.id);
 }
