@@ -55,6 +55,7 @@ function WireLayer({ routes, motion }: { routes: Routes; motion?: Motion }) {
   return (
     <g className="execution-graph__wire-layer" data-motion={motion}>
       {routes.paths.map((route) => <path key={route.key} className={`execution-graph__edge${route.bundle ? " execution-graph__edge--bundle" : ""}`} data-edge={route.edge} data-state={route.state} data-route="orthogonal" data-bundle={route.bundle ? "true" : undefined} data-intent-count={route.intentCount} d={route.path} />)}
+      {routes.paths.map((route) => route.source ? <circle key={`source:${route.key}`} className="execution-graph__source" data-state={route.state} cx={route.source.x} cy={route.source.y} r="3" /> : null)}
       {routes.gates.map((gate) => <g key={gate.key} className="execution-graph__join" data-join-for={gate.targetKey} data-progress={`${gate.satisfied}/${gate.required}`} data-state={gate.state}><path className="execution-graph__join-trunk" data-state={gate.state} d={gate.path} /><text className="execution-graph__join-label" x={gate.label.x} y={gate.label.y} textAnchor={gate.label.anchor}>{gate.satisfied === gate.required ? "✓" : `${gate.satisfied}/${gate.required}`}</text></g>)}
     </g>
   );

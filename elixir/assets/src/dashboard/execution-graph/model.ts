@@ -1,5 +1,5 @@
 import { isFinishedBoardStatus } from "@/lib/operational-state";
-import { entityRect, layoutRootEntities } from "./layout";
+import { entityRect, layoutRootEntities, orderWithinRanks } from "./layout";
 
 export type DependencyPathState = "satisfied" | "active" | "waiting" | "blocked";
 export type GraphOrientation = "desktop" | "mobile";
@@ -130,6 +130,7 @@ export type ExecutionGraphRouting = {
   contentRight: number;
   columnGutters: Map<number, number>;
   rowCorridors: Map<number, number>;
+  bandBottoms: Map<number, number>;
 };
 export type VisibleGraphDependency = {
   key: string;
@@ -167,7 +168,7 @@ export function defaultExpandedGroupIds(graph: WorkRequestExecutionGraphModel) {
   const context = graphContext(graph);
   return new Set(
     [...context.groups.values()]
-      .filter((group) => ["active", "blocked"].includes(context.groupStates.get(group.id)?.tone ?? ""))
+      .filter((group) => context.groupStates.get(group.id)?.tone !== "complete")
       .map((group) => group.id),
   );
 }
@@ -177,8 +178,9 @@ export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel,
   const rootDependencies = projectedRootDependencies(graphDependencies(graph), context);
   const order = topologicalEntityOrder(rootKeys, rootDependencies, context);
   const depths = entityDepths(order, rootDependencies);
-  const sizes = new Map(order.map((key) => [key, entitySize(key, orientation, expandedGroupIds, context)]));
-  const rootLayout = layoutRootEntities(order, depths, sizes, orientation, metrics[orientation]);
+  const rankedOrder = orderWithinRanks(order, depths, rootDependencies);
+  const sizes = new Map(rankedOrder.map((key) => [key, entitySize(key, orientation, expandedGroupIds, context)]));
+  const rootLayout = layoutRootEntities(rankedOrder, depths, sizes, orientation, metrics[orientation]);
   const rootRects = rootLayout.rects.map((rect) => ({
     ...rect,
     expanded: rect.kind === "group" && expandedGroupIds.has(rect.id),
@@ -204,7 +206,9 @@ export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel,
     dependencies,
     incoming,
     routing: rootLayout.routing,
-    width: Math.ceil(rootLayout.routing ? Math.max(...rootLayout.routing.columnGutters.values()) + 28 : edge + (orientation === "mobile" ? 16 : 28)),
+    width: Math.ceil(rootLayout.routing
+      ? rootLayout.routing.contentRight + Math.max(84, dependencies.length * 8 + 36)
+      : edge + (orientation === "mobile" ? 16 : 28)),
     height: Math.ceil(bottom + 28),
   };
 }

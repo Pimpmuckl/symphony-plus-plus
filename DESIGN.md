@@ -196,11 +196,13 @@ Symphony++ uses state-based layering. Cards and groups stay visually still at re
 
 ### Execution Graph
 
-- Root groups and standalone WorkPackages occupy a deterministic left-to-right, then top-to-bottom grid.
-- Dependencies may inform the ordering of otherwise equivalent entities, but routing never repositions cards.
+- Root groups and standalone WorkPackages occupy dependency-ranked columns. Entities in the same rank stack vertically; every three ranks continue in a new top-to-bottom band.
+- A deterministic predecessor sweep orders otherwise equivalent entities to reduce crossings without changing their dependency rank.
 - Status-only updates and group expansion never reshuffle root entities.
-- Routes use node-free horizontal corridors and vertical gutters after layout is fixed.
+- Desktop routes always leave the source on the right and enter the target on the left. Direct neighbors use the column gap; skipped ranks and band jumps use reserved node-free corridors, gutters, and an outer bus.
+- Independent routes reserve six-pixel clearance and never share a segment. A bounded reroute pass moves avoidable crossings into free corridors; genuinely non-planar dense graphs may still cross rather than hide or invent dependencies. Route geometry is state-neutral; color and dashes communicate state after layout is fixed.
 - Dependency gates receive inputs from the left on desktop and from the top on mobile. Corridor inputs take the corresponding upper or leading gate slot.
+- A small source dot establishes direction without arrowheads or decorative markers.
 - Groups use the same visual grammar as WorkPackages. Expansion reveals children inside the existing group boundary and preserves external connections.
 
 ## Do's and Don'ts

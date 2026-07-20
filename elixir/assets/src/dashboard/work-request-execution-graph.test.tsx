@@ -70,15 +70,26 @@ describe("WorkRequestExecutionGraph", () => {
     expect(model.rects.some((item) => item.key === "work_package:snapshot")).toBe(false);
   });
 
-  it("packs roots row-major while keeping newly unlocked work beside its prerequisite", () => {
+  it("stacks roots by dependency rank instead of filling an unrelated grid row", () => {
     const roots = buildExecutionGraphLayout(affinityGridFixture, "desktop").rects.filter((item) => !item.parent_group_id);
 
-    expect(roots.map((item) => item.key)).toEqual(["group:a", "group:c", "group:b", "group:d"]);
-    expect(roots.map(({ row, column }) => [row, column])).toEqual([[0, 0], [0, 1], [0, 2], [1, 0]]);
+    expect(roots.map((item) => item.key)).toEqual(["group:a", "group:b", "group:c", "group:d"]);
+    expect(roots.map(({ row, column }) => [row, column])).toEqual([[0, 0], [0, 0], [0, 1], [0, 1]]);
+    expect(rect(buildExecutionGraphLayout(graphFixture, "desktop"), "work_package:playtest").column).toBe(1);
   });
 
-  it("expands active Groups by default and keeps finished or planned Groups compact", () => {
-    expect([...defaultExpandedGroupIds(graphFixture)]).toEqual(["workers"]);
+  it("keeps the same dependency order as a single top-to-bottom mobile flow", () => {
+    const model = buildExecutionGraphLayout(graphFixture, "mobile");
+    const roots = model.rects.filter((item) => !item.parent_group_id);
+    const route = graphWireRoutes(model, "mobile").paths[0];
+
+    expect(roots.map((item) => item.key)).toEqual(["group:source", "group:workers", "work_package:playtest", "group:output"]);
+    expect(roots.map((item) => item.y)).toEqual([...roots.map((item) => item.y)].sort((left, right) => left - right));
+    expect(route.path).toMatch(/^M [\d.]+ [\d.]+ V [\d.]+ H [\d.]+ V [\d.]+$/);
+  });
+
+  it("expands every non-complete Group by default and keeps only finished Groups compact", () => {
+    expect([...defaultExpandedGroupIds(graphFixture)]).toEqual(["workers", "output"]);
     const model = buildExecutionGraphLayout(graphFixture, "desktop");
     const collapsed = buildExecutionGraphLayout(graphFixture, "desktop", new Set());
     const exiting = buildExecutionGraphLayout(graphFixture, "desktop", new Set(), new Set(["workers"]));
@@ -86,13 +97,14 @@ describe("WorkRequestExecutionGraph", () => {
     expect(rect(model, "group:source")).toMatchObject({ expanded: false, height: 62 });
     expect(rect(model, "group:workers")).toMatchObject({ expanded: true });
     expect(rect(model, "group:workers").height).toBeGreaterThan(62);
-    expect(rect(model, "group:output")).toMatchObject({ expanded: false, height: 62 });
+    expect(rect(model, "group:output")).toMatchObject({ expanded: true });
+    expect(rect(model, "group:output").height).toBeGreaterThan(62);
     expect(exiting.rects.some((item) => item.key === "work_package:parse")).toBe(true);
     expect(exiting.height).toBe(collapsed.height);
   });
 
   it("keeps group-intent edges on the shell and proxies hidden WP endpoints to their collapsed Group", () => {
-    const model = buildExecutionGraphLayout(graphFixture, "desktop");
+    const model = buildExecutionGraphLayout(graphFixture, "desktop", new Set(["workers"]));
     const edges = model.dependencies.map((edge) => [edge.source_key, edge.target_key]);
     const collapsedEdges = buildExecutionGraphLayout(graphFixture, "desktop", new Set()).dependencies.map((edge) => [edge.source_key, edge.target_key]);
 
@@ -121,10 +133,10 @@ describe("WorkRequestExecutionGraph", () => {
   it("renders one static N/M gate for fan-in and leaves only active paths dashed by state", () => {
     const html = render();
 
-    expect(html.match(/data-join-for="group:output"/g)).toHaveLength(2);
+    expect(html.match(/data-join-for="work_package:join"/g)).toHaveLength(2);
     expect(html.match(/data-progress="0\/2"/g)).toHaveLength(2);
-    expect(html).toContain('data-edge="work_package:parse:group:output" data-state="active"');
-    expect(html).toContain('data-edge="work_package:index:group:output" data-state="active"');
+    expect(html).toContain('data-edge="work_package:parse:work_package:join" data-state="active"');
+    expect(html).toContain('data-edge="work_package:index:work_package:join" data-state="active"');
     expect(html).toContain('class="execution-graph__join-trunk" data-state="waiting"');
     expect(html).not.toContain("execution-graph__group-label");
   });
@@ -132,13 +144,13 @@ describe("WorkRequestExecutionGraph", () => {
   it("orders fan-out lanes toward their destinations and routes mixed fan-in around the target", () => {
     const fanoutModel = buildExecutionGraphLayout(graphFixture, "desktop");
     const fanout = graphWireRoutes(fanoutModel, "desktop").paths;
-    const tracks = fanoutModel.dependencies
+    const sourcePaths = fanoutModel.dependencies
       .filter((dependency) => dependency.source_key === "group:source")
       .sort((left, right) => rect(fanoutModel, left.target_key).y - rect(fanoutModel, right.target_key).y)
-      .map((dependency) => firstHorizontalTrack(fanout.find((route) => route.edge === dependency.key)?.path));
+      .map((dependency) => fanout.find((route) => route.edge === dependency.key) as WirePath);
 
-    expect(tracks[0]).toBeGreaterThan(tracks[1] as number);
-    expect(tracks[1]).toBeGreaterThan(tracks[2] as number);
+    expect(sourcePaths.map((path) => path.source?.y)).toEqual([...sourcePaths.map((path) => path.source?.y)].sort((left, right) => (left ?? 0) - (right ?? 0)));
+    expect(routeConflicts(sourcePaths)).toEqual([]);
 
     const recovery = buildExecutionGraphLayout(recoveryGraphFixture, "desktop");
     const routes = graphWireRoutes(recovery, "desktop");
@@ -163,7 +175,7 @@ describe("WorkRequestExecutionGraph", () => {
     expect(firstCard(html, "validate")).toContain("Waiting 1/2");
   });
 
-  it("keeps dense fan-in lanes monotonic by source order", () => {
+  it("keeps dense fan-in lanes monotonic and physically separate", () => {
     const model = buildExecutionGraphLayout(denseFanInGraphFixture, "desktop");
     const paths = graphWireRoutes(model, "desktop").paths;
     const tracks = model.dependencies
@@ -172,50 +184,33 @@ describe("WorkRequestExecutionGraph", () => {
       .map((dependency) => firstHorizontalTrack(paths.find((route) => route.edge === dependency.key)?.path));
 
     expect(tracks).toEqual([...tracks].sort((left, right) => left - right));
+    expect(routeConflicts(paths)).toEqual([]);
   });
 
-  it("wraps huge desktop graphs and gives overlapping corridor routes distinct right-to-left lanes", () => {
+  it("wraps huge desktop graphs into ranked bands without routing through cards or sharing lanes", () => {
     const model = buildExecutionGraphLayout(wrappedGraphFixture, "desktop");
     const routes = graphWireRoutes(model, "desktop");
     const source = rect(model, "work_package:wp-0");
     const target = rect(model, "work_package:wp-7");
     const route = routes.paths.find((path) => path.intentIds.includes("0-7"));
-    const skippedTierRoute = routes.paths.find((path) => path.intentIds.includes("0-2"));
-    const adjacentTierRoute = routes.paths.find((path) => path.intentIds.includes("1-2"));
-    const routing = model.routing!;
-    const sourceGutter = routing.columnGutters.get(source.column)!;
-    const sourceCorridor = routing.rowCorridors.get(source.row)! + 12;
-    const targetCorridor = routing.rowCorridors.get(target.row)! + 12;
-    const targetGateX = target.x - 22;
-    const skippedTarget = rect(model, "work_package:wp-2");
-    const skippedGateX = skippedTarget.x - 22;
-
     expect(model.routing?.wrapped).toBe(true);
     expect(model.width).toBeLessThan(1_200);
     expect([...new Set(model.rects.map((item) => item.column))]).toEqual([0, 1, 2]);
     expect(target.row).toBe(2);
-    expect(sourceGutter).toBeGreaterThan(source.x + source.width);
-    expect(sourceCorridor).toBeLessThan(source.y);
-    expect(targetCorridor).toBeLessThan(target.y);
-    expect(route?.path).toMatch(new RegExp(`^M ${source.x + source.width} ${source.y + source.height / 2} H [\\d.]+ V ${targetCorridor}`));
-    expect(route?.path).toMatch(new RegExp(`H [\\d.]+ V [\\d.]+ H ${targetGateX}$`));
-    expect(skippedTierRoute?.path).toMatch(new RegExp(`^M ${source.x + source.width} ${source.y + source.height / 2} H [\\d.]+ V ${sourceCorridor}`));
-    expect(skippedTierRoute?.path).toMatch(new RegExp(`H [\\d.]+ V [\\d.]+ H ${skippedGateX}$`));
-    expect(firstHorizontalTrack(route?.path)).not.toBe(firstHorizontalTrack(skippedTierRoute?.path));
-    expect(Math.abs(firstHorizontalTrack(route?.path) - sourceGutter)).toBeLessThanOrEqual(9);
-    expect(Math.abs(firstHorizontalTrack(skippedTierRoute?.path) - sourceGutter)).toBeLessThanOrEqual(9);
-    expect(targetSlotY(skippedTierRoute?.path)).toBeLessThan(targetSlotY(adjacentTierRoute?.path));
+    expect(route?.path).toMatch(new RegExp(`^M ${source.x + source.width} [\\d.]+ H [\\d.]+ V [\\d.]+ H [\\d.]+ V [\\d.]+ H [\\d.]+ V [\\d.]+ H ${target.x - 22}$`));
+    expect(routes.paths.flatMap((path) => unrelatedCardIntersections(path, model))).toEqual([]);
+    expect(routeConflicts(routes.paths)).toEqual([]);
   });
 
-  it("routes an expanded child through its parent column gutter before entering a row corridor", () => {
+  it("keeps expanded-child dependencies attached right-to-left without cutting through a sibling root", () => {
     const model = buildExecutionGraphLayout(nestedCorridorFixture, "desktop", new Set(["source"]));
     const child = rect(model, "work_package:bottom");
     const route = graphWireRoutes(model, "desktop").paths.find((path) => path.intentIds.includes("bottom-target"));
-    const gutter = model.routing?.columnGutters.get(child.column);
-    const corridor = (model.routing?.rowCorridors.get(child.row) ?? 0) + 12;
+    const target = rect(model, "group:target");
 
-    expect(route?.path).toContain(`M ${child.x + child.width} ${child.y + child.height / 2} H ${gutter} V ${corridor}`);
+    expect(route?.path).toMatch(new RegExp(`^M ${child.x + child.width} [\\d.]+ H [\\d.]+ V [\\d.]+ H ${target.x}$`));
     expect(route?.path).not.toContain(`M ${child.x + child.width / 2} ${child.y} V`);
+    expect(unrelatedCardIntersections(route!, model)).toEqual([]);
   });
 
   it("duplicates an existing collapsed wire when child routes expand", () => {
@@ -474,8 +469,87 @@ function firstHorizontalTrack(path?: string) {
   return Number(value);
 }
 
-function targetSlotY(path?: string) {
-  const value = [...(path?.matchAll(/ V (-?[\d.]+) H /g) ?? [])].at(-1)?.[1];
-  expect(value).toBeDefined();
-  return Number(value);
+type Segment = { x1: number; y1: number; x2: number; y2: number };
+
+function routeSegments(path: string) {
+  const tokens = [...path.matchAll(/([MHV])\s*(-?[\d.]+)(?:\s+(-?[\d.]+))?/g)];
+  const segments: Segment[] = [];
+  let x = 0;
+  let y = 0;
+  for (const [, command, first, second] of tokens) {
+    const previous = { x, y };
+    if (command === "M") [x, y] = [Number(first), Number(second)];
+    if (command === "H") x = Number(first);
+    if (command === "V") y = Number(first);
+    if (command !== "M") segments.push({ x1: previous.x, y1: previous.y, x2: x, y2: y });
+  }
+  return segments;
+}
+
+function unrelatedCardIntersections(path: WirePath, model: ReturnType<typeof buildExecutionGraphLayout>) {
+  const dependency = model.dependencies.find(({ key }) => key === path.edge);
+  if (!dependency) return [];
+  const endpoints = [rootKeyFor(dependency.source_key, model), rootKeyFor(dependency.target_key, model)];
+  return model.rects
+    .filter((item) => !item.parent_group_id && !endpoints.includes(item.key))
+    .filter((item) => routeSegments(path.path).some((segment) => segmentIntersectsInterior(segment, item)))
+    .map((item) => `${path.edge}->${item.key}`);
+}
+
+function rootKeyFor(key: string, model: ReturnType<typeof buildExecutionGraphLayout>) {
+  let item = model.rects.find((candidate) => candidate.key === key);
+  while (item?.parent_group_id) item = model.rects.find((candidate) => candidate.key === `group:${item?.parent_group_id}`);
+  return item?.key ?? key;
+}
+
+function segmentIntersectsInterior(segment: Segment, item: ReturnType<typeof rect>) {
+  if (segment.x1 === segment.x2) {
+    return segment.x1 > item.x + 2
+      && segment.x1 < item.x + item.width - 2
+      && Math.max(Math.min(segment.y1, segment.y2), item.y + 2) < Math.min(Math.max(segment.y1, segment.y2), item.y + item.height - 2);
+  }
+  return segment.y1 > item.y + 2
+    && segment.y1 < item.y + item.height - 2
+    && Math.max(Math.min(segment.x1, segment.x2), item.x + 2) < Math.min(Math.max(segment.x1, segment.x2), item.x + item.width - 2);
+}
+
+function routeConflicts(paths: WirePath[]) {
+  const conflicts: string[] = [];
+  for (let left = 0; left < paths.length; left += 1) {
+    for (let right = left + 1; right < paths.length; right += 1) {
+      const conflict = routeSegments(paths[left].path).some((a) => routeSegments(paths[right].path).some((b) => segmentsConflict(a, b)));
+      if (conflict) conflicts.push(`${paths[left].edge}<->${paths[right].edge}`);
+    }
+  }
+  return conflicts;
+}
+
+function segmentsConflict(left: Segment, right: Segment) {
+  const leftHorizontal = left.y1 === left.y2;
+  const rightHorizontal = right.y1 === right.y2;
+  if (leftHorizontal === rightHorizontal) {
+    const distance = Math.abs((leftHorizontal ? left.y1 : left.x1) - (leftHorizontal ? right.y1 : right.x1));
+    const overlap = intervalOverlap(
+      leftHorizontal ? left.x1 : left.y1,
+      leftHorizontal ? left.x2 : left.y2,
+      leftHorizontal ? right.x1 : right.y1,
+      leftHorizontal ? right.x2 : right.y2,
+    );
+    return overlap > 2 && distance < 6;
+  }
+  const horizontal = leftHorizontal ? left : right;
+  const vertical = leftHorizontal ? right : left;
+  const insideX = within(vertical.x1, horizontal.x1, horizontal.x2);
+  const insideY = within(horizontal.y1, vertical.y1, vertical.y2);
+  const nearX = Math.min(Math.abs(vertical.x1 - horizontal.x1), Math.abs(vertical.x1 - horizontal.x2));
+  const nearY = Math.min(Math.abs(horizontal.y1 - vertical.y1), Math.abs(horizontal.y1 - vertical.y2));
+  return (insideX && insideY) || (insideX && nearY < 6) || (insideY && nearX < 6);
+}
+
+function intervalOverlap(a1: number, a2: number, b1: number, b2: number) {
+  return Math.min(Math.max(a1, a2), Math.max(b1, b2)) - Math.max(Math.min(a1, a2), Math.min(b1, b2));
+}
+
+function within(value: number, start: number, end: number) {
+  return value > Math.min(start, end) && value < Math.max(start, end);
 }

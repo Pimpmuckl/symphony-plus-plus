@@ -3734,6 +3734,29 @@
     vector-effect: non-scaling-stroke;
   }
 
+  .execution-graph__source {
+    fill: var(--graph-edge);
+    stroke: hsl(var(--card));
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .execution-graph__source[data-state="waiting"] {
+    fill: var(--graph-edge-waiting);
+  }
+
+  .execution-graph__source[data-state="satisfied"] {
+    fill: var(--graph-edge-satisfied);
+  }
+
+  .execution-graph__source[data-state="blocked"] {
+    fill: var(--graph-edge-blocked);
+  }
+
+  .execution-graph__source[data-state="active"] {
+    fill: var(--graph-edge-active);
+  }
+
   .execution-graph__edge,
   .execution-graph__join-trunk {
     stroke-width: 1.75;

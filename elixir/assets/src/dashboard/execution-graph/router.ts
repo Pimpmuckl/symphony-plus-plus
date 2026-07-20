@@ -12,6 +12,7 @@ export type WirePath = {
   edge: string;
   state: DependencyPathState;
   path: string;
+  source?: Point;
   intentIds: string[];
   intentCount: number;
   bundle?: boolean;
@@ -30,206 +31,388 @@ export type WireGate = {
 type Point = { x: number; y: number };
 type AxisPoint = { primary: number; cross: number };
 type AxisRect = { start: number; end: number; crossStart: number; crossExtent: number };
-type PortBundle = { key: string; state: DependencyPathState; dependencies: VisibleGraphDependency[] };
+type RouteKind = "direct" | "corridor" | "local";
 type RouteCandidate = {
   dependency: VisibleGraphDependency;
   source: GraphEntityRect;
   target: GraphEntityRect;
+  sourceRoot: GraphEntityRect;
+  targetRoot: GraphEntityRect;
   start: Point;
   end: Point;
-  laneBias: number;
-  corridor: boolean;
+  kind: RouteKind;
 };
-type CorridorLane = { source: number; target: number };
-type LaneAssignment = { index: number; count: number };
-type LaneReservation = { primary: number; crossStart: number; crossEnd: number };
+type Segment = { x1: number; y1: number; x2: number; y2: number };
+type RouteOption = { path: string; segments: Segment[] };
 
 const PORT_INSET = 10;
-const PORT_PITCH = 12;
+const MIN_PORT_PITCH = 4;
 const BRANCH_STUB = 16;
 const GATE_OFFSET = 22;
-const LANE_PITCH = 9;
-const LANE_CLEARANCE = 5;
+const LANE_PITCH = 8;
+const WIRE_CLEARANCE = 6;
 
 export function graphWireRoutes(model: ExecutionGraphLayoutModel, orientation: GraphOrientation) {
   const rects = new Map(model.rects.map((rect) => [rect.key, rect]));
-  const incoming = groupBy(model.dependencies, (dependency) => dependency.target_key);
-  const outgoing = groupBy(model.dependencies, (dependency) => dependency.source_key);
-  const starts = new Map<string, Point>();
-  const sourceBiases = new Map<string, number>();
-  const targetBiases = new Map<string, number>();
-  const trunks: WirePath[] = [];
-
-  outgoing.forEach((dependencies, sourceKey) => {
-    const source = rects.get(sourceKey);
-    if (!source) return;
-    const local = dependencies.filter((dependency) => !usesCorridor(source, rects.get(dependency.target_key), orientation, model));
-    local.sort((left, right) => entityCrossCenter(rects.get(left.target_key), orientation) - entityCrossCenter(rects.get(right.target_key), orientation));
-    assignSourceLaneBiases(local, source, rects, orientation, sourceBiases);
-    const bundles = sourceBundles(local, portCapacity(source, orientation));
-
-    bundles.forEach((bundle, index) => {
-      const port = sourcePort(source, orientation, index, bundles.length);
-      const branch = bundle.dependencies.length > 1 ? movePrimary(port, orientation, BRANCH_STUB) : port;
-      bundle.dependencies.forEach((dependency) => starts.set(dependency.key, branch));
-      if (bundle.dependencies.length <= 1) return;
-      trunks.push({
-        key: `bundle:${sourceKey}:${bundle.key}`,
-        edge: bundle.dependencies.map((dependency) => dependency.key).join(" "),
-        state: bundle.state,
-        path: straightPath(port, branch, orientation),
-        intentIds: [...new Set(bundle.dependencies.flatMap((dependency) => dependency.intent_ids))],
-        intentCount: bundle.dependencies.reduce((sum, dependency) => sum + dependency.intent_ids.length, 0),
-        bundle: true,
-      });
-    });
+  const starts = sourcePorts(model.dependencies, rects, orientation);
+  const { ends, gates } = targetPorts(model.dependencies, rects, orientation);
+  const candidates = model.dependencies.flatMap((dependency) => {
+    const source = rects.get(dependency.source_key);
+    const target = rects.get(dependency.target_key);
+    const start = starts.get(dependency.key);
+    const end = ends.get(dependency.key);
+    if (!source || !target || !start || !end) return [];
+    const sourceRoot = rootRect(source, rects);
+    const targetRoot = rootRect(target, rects);
+    return [{
+      dependency,
+      source,
+      target,
+      sourceRoot,
+      targetRoot,
+      start,
+      end,
+      kind: routeKind(sourceRoot, targetRoot, orientation),
+    } satisfies RouteCandidate];
   });
 
-  const candidates: RouteCandidate[] = [];
-  const gates: WireGate[] = [];
-  incoming.forEach((dependencies, targetKey) => {
-    const target = rects.get(targetKey);
-    if (!target) return;
-    const visible = dependencies.filter((dependency) => {
-      const source = rects.get(dependency.source_key);
-      return source && (starts.has(dependency.key) || usesCorridor(source, target, orientation, model));
-    });
-    if (!visible.length) return;
-    visible.sort((left, right) => (
-      Number(!usesCorridor(rects.get(left.source_key), target, orientation, model))
-      - Number(!usesCorridor(rects.get(right.source_key), target, orientation, model))
-      || entityCrossCenter(rects.get(left.source_key), orientation) - entityCrossCenter(rects.get(right.source_key), orientation)
-    ));
-    assignTargetLaneBiases(visible, target, rects, orientation, targetBiases);
-    const forward = true;
-    const gate = visible.length > 1 ? buildGate(targetKey, target, visible, forward, orientation) : undefined;
-    if (gate) gates.push(gate.value);
+  const paths = orientation === "mobile"
+    ? mobilePaths(candidates)
+    : desktopPaths(candidates, model);
 
-    visible.forEach((dependency, index) => {
-      const source = rects.get(dependency.source_key) as GraphEntityRect;
-      const corridor = usesCorridor(source, target, orientation, model);
-      candidates.push({
-        dependency,
-        source,
-        target,
-        start: corridor
-          ? sourcePort(source, orientation, 0, 1)
-          : routedStart(starts.get(dependency.key) as Point, source, target, forward, orientation),
-        end: gate?.slots[index] ?? targetPort(target, orientation, forward),
-        laneBias: targetBiases.get(dependency.key) ?? sourceBiases.get(dependency.key) ?? 0,
-        corridor,
-      });
-    });
+  return { paths, gates };
+}
+
+function desktopPaths(candidates: RouteCandidate[], model: ExecutionGraphLayoutModel): WirePath[] {
+  const planned = new Map<string, RouteOption>();
+  const reserved: Segment[] = [];
+  const ordered = planningOrder(candidates);
+  const plans = ordered.map((candidate) => ({
+    candidate,
+    obstacles: model.rects.filter((rect) => !rect.parent_group_id && ![candidate.sourceRoot.key, candidate.targetRoot.key].includes(rect.key)),
+    options: routeOptions(candidate, model),
+  }));
+
+  for (const { candidate, obstacles, options } of plans) {
+    const best = bestRoute(options, reserved, obstacles);
+    planned.set(candidate.dependency.key, best);
+    reserved.push(...best.segments);
+  }
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    let changed = false;
+    for (const { candidate, obstacles, options } of [...plans].reverse()) {
+      const key = candidate.dependency.key;
+      const current = planned.get(key) as RouteOption;
+      const others = [...planned].filter(([otherKey]) => otherKey !== key).flatMap(([, route]) => route.segments);
+      const currentScore = routeScore(current, others, obstacles);
+      if (currentScore < 1_000_000) continue;
+      const best = bestRoute(options, others, obstacles);
+      if (routeScore(best, others, obstacles) >= currentScore) continue;
+      planned.set(key, best);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+
+  return candidates.map((candidate) => wirePath(candidate, (planned.get(candidate.dependency.key) as RouteOption).path));
+}
+
+function bestRoute(options: RouteOption[], reserved: Segment[], obstacles: GraphEntityRect[]) {
+  let best = options[0];
+  let score = routeScore(best, reserved, obstacles);
+  for (const option of options.slice(1)) {
+    const next = routeScore(option, reserved, obstacles);
+    if (next >= score) continue;
+    best = option;
+    score = next;
+  }
+  return best;
+}
+
+function mobilePaths(candidates: RouteCandidate[]) {
+  const reservations: Array<{ track: number; start: number; end: number }> = [];
+  return candidates.map((candidate) => {
+    const from = toAxis(candidate.start, "mobile");
+    const to = toAxis(candidate.end, "mobile");
+    const low = Math.min(from.cross, to.cross);
+    const high = Math.max(from.cross, to.cross);
+    const midpoint = (from.primary + to.primary) / 2;
+    let track = midpoint;
+    for (let lane = 0; lane < 24; lane += 1) {
+      const option = midpoint + alternatingOffset(lane) * LANE_PITCH;
+      if (reservations.every((item) => Math.abs(item.track - option) >= 5 || high + 5 <= item.start || low >= item.end + 5)) {
+        track = option;
+        break;
+      }
+    }
+    reservations.push({ track, start: low, end: high });
+    return wirePath(candidate, orthogonalPath(candidate.start, track, to, "mobile"));
   });
+}
 
-  const reservations: LaneReservation[] = [];
-  const corridorLanes = assignCorridorLanes(candidates, model, rects);
-  const paths = candidates.map((candidate) => ({
+function routeOptions(candidate: RouteCandidate, model: ExecutionGraphLayoutModel) {
+  const routing = model.routing;
+  if (candidate.kind === "direct") {
+    const direct = directOptions(candidate);
+    if (!routing) return direct;
+    const corridor = sameBandOptions(
+      candidate,
+      sourceLaneOptions(candidate, routing),
+      bandLaneOptions(candidate.targetRoot.row, model, "target"),
+      targetLaneOptions(candidate, model),
+    );
+    return [...direct, ...corridor];
+  }
+  if (!routing) return [routeFromPoints([candidate.start, candidate.end])];
+
+  const sourceXs = sourceLaneOptions(candidate, routing);
+  const targetXs = targetLaneOptions(candidate, model);
+  const targetYs = bandLaneOptions(candidate.targetRoot.row, model, "target");
+  const crossBand = candidate.sourceRoot.row !== candidate.targetRoot.row;
+  if (!crossBand) return sameBandOptions(candidate, sourceXs, targetYs, targetXs);
+  return crossBandOptions(candidate, model, sourceXs, targetYs, targetXs);
+}
+
+function sameBandOptions(candidate: RouteCandidate, sourceXs: number[], targetYs: number[], targetXs: number[]) {
+  return sourceXs.flatMap((sourceX) => targetYs.flatMap((targetY) => targetXs.map((targetX) => (
+    routeFromPoints([candidate.start, { x: sourceX, y: candidate.start.y }, { x: sourceX, y: targetY }, { x: targetX, y: targetY }, { x: targetX, y: candidate.end.y }, candidate.end])
+  ))));
+}
+
+function crossBandOptions(candidate: RouteCandidate, model: ExecutionGraphLayoutModel, sourceXs: number[], targetYs: number[], targetXs: number[]) {
+  const routing = model.routing as NonNullable<ExecutionGraphLayoutModel["routing"]>;
+  const busXs = spread(routing.contentRight + 20, model.width - 20, 6);
+  if (candidate.sourceRoot.column >= 2) {
+    return busXs.flatMap((busX) => targetYs.flatMap((targetY) => targetXs.map((targetX) => (
+      routeFromPoints([candidate.start, { x: busX, y: candidate.start.y }, { x: busX, y: targetY }, { x: targetX, y: targetY }, { x: targetX, y: candidate.end.y }, candidate.end])
+    ))));
+  }
+  const sourceYs = bandLaneOptions(candidate.sourceRoot.row, model, "source");
+  return sourceXs.flatMap((sourceX) => sourceYs.flatMap((sourceY) => busXs.flatMap((busX) => targetYs.flatMap((targetY) => targetXs.map((targetX) => (
+    routeFromPoints([candidate.start, { x: sourceX, y: candidate.start.y }, { x: sourceX, y: sourceY }, { x: busX, y: sourceY }, { x: busX, y: targetY }, { x: targetX, y: targetY }, { x: targetX, y: candidate.end.y }, candidate.end])
+  ))))));
+}
+
+function directOptions(candidate: RouteCandidate) {
+  if (Math.abs(candidate.start.y - candidate.end.y) < 1) return [routeFromPoints([candidate.start, candidate.end])];
+  return spread(candidate.start.x + BRANCH_STUB, candidate.end.x - BRANCH_STUB, 8)
+    .map((track) => routeFromPoints([candidate.start, { x: track, y: candidate.start.y }, { x: track, y: candidate.end.y }, candidate.end]));
+}
+
+function sourceLaneOptions(candidate: RouteCandidate, routing: NonNullable<ExecutionGraphLayoutModel["routing"]>) {
+  if (candidate.kind === "local") return spread(candidate.sourceRoot.x + candidate.sourceRoot.width + 8, candidate.sourceRoot.x + candidate.sourceRoot.width + 18, 3);
+  if (candidate.sourceRoot.column < 2) {
+    const right = candidate.sourceRoot.x + candidate.sourceRoot.width;
+    const gutter = routing.columnGutters.get(candidate.sourceRoot.column) ?? right + 28;
+    return spread(right + 5, Math.max(right + 12, gutter - 6), 8);
+  }
+  return [routing.contentRight + 20];
+}
+
+function targetLaneOptions(candidate: RouteCandidate, model: ExecutionGraphLayoutModel) {
+  const previousRight = candidate.targetRoot.column === 0
+    ? 8
+    : Math.max(...model.rects.filter((rect) => !rect.parent_group_id && rect.row === candidate.targetRoot.row && rect.column === candidate.targetRoot.column - 1).map((rect) => rect.x + rect.width), 8) + 8;
+  return spread(previousRight, candidate.end.x - BRANCH_STUB, 6).reverse();
+}
+
+function bandLaneOptions(row: number, model: ExecutionGraphLayoutModel, side: "source" | "target") {
+  const routing = model.routing as NonNullable<ExecutionGraphLayoutModel["routing"]>;
+  const bandTop = Math.min(...model.rects.filter((rect) => !rect.parent_group_id && rect.row === row).map((rect) => rect.y));
+  const previousBottom = row > 0 ? (routing.bandBottoms.get(row - 1) ?? 0) : 0;
+  const low = previousBottom + 12;
+  const high = bandTop - 18;
+  const middle = (low + high) / 2;
+  const range = side === "source" ? [low, middle - 4] : [middle + 4, high];
+  const count = Math.max(2, Math.min(6, Math.floor((range[1] - range[0]) / WIRE_CLEARANCE) + 1));
+  return spread(range[0], range[1], count);
+}
+
+function routeFromPoints(points: Point[]): RouteOption {
+  const compact = points.filter((point, index) => index === 0 || point.x !== points[index - 1].x || point.y !== points[index - 1].y);
+  const segments = compact.slice(1).map((point, index) => ({ x1: compact[index].x, y1: compact[index].y, x2: point.x, y2: point.y }));
+  const path = compact.slice(1).reduce((value, point, index) => (
+    `${value} ${point.y === compact[index].y ? "H" : "V"} ${number(point.y === compact[index].y ? point.x : point.y)}`
+  ), `M ${pointValue(compact[0])}`);
+  return { path, segments };
+}
+
+function routeScore(option: RouteOption, reserved: Segment[], obstacles: GraphEntityRect[]) {
+  const collision = option.segments.some((segment) => obstacles.some((rect) => segmentIntersectsRect(segment, rect))) ? 1_000_000_000 : 0;
+  const self = option.segments.flatMap((segment, index) => option.segments.slice(index + 2).map((other) => segmentConflict(segment, other))).reduce((sum, value) => sum + value, 0);
+  const existing = option.segments.flatMap((segment) => reserved.map((other) => segmentConflict(segment, other))).reduce((sum, value) => sum + value, 0);
+  const length = option.segments.reduce((sum, segment) => sum + Math.abs(segment.x2 - segment.x1) + Math.abs(segment.y2 - segment.y1), 0);
+  return collision + self + existing + length;
+}
+
+function segmentConflict(left: Segment, right: Segment) {
+  const leftHorizontal = left.y1 === left.y2;
+  const rightHorizontal = right.y1 === right.y2;
+  if (leftHorizontal === rightHorizontal) return parallelConflict(left, right, leftHorizontal);
+  const horizontal = leftHorizontal ? left : right;
+  const vertical = leftHorizontal ? right : left;
+  return orthogonalConflict(horizontal, vertical);
+}
+
+function parallelConflict(left: Segment, right: Segment, horizontal: boolean) {
+  const distance = Math.abs((horizontal ? left.y1 : left.x1) - (horizontal ? right.y1 : right.x1));
+  const overlap = intervalOverlap(horizontal ? left.x1 : left.y1, horizontal ? left.x2 : left.y2, horizontal ? right.x1 : right.y1, horizontal ? right.x2 : right.y2);
+  if (overlap <= 2) return 0;
+  if (distance === 0) return 100_000_000 + overlap;
+  return distance < WIRE_CLEARANCE ? 1_000_000 : 0;
+}
+
+function orthogonalConflict(horizontal: Segment, vertical: Segment) {
+  const insideX = between(vertical.x1, horizontal.x1, horizontal.x2);
+  const insideY = between(horizontal.y1, vertical.y1, vertical.y2);
+  if (insideX && insideY) return 100_000_000;
+  const nearX = Math.min(Math.abs(vertical.x1 - horizontal.x1), Math.abs(vertical.x1 - horizontal.x2));
+  const nearY = Math.min(Math.abs(horizontal.y1 - vertical.y1), Math.abs(horizontal.y1 - vertical.y2));
+  return (insideX && nearY < WIRE_CLEARANCE) || (insideY && nearX < WIRE_CLEARANCE) ? 1_000_000 : 0;
+}
+
+function segmentIntersectsRect(segment: Segment, rect: GraphEntityRect) {
+  if (segment.x1 === segment.x2) return segment.x1 > rect.x + 2 && segment.x1 < rect.x + rect.width - 2 && intervalOverlap(segment.y1, segment.y2, rect.y + 2, rect.y + rect.height - 2) > 0;
+  return segment.y1 > rect.y + 2 && segment.y1 < rect.y + rect.height - 2 && intervalOverlap(segment.x1, segment.x2, rect.x + 2, rect.x + rect.width - 2) > 0;
+}
+
+function intervalOverlap(a1: number, a2: number, b1: number, b2: number) {
+  return Math.min(Math.max(a1, a2), Math.max(b1, b2)) - Math.max(Math.min(a1, a2), Math.min(b1, b2));
+}
+
+function between(value: number, start: number, end: number) {
+  return value > Math.min(start, end) && value < Math.max(start, end);
+}
+
+function routePriority(candidate: RouteCandidate) {
+  if (candidate.kind === "direct") return 0;
+  if (candidate.kind === "local") return 1;
+  return 2;
+}
+
+function wirePath(candidate: RouteCandidate, path: string): WirePath {
+  return {
     key: candidate.dependency.key,
     edge: candidate.dependency.key,
     state: candidate.dependency.state,
-    path: candidate.corridor
-      ? routedThroughCorridor(candidate, corridorLanes.get(candidate.dependency.key) as CorridorLane, model, rects)
-      : routedPath(candidate.start, candidate.end, orientation, reservations, candidate.laneBias),
+    path,
+    source: candidate.start,
     intentIds: candidate.dependency.intent_ids,
     intentCount: candidate.dependency.intent_ids.length,
     bundle: false,
-  }));
-
-  return { paths: [...trunks, ...paths], gates };
+  };
 }
 
-function usesCorridor(
-  source: GraphEntityRect | undefined,
-  target: GraphEntityRect | undefined,
+function routeKind(source: GraphEntityRect, target: GraphEntityRect, orientation: GraphOrientation): RouteKind {
+  if (orientation === "mobile") return "direct";
+  if (source.key === target.key) return "local";
+  if (source.row === target.row && target.column === source.column + 1) return "direct";
+  return "corridor";
+}
+
+function sourcePorts(
+  dependencies: VisibleGraphDependency[],
+  rects: Map<string, GraphEntityRect>,
   orientation: GraphOrientation,
-  model: ExecutionGraphLayoutModel,
 ) {
-  return orientation === "desktop"
-    && Boolean(model.routing && source && target && (source.row !== target.row || target.column !== source.column + 1));
-}
-
-function routedThroughCorridor(
-  candidate: RouteCandidate,
-  lanes: CorridorLane,
-  model: ExecutionGraphLayoutModel,
-  rects: Map<string, GraphEntityRect>,
-) {
-  const routing = model.routing as NonNullable<ExecutionGraphLayoutModel["routing"]>;
-  const corridor = corridorY(candidate, routing, rects);
-  return `M ${pointValue(candidate.start)} H ${number(lanes.source)} V ${number(corridor)} H ${number(lanes.target)} V ${number(candidate.end.y)} H ${number(candidate.end.x)}`;
-}
-
-function assignCorridorLanes(
-  candidates: RouteCandidate[],
-  model: ExecutionGraphLayoutModel,
-  rects: Map<string, GraphEntityRect>,
-) {
-  const routing = model.routing;
-  const corridorCandidates = candidates.filter((candidate) => candidate.corridor);
-  if (!routing || !corridorCandidates.length) return new Map<string, CorridorLane>();
-  const sourceAssignments = laneAssignments(corridorCandidates, "source", routing, rects);
-  const targetAssignments = laneAssignments(corridorCandidates, "target", routing, rects);
-  return new Map(corridorCandidates.map((candidate) => {
-    const source = sourceAssignments.get(candidate.dependency.key) as LaneAssignment;
-    const target = targetAssignments.get(candidate.dependency.key) as LaneAssignment;
-    const sourceRoot = rootRect(candidate.source, rects);
-    const targetRoot = rootRect(candidate.target, rects);
-    const sourceBase = routing.columnGutters.get(candidate.source.column) ?? sourceRoot.x + sourceRoot.width + BRANCH_STUB;
-    const targetBase = Math.min(targetRoot.x - BRANCH_STUB, candidate.end.x - BRANCH_STUB);
-    return [candidate.dependency.key, {
-      source: sourceBase + (source.index - (source.count - 1) / 2) * LANE_PITCH,
-      target: targetBase - target.index * LANE_PITCH,
-    }];
-  }));
-}
-
-function laneAssignments(
-  candidates: RouteCandidate[],
-  side: "source" | "target",
-  routing: NonNullable<ExecutionGraphLayoutModel["routing"]>,
-  rects: Map<string, GraphEntityRect>,
-) {
-  const assignments = new Map<string, LaneAssignment>();
-  groupBy(candidates, (candidate) => String(candidate[side].column)).forEach((columnCandidates) => {
-    const lanes: Array<Array<{ start: number; end: number }>> = [];
-    const assigned: Array<{ key: string; index: number }> = [];
-    columnCandidates
-      .map((candidate) => {
-        const corridor = corridorY(candidate, routing, rects);
-        const endpoint = side === "source" ? candidate.start.y : candidate.end.y;
-        return { candidate, start: Math.min(corridor, endpoint), end: Math.max(corridor, endpoint) };
-      })
-      .sort((left, right) => (
-        (side === "target" ? left.candidate.end.y - right.candidate.end.y : left.start - right.start)
-        || left.end - right.end
-        || left.candidate.dependency.key.localeCompare(right.candidate.dependency.key)
-      ))
-      .forEach(({ candidate, start, end }) => {
-        let index = lanes.findIndex((intervals) => intervals.every((interval) => (
-          end + LANE_CLEARANCE <= interval.start || start >= interval.end + LANE_CLEARANCE
-        )));
-        if (index < 0) {
-          index = lanes.length;
-          lanes.push([]);
-        }
-        lanes[index].push({ start, end });
-        assigned.push({ key: candidate.dependency.key, index });
-      });
-    assigned.forEach(({ key, index }) => assignments.set(key, { index, count: lanes.length }));
+  const ports = new Map<string, Point>();
+  groupBy(dependencies, ({ source_key }) => source_key).forEach((members, sourceKey) => {
+    const source = rects.get(sourceKey);
+    if (!source) return;
+    members.sort((left, right) => portPriority(left, rects, orientation) - portPriority(right, rects, orientation)
+      || targetDistance(right, source, rects) - targetDistance(left, source, rects)
+      || compareTargetPosition(left, right, rects));
+    members.forEach((dependency, index) => ports.set(dependency.key, sourcePort(source, orientation, index, members.length)));
   });
-  return assignments;
+  return ports;
 }
 
-function corridorY(
-  candidate: RouteCandidate,
-  routing: NonNullable<ExecutionGraphLayoutModel["routing"]>,
+function targetPorts(
+  dependencies: VisibleGraphDependency[],
   rects: Map<string, GraphEntityRect>,
+  orientation: GraphOrientation,
 ) {
-  const sameRow = candidate.source.row === candidate.target.row;
-  const row = sameRow ? candidate.source.row : candidate.target.row;
-  const fallback = sameRow ? rootRect(candidate.source, rects).y : rootRect(candidate.target, rects).y;
-  return (routing.rowCorridors.get(row) ?? fallback - 48) + laneOffsetForState(candidate.dependency.state);
+  const ends = new Map<string, Point>();
+  const gates: WireGate[] = [];
+  groupBy(dependencies, ({ target_key }) => target_key).forEach((members, targetKey) => {
+    const target = rects.get(targetKey);
+    if (!target) return;
+    members.sort((left, right) => portPriority(left, rects, orientation) - portPriority(right, rects, orientation) || compareSourcePosition(left, right, rects));
+    const gate = members.length > 1 ? buildGate(targetKey, target, members, orientation) : undefined;
+    if (gate) gates.push(gate.value);
+    members.forEach((dependency, index) => ends.set(
+      dependency.key,
+      gate?.slots[index] ?? targetPort(target, orientation),
+    ));
+  });
+  return { ends, gates };
+}
+
+function buildGate(
+  targetKey: string,
+  target: GraphEntityRect,
+  dependencies: VisibleGraphDependency[],
+  orientation: GraphOrientation,
+) {
+  const axis = axisRect(target, orientation);
+  const primary = axis.start - GATE_OFFSET;
+  const center = axis.crossStart + axis.crossExtent / 2;
+  const pitch = Math.max(MIN_PORT_PITCH, Math.min(12, (axis.crossExtent - PORT_INSET * 2) / Math.max(1, dependencies.length - 1)));
+  const span = (dependencies.length - 1) * pitch;
+  const slots = dependencies.map((_dependency, index) => fromAxis({ primary, cross: center - span / 2 + index * pitch }, orientation));
+  const first = toAxis(slots[0], orientation);
+  const last = toAxis(slots.at(-1) as Point, orientation);
+  const railStart = { primary, cross: first.cross - 4 };
+  const railEnd = { primary, cross: last.cross + 4 };
+  const gateCenter = { primary, cross: center };
+  const targetEntry = { primary: axis.start, cross: center };
+  const satisfied = dependencies.filter(({ state }) => state === "satisfied").length;
+  const state: DependencyPathState = satisfied === dependencies.length ? "satisfied" : "waiting";
+
+  return {
+    slots,
+    value: {
+      key: `gate:${targetKey}`,
+      targetKey,
+      state,
+      path: `${linePath(railStart, railEnd, orientation)} ${linePath(gateCenter, targetEntry, orientation)}`,
+      satisfied,
+      required: dependencies.length,
+      label: orientation === "desktop"
+        ? { x: primary, y: railStart.cross - 7, anchor: "middle" as const }
+        : { x: center, y: primary - 7, anchor: "middle" as const },
+    },
+  };
+}
+
+function sourcePort(rect: GraphEntityRect, orientation: GraphOrientation, index: number, count: number) {
+  const axis = axisRect(rect, orientation);
+  return fromAxis({ primary: axis.end, cross: axis.crossStart + edgeSlot(index, count, axis.crossExtent) }, orientation);
+}
+
+function targetPort(rect: GraphEntityRect, orientation: GraphOrientation) {
+  const axis = axisRect(rect, orientation);
+  return fromAxis({ primary: axis.start, cross: axis.crossStart + axis.crossExtent / 2 }, orientation);
+}
+
+function axisRect(rect: GraphEntityRect, orientation: GraphOrientation): AxisRect {
+  if (orientation === "desktop") {
+    return { start: rect.x, end: rect.x + rect.width, crossStart: rect.y, crossExtent: sourcePortExtent(rect, orientation) };
+  }
+  const primaryExtent = rect.kind === "group" && rect.expanded ? graphGroupHeaderSize(orientation) : rect.height;
+  return { start: rect.y, end: rect.y + primaryExtent, crossStart: rect.x, crossExtent: rect.width };
+}
+
+function sourcePortExtent(rect: GraphEntityRect, orientation: GraphOrientation) {
+  if (orientation === "mobile") return rect.width;
+  return rect.kind === "group" && rect.expanded ? graphGroupHeaderSize(orientation) : rect.height;
+}
+
+function edgeSlot(index: number, count: number, extent: number) {
+  if (count <= 1) return extent / 2;
+  const usable = Math.max(0, extent - PORT_INSET * 2);
+  return (extent - usable) / 2 + (index * usable) / (count - 1);
 }
 
 function rootRect(rect: GraphEntityRect, rects: Map<string, GraphEntityRect>) {
@@ -242,210 +425,84 @@ function rootRect(rect: GraphEntityRect, rects: Map<string, GraphEntityRect>) {
   return current;
 }
 
-function laneOffsetForState(state: DependencyPathState) {
-  return (stateOrder.indexOf(state) - 1.5) * 8;
+function compareTargetPosition(left: VisibleGraphDependency, right: VisibleGraphDependency, rects: Map<string, GraphEntityRect>) {
+  return compareRects(rects.get(left.target_key), rects.get(right.target_key)) || left.key.localeCompare(right.key);
 }
 
-function assignSourceLaneBiases(
-  dependencies: VisibleGraphDependency[],
-  source: GraphEntityRect,
-  rects: Map<string, GraphEntityRect>,
-  orientation: GraphOrientation,
-  laneBiases: Map<string, number>,
-) {
-  const center = entityCrossCenter(source, orientation);
-  assignDirectionalBiases(dependencies.filter((dependency) => entityCrossCenter(rects.get(dependency.target_key), orientation) < center), -1, laneBiases);
-  assignDirectionalBiases(dependencies.filter((dependency) => entityCrossCenter(rects.get(dependency.target_key), orientation) >= center), 1, laneBiases);
+function targetDistance(dependency: VisibleGraphDependency, source: GraphEntityRect, rects: Map<string, GraphEntityRect>) {
+  const target = rects.get(dependency.target_key);
+  return target ? Math.abs(rootRect(target, rects).row - rootRect(source, rects).row) : 0;
 }
 
-function assignTargetLaneBiases(
-  dependencies: VisibleGraphDependency[],
-  target: GraphEntityRect,
-  rects: Map<string, GraphEntityRect>,
-  orientation: GraphOrientation,
-  laneBiases: Map<string, number>,
-) {
-  const center = entityCrossCenter(target, orientation);
-  assignDirectionalBiases(dependencies.filter((dependency) => entityCrossCenter(rects.get(dependency.source_key), orientation) < center), 1, laneBiases);
-  assignDirectionalBiases(dependencies.filter((dependency) => entityCrossCenter(rects.get(dependency.source_key), orientation) >= center), -1, laneBiases);
+function portPriority(dependency: VisibleGraphDependency, rects: Map<string, GraphEntityRect>, orientation: GraphOrientation) {
+  const source = rects.get(dependency.source_key);
+  const target = rects.get(dependency.target_key);
+  if (!source || !target) return 0;
+  return routeKind(rootRect(source, rects), rootRect(target, rects), orientation) === "direct" ? 1 : 0;
 }
 
-function assignDirectionalBiases(dependencies: VisibleGraphDependency[], direction: number, laneBiases: Map<string, number>) {
-  if (dependencies.length <= 1) return;
-  dependencies.forEach((dependency, index) => laneBiases.set(dependency.key, direction * ((dependencies.length - 1) / 2 - index)));
+function compareSourcePosition(left: VisibleGraphDependency, right: VisibleGraphDependency, rects: Map<string, GraphEntityRect>) {
+  return compareRects(rects.get(left.source_key), rects.get(right.source_key)) || left.key.localeCompare(right.key);
 }
 
-function sourceBundles(dependencies: VisibleGraphDependency[], capacity: number): PortBundle[] {
-  if (dependencies.length <= capacity) {
-    return dependencies.map((dependency) => ({ key: dependency.key, state: dependency.state, dependencies: [dependency] }));
+function compareRects(left?: GraphEntityRect, right?: GraphEntityRect) {
+  const leftValues = rectPosition(left);
+  const rightValues = rectPosition(right);
+  for (let index = 0; index < leftValues.length; index += 1) {
+    const difference = leftValues[index] - rightValues[index];
+    if (difference) return difference;
   }
-  const byState = groupBy(dependencies, (dependency) => dependency.state);
-  return stateOrder.flatMap((state) => {
-    const members = byState.get(state) ?? [];
-    return members.length ? [{ key: state, state, dependencies: members }] : [];
-  });
+  return 0;
 }
 
-function portCapacity(rect: GraphEntityRect, orientation: GraphOrientation) {
-  const extent = sourcePortExtent(rect, orientation);
-  return Math.max(1, Math.min(5, Math.floor((extent - PORT_INSET * 2) / PORT_PITCH) + 1));
+function rectPosition(rect?: GraphEntityRect) {
+  return rect ? [rect.row, rect.y, rect.column, rect.x] : [0, 0, 0, 0];
 }
 
-function sourcePort(rect: GraphEntityRect, orientation: GraphOrientation, index: number, count: number) {
-  const axis = axisRect(rect, orientation);
-  return fromAxis({ primary: axis.end, cross: axis.crossStart + edgeSlot(index, count, axis.crossExtent) }, orientation);
+function compareCandidates(left: RouteCandidate, right: RouteCandidate) {
+  const leftDistance = Math.abs(left.targetRoot.row - left.sourceRoot.row);
+  const rightDistance = Math.abs(right.targetRoot.row - right.sourceRoot.row);
+  return left.targetRoot.row - right.targetRoot.row
+    || leftDistance - rightDistance
+    || right.sourceRoot.row - left.sourceRoot.row
+    || right.sourceRoot.column - left.sourceRoot.column
+    || left.start.y - right.start.y
+    || left.end.y - right.end.y
+    || left.dependency.key.localeCompare(right.dependency.key);
 }
 
-function targetPort(rect: GraphEntityRect, orientation: GraphOrientation, forward: boolean) {
-  const axis = axisRect(rect, orientation);
-  return fromAxis({ primary: forward ? axis.start : axis.end, cross: axis.crossStart + axis.crossExtent / 2 }, orientation);
-}
-
-function buildGate(
-  targetKey: string,
-  target: GraphEntityRect,
-  dependencies: VisibleGraphDependency[],
-  forward: boolean,
-  orientation: GraphOrientation,
-) {
-  const targetAxis = axisRect(target, orientation);
-  const primary = (forward ? targetAxis.start : targetAxis.end) + (forward ? -GATE_OFFSET : GATE_OFFSET);
-  const center = targetAxis.crossStart + targetAxis.crossExtent / 2;
-  const span = (dependencies.length - 1) * PORT_PITCH;
-  const slots = dependencies.map((_dependency, index) => fromAxis({ primary, cross: center - span / 2 + index * PORT_PITCH }, orientation));
-  const first = toAxis(slots[0], orientation);
-  const last = toAxis(slots.at(-1) as Point, orientation);
-  const railStart = { primary, cross: first.cross - 4 };
-  const railEnd = { primary, cross: last.cross + 4 };
-  const targetEntry = { primary: forward ? targetAxis.start : targetAxis.end, cross: center };
-  const gateCenter = { primary, cross: center };
-  const satisfied = dependencies.filter((dependency) => dependency.state === "satisfied").length;
-  const state: DependencyPathState = satisfied === dependencies.length ? "satisfied" : "waiting";
-  const label = orientation === "desktop"
-    ? { x: primary, y: railStart.cross - 7, anchor: "middle" as const }
-    : { x: center, y: primary - 7, anchor: "middle" as const };
-
-  return {
-    slots,
-    value: {
-      key: `gate:${targetKey}`,
-      targetKey,
-      state,
-      path: `${linePath(railStart, railEnd, orientation)} ${linePath(gateCenter, targetEntry, orientation)}`,
-      satisfied,
-      required: dependencies.length,
-      label,
-    },
-  };
-}
-
-function routedStart(start: Point, source: GraphEntityRect, target: GraphEntityRect, targetOnStart: boolean, orientation: GraphOrientation) {
-  if (orientation === "desktop") return start;
-  if (!targetOnStart || entityPrimaryEnd(source, orientation) <= entityPrimaryStart(target, orientation)) return start;
-  const axis = toAxis(start, orientation);
-  return fromAxis({ ...axis, primary: entityPrimaryStart(source, orientation) }, orientation);
-}
-
-function routedPath(start: Point, end: Point, orientation: GraphOrientation, reservations: LaneReservation[], laneBias: number) {
-  const from = toAxis(start, orientation);
-  const to = toAxis(end, orientation);
-  if (Math.abs(from.cross - to.cross) < 1) return straightPath(start, end, orientation);
-  const crossStart = Math.min(from.cross, to.cross);
-  const crossEnd = Math.max(from.cross, to.cross);
-  const track = reserveLane(from.primary, to.primary, to.primary - from.primary, crossStart, crossEnd, reservations, laneBias);
-  return orthogonalPath(start, track, to, orientation);
-}
-
-function reserveLane(
-  from: number,
-  to: number,
-  directSpace: number,
-  crossStart: number,
-  crossEnd: number,
-  reservations: LaneReservation[],
-  laneBias: number,
-) {
-  const forward = directSpace > BRANCH_STUB * 2;
-  const midpoint = (from + to) / 2;
-  for (let lane = 0; lane < 24; lane += 1) {
-    const candidate = forward
-      ? clamp(midpoint + (laneBias + laneOffset(lane)) * LANE_PITCH, from + BRANCH_STUB, to - BRANCH_STUB)
-      : outsideLane(from, to, lane);
-    if (laneAvailable(candidate, crossStart, crossEnd, reservations)) {
-      reservations.push({ primary: candidate, crossStart, crossEnd });
-      return candidate;
-    }
-  }
-  const fallback = outsideLane(from, to, reservations.length);
-  reservations.push({ primary: fallback, crossStart, crossEnd });
-  return fallback;
-}
-
-function outsideLane(from: number, to: number, lane: number) {
-  return to < from
-    ? Math.min(from, to) - GATE_OFFSET - lane * LANE_PITCH
-    : Math.max(from, to) + GATE_OFFSET + lane * LANE_PITCH;
-}
-
-function laneAvailable(primary: number, crossStart: number, crossEnd: number, reservations: LaneReservation[]) {
-  return reservations.every((reserved) => (
-    Math.abs(reserved.primary - primary) >= LANE_CLEARANCE
-    || crossEnd + LANE_CLEARANCE <= reserved.crossStart
-    || crossStart >= reserved.crossEnd + LANE_CLEARANCE
+function planningOrder(candidates: RouteCandidate[]) {
+  const groups = [...groupBy(candidates, ({ source }) => source.key).values()];
+  groups.forEach((members) => members.sort((left, right) => (
+    Math.abs(right.end.y - right.start.y) - Math.abs(left.end.y - left.start.y)
+    || routePriority(left) - routePriority(right)
+    || compareCandidates(left, right)
+  )));
+  groups.sort((left, right) => (
+    right[0].sourceRoot.row - left[0].sourceRoot.row
+    || right[0].sourceRoot.column - left[0].sourceRoot.column
+    || Math.min(...left.map(routePriority)) - Math.min(...right.map(routePriority))
+    || compareCandidates(left[0], right[0])
   ));
+  return groups.flat();
 }
 
-function laneOffset(index: number) {
+function spread(min: number, max: number, count: number) {
+  if (count <= 0) return [];
+  if (count === 1) return [(min + max) / 2];
+  const low = Math.min(min, max);
+  const high = Math.max(min, max);
+  return Array.from({ length: count }, (_value, index) => low + ((high - low) * index) / (count - 1));
+}
+
+function alternatingOffset(index: number) {
   if (index === 0) return 0;
   const value = Math.ceil(index / 2);
   return index % 2 ? value : -value;
 }
 
-function edgeSlot(index: number, count: number, extent: number) {
-  if (count <= 1) return extent / 2;
-  const usable = Math.max(0, extent - PORT_INSET * 2);
-  const span = Math.min((count - 1) * PORT_PITCH, usable);
-  return (extent - span) / 2 + (index * span) / (count - 1);
-}
-
-function sourcePortExtent(rect: GraphEntityRect, orientation: GraphOrientation) {
-  if (orientation === "mobile") return rect.width;
-  return rect.kind === "group" && rect.expanded ? graphGroupHeaderSize(orientation) : rect.height;
-}
-
-function axisRect(rect: GraphEntityRect, orientation: GraphOrientation): AxisRect {
-  if (orientation === "desktop") return { start: rect.x, end: rect.x + rect.width, crossStart: rect.y, crossExtent: sourcePortExtent(rect, orientation) };
-  const primaryExtent = rect.kind === "group" && rect.expanded ? graphGroupHeaderSize(orientation) : rect.height;
-  return { start: rect.y, end: rect.y + primaryExtent, crossStart: rect.x, crossExtent: rect.width };
-}
-
-function entityPrimaryStart(rect: GraphEntityRect | undefined, orientation: GraphOrientation) {
-  return rect ? axisRect(rect, orientation).start : 0;
-}
-
-function entityPrimaryEnd(rect: GraphEntityRect | undefined, orientation: GraphOrientation) {
-  return rect ? axisRect(rect, orientation).end : 0;
-}
-
-function entityCrossCenter(rect: GraphEntityRect | undefined, orientation: GraphOrientation) {
-  if (!rect) return 0;
-  const axis = axisRect(rect, orientation);
-  return axis.crossStart + axis.crossExtent / 2;
-}
-
-function movePrimary(point: Point, orientation: GraphOrientation, amount: number) {
-  const axis = toAxis(point, orientation);
-  return fromAxis({ ...axis, primary: axis.primary + amount }, orientation);
-}
-
-function straightPath(start: Point, end: Point, orientation: GraphOrientation) {
-  const from = toAxis(start, orientation);
-  const to = toAxis(end, orientation);
-  return orthogonalPath(start, (from.primary + to.primary) / 2, to, orientation);
-}
-
 function orthogonalPath(start: Point, track: number, end: AxisPoint, orientation: GraphOrientation) {
-  return `M ${pointValue(start)} ${primaryCommand(orientation)} ${number(track)} ${crossCommand(orientation)} ${number(end.cross)} ${primaryCommand(orientation)} ${number(end.primary)}`;
+  return `M ${pointValue(start)} ${orientation === "desktop" ? "H" : "V"} ${number(track)} ${orientation === "desktop" ? "V" : "H"} ${number(end.cross)} ${orientation === "desktop" ? "H" : "V"} ${number(end.primary)}`;
 }
 
 function linePath(start: AxisPoint, end: AxisPoint, orientation: GraphOrientation) {
@@ -464,20 +521,8 @@ function pointValue(point: Point) {
   return `${number(point.x)} ${number(point.y)}`;
 }
 
-function primaryCommand(orientation: GraphOrientation) {
-  return orientation === "desktop" ? "H" : "V";
-}
-
-function crossCommand(orientation: GraphOrientation) {
-  return orientation === "desktop" ? "V" : "H";
-}
-
 function number(value: number) {
   return Number(value.toFixed(2));
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), Math.max(min, max));
 }
 
 function groupBy<T>(items: T[], key: (item: T) => string) {
@@ -485,5 +530,3 @@ function groupBy<T>(items: T[], key: (item: T) => string) {
   for (const item of items) grouped.set(key(item), [...(grouped.get(key(item)) ?? []), item]);
   return grouped;
 }
-
-const stateOrder: DependencyPathState[] = ["blocked", "active", "waiting", "satisfied"];
