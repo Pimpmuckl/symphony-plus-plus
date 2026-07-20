@@ -8,7 +8,7 @@ const Dialog = DialogPrimitive.Root;
 const DialogTrigger = DialogPrimitive.Trigger;
 const DialogPortal = DialogPrimitive.Portal;
 const DialogClose = DialogPrimitive.Close;
-const DIALOG_SIZE_MOTION_MS = 560;
+const DIALOG_SIZE_MOTION_MS = 280;
 const DIALOG_RESIZE_EPSILON_PX = 3;
 
 function DialogOverlay({ className, ref, ...props }: React.ComponentProps<typeof DialogPrimitive.Overlay>) {

@@ -2,7 +2,7 @@ import { AlertTriangle, Archive, CheckCircle2, Copy, Loader2, MessageSquareText,
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { CopyArchitectHandoff, GuidanceItem, WorkRequestDetail } from "@/types/dashboard";
-import { DetailDisclosure, DetailFacts, DetailHeader, DetailList, DetailSection, DetailStatGrid, JsonDetail } from "@/components/dashboard/detail-layout";
+import { DetailDisclosure, DetailFacts, DetailHeader, DetailList, DetailLoadError, DetailSection, DetailSummaryBar, JsonDetail } from "@/components/dashboard/detail-layout";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { MarkdownBlock } from "@/components/dashboard/markdown-block";
 import { architectHandoffEligibleRequest, isFinishedBoardStatus, operationalBadgeVariant, operationalLabel } from "@/lib/operational-state";
@@ -29,6 +29,7 @@ export function RequestDetailContent({
   onSubmitComment,
   onResolveComment,
   canMutateComments,
+  detailError,
 }: {
   detail: WorkRequestDetail;
   onSelectGuidance: (item: GuidanceItem) => void;
@@ -40,6 +41,7 @@ export function RequestDetailContent({
   onSubmitComment: SubmitContextComment;
   onResolveComment: ResolveContextComment;
   canMutateComments: boolean;
+  detailError?: string | null;
 }) {
   const request = detail.work_request;
   const [requestComments, setRequestComments] = useSyncedComments(detail.comments || []);
@@ -137,12 +139,15 @@ export function RequestDetailContent({
       <DetailHeader
         title={request.title || request.id}
         eyebrow={`${repoDisplayName(request)} / ${request.base_branch || "main"} / ${request.work_type || "feature"}`}
+        identifier={request.id}
+        identifierLabel="WorkRequest ID"
         badge={<Badge variant={operationalBadgeVariant(operational, request.status)}>{operationalLabel(operational, request.status)}</Badge>}
       />
       <div className="detail-modal-reveal-body grid gap-4">
+        <DetailLoadError error={detailError} />
         {handoffEligible || canMutateComments ? (
-          <div className={cn("handoff-action-panel", handoffHasOpenQuestions && "handoff-action-panel-muted")} data-guidance-section style={{ animationDelay: "58ms" }}>
-            <div className="handoff-action-row">
+          <div className={cn("detail-primary-actions", handoffHasOpenQuestions && "detail-primary-actions-muted")} data-guidance-section style={{ animationDelay: "58ms" }}>
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               {handoffEligible ? (
                 <Button type="button" size="sm" variant={handoffHasOpenQuestions ? "outline" : "default"} onClick={() => void copyHandoff()} disabled={handoffCopyState === "copying"}>
                   {handoffCopyState === "copying" ? <Loader2 className="size-4 animate-spin" /> : handoffCopyState === "copied" ? <CheckCircle2 className="size-4" /> : <Copy className="size-4" />}
@@ -159,9 +164,7 @@ export function RequestDetailContent({
             {handoffError ? <p className="text-xs text-destructive">{handoffError}</p> : null}
           </div>
         ) : null}
-        <DetailStatGrid
-          stats={requestDetailStats(detail, openQuestions.length, sliceCounts.total, currentCommentStats)}
-        />
+        <DetailSummaryBar items={requestDetailSummary(detail, openQuestions.length, sliceCounts.total, currentCommentStats)} />
         <DetailSection title="Product Intent">
           <MarkdownBlock value={request.human_description} empty="No operator-facing description has been recorded yet." />
         </DetailSection>
@@ -308,7 +311,7 @@ function RequestDangerActions({
   );
 }
 
-function requestDetailStats(
+function requestDetailSummary(
   detail: WorkRequestDetail,
   openQuestionCount: number,
   sliceCount: number,
@@ -317,17 +320,12 @@ function requestDetailStats(
   const request = detail.work_request;
 
   return [
-    { label: "Open Questions", value: String(openQuestionCount || request.open_question_count || 0) },
-    { label: "Plan Nodes", value: String(requestPlanNodeCount(detail)) },
     { label: "WorkPackages", value: String(sliceCount) },
-    { label: "Decisions", value: String(detail.decision_logs?.length || detail.summary?.decision_count || 0) },
+    { label: "Open Questions", value: String(openQuestionCount || request.open_question_count || 0) },
+    { label: "Decisions", value: String(detail.summary?.decision_count ?? detail.decision_logs?.length ?? 0) },
     { label: "Comments", value: commentStatLabel(currentCommentStats.open_comment_count, currentCommentStats.comment_count) },
     { label: "Updated", value: detailDate(request.updated_at || request.inserted_at) },
   ];
-}
-
-function requestPlanNodeCount(detail: WorkRequestDetail) {
-  return detail.product_tree?.summary?.node_count ?? detail.product_tree?.nodes?.length ?? 0;
 }
 
 export function canArchiveWorkRequest(request: WorkRequestDetail["work_request"]) {

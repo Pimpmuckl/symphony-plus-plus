@@ -343,7 +343,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentityTest do
       )
 
     git_dir = Path.join(repo_path, ".git")
-    include_path = Path.join(Path.dirname(repo_path), "origin.inc")
+    include_path = git_dir |> Path.join("origin.inc") |> String.replace("\\", "/")
 
     TestSupport.git_output!(repo_path, ["remote", "remove", "origin"])
     File.write!(Path.join(git_dir, "config"), File.read!(Path.join(git_dir, "config")) <> "\n[include]\n\tpath = #{include_path}\n")
@@ -359,7 +359,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentityTest do
       )
 
     git_dir = Path.join(repo_path, ".git")
-    include_path = Path.join(Path.dirname(repo_path), "origin.inc")
+    include_path = git_dir |> Path.join("origin.inc") |> String.replace("\\", "/")
     gitdir_pattern = String.replace(git_dir, "\\", "/")
 
     TestSupport.git_output!(repo_path, ["remote", "remove", "origin"])
@@ -381,7 +381,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentityTest do
       )
 
     git_dir = Path.join(repo_path, ".git")
-    include_path = Path.join(Path.dirname(repo_path), "origin.inc")
+    include_path = git_dir |> Path.join("origin.inc") |> String.replace("\\", "/")
     root = Path.dirname(repo_path)
     gitdir_pattern = String.replace(root, "\\", "/") <> "/*/"
 
