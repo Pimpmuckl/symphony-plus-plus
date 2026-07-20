@@ -23,11 +23,11 @@ export const REPO_WORKSTREAM_MOTION_MS = 360;
 
 export const DASHBOARD_RECONNECT_GRACE_MS = 5 * 60 * 1000;
 
-export const CARD_DETAIL_LOADING_HOLD_MS = 220;
+export const CARD_DETAIL_LOADING_HOLD_MS = 110;
 
-export const CARD_DETAIL_WIDTH_MS = 340;
+export const CARD_DETAIL_WIDTH_MS = 170;
 
-export const CARD_DETAIL_HEIGHT_MS = 620;
+export const CARD_DETAIL_HEIGHT_MS = 310;
 
 export const LOCAL_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 

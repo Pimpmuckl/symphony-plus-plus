@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { lazy, Suspense, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 
 import type { CopyArchitectHandoff, GuidanceAnswerSubmission, GuidanceItem } from "@/types/dashboard";
 import type { AppDialogState } from "./dashboard-state";
@@ -15,7 +15,8 @@ import type {
 } from "./runtime";
 
 const GuidanceDialog = lazy(() => import("@/components/dashboard/guidance-dialog").then((module) => ({ default: module.GuidanceDialog })));
-const CardDetailDialog = lazy(() => import("./card-detail-dialog").then((module) => ({ default: module.CardDetailDialog })));
+const loadCardDetailDialog = () => import("./card-detail-dialog").then((module) => ({ default: module.CardDetailDialog }));
+const CardDetailDialog = lazy(loadCardDetailDialog);
 
 export function DashboardDeferredDialogs({
   canMutateComments,
@@ -52,6 +53,10 @@ export function DashboardDeferredDialogs({
   onSubmitComment: SubmitContextComment;
   onSubmitGuidanceAnswer: (item: GuidanceItem, submission: GuidanceAnswerSubmission) => Promise<void>;
 }) {
+  useEffect(() => {
+    void loadCardDetailDialog();
+  }, []);
+
   return (
     <>
       {dialogState.selectedGuidance ? (

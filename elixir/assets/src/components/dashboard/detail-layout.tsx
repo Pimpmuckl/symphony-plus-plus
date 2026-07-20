@@ -3,14 +3,38 @@ import type { ReactNode } from "react";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DetailCopyButton } from "./detail-copy-button";
 
-export function DetailHeader({ title, eyebrow, badge, action }: { title: string; eyebrow: string; badge?: ReactNode; action?: ReactNode }) {
+export function DetailHeader({
+  title,
+  eyebrow,
+  identifier,
+  identifierLabel = "ID",
+  badge,
+  action,
+}: {
+  title: string;
+  eyebrow: string;
+  identifier?: string;
+  identifierLabel?: string;
+  badge?: ReactNode;
+  action?: ReactNode;
+}) {
   return (
-    <DialogHeader data-guidance-section style={{ animationDelay: "35ms" }}>
-      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <DialogHeader className="detail-header" data-guidance-section style={{ animationDelay: "35ms" }}>
+      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <DialogTitle className="pr-6">{title}</DialogTitle>
-          <DialogDescription className="mt-1 truncate">{eyebrow}</DialogDescription>
+          <div className="detail-header-context">
+            {identifier ? (
+              <div className="detail-header-identifier">
+                <span>{identifierLabel}</span>
+                <code title={identifier}>{identifier}</code>
+                <DetailCopyButton label={`Copy ${identifierLabel}`} text={identifier} />
+              </div>
+            ) : null}
+            <DialogDescription className="detail-header-eyebrow">{eyebrow}</DialogDescription>
+          </div>
         </div>
         {badge || action ? (
           <div className="flex shrink-0 items-center gap-2 sm:pr-6">
@@ -20,6 +44,29 @@ export function DetailHeader({ title, eyebrow, badge, action }: { title: string;
         ) : null}
       </div>
     </DialogHeader>
+  );
+}
+
+export function DetailSummaryBar({ items }: { items: Array<{ label: string; value: string }> }) {
+  return (
+    <dl className="detail-summary-bar" data-guidance-section style={{ animationDelay: "70ms" }}>
+      {items.map((item) => (
+        <div key={item.label}>
+          <dt>{item.label}</dt>
+          <dd>{item.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+export function DetailLoadError({ error }: { error?: string | null }) {
+  if (!error) return null;
+
+  return (
+    <p role="alert" className="rounded-md border border-destructive/35 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+      Some details could not be loaded. {error}
+    </p>
   );
 }
 

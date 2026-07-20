@@ -698,16 +698,15 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   @spec operator_work_request_detail(Conn.t(), map()) :: Conn.t()
-  def operator_work_request_detail(conn, %{"work_request_id" => work_request_id}) do
+  def operator_work_request_detail(conn, %{"work_request_id" => work_request_id} = params) do
     send_local_operator_response(
       conn,
       :dashboard_read,
       Target.new(:dashboard),
       :operator_work_request_detail,
       fn repo ->
-        with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo),
-             detail_opts = [repo_identity_catalog: repo_identity_catalog],
-             {:ok, payload} <- Dashboard.work_request_detail(repo, work_request_id, detail_opts) do
+        with {:ok, payload} <-
+               LocalOperatorDashboard.operator_work_request_detail_payload(repo, work_request_id, work_package_id: Map.get(params, "work_package_id")) do
           json(conn, payload)
         end
       end

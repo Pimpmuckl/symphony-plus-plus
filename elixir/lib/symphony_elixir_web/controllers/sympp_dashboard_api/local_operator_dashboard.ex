@@ -2,13 +2,15 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.CommentProjection
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.Sanitizer
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service, as: SoloSessionService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -272,11 +274,77 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  @spec operator_work_request_detail_payload(module(), String.t()) :: {:ok, map()} | {:error, term()}
-  def operator_work_request_detail_payload(repo, work_request_id) when is_binary(work_request_id) do
-    with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo) do
-      Dashboard.work_request_detail(repo, work_request_id, repo_identity_catalog: repo_identity_catalog)
+  @spec operator_work_request_detail_payload(module(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def operator_work_request_detail_payload(repo, work_request_id, opts \\ []) when is_binary(work_request_id) do
+    with {:ok, work_request} <- WorkRequestRepository.get(repo, work_request_id),
+         {:ok, questions} <- WorkRequestRepository.list_questions(repo, work_request_id),
+         {:ok, decisions} <- WorkRequestRepository.list_decisions(repo, work_request_id),
+         {:ok, selected_work_package} <- operator_selected_work_package(repo, work_request_id, opts),
+         comment_targets =
+           [{"work_request", work_request_id}] ++
+             if(selected_work_package, do: [{"work_package", selected_work_package.id}], else: []),
+         {:ok, comment_context} <- Dashboard.comment_context(repo, comment_targets) do
+      comment_counts = CommentProjection.counts_for(comment_context, "work_request", work_request_id)
+
+      payload =
+        %{
+          work_request: operator_work_request_enrichment(work_request),
+          clarification_questions: Enum.map(questions, &Dashboard.clarification_question/1),
+          decision_logs: decisions |> Enum.reverse() |> Enum.take(3) |> Enum.map(&Dashboard.decision_log_entry/1),
+          comments: CommentProjection.comments_for(comment_context, "work_request", work_request_id),
+          summary: %{
+            open_question_count: Enum.count(questions, &(&1.status == "open")),
+            answered_question_count: Enum.count(questions, &(&1.status == "answered")),
+            closed_question_count: Enum.count(questions, &(&1.status == "closed")),
+            decision_count: length(decisions),
+            comment_count: comment_counts.comment_count,
+            open_comment_count: comment_counts.open_comment_count
+          }
+        }
+
+      {:ok,
+       if selected_work_package do
+         Map.put(
+           payload,
+           :work_packages,
+           Dashboard.work_package_payloads([selected_work_package], %{}, false, comment_context, delivery_board: nil)
+         )
+       else
+         payload
+       end}
     end
+  end
+
+  defp operator_selected_work_package(repo, work_request_id, opts) do
+    case Keyword.get(opts, :work_package_id) do
+      nil -> {:ok, nil}
+      work_package_id -> WorkRequestRepository.get_work_package(repo, work_request_id, work_package_id)
+    end
+  end
+
+  defp operator_work_request_enrichment(%WorkRequest{} = work_request) do
+    %{
+      id: work_request.id,
+      title: Sanitizer.redacted_text(work_request.title),
+      repo: work_request.repo,
+      base_branch: work_request.base_branch,
+      work_type: work_request.work_type,
+      human_description: Sanitizer.redacted_text(work_request.human_description),
+      constraints: Sanitizer.redacted_json(work_request.constraints || %{}),
+      desired_dispatch_shape: work_request.desired_dispatch_shape,
+      creator: %{
+        kind: work_request.creator_kind,
+        name: Sanitizer.redacted_text(work_request.creator_name),
+        via: work_request.created_via
+      },
+      status: work_request.status,
+      completed_at: timestamp(work_request.completed_at),
+      completion_source: work_request.completion_source,
+      archived_at: timestamp(work_request.archived_at),
+      archive_reason: work_request.archive_reason,
+      inserted_at: timestamp(work_request.inserted_at),
+      updated_at: timestamp(work_request.updated_at)
+    }
   end
 
   @spec operator_work_request_board_details(module(), [map()], term()) :: {:ok, [map()]} | {:error, term()}
