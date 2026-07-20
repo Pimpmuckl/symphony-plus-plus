@@ -74,7 +74,15 @@ function graphRequestDetail(): WorkRequestDetail {
   return {
     work_request: { id: "wr-graph", title: "Graph request", repo: "fixture/repo", base_branch: "main", status: "implementing" },
     work_packages: [
-      { id: "wp-active", work_request_id: "wr-graph", product_tree_node_id: "group-a", sequence: 1, title: "Active package", status: "implementing" },
+      {
+        id: "wp-active",
+        work_request_id: "wr-graph",
+        product_tree_node_id: "group-a",
+        sequence: 1,
+        title: "Active package",
+        status: "implementing",
+        worker_signal: { status: "active", active_since: "2026-07-18T08:00:00Z", run_label: "fixture-worker" },
+      },
       { id: "wp-old", work_request_id: "wr-graph", product_tree_node_id: "group-a", sequence: 2, title: "Old package", status: "skipped" },
     ],
     product_tree: {
@@ -87,12 +95,6 @@ function graphRequestDetail(): WorkRequestDetail {
         cycles: [],
       },
       nodes: [{ id: "group-a", title: "Graph group", work_package_ids: ["wp-active", "wp-old"] }],
-    },
-    delivery_board: {
-      work_packages: [
-        { id: "wp-active", work_package: { id: "wp-active", raw_status: "implementing", worker_signal: { status: "active", active_since: "2026-07-18T08:00:00Z", run_label: "fixture-worker" } } },
-        { id: "wp-old", raw_status: "skipped", work_package: { id: "wp-old", raw_status: "skipped" } },
-      ],
     },
   };
 }

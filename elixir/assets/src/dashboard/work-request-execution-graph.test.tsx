@@ -11,12 +11,20 @@ import { WorkRequestExecutionGraph } from "@/dashboard/work-request-execution-gr
 import type { WorkRequestDetail } from "@/types/dashboard";
 
 describe("WorkRequestExecutionGraph", () => {
-  it("maps original dependency intent and DeliveryBoard state without replacing it with effective edges", () => {
+  it("maps original dependency intent and package lifecycle signals without replacing it with effective edges", () => {
     const detail: WorkRequestDetail = {
       work_request: { id: "wr-adapter", title: "Adapter fixture" },
       work_packages: [
-        { id: "wp-active", work_request_id: "wr-adapter", product_tree_node_id: "group-a", title: "Active", status: "implementing" },
-        { id: "wp-old", work_request_id: "wr-adapter", product_tree_node_id: "group-a", title: "Old", status: "merged" },
+        {
+          id: "wp-active",
+          work_request_id: "wr-adapter",
+          product_tree_node_id: "group-a",
+          title: "Active projection",
+          status: "implementing",
+          operational_state: { key: "implementing", label: "Implementing", tone: "info" },
+          worker_signal: { status: "active", run_label: "fixture-worker" },
+        },
+        { id: "wp-old", work_request_id: "wr-adapter", product_tree_node_id: "group-a", title: "Old", status: "merged", delivery: { outcome: "superseded" } },
       ],
       product_tree: {
         available: true,
@@ -31,16 +39,6 @@ describe("WorkRequestExecutionGraph", () => {
           effective_edges: [{ prerequisite_work_package_id: "wp-old", dependent_work_package_id: "wp-active", dependency_ids: ["expanded"] }],
           topological_order: ["wp-old", "wp-active"],
         },
-      },
-      delivery_board: {
-        work_packages: [
-          {
-            id: "wp-active",
-            operational_state: { key: "implementing", label: "Implementing", tone: "info" },
-            work_package: { id: "wp-active", title: "Active projection", raw_status: "implementing", worker_signal: { status: "active", run_label: "fixture-worker" } },
-          },
-          { id: "wp-old", delivery_outcome: "superseded", work_package: { id: "wp-old", raw_status: "merged" } },
-        ],
       },
     };
 
