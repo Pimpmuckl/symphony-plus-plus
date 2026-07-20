@@ -138,6 +138,7 @@ export type VisibleGraphDependency = {
   target_key: string;
   state: DependencyPathState;
   intent_ids: string[];
+  target_is_collapsed_proxy: boolean;
 };
 export type ExecutionGraphLayoutModel = {
   groups: Map<string, ExecutionGraphGroup>;
@@ -480,15 +481,22 @@ function visibleDependencies(
   rects: Map<string, GraphEntityRect>,
   context: GraphContext,
 ) {
-  const grouped = new Map<string, { source: string; target: string; states: DependencyPathState[]; ids: string[] }>();
+  const grouped = new Map<string, {
+    source: string;
+    target: string;
+    states: DependencyPathState[];
+    ids: string[];
+    targetProxies: boolean[];
+  }>();
   for (const intent of intents) {
     const source = visibleEndpointKey(intent.prerequisite, rects, context);
     const target = visibleEndpointKey(intent.dependent, rects, context);
     if (!source || !target || source === target) continue;
     const key = `${source}:${target}`;
-    const value = grouped.get(key) ?? { source, target, states: [], ids: [] };
+    const value = grouped.get(key) ?? { source, target, states: [], ids: [], targetProxies: [] };
     value.states.push(endpointPathState(intent.prerequisite, context));
     value.ids.push(intent.id);
+    value.targetProxies.push(endpointKey(intent.dependent) !== target);
     grouped.set(key, value);
   }
   return [...grouped].map(([key, value]) => ({
@@ -497,6 +505,7 @@ function visibleDependencies(
     target_key: value.target,
     state: combinedPathState(value.states),
     intent_ids: [...new Set(value.ids)],
+    target_is_collapsed_proxy: value.targetProxies.every(Boolean),
   }));
 }
 

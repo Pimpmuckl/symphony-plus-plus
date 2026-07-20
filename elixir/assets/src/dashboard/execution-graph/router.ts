@@ -395,12 +395,17 @@ function targetPorts(
     const target = rects.get(targetKey);
     if (!target) return;
     members.sort((left, right) => portPriority(left, rects, orientation) - portPriority(right, rects, orientation) || compareSourcePosition(left, right, rects));
-    const gate = members.length > 1 ? buildGate(targetKey, target, members, orientation) : undefined;
-    if (gate) gates.push(gate.value);
-    members.forEach((dependency, index) => ends.set(
-      dependency.key,
-      gate?.slots[index] ?? targetPort(target, orientation),
-    ));
+    const gateMembers = members.filter(({ target_is_collapsed_proxy }) => !target_is_collapsed_proxy);
+    const gate = gateMembers.length > 1 ? buildGate(targetKey, target, gateMembers, orientation) : undefined;
+    if (!gate) {
+      members.forEach((dependency, index) => ends.set(dependency.key, targetPort(target, orientation, index, members.length)));
+      return;
+    }
+
+    gates.push(gate.value);
+    gateMembers.forEach((dependency, index) => ends.set(dependency.key, gate.slots[index]));
+    const proxyMembers = members.filter(({ target_is_collapsed_proxy }) => target_is_collapsed_proxy);
+    proxyMembers.forEach((dependency, index) => ends.set(dependency.key, targetPort(target, orientation, index, proxyMembers.length, true)));
   });
   return { ends, gates };
 }
@@ -447,9 +452,12 @@ function sourcePort(rect: GraphEntityRect, orientation: GraphOrientation, index:
   return fromAxis({ primary: axis.end, cross: axis.crossStart + edgeSlot(index, count, axis.crossExtent) }, orientation);
 }
 
-function targetPort(rect: GraphEntityRect, orientation: GraphOrientation) {
+function targetPort(rect: GraphEntityRect, orientation: GraphOrientation, index = 0, count = 1, reserveCenter = false) {
   const axis = axisRect(rect, orientation);
-  return fromAxis({ primary: axis.start, cross: axis.crossStart + axis.crossExtent / 2 }, orientation);
+  const slotCount = reserveCenter ? count + 1 : count;
+  const reservedSlot = Math.floor(slotCount / 2);
+  const slotIndex = reserveCenter && index >= reservedSlot ? index + 1 : index;
+  return fromAxis({ primary: axis.start, cross: axis.crossStart + edgeSlot(slotIndex, slotCount, axis.crossExtent) }, orientation);
 }
 
 function axisRect(rect: GraphEntityRect, orientation: GraphOrientation): AxisRect {

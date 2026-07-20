@@ -118,6 +118,29 @@ describe("WorkRequestExecutionGraph", () => {
     expect(collapsedEdges.some(([source, target]) => source.includes("work_package:parse") || target.includes("work_package:parse"))).toBe(false);
   });
 
+  it("keeps hidden child prerequisites independent when their Group is collapsed", () => {
+    const model = buildExecutionGraphLayout({
+      groups: [{ id: "target", title: "Backup and host migration", work_package_ids: ["backup", "migration"] }],
+      work_packages: [
+        { id: "contract", title: "Contract", status: "merged" },
+        { id: "restore", title: "Restore verification", status: "merged" },
+        { id: "backup", group_id: "target", title: "Back up host state", status: "closed" },
+        { id: "migration", group_id: "target", title: "Execute host migration", status: "planned" },
+      ],
+      dependency_intents: [
+        { id: "contract-backup", prerequisite: { kind: "work_package", id: "contract" }, dependent: { kind: "work_package", id: "backup" } },
+        { id: "restore-migration", prerequisite: { kind: "work_package", id: "restore" }, dependent: { kind: "work_package", id: "migration" } },
+      ],
+      topological_order: ["contract", "restore", "backup", "migration"],
+    }, "desktop", new Set());
+    const routes = graphWireRoutes(model, "desktop");
+    const targetEntries = routes.paths.map(({ path }) => routeSegments(path).at(-1)?.y2);
+
+    expect(model.dependencies.every(({ target_is_collapsed_proxy }) => target_is_collapsed_proxy)).toBe(true);
+    expect(routes.gates.some(({ targetKey }) => targetKey === "group:target")).toBe(false);
+    expect(new Set(targetEntries).size).toBe(2);
+  });
+
   it("reveals WP-specific endpoints when a Group expands without moving Group-intent edges off its shell", () => {
     const expanded = new Set(["workers", "output"]);
     const model = buildExecutionGraphLayout(graphFixture, "desktop", expanded);
