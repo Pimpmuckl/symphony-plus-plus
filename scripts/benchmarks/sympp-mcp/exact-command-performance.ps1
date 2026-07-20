@@ -301,6 +301,7 @@ exit /b %ERRORLEVEL%
     SYMPP_STARTUP_LOCK_TIMEOUT_SEC = "1800"
     SYMPP_LAUNCHER_TRACE_DIR = $traceDir
     SYMPP_BENCH_GIT_LOG_DIR = $gitLogDir
+    SYMPP_INTEGRITY_MARKER = Join-Path $tempRoot "unsafe-cleanup-ran"
     HOME = Join-Path $tempRoot "profile"
     PATH = (Join-Path $tempRoot "shim") + ";" + $effectivePath
   }
@@ -436,7 +437,7 @@ exit /b %ERRORLEVEL%
   }
   Stop-ExactClient $recovery
 
-  $mutation = [pscustomobject]@{ checked = $false; shortcut_rejected = $null; scan_race_retried = $null; attach_race_rejected = $null }
+  $mutation = [pscustomobject]@{ checked = $false; shortcut_rejected = $null; scan_race_retried = $null; attach_race_rejected = $null; unsafe_cleanup_skipped = $null }
   if (-not $SkipMutationCheck) {
     $mutation.checked = $true
     $mutationFile = Join-Path $pluginRoot "scripts/start-sympp-mcp.ps1"
@@ -465,15 +466,16 @@ exit /b %ERRORLEVEL%
       while ([int](Get-TraceCounts)["generation_attach_preflight"] -le $attachBefore -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
       if ([int](Get-TraceCounts)["generation_attach_preflight"] -le $attachBefore) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
     }
-    Add-Content -LiteralPath $mutationFile -Value "`n# benchmark mutation"
+    Set-Content -LiteralPath $mutationFile -Value 'Set-Content -LiteralPath $env:SYMPP_INTEGRITY_MARKER -Value invoked' -Encoding utf8NoBOM
     while (-not $mutated.process.HasExited -and -not $mutated.line_task.IsCompleted -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
     $mutation.shortcut_rejected = $mutated.process.HasExited -and
       $mutated.line_task.IsCompleted -and
       [string]::IsNullOrWhiteSpace([string]$mutated.line_task.GetAwaiter().GetResult())
     $mutation.attach_race_rejected = $LauncherMode -ne "NodePresent" -or ([int](Get-TraceCounts)["warm_miss_generation"] -gt 0 -and $mutation.shortcut_rejected)
+    $mutation.unsafe_cleanup_skipped = -not (Test-Path -LiteralPath $environment.SYMPP_INTEGRITY_MARKER)
     if ($LauncherMode -ne "NodePresent") { $mutation.scan_race_retried = $true }
     Stop-ExactClient $mutated
-    if (-not $mutation.shortcut_rejected -or -not $mutation.attach_race_rejected) { throw "Installed payload mutation at the attachment boundary was not rejected before warm attach." }
+    if (-not $mutation.shortcut_rejected -or -not $mutation.attach_race_rejected -or -not $mutation.unsafe_cleanup_skipped) { throw "Installed payload mutation at the attachment boundary was not rejected safely before warm attach." }
   }
 
   $result = [pscustomobject]@{
