@@ -53,14 +53,15 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   @spec operator_dashboard_deferred_payload(module()) :: {:ok, map()} | {:error, term()}
   def operator_dashboard_deferred_payload(repo) do
-    with {:ok, context} <- operator_dashboard_context(repo) do
-      opts = dashboard_opts(context)
+    with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo),
+         {:ok, work_requests} <- WorkRequestRepository.list(repo, %{include_archived: true}) do
+      opts = [repo_identity_catalog: repo_identity_catalog]
+      active_work_requests = Enum.filter(work_requests, &is_nil(&1.archived_at))
 
-      with {:ok, work_requests} <- Dashboard.work_requests(repo, opts),
-           {:ok, archived_work_requests} <- Dashboard.archived_work_requests(repo, opts),
+      with {:ok, archived_work_requests} <- Dashboard.archived_work_requests(repo, opts),
            {:ok, solo_sessions} <- Dashboard.solo_sessions(repo, %{}, opts),
            {:ok, work_request_details} <-
-             operator_work_request_board_details(repo, Map.get(work_requests, :work_requests, []), context.repo_identity_catalog) do
+             operator_work_request_board_details(repo, active_work_requests, repo_identity_catalog) do
         {:ok,
          %{
            generated_at: DateTime.utc_now(:microsecond) |> DateTime.to_iso8601(),

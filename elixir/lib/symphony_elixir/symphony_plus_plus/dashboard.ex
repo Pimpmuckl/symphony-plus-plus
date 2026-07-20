@@ -572,74 +572,89 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
          {:ok, grants} <- AccessGrantRepository.list_for_work_package(repo, work_package.id),
          {:ok, comment_context} <- comment_count_context(repo, [{"work_package", work_package.id}]) do
       %{artifacts: artifacts, findings: findings} = readiness_collections
-      blockers = OperationalProjection.blockers(progress_events)
-      runtime = OperationalProjection.runtime_summary(agent_runs)
       claim_leases = grouped_claim_leases(repo, [work_package.id]) |> Map.get(work_package.id, [])
 
       activity_context =
         WorkPackageActivity.project_context(grants, agent_runs, claim_leases, progress_events, work_package)
 
-      readiness_context =
-        OperationalProjection.readiness_context(
-          repo,
-          work_package,
-          status_summary.plan_nodes,
-          progress_events,
-          artifacts,
-          findings
-        )
-
-      metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id, work_package.review_requirement)
-
-      operational_state =
-        OperationalProjection.work_package_operational_state(work_package, %{
-          agent_runs: agent_runs,
-          progress_events: progress_events,
-          blockers: blockers,
-          runtime: runtime,
-          metadata: metadata,
-          readiness_context: readiness_context,
-          grants: grants,
-          lineage: lineage,
-          worker_signal: activity_context.worker_signal
-        })
-
       {:ok,
-       %{
-         work_package: work_package,
-         blockers: blockers,
-         card:
-           %{
-             id: work_package.id,
-             title: redacted_text(work_package.title),
-             kind: work_package.kind,
-             status: work_package.status,
-             merge_required: merge_required?(work_package),
-             pr_required: pr_required?(work_package),
-             repo: work_package.repo,
-             base_branch: work_package.base_branch,
-             parent_id: work_package.parent_id,
-             phase_id: work_package.phase_id,
-             owner_id: work_package.owner_id,
-             active_agent_run: OperationalProjection.latest_active_agent_run(agent_runs),
-             runtime: runtime,
-             latest_progress_at: latest_progress_at(progress_events),
-             active_blocker_count: Enum.count(blockers, & &1.active),
-             active_blockers: active_blockers(blockers),
-             artifact_count: status_summary.artifact_count,
-             finding_count: status_summary.finding_count,
-             plan: OperationalProjection.plan_summary(status_summary.plan_nodes),
-             metadata: metadata,
-             lineage: lineage,
-             operational_state: operational_state,
-             alert_indicators: OperationalProjection.alert_indicators(readiness_context, blockers, runtime),
-             inserted_at: timestamp(work_package.inserted_at),
-             updated_at: timestamp(work_package.updated_at)
-           }
-           |> CommentProjection.put_counts(CommentProjection.counts_for(comment_context, "work_package", work_package.id))
-           |> put_repo_identity_fields(repo_identity_catalog, work_package.repo)
-       }}
+       build_card_context(repo, work_package, repo_identity_catalog, comment_context, %{
+         plan_nodes: status_summary.plan_nodes,
+         progress_events: progress_events,
+         artifacts: artifacts,
+         artifact_count: status_summary.artifact_count,
+         findings: findings,
+         finding_count: status_summary.finding_count,
+         agent_runs: agent_runs,
+         grants: grants,
+         lineage: lineage,
+         worker_signal: activity_context.worker_signal
+       })}
     end
+  end
+
+  defp build_card_context(repo, work_package, repo_identity_catalog, comment_context, context) do
+    plan_nodes = context.plan_nodes
+    progress_events = context.progress_events
+    artifacts = context.artifacts
+    findings = context.findings
+    agent_runs = context.agent_runs
+    grants = context.grants
+    lineage = context.lineage
+    blockers = OperationalProjection.blockers(progress_events)
+    runtime = OperationalProjection.runtime_summary(agent_runs)
+    metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id, work_package.review_requirement)
+
+    readiness_context =
+      OperationalProjection.readiness_context(repo, work_package, plan_nodes, progress_events, artifacts, findings)
+
+    operational_state =
+      OperationalProjection.work_package_operational_state(work_package, %{
+        agent_runs: agent_runs,
+        progress_events: progress_events,
+        blockers: blockers,
+        runtime: runtime,
+        metadata: metadata,
+        readiness_context: readiness_context,
+        grants: grants,
+        lineage: lineage,
+        worker_signal: context.worker_signal
+      })
+
+    %{
+      work_package: work_package,
+      blockers: blockers,
+      card:
+        %{
+          id: work_package.id,
+          title: redacted_text(work_package.title),
+          kind: work_package.kind,
+          status: work_package.status,
+          merge_required: merge_required?(work_package),
+          pr_required: pr_required?(work_package),
+          repo: work_package.repo,
+          base_branch: work_package.base_branch,
+          parent_id: work_package.parent_id,
+          phase_id: work_package.phase_id,
+          owner_id: work_package.owner_id,
+          active_agent_run: OperationalProjection.latest_active_agent_run(agent_runs),
+          runtime: runtime,
+          latest_progress_at: latest_progress_at(progress_events),
+          active_blocker_count: Enum.count(blockers, & &1.active),
+          active_blockers: active_blockers(blockers),
+          artifact_count: context.artifact_count,
+          finding_count: context.finding_count,
+          plan: OperationalProjection.plan_summary(plan_nodes),
+          metadata: metadata,
+          lineage: lineage,
+          operational_state: operational_state,
+          alert_indicators: OperationalProjection.alert_indicators(readiness_context, blockers, runtime),
+          inserted_at: timestamp(work_package.inserted_at),
+          updated_at: timestamp(work_package.updated_at)
+        }
+        |> CommentProjection.put_counts(CommentProjection.counts_for(comment_context, "work_package", work_package.id))
+        |> put_repo_identity_fields(repo_identity_catalog, work_package.repo)
+    }
   end
 
   defp readiness_collections(repo, %WorkPackage{} = work_package) do
@@ -1009,11 +1024,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   defp card_contexts_for_packages(repo, work_packages, repo_identity_catalog) do
-    lineages_by_id = OperationalProjection.package_lineages(repo, work_packages)
+    work_package_contexts = work_package_contexts(repo, work_packages)
+    targets = Enum.map(work_packages, &{"work_package", &1.id})
 
-    work_packages
-    |> Enum.map(&card_context(repo, &1, Map.get(lineages_by_id, &1.id, OperationalProjection.empty_lineage(&1.id)), repo_identity_catalog))
-    |> collect_or_error()
+    with {:ok, comment_context} <- comment_count_context(repo, targets) do
+      {:ok,
+       Enum.map(work_packages, fn work_package ->
+         context = work_package_contexts |> Map.fetch!(work_package.id) |> card_context_projection(work_package)
+         build_card_context(repo, work_package, repo_identity_catalog, comment_context, context)
+       end)}
+    end
+  end
+
+  defp card_context_projection(context, %WorkPackage{} = work_package) do
+    artifacts = context.artifacts
+    findings = context.findings
+
+    context
+    |> Map.put(:artifact_count, length(artifacts))
+    |> Map.put(:finding_count, length(findings))
+    |> Map.put(:artifacts, if(work_package.status in @ready_statuses or artifact_backed_readiness_gate_required?(work_package), do: artifacts, else: []))
+    |> Map.put(:findings, if(work_package.status in @ready_statuses, do: findings, else: []))
   end
 
   defp active_blocking_edges_from_card_contexts(_repo, []), do: {:ok, []}
@@ -1566,6 +1597,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       {work_package.id,
        %{
          work_package: work_package,
+         plan_nodes: plan_nodes,
+         progress_events: progress_events,
+         artifacts: artifacts,
+         findings: findings,
+         agent_runs: agent_runs,
+         grants: grants,
+         lineage: lineage,
          blocker_state: activity_context.blocker_state,
          runtime_state: activity_context.runtime_state,
          worker_signal: activity_context.worker_signal,

@@ -4207,6 +4207,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert hydrated_payload.deferred == %{dashboard_sections: false}
     assert hydrated_payload.work_requests.total_count == 20
     assert hydrated_payload.board.visible_count == 50
+    assert split_metrics.queries <= 110
+    assert hydrated_metrics.queries <= 105
     assert hydrated_metrics.queries < split_metrics.queries
     assert hydrated_metrics.bytes < split_metrics.bytes
 
