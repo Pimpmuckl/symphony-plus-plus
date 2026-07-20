@@ -626,6 +626,7 @@ async function bridge(identity, state, runtimeFile) {
     }
     cleanupScript = prepareCleanupScript(identity);
     if (cleanupScript === CLEANUP_SOURCE_CHANGED) {
+      cleanupScript = null;
       throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
     }
     if (!cleanupScript) {
