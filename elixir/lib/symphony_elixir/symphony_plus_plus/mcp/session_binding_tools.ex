@@ -30,6 +30,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
   @worker_tools ToolCatalog.worker_tools()
   @architect_tools ToolCatalog.architect_tools()
   @local_assignment_claim_stale_after_ms :timer.minutes(5)
+  @claim_lease_heartbeat_interval_ms :timer.seconds(30)
 
   @spec release_current_assignment(map(), Server.t()) :: {:ok, map(), Server.t()} | term()
   def release_current_assignment(arguments, %Server{session: nil} = server) do
@@ -369,17 +370,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
   end
 
   defp refresh_current_session_claim_lease(repo, %Server{session: %Session{} = session} = server, %ClaimLease{} = lease) do
-    case ClaimLeaseService.heartbeat(repo, lease.id, stale_after_ms: @local_assignment_claim_stale_after_ms) do
-      {:ok, %ClaimLease{} = renewed} ->
-        {:ok, %{server | session: Session.with_claim_lease(session, renewed)}}
+    if claim_lease_heartbeat_due?(lease) do
+      case ClaimLeaseService.heartbeat(repo, lease.id, stale_after_ms: @local_assignment_claim_stale_after_ms) do
+        {:ok, %ClaimLease{} = renewed} ->
+          {:ok, %{server | session: Session.with_claim_lease(session, renewed)}}
 
-      {:error, :claim_stale} ->
-        reclaim_current_session_claim_lease(repo, server, session, lease)
+        {:error, :claim_stale} ->
+          reclaim_current_session_claim_lease(repo, server, session, lease)
 
-      {:error, reason} ->
-        lost_current_session_claim(server, reason)
+        {:error, reason} ->
+          lost_current_session_claim(server, reason)
+      end
+    else
+      {:ok, %{server | session: Session.with_claim_lease(session, lease)}}
     end
   end
+
+  defp claim_lease_heartbeat_due?(%ClaimLease{} = lease) do
+    now = DateTime.utc_now(:microsecond)
+
+    ClaimLease.stale?(lease, now, @local_assignment_claim_stale_after_ms) or
+      heartbeat_interval_elapsed?(lease.last_seen_at, now)
+  end
+
+  defp heartbeat_interval_elapsed?(%DateTime{} = last_seen_at, %DateTime{} = now) do
+    DateTime.diff(now, last_seen_at, :millisecond) >= @claim_lease_heartbeat_interval_ms
+  end
+
+  defp heartbeat_interval_elapsed?(_last_seen_at, _now), do: true
 
   defp reclaim_current_session_claim_lease(repo, %Server{} = server, %Session{} = session, %ClaimLease{} = lease) do
     actor = %{

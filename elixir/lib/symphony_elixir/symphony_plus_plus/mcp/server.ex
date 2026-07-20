@@ -2098,12 +2098,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     }
   end
 
-  defp authorize_worker_tool_call(%__MODULE__{config: config, session: session}, "get_current_assignment") do
-    case Auth.require_session(session, config.repo) do
-      {:ok, session} -> require_assignment_introspection(session.assignment)
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  # Claim preflight and these handlers both revalidate live authority; avoid a third
+  # grant/package/scope lookup between them.
+  defp authorize_worker_tool_call(%__MODULE__{}, tool) when tool in ["get_current_assignment", "append_progress"], do: :ok
 
   defp authorize_worker_tool_call(%__MODULE__{config: config, session: session}, "sync_pr") do
     case Auth.require_session(session, config.repo) do

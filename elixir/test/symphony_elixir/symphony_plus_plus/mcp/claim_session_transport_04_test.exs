@@ -277,7 +277,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert get_in(assignment_response, ["result", "structuredContent", "assignment", "work_package_id"]) == package.id
   end
 
-  test "bound notification tool calls refresh the current claim lease", %{repo: repo} do
+  test "bound notification tool calls skip fresh and refresh aging current claim leases", %{repo: repo} do
     package = create_local_claim_package!(repo, "SYMPP-STATE-NOTIFICATION-HEARTBEAT")
     assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
@@ -293,6 +293,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
       )
 
     assert {:ok, lease} = ClaimLeaseService.current_for_work_package(repo, package.id)
+
+    {nil, fresh_server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "method" => "tools/call",
+          "params" => %{"name" => "get_current_assignment", "arguments" => %{}}
+        },
+        claimed_server
+      )
+
+    assert {:ok, unchanged_lease} = ClaimLeaseService.current_for_work_package(repo, package.id)
+    assert DateTime.compare(unchanged_lease.last_seen_at, lease.last_seen_at) == :eq
+
     old_seen_at = DateTime.add(DateTime.utc_now(:microsecond), -4, :minute)
     lease |> ClaimLease.update_changeset(%{last_seen_at: old_seen_at}) |> repo.update!()
 
@@ -303,7 +317,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
           "method" => "tools/call",
           "params" => %{"name" => "get_current_assignment", "arguments" => %{}}
         },
-        claimed_server
+        fresh_server
       )
 
     assert notified_server.session.assignment.work_package_id == package.id
