@@ -131,7 +131,6 @@ describe("WorkRequestExecutionGraph", () => {
         { id: "contract-backup", prerequisite: { kind: "work_package", id: "contract" }, dependent: { kind: "work_package", id: "backup" } },
         { id: "restore-migration", prerequisite: { kind: "work_package", id: "restore" }, dependent: { kind: "work_package", id: "migration" } },
       ],
-      topological_order: ["contract", "restore", "backup", "migration"],
     }, "desktop", new Set());
     const routes = graphWireRoutes(model, "desktop");
     const targetEntries = routes.paths.map(({ path }) => routeSegments(path).at(-1)?.y2);
@@ -304,8 +303,8 @@ describe("WorkRequestExecutionGraph", () => {
   });
 
   it("keeps cards accessible and avoids empty signal chrome", () => {
-    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ work_packages: [{ id: "long", title: longTitle, status: "planned" }], topological_order: ["long"] }} />);
-    const interactive = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ work_packages: [{ id: "long" }], topological_order: ["long"] }} onSelectWorkPackage={() => {}} />);
+    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ work_packages: [{ id: "long", title: longTitle, status: "planned" }] }} />);
+    const interactive = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ work_packages: [{ id: "long" }] }} onSelectWorkPackage={() => {}} />);
 
     expect(html).toContain(`title="${longTitle}"`);
     expect(firstCard(html, "long")).not.toContain('tabindex="0"');
@@ -319,26 +318,30 @@ describe("WorkRequestExecutionGraph", () => {
   it("treats unmet dependencies as waiting rather than a true blocker", () => {
     const waitingGraph: WorkRequestExecutionGraphModel = {
       groups: [{ id: "waiting", title: "Waiting group", work_package_ids: ["wp"] }],
-      work_packages: [{
-        id: "wp",
-        group_id: "waiting",
-        status: "ready_for_worker",
-        operational_state: { key: "blocked_by_dependencies", label: "Waiting", tone: "warning" },
-        dependency_signal: { satisfied: 0, required: 1, active: 0, blocked: 1, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "blocked" }] },
-      }],
-      topological_order: ["wp"],
+      work_packages: [
+        { id: "input", title: "Upstream input", status: "blocked" },
+        {
+          id: "wp",
+          group_id: "waiting",
+          status: "ready_for_worker",
+          operational_state: { key: "blocked_by_dependencies", label: "Waiting", tone: "warning" },
+          dependency_signal: { satisfied: 0, required: 1, active: 0, blocked: 1, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "blocked" }] },
+        },
+      ],
+      dependency_intents: [{ id: "input-waiting", prerequisite: { kind: "work_package", id: "input" }, dependent: { kind: "group", id: "waiting" } }],
     };
     const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={waitingGraph} />);
 
     expect(html).toContain('data-group-id="waiting" data-state="neutral"');
     expect(firstCard(html, "wp")).toContain('data-state="waiting"');
     expect(html).toContain("Planned · 0/1");
+    expect(firstCard(html, "wp")).toContain("Dependencies 0 of 1 satisfied: Upstream input");
     expect(html).not.toContain('data-group-id="waiting" data-state="blocked"');
   });
 
   it("renders unavailable and cyclic projections as explicit non-order states", () => {
-    const unavailable = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ available: false, work_packages: [{ id: "wp" }], topological_order: ["wp"] }} />);
-    const cyclic = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ available: true, work_packages: [{ id: "wp" }], topological_order: ["wp"], cycles: [["wp"]] }} />);
+    const unavailable = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ available: false, work_packages: [{ id: "wp" }] }} />);
+    const cyclic = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ available: true, work_packages: [{ id: "wp" }], cycles: [["wp"]] }} />);
 
     expect(unavailable).toContain("Execution order unavailable");
     expect(unavailable).not.toContain('data-work-package-id="wp"');
@@ -389,7 +392,6 @@ const graphFixture: WorkRequestExecutionGraphModel = {
     { id: "join-publish", prerequisite: { kind: "work_package", id: "join" }, dependent: { kind: "work_package", id: "publish" } },
     { id: "source-playtest", prerequisite: { kind: "group", id: "source" }, dependent: { kind: "work_package", id: "playtest" } },
   ],
-  topological_order: ["snapshot", "parse", "index", "join", "publish", "playtest"],
 };
 
 const recoveryGraphFixture: WorkRequestExecutionGraphModel = {
@@ -412,7 +414,6 @@ const recoveryGraphFixture: WorkRequestExecutionGraphModel = {
     { id: "history-validate", prerequisite: { kind: "group", id: "history" }, dependent: { kind: "work_package", id: "validate" } },
     { id: "successor-validate", prerequisite: { kind: "work_package", id: "successor" }, dependent: { kind: "work_package", id: "validate" } },
   ],
-  topological_order: ["old", "successor", "validate"],
 };
 
 const denseFanInGraphFixture: WorkRequestExecutionGraphModel = {
@@ -435,7 +436,6 @@ const denseFanInGraphFixture: WorkRequestExecutionGraphModel = {
     prerequisite: { kind: "work_package" as const, id },
     dependent: { kind: "group" as const, id: "target" },
   })),
-  topological_order: ["one", "two", "three", "four", "target-wp"],
 };
 
 const satisfiedGateGraphFixture: WorkRequestExecutionGraphModel = {
@@ -448,7 +448,6 @@ const satisfiedGateGraphFixture: WorkRequestExecutionGraphModel = {
     { id: "a-target", prerequisite: { kind: "work_package", id: "source-a" }, dependent: { kind: "work_package", id: "target" } },
     { id: "b-target", prerequisite: { kind: "work_package", id: "source-b" }, dependent: { kind: "work_package", id: "target" } },
   ],
-  topological_order: ["source-a", "source-b", "target"],
 };
 
 const wrappedGraphFixture: WorkRequestExecutionGraphModel = {
@@ -462,7 +461,6 @@ const wrappedGraphFixture: WorkRequestExecutionGraphModel = {
     { id: "0-2", prerequisite: { kind: "work_package", id: "wp-0" }, dependent: { kind: "work_package", id: "wp-2" } },
     { id: "0-7", prerequisite: { kind: "work_package", id: "wp-0" }, dependent: { kind: "work_package", id: "wp-7" } },
   ],
-  topological_order: Array.from({ length: 8 }, (_value, index) => `wp-${index}`),
 };
 
 const affinityGridFixture: WorkRequestExecutionGraphModel = {
@@ -472,7 +470,6 @@ const affinityGridFixture: WorkRequestExecutionGraphModel = {
     { id: "a-c", prerequisite: { kind: "group", id: "a" }, dependent: { kind: "group", id: "c" } },
     { id: "b-d", prerequisite: { kind: "group", id: "b" }, dependent: { kind: "group", id: "d" } },
   ],
-  topological_order: ["wp-a", "wp-b", "wp-c", "wp-d"],
 };
 
 const nestedCorridorFixture: WorkRequestExecutionGraphModel = {
@@ -492,7 +489,6 @@ const nestedCorridorFixture: WorkRequestExecutionGraphModel = {
     { id: "middle-target", prerequisite: { kind: "group", id: "middle" }, dependent: { kind: "work_package", id: "target-a" } },
     { id: "bottom-target", prerequisite: { kind: "work_package", id: "bottom" }, dependent: { kind: "work_package", id: "target-e" } },
   ],
-  topological_order: ["top", "bottom", "middle-wp", "target-a", "target-b", "target-c", "target-d", "target-e"],
 };
 
 function render() {

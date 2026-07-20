@@ -52,7 +52,6 @@ export type WorkRequestExecutionGraphModel = {
   work_packages: Array<ExecutionGraphWorkPackageRef & ExecutionGraphWorkPackageSignals>;
   dependency_intents?: ExecutionGraphDependencyIntent[];
   effective_edges?: ExecutionGraphEffectiveEdge[];
-  topological_order: string[];
   cycles?: string[][];
 };
 export type ExecutionGraphWorkPackageSignals = {

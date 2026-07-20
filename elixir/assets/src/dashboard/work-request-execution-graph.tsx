@@ -183,7 +183,7 @@ function WorkPackageCard({
   const title = ref.title?.trim() || ref.id;
   const progress = dependencyProgress(model, rect.key);
   const reason = firstText([(signal?.operational_state ?? ref.operational_state)?.reason]);
-  const dependencyLabel = accessibleDependencyLabel(model, rect.key, progress.satisfied, progress.required);
+  const dependencyLabel = accessibleDependencyLabel(model, rect.key, signal, progress.satisfied, progress.required);
   const groupLabel = groupAncestryLabel(model, ref.group_id);
   const cardContextPath = contextPath ? contextPathValue([...contextPath, ...groupAncestryPath(model, ref.group_id)]) : undefined;
   const scope = scopeLabel(model.packageScopes.get(ref.id));
@@ -240,7 +240,18 @@ function compactRepoLabel(repo: string) {
   return repo.trim().replaceAll("\\", "/").replace(/\/$/, "").split("/").at(-1) || repo;
 }
 
-function accessibleDependencyLabel(model: ExecutionGraphLayoutModel, targetKey: string, satisfied: number, required: number) {
+function accessibleDependencyLabel(
+  model: ExecutionGraphLayoutModel,
+  targetKey: string,
+  signal: ExecutionGraphWorkPackageSignals | undefined,
+  satisfied: number,
+  required: number,
+) {
+  const dependency = signal?.dependency_signal;
+  if (dependency?.inputs.length) {
+    const names = dependency.inputs.map(({ work_package_id: id }) => model.refs.get(id)?.title?.trim() || id).join(", ");
+    return `Dependencies ${dependency.satisfied} of ${dependency.required} satisfied: ${names}`;
+  }
   const incoming = model.incoming.get(targetKey) ?? [];
   if (!incoming.length) return "No prerequisites";
   const names = incoming.map((dependency) => entityTitle(model, dependency.source_key)).join(", ");

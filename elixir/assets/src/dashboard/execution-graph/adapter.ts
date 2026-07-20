@@ -32,7 +32,6 @@ export function workRequestExecutionGraphModel(
     work_packages: workPackageIds.map((id) => mapWorkPackage(id, slices.get(id), delivery.get(id))),
     dependency_intents: list(productTree?.dependency_edges).flatMap(mapDependencyIntent),
     effective_edges: list(graph?.effective_edges),
-    topological_order: list(graph?.topological_order),
     cycles: list(graph?.cycles),
   };
 }

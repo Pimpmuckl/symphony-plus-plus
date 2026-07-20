@@ -3746,10 +3746,6 @@
     fill: var(--graph-edge-satisfied);
   }
 
-  .execution-graph__source[data-state="blocked"] {
-    fill: var(--graph-edge-blocked);
-  }
-
   .execution-graph__source[data-state="active"] {
     fill: var(--graph-edge-active);
   }
@@ -3773,12 +3769,6 @@
   .execution-graph__join-segment[data-state="satisfied"],
   .execution-graph__join-trunk[data-state="satisfied"] {
     stroke: var(--graph-edge-satisfied);
-  }
-
-  .execution-graph__edge[data-state="blocked"],
-  .execution-graph__join-segment[data-state="blocked"],
-  .execution-graph__join-trunk[data-state="blocked"] {
-    stroke: var(--graph-edge-blocked);
   }
 
   .execution-graph__edge[data-state="active"],
