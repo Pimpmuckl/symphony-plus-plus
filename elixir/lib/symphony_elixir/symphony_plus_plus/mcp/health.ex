@@ -18,6 +18,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
   @bootstrap_tools ToolCatalog.bootstrap_tools()
   @mcp_contract_schema_version ToolCatalog.mcp_contract_schema_version()
   @mcp_contract_health_fields ToolCatalog.mcp_contract_health_fields()
+  @mcp_contract_identity_key {__MODULE__, :mcp_contract_identity}
 
   @spec health(map()) :: map()
   def health(%{config: %Config{health_ledger_mode: :configured_identity} = config}) do
@@ -72,10 +73,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
 
   @spec mcp_contract_identity() :: map()
   def mcp_contract_identity do
-    %{
-      "fingerprint" => mcp_contract_fingerprint(mcp_contract_material()),
-      "schema_version" => @mcp_contract_schema_version
-    }
+    case :persistent_term.get(@mcp_contract_identity_key, :unset) do
+      :unset ->
+        identity = %{
+          "fingerprint" => mcp_contract_fingerprint(mcp_contract_material()),
+          "schema_version" => @mcp_contract_schema_version
+        }
+
+        :persistent_term.put(@mcp_contract_identity_key, identity)
+        identity
+
+      identity ->
+        identity
+    end
   end
 
   defp mcp_contract_material do
