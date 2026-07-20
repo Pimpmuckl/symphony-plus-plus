@@ -18,13 +18,19 @@ end
 {first_ms, identity} = measure.()
 warm_ms = for _ <- 1..samples, do: elem(measure.(), 0)
 sorted = Enum.sort(warm_ms)
+middle = div(samples, 2)
+
+p50_ms =
+  if rem(samples, 2) == 1,
+    do: Enum.at(sorted, middle),
+    else: (Enum.at(sorted, middle - 1) + Enum.at(sorted, middle)) / 2
 
 IO.puts(
   Jason.encode!(%{
     fingerprint: identity["fingerprint"],
     first_ms: first_ms,
     warm_samples: samples,
-    warm_p50_ms: Enum.at(sorted, div(samples, 2)),
+    warm_p50_ms: p50_ms,
     warm_min_ms: hd(sorted),
     warm_max_ms: List.last(sorted)
   })
