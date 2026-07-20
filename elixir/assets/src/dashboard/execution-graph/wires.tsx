@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 
 import type { ExecutionGraphLayoutModel, GraphOrientation } from "./model";
@@ -13,18 +13,20 @@ export function GraphWires({ model, orientation }: { model: ExecutionGraphLayout
   const next = useMemo(() => graphWireRoutes(model, orientation), [model, orientation]);
   const signature = wireSignature(next);
   const current = useRef(next);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [frame, setFrame] = useState<{ current: Routes; previous?: Routes; sequence: number }>({ current: next, sequence: 0 });
+
+  const animate = useEffectEvent(() => {
+    const previous = current.current;
+    current.current = next;
+    setFrame(({ sequence }) => ({ current: next, previous, sequence: sequence + 1 }));
+    return setTimeout(() => setFrame((value) => ({ ...value, previous: undefined })), SNAP_MS);
+  });
 
   useLayoutEffect(() => {
     if (wireSignature(current.current) === signature) return;
-    const previous = current.current;
-    current.current = next;
-    clearTimeout(timer.current);
-    setFrame(({ sequence }) => ({ current: next, previous, sequence: sequence + 1 }));
-    timer.current = setTimeout(() => setFrame((value) => ({ ...value, previous: undefined })), SNAP_MS);
-  }, [next, signature]);
-  useEffect(() => () => clearTimeout(timer.current), []);
+    const timer = animate();
+    return () => clearTimeout(timer);
+  }, [signature]);
 
   return (
     <svg className="execution-graph__wires" width={model.width} height={model.height} aria-hidden="true" role="presentation" focusable="false">

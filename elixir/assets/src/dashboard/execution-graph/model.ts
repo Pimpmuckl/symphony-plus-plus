@@ -405,7 +405,7 @@ function topologicalEntityOrder(
       }
     }
   }
-  return order.length === keys.length ? order : [...keys].sort((left, right) => compareEntityKeys(left, right, context));
+  return order.length === keys.length ? order : keys.toSorted((left, right) => compareEntityKeys(left, right, context));
 }
 
 function entityDepths(order: string[], dependencies: Array<{ source: string; target: string }>) {
