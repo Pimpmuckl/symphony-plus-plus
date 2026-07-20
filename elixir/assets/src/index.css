@@ -3736,9 +3736,6 @@
 
   .execution-graph__source {
     fill: var(--graph-edge);
-    stroke: hsl(var(--card));
-    stroke-width: 1.5;
-    vector-effect: non-scaling-stroke;
   }
 
   .execution-graph__source[data-state="waiting"] {

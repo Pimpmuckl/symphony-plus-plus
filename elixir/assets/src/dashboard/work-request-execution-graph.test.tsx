@@ -144,6 +144,8 @@ describe("WorkRequestExecutionGraph", () => {
   it("orders fan-out lanes toward their destinations and routes mixed fan-in around the target", () => {
     const fanoutModel = buildExecutionGraphLayout(graphFixture, "desktop");
     const fanout = graphWireRoutes(fanoutModel, "desktop").paths;
+    const output = rect(fanoutModel, "group:output");
+    const publishPath = fanout.find((route) => route.edge === "work_package:join:work_package:publish")?.path;
     const sourcePaths = fanoutModel.dependencies
       .filter((dependency) => dependency.source_key === "group:source")
       .sort((left, right) => rect(fanoutModel, left.target_key).y - rect(fanoutModel, right.target_key).y)
@@ -151,18 +153,23 @@ describe("WorkRequestExecutionGraph", () => {
 
     expect(sourcePaths.map((path) => path.source?.y)).toEqual([...sourcePaths.map((path) => path.source?.y)].sort((left, right) => (left ?? 0) - (right ?? 0)));
     expect(routeConflicts(sourcePaths)).toEqual([]);
+    expect(routeSegments(publishPath ?? "").some((segment) => segment.y1 === segment.y2 && segment.y1 > output.y + output.height)).toBe(true);
 
     const recovery = buildExecutionGraphLayout(recoveryGraphFixture, "desktop");
     const routes = graphWireRoutes(recovery, "desktop");
+    const retry = rect(recovery, "group:retry");
     const validate = rect(recovery, "work_package:validate");
     const successor = rect(recovery, "work_package:successor");
     const gateX = validate.x - 22;
     const successorPath = routes.paths.find((route) => route.edge === "work_package:successor:work_package:validate")?.path;
+    const historyPath = routes.paths.find((route) => route.edge === "group:history:work_package:validate")?.path;
 
     expect(routes.gates.find((gate) => gate.targetKey === "work_package:validate")?.path).toContain(`M ${gateX}`);
-    expect(routes.paths.find((route) => route.edge === "group:history:work_package:validate")?.path).toMatch(new RegExp(`H ${gateX}$`));
+    expect(historyPath).toMatch(new RegExp(`H ${gateX}$`));
     expect(successorPath).toMatch(new RegExp(`^M ${successor.x + successor.width} `));
     expect(firstHorizontalTrack(successorPath)).toBeGreaterThan(successor.x + successor.width);
+    expect(routeSegments(successorPath ?? "").some((segment) => segment.y1 === segment.y2 && segment.y1 > retry.y + retry.height)).toBe(true);
+    expect(routeSegments(historyPath ?? "").at(-1)?.y2).toBeLessThan(routeSegments(successorPath ?? "").at(-1)?.y2 ?? 0);
     expect(successorPath).not.toMatch(/ V -/);
     expect(routes.paths.find((route) => route.edge === "work_package:successor:work_package:validate")?.state).toBe("waiting");
   });

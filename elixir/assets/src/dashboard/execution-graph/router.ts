@@ -168,7 +168,9 @@ function routeOptions(candidate: RouteCandidate, model: ExecutionGraphLayoutMode
 
   const sourceXs = sourceLaneOptions(candidate, routing);
   const targetXs = targetLaneOptions(candidate, model);
-  const targetYs = bandLaneOptions(candidate.targetRoot.row, model, "target");
+  const targetYs = candidate.kind === "local"
+    ? spread(candidate.sourceRoot.y + candidate.sourceRoot.height + 8, candidate.sourceRoot.y + candidate.sourceRoot.height + 18, 3)
+    : bandLaneOptions(candidate.targetRoot.row, model, "target");
   const crossBand = candidate.sourceRoot.row !== candidate.targetRoot.row;
   if (!crossBand) return sameBandOptions(candidate, sourceXs, targetYs, targetXs);
   return crossBandOptions(candidate, model, sourceXs, targetYs, targetXs);
@@ -438,7 +440,8 @@ function portPriority(dependency: VisibleGraphDependency, rects: Map<string, Gra
   const source = rects.get(dependency.source_key);
   const target = rects.get(dependency.target_key);
   if (!source || !target) return 0;
-  return routeKind(rootRect(source, rects), rootRect(target, rects), orientation) === "direct" ? 1 : 0;
+  const kind = routeKind(rootRect(source, rects), rootRect(target, rects), orientation);
+  return kind === "corridor" ? 0 : kind === "direct" ? 1 : 2;
 }
 
 function compareSourcePosition(left: VisibleGraphDependency, right: VisibleGraphDependency, rects: Map<string, GraphEntityRect>) {
