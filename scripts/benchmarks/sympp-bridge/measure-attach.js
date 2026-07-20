@@ -76,7 +76,7 @@ function startBackend() {
 
 function prepareInstall(origin) {
   fs.cpSync(sourcePlugin, pluginRoot, { recursive: true });
-  fs.mkdirSync(sourcePluginRoot, { recursive: true });
+  fs.cpSync(sourcePlugin, sourcePluginRoot, { recursive: true });
   writeJson(path.join(sourceRoot, ".codex-marketplace-install.json"), { revision });
   writeJson(path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp", "mcp_tools_contract.json"), { mcp_contract_fingerprint: contract });
 

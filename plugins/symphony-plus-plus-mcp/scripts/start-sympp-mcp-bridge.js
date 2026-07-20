@@ -13,6 +13,7 @@ const POWERSHELL_FALLBACK = 43;
 const BOARD_PATH = "/sympp/board";
 const MAX_DASHBOARD_REDIRECTS = 3;
 const GENERATION_SETTLE_MS = 100;
+const CLEANUP_SOURCE_CHANGED = Symbol("cleanup_source_changed");
 const synchronousWait = new Int32Array(new SharedArrayBuffer(4));
 const agent = new http.Agent({ keepAlive: true });
 const generationWatchers = [];
@@ -296,14 +297,17 @@ function prepareCleanupScript(identity) {
   try {
     const names = fs.readdirSync(__dirname).filter((name) => name.toLowerCase().endsWith(".ps1"));
     const directory = path.join(resolveHome(), "runtime", "launcher-cleanup", `${identity.revision}-${identity.generationKey.slice(0, 12)}`);
+    const marketplaceScripts = path.join(identity.sourceRoot, "plugins", path.basename(path.dirname(identity.pluginRoot)), "scripts");
     fs.mkdirSync(directory, { recursive: true });
     for (const name of names) {
       const source = path.join(__dirname, name);
       const destination = path.join(directory, name);
+      const sourceHash = sha256(fs.readFileSync(source));
+      if (sourceHash !== sha256(fs.readFileSync(path.join(marketplaceScripts, name)))) return CLEANUP_SOURCE_CHANGED;
       try { fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL); } catch (error) {
         if (error.code !== "EEXIST") throw error;
       }
-      if (sha256(fs.readFileSync(destination)) !== sha256(fs.readFileSync(source))) return null;
+      if (sha256(fs.readFileSync(destination)) !== sourceHash) return null;
     }
     const script = path.join(directory, "start-sympp-mcp.ps1");
     if (!fs.existsSync(script)) return null;
@@ -621,8 +625,12 @@ async function bridge(identity, state, runtimeFile) {
       return false;
     }
     cleanupScript = prepareCleanupScript(identity);
-    if (!cleanupScript) {
+    if (cleanupScript === CLEANUP_SOURCE_CHANGED) {
       throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
+    }
+    if (!cleanupScript) {
+      trace("warm_miss_cleanup");
+      return false;
     }
     localLease = createLocalLease(runtimeFile, state, identity);
     let attachedResponse;
@@ -647,8 +655,13 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_health");
       return false;
     }
-    if (!prepareCleanupScript(identity)) {
+    const confirmedCleanupScript = prepareCleanupScript(identity);
+    if (confirmedCleanupScript === CLEANUP_SOURCE_CHANGED) {
       throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
+    }
+    if (!confirmedCleanupScript) {
+      trace("warm_miss_cleanup");
+      return false;
     }
     if (!await generationValidAtAttachment(identity)) {
       trace("warm_miss_generation");
