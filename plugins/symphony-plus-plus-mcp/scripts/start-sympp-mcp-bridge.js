@@ -202,7 +202,6 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
   if (!watched) return null;
 
   let watchVersion = generationWatchVersion;
-  await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
   let generation = liveGeneration(markerFile);
   if (generation && generationWatchVersion === watchVersion) {
     trace("generation_cache_hit");
@@ -216,7 +215,6 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
     if (lock !== null) {
       try {
         watchVersion = generationWatchVersion;
-        await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
         generation = liveGeneration(markerFile);
         if (generation && generationWatchVersion === watchVersion) return { key: generation, watchVersion };
         for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -226,7 +224,6 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
           trace("generation_scan_complete");
           await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
           const confirmed = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
-          await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
           if (!confirmed || confirmed !== generation || generationWatchVersion !== watchVersion) {
             trace("generation_scan_retry");
             continue;
@@ -235,7 +232,6 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
           fs.writeFileSync(temporary, `${JSON.stringify({ generation_key: generation, validated_at_ms: performance.timeOrigin + performance.now() })}\n`);
           try { fs.unlinkSync(markerFile); } catch (_) { }
           fs.renameSync(temporary, markerFile);
-          await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
           if (generationWatchVersion !== watchVersion || liveGeneration(markerFile) !== generation) {
             trace("generation_scan_retry");
             continue;
@@ -626,8 +622,7 @@ async function bridge(identity, state, runtimeFile) {
     }
     cleanupScript = prepareCleanupScript(identity);
     if (!cleanupScript) {
-      trace("warm_miss_cleanup");
-      return false;
+      throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
     }
     localLease = createLocalLease(runtimeFile, state, identity);
     let attachedResponse;
@@ -651,6 +646,9 @@ async function bridge(identity, state, runtimeFile) {
     if (!await preflightRuntimeHealth(runtimeFile, confirmedState, confirmed)) {
       trace("warm_miss_health");
       return false;
+    }
+    if (!prepareCleanupScript(identity)) {
+      throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
     }
     if (!await generationValidAtAttachment(identity)) {
       trace("warm_miss_generation");
