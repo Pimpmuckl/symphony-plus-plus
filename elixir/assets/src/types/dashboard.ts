@@ -1,5 +1,5 @@
 import type { ProductTreeProjection } from "./product-tree";
-import type { DeliveryBoardWorkPackageSummary } from "./delivery-signals";
+import type { DeliveryBoardWorkPackageSummary, WorkPackageDependencySignal, WorkPackagePrSignal, WorkPackageReviewSignal, WorkPackageWorkerSignal } from "./delivery-signals";
 export type * from "./delivery-signals";
 export type { ActiveBlockingEdge, ActiveBlockingEdgeEndpoint, BlockerActor, WorkPackageBlocker } from "./dashboard-blockers";
 import type { ActiveBlockingEdge, WorkPackageBlocker } from "./dashboard-blockers";
@@ -290,6 +290,7 @@ export type WorkRequestPackage = {
   sequence?: number;
   title?: string | null;
   goal?: MarkdownText | null;
+  repo?: string | null;
   status?: string | null;
   work_package_id?: string | null;
   work_package_status?: string | null;
@@ -306,6 +307,10 @@ export type WorkRequestPackage = {
   inserted_at?: string | null;
   updated_at?: string | null;
   operational_state?: PackageOperationalState | null;
+  worker_signal?: WorkPackageWorkerSignal | null;
+  pr_signal?: WorkPackagePrSignal | null;
+  review_signal?: WorkPackageReviewSignal | null;
+  dependency_signal?: WorkPackageDependencySignal | null;
   delivery?: WorkPackageDelivery | null;
   successor?: WorkPackageSuccessor | null;
   attention_reason_codes?: string[];
