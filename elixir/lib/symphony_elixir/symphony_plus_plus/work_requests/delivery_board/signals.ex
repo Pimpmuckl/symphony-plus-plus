@@ -75,7 +75,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
 
     {:ok, graphs}
   rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
+    error in Exqlite.Error ->
+      if missing_product_tree_schema_error?(error), do: {:ok, %{}}, else: normalize_exqlite_error(error)
   end
 
   @spec pr(map()) :: map()
@@ -296,6 +297,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
 
   defp reject_nil_values(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
   defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
+
+  defp missing_product_tree_schema_error?(error) do
+    error
+    |> Exception.message()
+    |> String.downcase()
+    |> String.contains?("no such table: sympp_product_tree_")
+  end
 
   defp normalize_exqlite_error(error) do
     message = Exception.message(error)

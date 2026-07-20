@@ -16,6 +16,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
+  defmodule MissingProductTreeRepo do
+    def all(_query), do: raise(%Exqlite.Error{message: "no such table: sympp_product_tree_nodes"})
+  end
+
   setup_all do
     database_path = database_path()
 
@@ -36,6 +40,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     repo.delete_all(WorkPackage)
     repo.delete_all(WorkRequest)
     :ok
+  end
+
+  test "keeps delivery signals available before product-tree migrations" do
+    work_request = %WorkRequest{id: "WR-BOARD-LEGACY"}
+
+    assert {:ok, %{}} =
+             Signals.execution_graphs(
+               MissingProductTreeRepo,
+               [work_request],
+               %{work_request.id => []},
+               %{},
+               []
+             )
   end
 
   test "projects ordered slices with delivery outcome, linked WorkPackage summary, reason codes, and successor context", %{repo: repo} do
