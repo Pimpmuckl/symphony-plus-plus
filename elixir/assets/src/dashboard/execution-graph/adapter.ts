@@ -9,8 +9,6 @@ import type {
 import type { WorkRequestExecutionGraphModel } from "./model";
 
 const historicalStates = new Set(["skipped", "canceled", "cancelled", "abandoned", "superseded"]);
-type DeliveryItem = NonNullable<NonNullable<WorkRequestDetail["delivery_board"]>["work_packages"]>[number];
-type DeliverySignal = NonNullable<DeliveryItem["work_package"]>;
 
 export function workRequestExecutionGraphModel(
   detail: WorkRequestDetail,
@@ -19,9 +17,8 @@ export function workRequestExecutionGraphModel(
   const productTree = detail.product_tree;
   const graph = productTree?.execution_graph;
   const slices = new Map(list(detail.work_packages).map((slice) => [slice.id, slice]));
-  const delivery = new Map(list(detail.delivery_board?.work_packages).map((item) => [item.id, item]));
   const workPackageIds = list(graph?.work_package_ids).filter(
-    (id) => includeHistorical || !isHistoricalWorkPackage(slices.get(id), delivery.get(id)),
+    (id) => includeHistorical || !isHistoricalWorkPackage(slices.get(id)),
   );
 
   return {
@@ -29,7 +26,7 @@ export function workRequestExecutionGraphModel(
     base_repo: firstValue(detail.work_request.repo_key, detail.work_request.repo),
     base_branch: detail.work_request.base_branch,
     groups: list(productTree?.nodes).map(mapGroup),
-    work_packages: workPackageIds.map((id) => mapWorkPackage(id, slices.get(id), delivery.get(id))),
+    work_packages: workPackageIds.map((id) => mapWorkPackage(id, slices.get(id))),
     dependency_intents: list(productTree?.dependency_edges).flatMap(mapDependencyIntent),
     effective_edges: list(graph?.effective_edges),
     cycles: list(graph?.cycles),
@@ -66,24 +63,23 @@ function mapGroup(group: ProductTreeNode) {
   };
 }
 
-function mapWorkPackage(id: string, slice?: WorkRequestPackage, item?: DeliveryItem) {
+function mapWorkPackage(id: string, slice?: WorkRequestPackage) {
   return {
     id,
-    ...workPackageReference(slice, item),
-    ...workPackageSignals(item),
+    ...workPackageReference(slice),
+    ...workPackageSignals(slice),
   };
 }
 
-function workPackageReference(slice?: WorkRequestPackage, item?: DeliveryItem) {
-  const signal = item?.work_package;
+function workPackageReference(slice?: WorkRequestPackage) {
   return {
     ...sliceReference(slice),
-    title: firstValue(signal?.title, slice?.title),
-    repo: signal?.repo,
-    base_branch: firstValue(signal?.base_branch, slice?.base_branch),
-    status: firstValue(signal?.status, slice?.status),
-    raw_status: projectedRawStatus(signal, item, slice),
-    operational_state: projectedOperationalState(item, slice),
+    title: slice?.title,
+    repo: slice?.repo,
+    base_branch: slice?.base_branch,
+    status: slice?.status,
+    raw_status: firstValue(slice?.work_package_status, slice?.status),
+    operational_state: slice?.operational_state,
   };
 }
 
@@ -91,26 +87,17 @@ function sliceReference(slice?: WorkRequestPackage) {
   return { group_id: slice?.product_tree_node_id, sequence: slice?.sequence };
 }
 
-function projectedRawStatus(signal?: DeliverySignal | null, item?: DeliveryItem, slice?: WorkRequestPackage) {
-  return firstValue(signal?.raw_status, item?.raw_status, slice?.work_package_status, slice?.status);
-}
-
-function projectedOperationalState(item?: DeliveryItem, slice?: WorkRequestPackage) {
-  return firstValue(item?.operational_state, slice?.operational_state);
-}
-
-function workPackageSignals(item?: DeliveryItem) {
-  const signal = item?.work_package;
+function workPackageSignals(slice?: WorkRequestPackage) {
   return {
-    worker_signal: signal?.worker_signal,
-    pr_signal: signal?.pr_signal,
-    review_signal: signal?.review_signal,
-    dependency_signal: signal?.dependency_signal,
+    worker_signal: slice?.worker_signal,
+    pr_signal: slice?.pr_signal,
+    review_signal: slice?.review_signal,
+    dependency_signal: slice?.dependency_signal,
   };
 }
 
-function isHistoricalWorkPackage(slice?: WorkRequestPackage, item?: DeliveryItem) {
-  return [...sliceHistoryStates(slice), ...deliveryHistoryStates(item)].some(isHistoricalState);
+function isHistoricalWorkPackage(slice?: WorkRequestPackage) {
+  return sliceHistoryStates(slice).some(isHistoricalState);
 }
 
 function sliceHistoryStates(slice?: WorkRequestPackage) {
@@ -121,21 +108,6 @@ function sliceHistoryStates(slice?: WorkRequestPackage) {
     slice?.operational_state?.key,
     slice?.operational_state?.delivery_outcome,
   ];
-}
-
-function deliveryHistoryStates(item?: DeliveryItem) {
-  return [
-    item?.raw_status,
-    item?.delivery_outcome,
-    item?.delivery?.outcome,
-    item?.operational_state?.key,
-    item?.operational_state?.delivery_outcome,
-    ...deliverySignalHistoryStates(item?.work_package),
-  ];
-}
-
-function deliverySignalHistoryStates(signal?: DeliverySignal | null) {
-  return [signal?.raw_status, signal?.status];
 }
 
 function graphAvailable(graph?: ProductTreeExecutionGraph) {

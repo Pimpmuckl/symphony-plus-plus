@@ -23,3 +23,10 @@ node scripts/benchmarks/sympp-dashboard/measure.mjs --url http://127.0.0.1:20051
 ```
 
 Pass `--details` to include every raw sample. Run the same commands at the baseline and candidate revisions. Report medians with the sample count; do not compare warm and cold server cohorts.
+
+Profile backend assembly, JSON encoding, response bytes, and the largest serialized fields against the same fixture:
+
+```powershell
+$env:MIX_ENV = "test"
+mix run ../scripts/benchmarks/sympp-dashboard/profile.exs -- ../scripts/benchmarks/sympp-dashboard/fixture.sqlite3 11
+```
