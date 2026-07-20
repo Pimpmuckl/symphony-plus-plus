@@ -111,7 +111,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
             runtime_evidence.active_agent_runs,
             runtime_evidence.active_grants
           ),
-        active_since: evidence |> Enum.flat_map(&worker_started_at/1) |> earliest_timestamp(),
+        active_since: worker_active_since(evidence, runtime_evidence),
         last_activity: evidence |> Enum.flat_map(&worker_activity_at/1) |> latest_timestamp(),
         run_label: worker_run_label(evidence)
       }
@@ -247,6 +247,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
     %{
       now: now,
       paused?: paused?,
+      current_claim_leases: current_claim_leases,
       stale_claim_leases: stale_claim_leases,
       active_claim_leases: active_claim_leases,
       active_agent_runs: active_agent_runs,
@@ -488,6 +489,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   defp worker_started_at(%AccessGrant{} = grant), do: [grant.claimed_at || grant.inserted_at]
   defp worker_started_at(%AgentRun{} = run), do: [run.started_at || run.inserted_at]
   defp worker_started_at(%ClaimLease{} = lease), do: [lease.lease_started_at || lease.inserted_at]
+
+  defp worker_active_since(evidence, runtime_evidence) do
+    current_runs = runtime_evidence.active_agent_runs ++ runtime_evidence.stale_agent_runs
+
+    cond do
+      runtime_evidence.current_claim_leases != [] -> started_at(runtime_evidence.current_claim_leases, :earliest)
+      current_runs != [] -> started_at(current_runs, :earliest)
+      runtime_evidence.active_grants != [] -> started_at(runtime_evidence.active_grants, :latest)
+      true -> started_at(evidence, :earliest)
+    end
+  end
+
+  defp started_at(evidence, order) do
+    timestamps = Enum.flat_map(evidence, &worker_started_at/1)
+    if order == :latest, do: latest_timestamp(timestamps), else: earliest_timestamp(timestamps)
+  end
 
   defp worker_activity_at(%AccessGrant{} = grant), do: [grant.revoked_at, grant.updated_at, grant.claimed_at, grant.inserted_at]
 

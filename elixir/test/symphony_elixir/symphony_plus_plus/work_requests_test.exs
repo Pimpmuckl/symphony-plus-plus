@@ -1170,7 +1170,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, _reclaimed_lease} =
              ClaimLeaseService.claim(repo, recycled_package.id, activity_actor("old-worker"), now: stale_seen_at, stale_after_ms: 1)
 
-    assert {:ok, _replacement_lease} =
+    assert {:ok, replacement_lease} =
              ClaimLeaseService.reclaim_stale(repo, recycled_package.id, activity_actor("replacement-worker"),
                reason: "worker_recycled",
                stale_after_ms: 60_000
@@ -1252,6 +1252,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert recycled_runtime.lifecycle_state == "active"
     assert "worker_recycled" in recycled_runtime.reason_codes
     assert DateTime.compare(recycled_runtime.latest_gate_at, DateTime.add(stale_seen_at, 1, :millisecond)) == :gt
+    assert get_in(contexts, [recycled_package.id, :worker_signal, :active_since]) == replacement_lease.lease_started_at
 
     ready_context = contexts[ready_package.id]
     assert ready_context.runtime_state.active? == false

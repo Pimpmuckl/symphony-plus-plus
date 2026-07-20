@@ -287,7 +287,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository do
          %DependencyEdge{work_request_id: work_request_id} = edge,
          %{"work_request_id" => work_request_id} = attrs
        ) do
-    with :ok <- validate_dependency_edge_scope(repo, attrs) do
+    scope_attrs =
+      Map.merge(
+        %{
+          "work_request_id" => edge.work_request_id,
+          "source_kind" => edge.source_kind,
+          "source_id" => edge.source_id,
+          "target_kind" => edge.target_kind,
+          "target_id" => edge.target_id
+        },
+        attrs
+      )
+
+    with :ok <- validate_dependency_edge_scope(repo, scope_attrs) do
       edge
       |> DependencyEdge.update_changeset(attrs)
       |> repo.update()
