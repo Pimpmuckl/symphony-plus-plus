@@ -317,11 +317,14 @@ function workPackageEntityState(ref?: ExecutionGraphWorkPackageRef, signal?: Exe
   if (workPackageIsFinished(ref, signal)) return "satisfied";
   const status = workPackageStatusText(ref, signal);
   if (deliverySignalFailed(signal)) return "blocked";
+  if (operationalStateIsBlocked(signal?.operational_state ?? ref?.operational_state)) return "blocked";
   if (waitingOnDependencies(signal)) return "waiting";
   if (/block|error|fail/.test(status)) return "blocked";
   if (deliverySignalActive(signal) || /active|implement|review|claim|progress/.test(status)) return "active";
   return "waiting";
 }
+
+export function operationalStateIsBlocked(operational?: ExecutionGraphWorkPackageRef["operational_state"]) { const source = [operational?.key, operational?.label].filter(Boolean).join(" ").toLowerCase(); return /block/.test(source) && !/depend/.test(source); }
 
 function workPackageStatusText(ref?: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
   return [signal?.raw_status, ref?.raw_status, ref?.status, ref?.operational_state?.key].filter(Boolean).join(" ").toLowerCase();

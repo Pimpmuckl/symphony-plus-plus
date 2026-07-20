@@ -339,6 +339,25 @@ describe("WorkRequestExecutionGraph", () => {
     expect(html).not.toContain('data-group-id="waiting" data-state="blocked"');
   });
 
+  it("prefers an active operational blocker over raw planned status", () => {
+    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={{
+      groups: [{ id: "blocked-group", title: "Blocked group", work_package_ids: ["blocked"] }],
+      work_packages: [{
+        id: "blocked",
+        group_id: "blocked-group",
+        title: "Blocked package",
+        status: "planned",
+        operational_state: { key: "blocked", label: "Blocked", tone: "danger" },
+        worker_signal: { status: "active", active_since: "2026-07-18T09:00:00Z" },
+        dependency_signal: { satisfied: 0, required: 1, active: 1, blocked: 0, unmet_work_package_ids: ["input"], inputs: [{ work_package_id: "input", status: "active" }] },
+      }],
+    }} />);
+
+    expect(firstCard(html, "blocked")).toContain('data-state="blocked"');
+    expect(firstCard(html, "blocked")).toContain(">Blocked<");
+    expect(html).toContain('data-group-id="blocked-group" data-state="blocked"');
+  });
+
   it("renders unavailable and cyclic projections as explicit non-order states", () => {
     const unavailable = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ available: false, work_packages: [{ id: "wp" }] }} />);
     const cyclic = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ available: true, work_packages: [{ id: "wp" }], cycles: [["wp"]] }} />);

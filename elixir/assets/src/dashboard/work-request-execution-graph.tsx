@@ -6,6 +6,7 @@ import {
   defaultExpandedGroupIds,
   dependencyProgress,
   graphGroupHeaderSize,
+  operationalStateIsBlocked,
   workPackageIsFinished,
 } from "@/dashboard/execution-graph/model";
 import type {
@@ -287,6 +288,7 @@ function cardState(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWor
   const status = firstText([signal?.raw_status, ref.raw_status, ref.status]) ?? "planned";
   return terminalCardState(ref, signal, status)
     ?? failedCardState(status, signal)
+    ?? operationalBlockerCardState(operational)
     ?? activeCardState(signal, now)
     ?? dependencyCardState(signal)
     ?? fallbackCardState(status, operational);
@@ -310,6 +312,11 @@ function failedCardState(status: string, signal?: ExecutionGraphWorkPackageSigna
   return undefined;
 }
 
+function operationalBlockerCardState(operational?: ExecutionGraphWorkPackageRef["operational_state"]): CardState | undefined {
+  if (!operationalStateIsBlocked(operational)) return undefined;
+  return { label: firstText([operational?.label]) ?? "Blocked", tone: "blocked" };
+}
+
 function activeCardState(signal?: ExecutionGraphWorkPackageSignals, now?: string | number | Date): CardState | undefined {
   const review = signal?.review_signal;
   if (review?.status === "in_progress") return { label: `Review${progressText(review.current, review.total)}`, tone: "active" };
@@ -327,15 +334,8 @@ function dependencyCardState(signal?: ExecutionGraphWorkPackageSignals): CardSta
 }
 
 function fallbackCardState(status: string, operational?: ExecutionGraphWorkPackageRef["operational_state"]): CardState {
-  const source = [status, operational?.key].filter(Boolean).join(" ").toLowerCase();
-  return { label: operationalCardLabel(status, operational?.label), tone: cardTone(source) };
-}
-
-function operationalCardLabel(status: string, label?: string | null) {
-  const operationalLabel = firstText([label]);
-  if (!operationalLabel) return humanize(status);
-  if (/block/i.test(operationalLabel) && !/block/i.test(status)) return humanize(status);
-  return operationalLabel;
+  const source = firstText([operational?.key, operational?.label, status]) ?? status;
+  return { label: firstText([operational?.label]) ?? humanize(source), tone: cardTone(source.toLowerCase()) };
 }
 
 function elapsedLabel(activeSince: string | null | undefined, now?: string | number | Date) {
