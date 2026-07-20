@@ -303,7 +303,9 @@ function prepareCleanupScript(identity) {
       const source = path.join(__dirname, name);
       const destination = path.join(directory, name);
       const sourceHash = sha256(fs.readFileSync(source));
-      if (sourceHash !== sha256(fs.readFileSync(path.join(marketplaceScripts, name)))) return CLEANUP_SOURCE_CHANGED;
+      let marketplaceHash;
+      try { marketplaceHash = sha256(fs.readFileSync(path.join(marketplaceScripts, name))); } catch (_) { return CLEANUP_SOURCE_CHANGED; }
+      if (sourceHash !== marketplaceHash) return CLEANUP_SOURCE_CHANGED;
       try { fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL); } catch (error) {
         if (error.code !== "EEXIST") throw error;
       }
@@ -605,6 +607,7 @@ async function bridge(identity, state, runtimeFile) {
   const clientId = `bridge-${process.pid}-${crypto.randomUUID().replace(/-/g, "")}`;
   let localLease = null;
   let cleanupScript = null;
+  let cleanupAllowed = true;
   let startupLock = null;
   let attached = false;
   let heartbeat = null;
@@ -626,6 +629,7 @@ async function bridge(identity, state, runtimeFile) {
     }
     cleanupScript = prepareCleanupScript(identity);
     if (cleanupScript === CLEANUP_SOURCE_CHANGED) {
+      cleanupAllowed = false;
       cleanupScript = null;
       throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
     }
@@ -658,6 +662,7 @@ async function bridge(identity, state, runtimeFile) {
     }
     const confirmedCleanupScript = prepareCleanupScript(identity);
     if (confirmedCleanupScript === CLEANUP_SOURCE_CHANGED) {
+      cleanupAllowed = false;
       throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
     }
     if (!confirmedCleanupScript) {
@@ -716,7 +721,7 @@ async function bridge(identity, state, runtimeFile) {
     if (localLease) { try { fs.unlinkSync(localLease); } catch (_) { } }
     if (attached) await clientLease(mcpUrl, clientId, "detach", false);
     closeGenerationWatchers();
-    cleanupLastDetach(runtimeFile, identity.runtimeKey, cleanupScript);
+    if (cleanupAllowed) cleanupLastDetach(runtimeFile, identity.runtimeKey, cleanupScript);
     closeLivenessProbe();
   }
 }

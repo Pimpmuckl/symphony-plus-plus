@@ -105,7 +105,7 @@ function startClient() {
   const script = path.join(pluginRoot, "scripts", "start-sympp-mcp-bridge.js");
   const child = spawn(process.execPath, [script], {
     cwd: pluginRoot,
-    env: { ...process.env, SYMPP_HOME: symppHome, SYMPP_RUNTIME_FILE: runtimeFile, SYMPP_BACKEND_URL: "", SYMPP_DASHBOARD_ORIGIN: "", SYMPP_REPO_ROOT: "" },
+    env: bridgeEnvironment(),
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -139,6 +139,26 @@ function startClient() {
   return { child, ready };
 }
 
+function bridgeEnvironment(extra = {}) {
+  return { ...process.env, SYMPP_HOME: symppHome, SYMPP_RUNTIME_FILE: runtimeFile, SYMPP_BACKEND_URL: "", SYMPP_DASHBOARD_ORIGIN: "", SYMPP_REPO_ROOT: "", ...extra };
+}
+
+async function verifyIntegrityRejection() {
+  const bridge = path.join(pluginRoot, "scripts", "start-sympp-mcp-bridge.js");
+  const cleanup = path.join(pluginRoot, "scripts", "start-sympp-mcp.ps1");
+  const marker = path.join(tempRoot, "unsafe-cleanup-ran");
+  const original = fs.readFileSync(cleanup);
+  try {
+    fs.writeFileSync(cleanup, "Set-Content -LiteralPath $env:SYMPP_INTEGRITY_MARKER -Value invoked\n");
+    const child = spawn(process.execPath, [bridge], { cwd: pluginRoot, env: bridgeEnvironment({ SYMPP_INTEGRITY_MARKER: marker }), stdio: "ignore", windowsHide: true });
+    const exitCode = await new Promise((resolve) => child.once("exit", resolve));
+    if (exitCode === 0 || fs.existsSync(marker)) throw new Error("mismatched cleanup script was not rejected safely");
+    return { rejected: true, unsafe_cleanup_skipped: true };
+  } finally {
+    fs.writeFileSync(cleanup, original);
+  }
+}
+
 async function closeClient(client) {
   client.stdin.end();
   await new Promise((resolve) => client.once("exit", resolve));
@@ -159,11 +179,9 @@ async function main() {
       await closeClient(sample.child);
     }
     const ready = warm.map((sample) => sample.ready_ms);
-    console.log(JSON.stringify({ command: "node scripts/start-sympp-mcp-bridge.js", cold, warm, summary: { samples: warm.length, p50_ready_ms: percentile(ready, 0.5), p95_ready_ms: percentile(ready, 0.95) } }, null, 2));
-    const exited = new Promise((resolve) => anchor.child.once("exit", resolve));
-    anchor.child.kill();
-    await exited;
-    clients.delete(anchor.child);
+    await closeClient(anchor.child);
+    const integrity = await verifyIntegrityRejection();
+    console.log(JSON.stringify({ command: "node scripts/start-sympp-mcp-bridge.js", cold, warm, summary: { samples: warm.length, p50_ready_ms: percentile(ready, 0.5), p95_ready_ms: percentile(ready, 0.95) }, integrity }, null, 2));
   } finally {
     for (const client of clients) client.kill();
     await new Promise((resolve) => server.close(resolve));
