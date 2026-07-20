@@ -1,7 +1,7 @@
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DetailDisclosure, DetailFacts, DetailHeader, DetailList, DetailSection, DetailStatGrid } from "@/components/dashboard/detail-layout";
+import { DetailDisclosure, DetailFacts, DetailHeader, DetailList, DetailLoadError, DetailSection, DetailStatGrid, DetailSummaryBar } from "@/components/dashboard/detail-layout";
 import { MarkdownBlock } from "@/components/dashboard/markdown-block";
 import type { ActiveBlockingEdgeEndpoint, WorkRequestPackage, WorkPackageCard, WorkPackageDetailPayload, WorkRequestDetail } from "@/types/dashboard";
 import { isFinishedBoardStatus, operationalBadgeVariant, operationalLabel, sliceOperationalState } from "@/lib/operational-state";
@@ -24,6 +24,7 @@ export function SliceDetailContent({
   onSubmitComment,
   onResolveComment,
   canMutateComments,
+  detailError,
 }: {
   detail: WorkRequestDetail;
   slice: WorkRequestPackage;
@@ -31,6 +32,7 @@ export function SliceDetailContent({
   onSubmitComment: SubmitContextComment;
   onResolveComment: ResolveContextComment;
   canMutateComments: boolean;
+  detailError?: string | null;
 }) {
   const [sliceComments, setSliceComments] = useSyncedComments(slice.comments || []);
   const status = slice.work_package_status || slice.status;
@@ -48,13 +50,14 @@ export function SliceDetailContent({
       <DetailHeader
         title={slice.title || pkg?.title || slice.id}
         eyebrow={`${repoDisplayName(detail.work_request)} / ${detail.work_request.title || detail.work_request.id}`}
+        identifier={pkg?.id || slice.work_package_id || slice.id}
+        identifierLabel="WorkPackage ID"
         badge={<Badge variant={operationalBadgeVariant(operational, status)}>{operationalLabel(operational, status)}</Badge>}
       />
       <div className="detail-modal-reveal-body grid gap-4">
-        <DetailStatGrid
-          stats={[
-            { label: "State", value: operationalLabel(operational, status) },
-            { label: "Package", value: pkg ? operationalLabel(pkg.operational_state || null, pkg.status) : "Not dispatched" },
+        <DetailLoadError error={detailError} />
+        <DetailSummaryBar
+          items={[
             { label: "Review", value: reviewLabel || "Not recorded" },
             { label: "Blockers", value: String(blockerCount) },
             { label: "Comments", value: commentStatLabel(currentCommentStats.open_comment_count, currentCommentStats.comment_count) },

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import { canArchiveWorkRequest } from "./request-detail";
-import type { WorkRequestCard } from "@/types/dashboard";
+import { RecentDecisionsDisclosure } from "./detail-extras";
+import type { WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
 
 describe("request detail actions", () => {
   it("allows archive for derived delivered requests before completion is persisted", () => {
@@ -36,5 +39,19 @@ describe("request detail actions", () => {
         operational_state: { key: "completed", label: "Completed", tone: "success" },
       } satisfies WorkRequestCard),
     ).toBe(false);
+  });
+
+  it("reports the total decision count while listing only recent entries", () => {
+    const detail = {
+      work_request: { id: "wr-decisions" },
+      decision_logs: [
+        { id: "decision-5", work_request_id: "wr-decisions", decision: "Fifth" },
+        { id: "decision-4", work_request_id: "wr-decisions", decision: "Fourth" },
+        { id: "decision-3", work_request_id: "wr-decisions", decision: "Third" },
+      ],
+      summary: { decision_count: 5 },
+    } satisfies WorkRequestDetail;
+
+    expect(renderToStaticMarkup(createElement(RecentDecisionsDisclosure, { detail }))).toContain("5 recorded");
   });
 });

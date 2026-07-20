@@ -14,9 +14,10 @@ import {
 
 export function RecentDecisionsDisclosure({ detail }: { detail: WorkRequestDetail }) {
   const decisions = latestDecisionLogs(detail);
+  const decisionCount = detail.summary?.decision_count ?? decisions.length;
 
   return (
-    <DetailDisclosure title="Recent Decisions" meta={decisions.length > 0 ? `${decisions.length} recorded` : "None recorded"}>
+    <DetailDisclosure title="Recent Decisions" meta={decisionCount > 0 ? `${decisionCount} recorded` : "None recorded"}>
       {decisions.length > 0 ? (
         <DetailActivityList
           items={decisions.slice(0, 3).map((decision) => ({

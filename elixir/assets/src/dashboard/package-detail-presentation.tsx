@@ -2,7 +2,7 @@ import { Archive, CheckCircle2, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DetailCopyButton } from "@/components/dashboard/detail-copy-button";
-import { DetailDisclosure, DetailFacts, DetailHeader, DetailList, DetailSection, DetailStatGrid } from "@/components/dashboard/detail-layout";
+import { DetailDisclosure, DetailFacts, DetailHeader, DetailList, DetailSection, DetailSummaryBar } from "@/components/dashboard/detail-layout";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { MarkdownBlock } from "@/components/dashboard/markdown-block";
 import type { ContextComment, PackageOperationalAttention, WorkPackageCard, WorkPackageDetailPayload } from "@/types/dashboard";
@@ -100,7 +100,7 @@ export function PackageDetailBody({
     <>
       <PackageDetailHeader pkg={pkg} operational={operational} blockerCopyText={blockerCopyText} />
       <div className="detail-modal-reveal-body grid gap-4">
-        <DetailStatGrid stats={packageDetailStats({ blockerCount, currentCommentStats, operational, pkg, planLabel, summary })} />
+        <DetailSummaryBar items={packageDetailSummary({ blockerCount, currentCommentStats, pkg, planLabel, summary })} />
         <PackageExecutionScopeSection pkg={pkg} purposeMarkdown={purposeMarkdown} />
         <PackageOperationalTruthSection attentionItems={attentionItems} operational={operational} pkg={pkg} />
         <PackageProgressSection progress={progress} planLabel={planLabel} status={status} />
@@ -127,6 +127,8 @@ function PackageDetailHeader({
     <DetailHeader
       title={pkg.title || pkg.id}
       eyebrow={`${repoDisplayName(pkg)} / ${pkg.base_branch || "main"} / ${pkg.kind || "work package"}`}
+      identifier={pkg.id}
+      identifierLabel="WorkPackage ID"
       badge={<Badge variant={operationalBadgeVariant(operational, pkg.status)}>{operationalLabel(operational, pkg.status)}</Badge>}
       action={blockerCopyText ? <DetailCopyButton label="Copy blocker details" text={blockerCopyText} /> : null}
     />
@@ -221,23 +223,20 @@ function PackageRawDetails({
   );
 }
 
-function packageDetailStats({
+function packageDetailSummary({
   blockerCount,
   currentCommentStats,
-  operational,
   pkg,
   planLabel,
   summary,
 }: {
   blockerCount: number;
   currentCommentStats: ReturnType<typeof targetCommentStats>;
-  operational: WorkPackageCard["operational_state"] | null;
   pkg: PackageDetailPackage;
   planLabel: string;
   summary: WorkPackageDetailPayload["summary"] | undefined;
 }) {
   return [
-    { label: "State", value: operationalLabel(operational, pkg.status) },
     { label: "Plan", value: planLabel },
     { label: "Runtime", value: packageRuntimeText(summary, pkg) },
     { label: "Blockers", value: String(blockerCount) },
