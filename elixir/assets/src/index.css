@@ -29,7 +29,7 @@
     --ring: 191 100% 24%;
     --radius: 0.5rem;
     --dashboard-modal-ease: cubic-bezier(0.42, 0, 0.58, 1);
-    --dashboard-modal-size-ms: 560ms;
+    --dashboard-modal-size-ms: 280ms;
     --dashboard-scrollbar-top-offset: 0px;
   }
 
@@ -1796,7 +1796,7 @@
     justify-self: end;
     gap: 0.18rem;
     border: 1px solid hsl(var(--v3-tone-hsl) / 0.24);
-    border-radius: calc(var(--radius) - 3px);
+    border-radius: 6px;
     background: hsl(var(--v3-tone-hsl) / 0.08);
     color: hsl(var(--v3-tone-hsl));
   }
@@ -2534,9 +2534,9 @@
     max-width: none;
     translate: 0 -50%;
     transition:
-      width 340ms var(--dashboard-modal-ease),
+      width 170ms var(--dashboard-modal-ease),
       height var(--dashboard-modal-size-ms) var(--dashboard-modal-ease),
-      translate 340ms var(--dashboard-modal-ease);
+      translate 170ms var(--dashboard-modal-ease);
   }
 
   .card-detail-dialog[data-detail-stage="loading"],
@@ -2586,7 +2586,103 @@
 
   .card-detail-dialog[data-detail-stage="height"] .detail-modal-reveal-body {
     pointer-events: none;
-    animation: detail-modal-unroll-reveal 240ms cubic-bezier(0.2, 0.8, 0.2, 1) 85ms both;
+    animation: detail-modal-unroll-reveal 140ms cubic-bezier(0.2, 0.8, 0.2, 1) 40ms both;
+  }
+
+  .detail-header {
+    gap: 0;
+  }
+
+  .detail-header-context {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem 0.75rem;
+    margin-top: 0.45rem;
+  }
+
+  .detail-header-identifier {
+    display: inline-flex;
+    min-width: 0;
+    max-width: 100%;
+    align-items: center;
+    gap: 0.375rem;
+    border-radius: calc(var(--radius) - 3px);
+    background: hsl(var(--muted) / 0.58);
+    padding: 0.125rem 0.2rem 0.125rem 0.5rem;
+  }
+
+  .detail-header-identifier span {
+    flex-shrink: 0;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.6875rem;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .detail-header-identifier code {
+    min-width: 0;
+    overflow: hidden;
+    color: hsl(var(--foreground));
+    font-family: var(--font-geist-mono);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .detail-header-identifier button {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+
+  .detail-header-eyebrow {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .detail-primary-actions {
+    display: grid;
+    gap: 0.375rem;
+  }
+
+  .detail-primary-actions-muted {
+    color: hsl(var(--muted-foreground));
+  }
+
+  .detail-summary-bar {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.125rem;
+    border-block: 1px solid hsl(var(--border) / 0.72);
+    padding-block: 0.625rem;
+  }
+
+  .detail-summary-bar > div {
+    display: flex;
+    min-width: 0;
+    align-items: baseline;
+    gap: 0.35rem;
+  }
+
+  .detail-summary-bar dt {
+    color: hsl(var(--muted-foreground));
+    font-size: 0.6875rem;
+    font-weight: 600;
+  }
+
+  .detail-summary-bar dd {
+    overflow: hidden;
+    color: hsl(var(--foreground));
+    font-size: 0.8125rem;
+    font-weight: 720;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .handoff-success-panel,

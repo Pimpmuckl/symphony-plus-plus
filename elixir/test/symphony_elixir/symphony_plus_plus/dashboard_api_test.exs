@@ -4420,7 +4420,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
   end
 
-  test "local operator dashboard returns compact WorkRequest board details and lazy full detail", %{repo: repo} do
+  test "local operator dashboard returns compact WorkRequest board details and lean modal enrichment", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request =
         create_work_request!(
@@ -4433,6 +4433,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert {:ok, _decision} =
                WorkRequestRepository.record_decision(repo, work_request.id, decision_attrs(id: "WRD-LOCAL-COMPACT-DETAIL"))
+
+      Enum.each(2..5, fn sequence ->
+        assert {:ok, _decision} =
+                 WorkRequestRepository.record_decision(
+                   repo,
+                   work_request.id,
+                   decision_attrs(id: "WRD-LOCAL-COMPACT-DETAIL-#{sequence}")
+                 )
+      end)
 
       assert {:ok, work_package} =
                CanonicalWorkPackageFixtures.add_work_package(
@@ -4494,21 +4503,39 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       refute Map.has_key?(compact_slice["delivery"], "no_pr_evidence")
       assert compact_slice["operational_state"]["key"] == "completed_no_pr"
 
-      full_detail =
+      enrichment =
         local_operator_conn()
         |> get("/api/v1/sympp/operator/work-requests/#{work_request.id}")
         |> json_response(200)
 
-      assert [%{"id" => "WRD-LOCAL-COMPACT-DETAIL"}] = full_detail["decision_logs"]
-      assert [%{"body" => "Full comment should stay lazy."}] = full_detail["comments"]
-      assert full_detail["work_request"]["human_description"] == "Full operator detail should stay lazy."
-      assert full_detail["work_request"]["constraints"] == %{"heavy" => "constraint"}
-      assert [full_slice] = full_detail["work_packages"]
+      assert Enum.map(enrichment["decision_logs"], & &1["id"]) == [
+               "WRD-LOCAL-COMPACT-DETAIL-5",
+               "WRD-LOCAL-COMPACT-DETAIL-4",
+               "WRD-LOCAL-COMPACT-DETAIL-3"
+             ]
+
+      assert [%{"body" => "Full comment should stay lazy."}] = enrichment["comments"]
+      assert enrichment["work_request"]["human_description"] == "Full operator detail should stay lazy."
+      assert enrichment["work_request"]["constraints"] == %{"heavy" => "constraint"}
+      assert enrichment["summary"]["decision_count"] == 5
+      assert enrichment["summary"]["comment_count"] == 1
+      refute Map.has_key?(enrichment, "work_packages")
+      refute Map.has_key?(enrichment, "product_tree")
+      refute Map.has_key?(enrichment, "delivery_board")
+
+      slice_enrichment =
+        local_operator_conn()
+        |> get("/api/v1/sympp/operator/work-requests/#{work_request.id}?work_package_id=#{compact_slice["id"]}")
+        |> json_response(200)
+
+      assert [full_slice] = slice_enrichment["work_packages"]
+      assert full_slice["id"] == compact_slice["id"]
       assert full_slice["acceptance_criteria"] == ["Large acceptance text"]
       assert full_slice["validation_steps"] == ["Large validation text"]
       assert full_slice["allowed_file_globs"] == ["large/**"]
       assert full_slice["stop_conditions"] == ["Large stop condition"]
-      assert full_slice["delivery"]["no_pr_evidence"] == "Full delivery evidence should stay lazy."
+      refute Map.has_key?(slice_enrichment, "product_tree")
+      refute Map.has_key?(slice_enrichment, "delivery_board")
     end)
   end
 
@@ -6622,8 +6649,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> get("/api/v1/sympp/operator/work-requests/#{work_request.id}")
         |> json_response(200)
 
-      assert get_in(detail_payload, ["work_request", "operational_state", "key"]) == "completed"
       assert get_in(detail_payload, ["work_request", "completion_source"]) == "operator"
+
+      dashboard_payload = local_operator_dashboard_payload()
+
+      assert get_in(work_request_detail(dashboard_payload, work_request.id), ["work_request", "operational_state", "key"]) ==
+               "completed"
 
       assert {:ok, persisted_request} = WorkRequestRepository.get(repo, work_request.id)
       assert %DateTime{} = persisted_request.completed_at
