@@ -1,0 +1,6 @@
+{
+  "files": ["elixir/assets/index.html"],
+  "insertBefore": "</body>",
+  "commentSyntax": "html",
+  "cspChecked": true
+}

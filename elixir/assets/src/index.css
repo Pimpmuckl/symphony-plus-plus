@@ -3829,7 +3829,6 @@
     transition:
       border-color 150ms ease-out,
       box-shadow 150ms ease-out,
-      transform 150ms ease-out,
       left 220ms cubic-bezier(0.16, 1, 0.3, 1),
       top 220ms cubic-bezier(0.16, 1, 0.3, 1),
       width 220ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -3943,10 +3942,6 @@
 
   .execution-graph__card[role="button"] {
     cursor: pointer;
-  }
-
-  .execution-graph__card[role="button"]:active {
-    transform: translateY(1px);
   }
 
   .execution-graph__card[data-state="active"],

@@ -4236,6 +4236,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert Repo.all(WorkRequest) |> Enum.map(& &1.id) |> Enum.sort() == [
                "WR-FIXTURE-DENSE",
                "WR-FIXTURE-FANOUT",
+               "WR-FIXTURE-KRAKEN-SCALE",
                "WR-FIXTURE-RECOVERY"
              ]
 
@@ -4256,6 +4257,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert length(fanout_detail.product_tree.execution_graph.effective_edges) == 6
       assert length(fanout_detail.product_tree.execution_graph.topological_order) == 6
       assert fanout_detail.product_tree.root_work_package_ids == ["WP-FANOUT-PLAYTEST"]
+
+      assert {:ok, [kraken_detail]} = Dashboard.work_request_board_details(Repo, ["WR-FIXTURE-KRAKEN-SCALE"])
+      assert length(kraken_detail.delivery_board["work_packages"]) == 49
+      assert length(kraken_detail.product_tree.nodes) == 10
+      assert length(kraken_detail.product_tree.execution_graph.effective_edges) == 11
+
+      kraken_edges =
+        kraken_detail.product_tree.execution_graph.effective_edges
+        |> Enum.map(&{&1.prerequisite_work_package_id, &1.dependent_work_package_id})
+        |> MapSet.new()
+
+      assert MapSet.subset?(
+               MapSet.new([
+                 {"WP-KRAKEN-07", "WP-KRAKEN-04"},
+                 {"WP-KRAKEN-31", "WP-KRAKEN-27"},
+                 {"WP-KRAKEN-47", "WP-KRAKEN-10"}
+               ]),
+               kraken_edges
+             )
 
       projected_parse =
         Enum.find(fanout_detail.delivery_board["work_packages"], &(&1["id"] == "WP-FANOUT-PARSE"))

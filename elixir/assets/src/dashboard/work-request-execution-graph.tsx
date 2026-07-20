@@ -126,7 +126,7 @@ function GraphSurface({
       data-orientation={orientation}
       role="region"
       tabIndex={0}
-      aria-label={`${orientation === "desktop" ? "Left-to-right" : "Top-to-bottom"} execution order; scroll to inspect`}
+      aria-label={`${orientation === "desktop" ? (model.routing?.wrapped ? "Wrapped left-to-right" : "Left-to-right") : "Top-to-bottom"} execution order; scroll to inspect`}
     >
       <div className="execution-graph__canvas" style={{ width: model.width, height: model.height } as CSSProperties}>
         {roots.map((rect) => renderNode(rect))}
@@ -197,6 +197,7 @@ function WorkPackageCard({
       style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height } as CSSProperties}
       data-work-package-id={rect.id}
       data-depth={rect.depth}
+      data-layout-row={rect.row}
       data-layout-order={rect.order}
       data-state={state.tone}
       data-parent-group-id={rect.parent_group_id}

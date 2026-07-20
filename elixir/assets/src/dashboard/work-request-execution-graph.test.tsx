@@ -70,6 +70,13 @@ describe("WorkRequestExecutionGraph", () => {
     expect(model.rects.some((item) => item.key === "work_package:snapshot")).toBe(false);
   });
 
+  it("packs roots row-major while keeping newly unlocked work beside its prerequisite", () => {
+    const roots = buildExecutionGraphLayout(affinityGridFixture, "desktop").rects.filter((item) => !item.parent_group_id);
+
+    expect(roots.map((item) => item.key)).toEqual(["group:a", "group:c", "group:b", "group:d"]);
+    expect(roots.map(({ row, column }) => [row, column])).toEqual([[0, 0], [0, 1], [0, 2], [1, 0]]);
+  });
+
   it("expands active Groups by default and keeps finished or planned Groups compact", () => {
     expect([...defaultExpandedGroupIds(graphFixture)]).toEqual(["workers"]);
     const model = buildExecutionGraphLayout(graphFixture, "desktop");
@@ -136,11 +143,15 @@ describe("WorkRequestExecutionGraph", () => {
     const recovery = buildExecutionGraphLayout(recoveryGraphFixture, "desktop");
     const routes = graphWireRoutes(recovery, "desktop");
     const validate = rect(recovery, "work_package:validate");
+    const successor = rect(recovery, "work_package:successor");
     const gateX = validate.x - 22;
+    const successorPath = routes.paths.find((route) => route.edge === "work_package:successor:work_package:validate")?.path;
 
     expect(routes.gates.find((gate) => gate.targetKey === "work_package:validate")?.path).toContain(`M ${gateX}`);
     expect(routes.paths.find((route) => route.edge === "group:history:work_package:validate")?.path).toMatch(new RegExp(`H ${gateX}$`));
-    expect(routes.paths.find((route) => route.edge === "work_package:successor:work_package:validate")?.path).toMatch(new RegExp(`^M ${validate.x} `));
+    expect(successorPath).toMatch(new RegExp(`^M ${successor.x + successor.width} `));
+    expect(firstHorizontalTrack(successorPath)).toBeGreaterThan(successor.x + successor.width);
+    expect(successorPath).not.toMatch(/ V -/);
     expect(routes.paths.find((route) => route.edge === "work_package:successor:work_package:validate")?.state).toBe("waiting");
   });
 
@@ -161,6 +172,50 @@ describe("WorkRequestExecutionGraph", () => {
       .map((dependency) => firstHorizontalTrack(paths.find((route) => route.edge === dependency.key)?.path));
 
     expect(tracks).toEqual([...tracks].sort((left, right) => left - right));
+  });
+
+  it("wraps huge desktop graphs and gives overlapping corridor routes distinct right-to-left lanes", () => {
+    const model = buildExecutionGraphLayout(wrappedGraphFixture, "desktop");
+    const routes = graphWireRoutes(model, "desktop");
+    const source = rect(model, "work_package:wp-0");
+    const target = rect(model, "work_package:wp-7");
+    const route = routes.paths.find((path) => path.intentIds.includes("0-7"));
+    const skippedTierRoute = routes.paths.find((path) => path.intentIds.includes("0-2"));
+    const adjacentTierRoute = routes.paths.find((path) => path.intentIds.includes("1-2"));
+    const routing = model.routing!;
+    const sourceGutter = routing.columnGutters.get(source.column)!;
+    const sourceCorridor = routing.rowCorridors.get(source.row)! + 12;
+    const targetCorridor = routing.rowCorridors.get(target.row)! + 12;
+    const targetGateX = target.x - 22;
+    const skippedTarget = rect(model, "work_package:wp-2");
+    const skippedGateX = skippedTarget.x - 22;
+
+    expect(model.routing?.wrapped).toBe(true);
+    expect(model.width).toBeLessThan(1_200);
+    expect([...new Set(model.rects.map((item) => item.column))]).toEqual([0, 1, 2]);
+    expect(target.row).toBe(2);
+    expect(sourceGutter).toBeGreaterThan(source.x + source.width);
+    expect(sourceCorridor).toBeLessThan(source.y);
+    expect(targetCorridor).toBeLessThan(target.y);
+    expect(route?.path).toMatch(new RegExp(`^M ${source.x + source.width} ${source.y + source.height / 2} H [\\d.]+ V ${targetCorridor}`));
+    expect(route?.path).toMatch(new RegExp(`H [\\d.]+ V [\\d.]+ H ${targetGateX}$`));
+    expect(skippedTierRoute?.path).toMatch(new RegExp(`^M ${source.x + source.width} ${source.y + source.height / 2} H [\\d.]+ V ${sourceCorridor}`));
+    expect(skippedTierRoute?.path).toMatch(new RegExp(`H [\\d.]+ V [\\d.]+ H ${skippedGateX}$`));
+    expect(firstHorizontalTrack(route?.path)).not.toBe(firstHorizontalTrack(skippedTierRoute?.path));
+    expect(Math.abs(firstHorizontalTrack(route?.path) - sourceGutter)).toBeLessThanOrEqual(9);
+    expect(Math.abs(firstHorizontalTrack(skippedTierRoute?.path) - sourceGutter)).toBeLessThanOrEqual(9);
+    expect(targetSlotY(skippedTierRoute?.path)).toBeLessThan(targetSlotY(adjacentTierRoute?.path));
+  });
+
+  it("routes an expanded child through its parent column gutter before entering a row corridor", () => {
+    const model = buildExecutionGraphLayout(nestedCorridorFixture, "desktop", new Set(["source"]));
+    const child = rect(model, "work_package:bottom");
+    const route = graphWireRoutes(model, "desktop").paths.find((path) => path.intentIds.includes("bottom-target"));
+    const gutter = model.routing?.columnGutters.get(child.column);
+    const corridor = (model.routing?.rowCorridors.get(child.row) ?? 0) + 12;
+
+    expect(route?.path).toContain(`M ${child.x + child.width} ${child.y + child.height / 2} H ${gutter} V ${corridor}`);
+    expect(route?.path).not.toContain(`M ${child.x + child.width / 2} ${child.y} V`);
   });
 
   it("duplicates an existing collapsed wire when child routes expand", () => {
@@ -354,6 +409,49 @@ const satisfiedGateGraphFixture: WorkRequestExecutionGraphModel = {
   topological_order: ["source-a", "source-b", "target"],
 };
 
+const wrappedGraphFixture: WorkRequestExecutionGraphModel = {
+  work_packages: Array.from({ length: 8 }, (_value, index) => ({ id: `wp-${index}`, title: `Stage ${index + 1}`, status: index === 0 ? "merged" : "planned" })),
+  dependency_intents: [
+    ...Array.from({ length: 7 }, (_value, index) => ({
+      id: `${index}-${index + 1}`,
+      prerequisite: { kind: "work_package" as const, id: `wp-${index}` },
+      dependent: { kind: "work_package" as const, id: `wp-${index + 1}` },
+    })),
+    { id: "0-2", prerequisite: { kind: "work_package", id: "wp-0" }, dependent: { kind: "work_package", id: "wp-2" } },
+    { id: "0-7", prerequisite: { kind: "work_package", id: "wp-0" }, dependent: { kind: "work_package", id: "wp-7" } },
+  ],
+  topological_order: Array.from({ length: 8 }, (_value, index) => `wp-${index}`),
+};
+
+const affinityGridFixture: WorkRequestExecutionGraphModel = {
+  groups: ["a", "b", "c", "d"].map((id, index) => ({ id, title: id.toUpperCase(), position: index + 1, work_package_ids: [`wp-${id}`] })),
+  work_packages: ["a", "b", "c", "d"].map((id) => ({ id: `wp-${id}`, group_id: id, title: id.toUpperCase(), status: "planned" })),
+  dependency_intents: [
+    { id: "a-c", prerequisite: { kind: "group", id: "a" }, dependent: { kind: "group", id: "c" } },
+    { id: "b-d", prerequisite: { kind: "group", id: "b" }, dependent: { kind: "group", id: "d" } },
+  ],
+  topological_order: ["wp-a", "wp-b", "wp-c", "wp-d"],
+};
+
+const nestedCorridorFixture: WorkRequestExecutionGraphModel = {
+  groups: [
+    { id: "source", title: "Source", position: 1, work_package_ids: ["top", "bottom"] },
+    { id: "middle", title: "Middle", position: 2, work_package_ids: ["middle-wp"] },
+    { id: "target", title: "Target", position: 3, work_package_ids: ["target-wp"] },
+  ],
+  work_packages: [
+    { id: "top", group_id: "source", title: "Top", status: "merged" },
+    { id: "bottom", group_id: "source", title: "Bottom", status: "merged" },
+    { id: "middle-wp", group_id: "middle", title: "Middle", status: "planned" },
+    { id: "target-wp", group_id: "target", title: "Target", status: "planned" },
+  ],
+  dependency_intents: [
+    { id: "source-middle", prerequisite: { kind: "group", id: "source" }, dependent: { kind: "group", id: "middle" } },
+    { id: "bottom-target", prerequisite: { kind: "work_package", id: "bottom" }, dependent: { kind: "group", id: "target" } },
+  ],
+  topological_order: ["top", "bottom", "middle-wp", "target-wp"],
+};
+
 function render() {
   return renderToStaticMarkup(<WorkRequestExecutionGraph model={graphFixture} now="2026-07-18T09:30:00Z" />);
 }
@@ -372,6 +470,12 @@ function firstCard(html: string, id: string) {
 
 function firstHorizontalTrack(path?: string) {
   const value = path?.match(/ H ([\d.]+) V /)?.[1];
+  expect(value).toBeDefined();
+  return Number(value);
+}
+
+function targetSlotY(path?: string) {
+  const value = [...(path?.matchAll(/ V (-?[\d.]+) H /g) ?? [])].at(-1)?.[1];
   expect(value).toBeDefined();
   return Number(value);
 }

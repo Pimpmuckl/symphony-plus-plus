@@ -1,4 +1,5 @@
 import { isFinishedBoardStatus } from "@/lib/operational-state";
+import { entityRect, layoutRootEntities } from "./layout";
 
 export type DependencyPathState = "satisfied" | "active" | "waiting" | "blocked";
 export type GraphOrientation = "desktop" | "mobile";
@@ -119,8 +120,16 @@ export type GraphEntityRect = {
   width: number;
   height: number;
   depth: number;
+  row: number;
+  column: number;
   order: number;
   expanded?: boolean;
+};
+export type ExecutionGraphRouting = {
+  wrapped: boolean;
+  contentRight: number;
+  columnGutters: Map<number, number>;
+  rowCorridors: Map<number, number>;
 };
 export type VisibleGraphDependency = {
   key: string;
@@ -141,6 +150,7 @@ export type ExecutionGraphLayoutModel = {
   rects: GraphEntityRect[];
   dependencies: VisibleGraphDependency[];
   incoming: Map<string, VisibleGraphDependency[]>;
+  routing?: ExecutionGraphRouting;
   width: number;
   height: number;
 };
@@ -168,7 +178,8 @@ export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel,
   const order = topologicalEntityOrder(rootKeys, rootDependencies, context);
   const depths = entityDepths(order, rootDependencies);
   const sizes = new Map(order.map((key) => [key, entitySize(key, orientation, expandedGroupIds, context)]));
-  const rootRects = layoutRootEntities(order, depths, sizes, orientation).map((rect) => ({
+  const rootLayout = layoutRootEntities(order, depths, sizes, orientation, metrics[orientation]);
+  const rootRects = rootLayout.rects.map((rect) => ({
     ...rect,
     expanded: rect.kind === "group" && expandedGroupIds.has(rect.id),
   }));
@@ -192,7 +203,8 @@ export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel,
     rects,
     dependencies,
     incoming,
-    width: Math.ceil(edge + (orientation === "mobile" ? 16 : 28)),
+    routing: rootLayout.routing,
+    width: Math.ceil(rootLayout.routing ? Math.max(...rootLayout.routing.columnGutters.values()) + 28 : edge + (orientation === "mobile" ? 16 : 28)),
     height: Math.ceil(bottom + 28),
   };
 }
@@ -358,19 +370,33 @@ function topologicalEntityOrder(
   context: GraphContext,
 ) {
   const incoming = new Map(keys.map((key) => [key, 0]));
+  const predecessors = groupBy(dependencies, (dependency) => dependency.target);
   const outgoing = groupBy(dependencies, (dependency) => dependency.source);
+  const placed = new Map<string, number>();
+  // ponytail: greedy parent affinity keeps connected work nearby; use a global crossing optimizer only if measured fixtures outgrow it.
+  const compareReady = (left: string, right: string) => {
+    const affinity = (key: string) => (predecessors.get(key) ?? [])
+      .map((dependency) => placed.get(dependency.source))
+      .filter((value): value is number => value != null);
+    const leftParents = affinity(left);
+    const rightParents = affinity(right);
+    return (Math.max(-1, ...rightParents) - Math.max(-1, ...leftParents))
+      || (rightParents.length - leftParents.length)
+      || compareEntityKeys(left, right, context);
+  };
   dependencies.forEach((dependency) => incoming.set(dependency.target, (incoming.get(dependency.target) ?? 0) + 1));
-  const ready = keys.filter((key) => (incoming.get(key) ?? 0) === 0).sort((left, right) => compareEntityKeys(left, right, context));
+  const ready = keys.filter((key) => (incoming.get(key) ?? 0) === 0).sort(compareReady);
   const order: string[] = [];
   while (ready.length) {
     const key = ready.shift() as string;
     order.push(key);
+    placed.set(key, order.length - 1);
     for (const dependency of outgoing.get(key) ?? []) {
       const next = (incoming.get(dependency.target) ?? 0) - 1;
       incoming.set(dependency.target, next);
       if (next === 0) {
         ready.push(dependency.target);
-        ready.sort((left, right) => compareEntityKeys(left, right, context));
+        ready.sort(compareReady);
       }
     }
   }
@@ -416,44 +442,6 @@ function entitySize(
   };
 }
 
-function layoutRootEntities(
-  order: string[],
-  depths: Map<string, number>,
-  sizes: Map<string, { width: number; height: number }>,
-  orientation: GraphOrientation,
-) {
-  const value = metrics[orientation];
-  if (orientation === "mobile") {
-    let y = value.y;
-    return order.map((key, index) => {
-      const size = sizes.get(key) ?? { width: value.cardWidth, height: value.cardHeight };
-      const rect = entityRect(key, value.x, y, size, 0, index);
-      y += size.height + value.yGap;
-      return rect;
-    });
-  }
-
-  const columnWidths = new Map<number, number>();
-  order.forEach((key) => {
-    const depth = depths.get(key) ?? 0;
-    columnWidths.set(depth, Math.max(columnWidths.get(depth) ?? 0, sizes.get(key)?.width ?? value.cardWidth));
-  });
-  const columnX = new Map<number, number>();
-  let x = value.x;
-  for (let depth = 0; depth <= Math.max(0, ...columnWidths.keys()); depth += 1) {
-    columnX.set(depth, x);
-    x += (columnWidths.get(depth) ?? value.cardWidth) + value.xGap;
-  }
-  const columnY = new Map<number, number>();
-  return order.map((key, index) => {
-    const depth = depths.get(key) ?? 0;
-    const size = sizes.get(key) ?? { width: value.cardWidth, height: value.cardHeight };
-    const y = columnY.get(depth) ?? value.y;
-    columnY.set(depth, y + size.height + value.yGap);
-    return entityRect(key, columnX.get(depth) ?? value.x, y, size, depth, index);
-  });
-}
-
 function layoutExpandedChildren(
   parent: GraphEntityRect,
   orientation: GraphOrientation,
@@ -466,24 +454,21 @@ function layoutExpandedChildren(
   let y = parent.y + value.groupHeader + value.groupPadding;
   return directChildKeys(parent.id, context).flatMap((key, index) => {
     const size = entitySize(key, orientation, expandedGroupIds, context);
-    const rect = entityRect(key, parent.x + value.groupPadding, y, size, parent.depth, index, parent.id, key.startsWith("group:") && expandedGroupIds.has(key.slice("group:".length)));
+    const rect = entityRect(
+      key,
+      parent.x + value.groupPadding,
+      y,
+      size,
+      parent.depth,
+      index,
+      parent.row,
+      parent.column,
+      parent.id,
+      key.startsWith("group:") && expandedGroupIds.has(key.slice("group:".length)),
+    );
     y += size.height + value.childGap;
     return [rect, ...layoutExpandedChildren(rect, orientation, renderedGroupIds, context, expandedGroupIds)];
   });
-}
-
-function entityRect(
-  key: string,
-  x: number,
-  y: number,
-  size: { width: number; height: number },
-  depth: number,
-  order: number,
-  parentGroupId?: string,
-  expanded = false,
-): GraphEntityRect {
-  const kind = key.startsWith("group:") ? "group" : "work_package";
-  return { key, id: key.slice(key.indexOf(":") + 1), kind, parent_group_id: parentGroupId, x, y, ...size, depth, order, expanded };
 }
 
 function visibleDependencies(
