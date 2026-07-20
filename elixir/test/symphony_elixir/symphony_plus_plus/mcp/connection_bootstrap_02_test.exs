@@ -230,60 +230,59 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
       assert get_in(unbound_tools_by_name, [tool, "inputSchema", "properties", "work_package_id", "type"]) == "string"
     end
 
-    refute Map.has_key?(unbound_tools_by_name, "upsert_work_request_product_plan_node")
+    refute Map.has_key?(unbound_tools_by_name, "upsert_plan_node")
+    refute Map.has_key?(unbound_tools_by_name, "move_plan_node")
+    refute Map.has_key?(unbound_tools_by_name, "set_plan_node_completion")
 
-    assert get_in(unbound_tools_by_name, ["upsert_plan_node", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["upsert_group", "inputSchema", "required"]) == [
              "work_request_id"
            ]
 
-    content_schema = get_in(unbound_tools_by_name, ["upsert_plan_node", "inputSchema"])
-    content_properties = get_in(content_schema, ["properties"])
-    assert get_in(content_properties, ["work_request_id", "description"]) =~ "Required WorkRequest id"
-    assert Map.has_key?(content_properties, "title")
-    refute Map.has_key?(content_properties, "parent_id")
-    refute Map.has_key?(content_properties, "completion_mark")
+    group_schema = get_in(unbound_tools_by_name, ["upsert_group", "inputSchema"])
+    group_properties = get_in(group_schema, ["properties"])
+    assert get_in(group_properties, ["work_request_id", "description"]) =~ "Required WorkRequest id"
+    assert Map.has_key?(group_properties, "group_id")
+    assert Map.has_key?(group_properties, "title")
+    assert Map.has_key?(group_properties, "parent_group_id")
+    assert Map.has_key?(group_properties, "position")
+    refute Map.has_key?(group_properties, "completion_mark")
 
-    assert get_in(content_schema, ["then", "allOf"]) == [
-             %{"anyOf" => [%{"required" => ["product_tree_node_id"]}, %{"required" => ["title"]}]},
-             %{"anyOf" => [%{"required" => ["title"]}, %{"required" => ["description"]}, %{"required" => ["node_kind"]}]}
+    assert get_in(group_schema, ["then", "allOf"]) == [
+             %{"anyOf" => [%{"required" => ["group_id"]}, %{"required" => ["title"]}]},
+             %{
+               "anyOf" => [
+                 %{"required" => ["title"]},
+                 %{"required" => ["description"]},
+                 %{"required" => ["kind"]},
+                 %{"required" => ["parent_group_id"]},
+                 %{"required" => ["position"]}
+               ]
+             }
            ]
 
-    assert get_in(unbound_tools_by_name, ["upsert_plan_node", "description"]) =~ "explicit WorkRequest"
-    refute get_in(unbound_tools_by_name, ["upsert_plan_node", "description"]) =~ "claimed current WorkRequest"
+    assert get_in(unbound_tools_by_name, ["upsert_group", "description"]) =~ "explicit WorkRequest"
+    assert get_in(unbound_tools_by_name, ["upsert_group", "description"]) =~ "no lifecycle"
 
-    assert get_in(unbound_tools_by_name, ["upsert_plan_node", "description"]) =~
-             "Do not create a plan node solely to wrap one WorkPackage."
-
-    assert get_in(unbound_tools_by_name, ["move_plan_node", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["delete_group", "inputSchema", "required"]) == [
              "work_request_id",
-             "product_tree_node_id"
+             "group_id"
            ]
 
-    move_node_schema = get_in(unbound_tools_by_name, ["move_plan_node", "inputSchema"])
-    move_node_properties = get_in(move_node_schema, ["properties"])
-    assert get_in(move_node_properties, ["product_tree_node_id", "minLength"]) == 1
-    assert get_in(move_node_properties, ["product_tree_node_id", "pattern"]) == "\\S"
-    assert Map.has_key?(move_node_properties, "parent_id")
-    assert Map.has_key?(move_node_properties, "position")
-    refute Map.has_key?(move_node_properties, "title")
-
-    assert get_in(move_node_schema, ["then", "anyOf"]) == [
-             %{"required" => ["parent_id"]},
-             %{"required" => ["position"]}
-           ]
-
-    assert get_in(unbound_tools_by_name, ["set_plan_node_completion", "inputSchema", "required"]) == [
+    assert get_in(unbound_tools_by_name, ["upsert_dependency", "inputSchema", "required"]) == [
              "work_request_id",
-             "product_tree_node_id",
-             "completion_mark"
+             "dependent",
+             "prerequisite"
            ]
 
-    completion_properties = get_in(unbound_tools_by_name, ["set_plan_node_completion", "inputSchema", "properties"])
-    assert get_in(completion_properties, ["product_tree_node_id", "minLength"]) == 1
-    assert get_in(completion_properties, ["product_tree_node_id", "pattern"]) == "\\S"
-    assert Map.has_key?(completion_properties, "blocker_closeout")
-    refute Map.has_key?(completion_properties, "title")
-    refute Map.has_key?(completion_properties, "parent_id")
+    dependency_properties = get_in(unbound_tools_by_name, ["upsert_dependency", "inputSchema", "properties"])
+    assert get_in(dependency_properties, ["dependent", "properties", "kind", "enum"]) == ["work_package", "group"]
+    assert get_in(dependency_properties, ["prerequisite", "properties", "id", "pattern"]) == "\\S"
+    assert get_in(dependency_properties, ["reason", "type"]) == "string"
+
+    assert get_in(unbound_tools_by_name, ["delete_dependency", "inputSchema", "required"]) == [
+             "work_request_id",
+             "dependency_id"
+           ]
 
     assert get_in(unbound_tools_by_name, ["update_work_package", "inputSchema", "required"]) == [
              "work_request_id",
@@ -394,8 +393,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     assert get_in(tools_by_name, ["read_guidance_request", "inputSchema", "required"]) == ["guidance_request_id"]
     assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "required"]) == ["expected_version"]
     assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties", "expected_version", "type"]) == "integer"
+    assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties", "status", "enum"]) == ["pending", "done", "skipped"]
     assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties", "patch", "required"]) == ["nodes"]
     assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties", "patch", "properties", "nodes", "minItems"]) == 1
+
+    assert get_in(tools_by_name, [
+             "update_task_plan",
+             "inputSchema",
+             "properties",
+             "patch",
+             "properties",
+             "nodes",
+             "items",
+             "properties",
+             "status",
+             "enum"
+           ]) == ["pending", "done", "skipped"]
+
     refute Map.has_key?(get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties"]), "work_package_id")
     assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "then", "oneOf"]) != nil
 
@@ -406,6 +420,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
 
     assert get_in(tools_by_name, ["set_status", "inputSchema", "required"]) == ["status", "expected_status"]
     assert get_in(tools_by_name, ["report_blocker", "inputSchema", "properties", "blocker_id", "type"]) == "string"
+    assert get_in(tools_by_name, ["report_blocker", "inputSchema", "properties", "blocker_id", "description"]) =~ "returned in structured output"
     assert get_in(tools_by_name, ["resolve_blocker", "inputSchema", "required"]) == ["blocker_id", "resolution", "summary", "idempotency_key"]
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "required"]) == ["body"]
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "properties", "target_kind", "enum"]) == ["work_request", "work_package"]

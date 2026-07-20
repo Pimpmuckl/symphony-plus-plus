@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
+  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Repository, as: CommentRepository
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
@@ -34,6 +35,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
@@ -572,6 +574,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       %{artifacts: artifacts, findings: findings} = readiness_collections
       blockers = OperationalProjection.blockers(progress_events)
       runtime = OperationalProjection.runtime_summary(agent_runs)
+      claim_leases = grouped_claim_leases(repo, [work_package.id]) |> Map.get(work_package.id, [])
+
+      activity_context =
+        WorkPackageActivity.project_context(grants, agent_runs, claim_leases, progress_events, work_package)
 
       readiness_context =
         OperationalProjection.readiness_context(
@@ -594,7 +600,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           metadata: metadata,
           readiness_context: readiness_context,
           grants: grants,
-          lineage: lineage
+          lineage: lineage,
+          worker_signal: activity_context.worker_signal
         })
 
       {:ok,
@@ -1511,6 +1518,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     findings_by_id = grouped_findings(repo, work_package_ids)
     agent_runs_by_id = grouped_agent_runs(repo, work_package_ids)
     grants_by_id = grouped_access_grants(repo, work_package_ids)
+    claim_leases_by_id = grouped_claim_leases(repo, work_package_ids)
     lineages_by_id = OperationalProjection.package_lineages(repo, work_packages)
 
     Map.new(work_packages, fn %WorkPackage{} = work_package ->
@@ -1520,6 +1528,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       findings = Map.get(findings_by_id, work_package.id, [])
       agent_runs = Map.get(agent_runs_by_id, work_package.id, [])
       grants = Map.get(grants_by_id, work_package.id, [])
+      claim_leases = Map.get(claim_leases_by_id, work_package.id, [])
+
+      activity_context =
+        WorkPackageActivity.project_context(grants, agent_runs, claim_leases, progress_events, work_package)
+
       blockers = OperationalProjection.blockers(progress_events)
       runtime = OperationalProjection.runtime_summary(agent_runs)
       metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id, work_package.review_requirement)
@@ -1546,10 +1559,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           metadata: metadata,
           readiness_context: readiness_context,
           grants: grants,
-          lineage: lineage
+          lineage: lineage,
+          worker_signal: activity_context.worker_signal
         })
 
-      {work_package.id, %{work_package: work_package, card: %{operational_state: operational_state, metadata: metadata}}}
+      {work_package.id,
+       %{
+         work_package: work_package,
+         blocker_state: activity_context.blocker_state,
+         runtime_state: activity_context.runtime_state,
+         worker_signal: activity_context.worker_signal,
+         card: %{operational_state: operational_state, metadata: metadata}
+       }}
     end)
   end
 
@@ -1614,6 +1635,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
         from(access_grant in AccessGrant,
           where: access_grant.work_package_id in ^work_package_id_chunk,
           order_by: [asc: access_grant.work_package_id, asc: access_grant.inserted_at]
+        )
+      )
+    end)
+  end
+
+  defp grouped_claim_leases(repo, work_package_ids) do
+    chunked_records_by_work_package_id(work_package_ids, fn work_package_id_chunk ->
+      repo.all(
+        from(claim_lease in ClaimLease,
+          where: claim_lease.work_package_id in ^work_package_id_chunk,
+          order_by: [asc: claim_lease.work_package_id, asc: claim_lease.inserted_at, asc: claim_lease.id]
         )
       )
     end)

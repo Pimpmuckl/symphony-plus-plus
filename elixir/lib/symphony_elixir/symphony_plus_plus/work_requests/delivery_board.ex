@@ -10,6 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -31,6 +32,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   @attention_details %{
     "active_blocker" => {"Blocker", "critical", "Active blocker."},
     "active_runtime" => {"Active", "info", "Worker activity is still current."},
+    "unmet_dependencies" => {"Dependency Blocked", "warning", "Required WorkPackages are not resolved."},
     "work_package_active_after_delivery" => {"Active After Delivery", "warning", "Worker activity remains after delivery closeout."},
     "work_package_blocked_after_delivery" => {"Blocked After Delivery", "warning", "A blocker remains after delivery closeout."},
     "work_package_status_stale_after_delivery" => {"Status Needs Repair", "warning", "Package status does not match the delivery outcome."},
@@ -47,12 +49,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   @spec project(repo(), String.t()) :: {:ok, map()} | {:error, error()}
   @spec project(repo(), String.t(), keyword()) :: {:ok, map()} | {:error, error()}
   def project(repo, work_request_id, opts \\ []) when is_atom(repo) and is_binary(work_request_id) and is_list(opts) do
-    with {:ok, _work_request} <- work_request(repo, work_request_id, opts),
+    with {:ok, work_request} <- work_request(repo, work_request_id, opts),
          {:ok, work_packages} <- work_packages(repo, work_request_id, opts),
          {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_request_id, work_packages),
          visible_work_packages = work_packages,
+         {:ok, execution_graphs} <-
+           Signals.execution_graphs(
+             repo,
+             [work_request],
+             %{work_request_id => work_packages},
+             deliveries_by_slice_id,
+             opts
+           ),
          {:ok, context} <- projection_context(repo, visible_work_packages, deliveries_by_slice_id, opts) do
       slices_by_scope = work_packages_by_scope(visible_work_packages)
+      context = Map.put(context, :execution_graphs, execution_graphs)
 
       slices =
         Enum.map(visible_work_packages, fn %WorkPackage{} = work_package ->
@@ -96,7 +107,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
          {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_packages),
          visible_work_packages_by_request = work_packages_by_request,
          visible_work_packages = all_work_packages(work_requests, visible_work_packages_by_request),
+         {:ok, execution_graphs} <-
+           Signals.execution_graphs(repo, work_requests, work_packages_by_request, deliveries_by_slice_id, opts),
          {:ok, context} <- projection_context(repo, visible_work_packages, deliveries_by_slice_id, opts) do
+      context = Map.put(context, :execution_graphs, execution_graphs)
+
       {:ok,
        Map.new(
          work_requests,
@@ -363,16 +378,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp preloaded_metadata_context(_context), do: :error
 
-  defp preloaded_activity_context(%{blocker_state: blocker_state, runtime_state: runtime_state})
+  defp preloaded_activity_context(%{blocker_state: blocker_state, runtime_state: runtime_state} = context)
        when is_map(blocker_state) and is_map(runtime_state) do
-    {:ok, %{blocker_state: blocker_state, runtime_state: runtime_state}}
+    {:ok, %{blocker_state: blocker_state, runtime_state: runtime_state, worker_signal: Map.get(context, :worker_signal)}}
   end
 
-  defp preloaded_activity_context(%{card: %{operational_state: operational_state}}) when is_map(operational_state) do
+  defp preloaded_activity_context(%{card: %{operational_state: operational_state}} = context) when is_map(operational_state) do
+    worker_signal = Map.get(context, :worker_signal)
+
     {:ok,
      %{
        blocker_state: %{active?: card_blocked?(operational_state), latest_gate_at: nil},
-       runtime_state: %{active?: map_value(operational_state, "has_active_worker") == true, latest_gate_at: nil}
+       runtime_state: %{active?: map_value(operational_state, "has_active_worker") == true, latest_gate_at: nil},
+       worker_signal: worker_signal
      }}
   end
 
@@ -480,10 +498,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
         metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events, work_package)
 
         %{
+          id: work_package.id,
           raw_status: work_package.status,
           merge_required: merge_required?(work_package),
           pr_required: pr_required?(work_package),
-          pr: pr_summary(map_value(metadata, "pr")),
+          pr: pr_summary(legacy_pr_metadata(metadata)),
+          dependency_signal: Signals.dependency(work_package, context),
           blocker_state: Map.fetch!(activity, :blocker_state),
           runtime_state: Map.fetch!(activity, :runtime_state)
         }
@@ -539,8 +559,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           merge_required: merge_required?(work_package),
           pr_required: pr_required?(work_package),
           branch: branch_summary(map_value(metadata, "branch")),
-          pr: pr_summary(map_value(metadata, "pr")),
+          pr: pr_summary(legacy_pr_metadata(metadata)),
           review: review_summary(metadata),
+          worker_signal: Map.get(activity, :worker_signal),
+          pr_signal: Signals.pr(metadata),
+          review_signal: Signals.review(work_package, metadata),
+          dependency_signal: Signals.dependency(work_package, context),
           blocker_state: Map.fetch!(activity, :blocker_state),
           runtime_state: Map.fetch!(activity, :runtime_state)
         }
@@ -552,30 +576,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp metadata_from_progress_events(events, %WorkPackage{} = work_package) do
     branch = latest_payload(events, "branch", "attach_branch")
+    current = MetadataProjection.metadata(events, [], work_package.id, work_package.review_requirement)
 
     %{
       branch: branch,
-      pr: latest_pr_payload(events),
-      review_package: latest_payload(events, "review_package", "submit_review_package"),
-      review_completion: current_review_completion(events, work_package, branch)
+      pr: map_value(current, "pr"),
+      legacy_pr: latest_pr_payload(events),
+      review_package: current_review_package(events, branch, current),
+      review_completion: map_value(current, "review_completion")
     }
   end
 
-  defp current_review_completion(events, %WorkPackage{review_requirement: requirement} = work_package, branch)
-       when is_map(requirement) do
-    case map_value(branch, "head_sha") do
-      head_sha when is_binary(head_sha) ->
-        case MetadataProjection.latest_review_completion_event(events, work_package.id, head_sha, requirement) do
-          %ProgressEvent{payload: payload} -> payload
-          nil -> nil
-        end
-
-      _head_sha ->
-        nil
+  defp current_review_package(events, branch, current) do
+    if filled_string?(map_value(branch, "head_sha")) do
+      map_value(current, "review_package")
+    else
+      latest_payload(events, "review_package", "submit_review_package")
     end
   end
 
-  defp current_review_completion(_events, %WorkPackage{}, _branch), do: nil
+  defp legacy_pr_metadata(metadata), do: map_value(metadata, "legacy_pr") || map_value(metadata, "pr")
 
   defp review_summary(metadata) do
     %{
@@ -802,6 +822,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     {"ci_waiting", "Validating", "info", "Waiting on validation.", []}
   end
 
+  defp status_work_package_state(%{
+         id: work_package_id,
+         raw_status: "ready_for_worker",
+         dependency_signal: %{unmet_work_package_ids: [_ | _] = prerequisite_ids}
+       }) do
+    {
+      "dependency_blocked",
+      "Dependency Blocked",
+      "warning",
+      "WorkPackage #{work_package_id} is waiting for prerequisites: #{Enum.join(prerequisite_ids, ", ")}.",
+      ["unmet_dependencies"]
+    }
+  end
+
   defp status_work_package_state(%{raw_status: "ready_for_worker"}) do
     {"ready_for_worker", "Ready", "neutral", "Ready for worker pickup.", []}
   end
@@ -883,9 +917,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     end
   end
 
-  defp latest_pr_payload(events) do
-    latest_payload(events, "pr", ["attach_pr", "sync_pr"])
-  end
+  defp latest_pr_payload(events), do: latest_payload(events, "pr", ["attach_pr", "sync_pr"])
 
   defp latest_payload(events, type, source_tool) do
     events
@@ -902,7 +934,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   end
 
   defp payload_matches?(%ProgressEvent{}, _type, _source_tool), do: false
-
   defp source_tool_matches?(value, expected) when is_list(expected), do: value in expected
   defp source_tool_matches?(value, expected), do: value == expected
 

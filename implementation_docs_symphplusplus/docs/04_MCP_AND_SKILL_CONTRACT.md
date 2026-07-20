@@ -71,9 +71,8 @@ blockers must be resolved or kept active as part of a finish transition.
 
 After `claim_local_architect_assignment`, planning writes that only target the
 claimed current WorkRequest may omit `work_request_id`:
-`slice_work_request`, `update_work_package`, `upsert_plan_node`,
-`move_plan_node`,
-`set_plan_node_completion`,
+`slice_work_request`, `update_work_package`, `upsert_group`, `delete_group`,
+`upsert_dependency`, `delete_dependency`,
 and `skip_work_package`. Reads, lists, delivery closeout, dispatch,
 status/question tools, durable decision tools, and package tools still require
 their explicit target ids.
@@ -86,9 +85,12 @@ when selecting a secondary delivery repo. Branch pattern and forbidden globs may
 owned globs, acceptance criteria, validation, and stop conditions stay
 required. Use `mcp` only for MCP server, protocol, tool, or plugin work.
 
-For product-plan nodes, use the content tool for title, description, or kind,
-the node move tool for parent or position, and the completion tool for
-completion marks and blocker closeout.
+Groups organize WorkPackages without carrying lifecycle or completion state.
+Use `upsert_group` and `delete_group` for Group structure, and
+`upsert_dependency` and `delete_dependency` for execution intent between
+Groups or WorkPackages. `read_plan` exposes `groups_only`,
+`groups_with_work_package_refs`, and `groups_with_work_packages` views backed by
+the same derived execution graph used at dispatch.
 
 ## Delivery Closeout
 

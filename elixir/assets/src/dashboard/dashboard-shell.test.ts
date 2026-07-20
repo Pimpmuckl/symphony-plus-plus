@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { restoreCardDetailTriggerFocus } from "./dashboard-deferred-dialogs";
 import { shouldAutoCloseTopPanel } from "./dashboard-shell";
 
 describe("dashboard shell", () => {
@@ -12,5 +13,15 @@ describe("dashboard shell", () => {
     expect(shouldAutoCloseTopPanel("guidance", loaded(0, 1), loaded(0, 1))).toBe(false);
     expect(shouldAutoCloseTopPanel("guidance", loading, loaded(0, 1))).toBe(false);
     expect(shouldAutoCloseTopPanel(null, loaded(1, 1), loaded(0, 0))).toBe(false);
+  });
+
+  it("restores focus to the connected card-detail trigger", () => {
+    const preventDefault = vi.fn();
+    const focus = vi.fn();
+
+    restoreCardDetailTriggerFocus({ preventDefault }, { focus, isConnected: true });
+
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(focus).toHaveBeenCalledOnce();
   });
 });

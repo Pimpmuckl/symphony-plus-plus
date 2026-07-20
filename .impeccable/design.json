@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-19T20:52:02.3729646Z",
+  "title": "Design System: Symphony++",
+  "extensions": {
+    "colorMeta": {
+      "control-teal": {
+        "role": "primary",
+        "displayName": "Control Teal",
+        "canonical": "#00647a",
+        "tonalRamp": ["oklch(15% 0.06 210)", "oklch(25% 0.07 210)", "oklch(35% 0.08 210)", "oklch(45% 0.09 210)", "oklch(55% 0.1 210)", "oklch(68% 0.08 210)", "oklch(82% 0.05 210)", "oklch(95% 0.02 210)"]
+      },
+      "active-signal": {
+        "role": "secondary",
+        "displayName": "Active Blue",
+        "canonical": "#0da2e7",
+        "tonalRamp": ["oklch(15% 0.08 225)", "oklch(25% 0.11 225)", "oklch(35% 0.14 225)", "oklch(45% 0.16 225)", "oklch(55% 0.17 225)", "oklch(68% 0.14 225)", "oklch(82% 0.08 225)", "oklch(95% 0.025 225)"]
+      },
+      "ready-signal": {
+        "role": "secondary",
+        "displayName": "Ready Blue",
+        "canonical": "#2c64dd",
+        "tonalRamp": ["oklch(15% 0.08 264)", "oklch(25% 0.12 264)", "oklch(35% 0.16 264)", "oklch(45% 0.18 264)", "oklch(55% 0.18 264)", "oklch(68% 0.14 264)", "oklch(82% 0.08 264)", "oklch(95% 0.025 264)"]
+      },
+      "waiting-signal": {
+        "role": "secondary",
+        "displayName": "Waiting Violet-Gray",
+        "canonical": "#778192",
+        "tonalRamp": ["oklch(15% 0.025 274)", "oklch(25% 0.03 274)", "oklch(35% 0.035 274)", "oklch(45% 0.04 274)", "oklch(55% 0.04 274)", "oklch(68% 0.035 274)", "oklch(82% 0.025 274)", "oklch(95% 0.012 274)"]
+      },
+      "complete-signal": {
+        "role": "secondary",
+        "displayName": "Complete Green",
+        "canonical": "#25a777",
+        "tonalRamp": ["oklch(15% 0.06 164)", "oklch(25% 0.08 164)", "oklch(35% 0.1 164)", "oklch(45% 0.12 164)", "oklch(55% 0.13 164)", "oklch(68% 0.1 164)", "oklch(82% 0.06 164)", "oklch(95% 0.02 164)"]
+      },
+      "blocked-signal": {
+        "role": "secondary",
+        "displayName": "Blocked Red",
+        "canonical": "#e3264c",
+        "tonalRamp": ["oklch(15% 0.08 15)", "oklch(25% 0.12 15)", "oklch(35% 0.16 15)", "oklch(45% 0.19 15)", "oklch(55% 0.2 15)", "oklch(68% 0.15 15)", "oklch(82% 0.08 15)", "oklch(95% 0.025 15)"]
+      }
+    },
+    "typographyMeta": {
+      "body": { "displayName": "Product Body", "purpose": "Default dashboard content and controls." },
+      "title": { "displayName": "Execution Title", "purpose": "Dense WorkPackage and group headings." },
+      "label": { "displayName": "Lifecycle Label", "purpose": "Compact state, progress, and counter labels." },
+      "mono": { "displayName": "Operational Mono", "purpose": "Repository, branch, identifiers, and gate progress." }
+    },
+    "shadows": [
+      { "name": "card-separation", "value": "0 3px 10px rgb(22 27 39 / 0.06)", "purpose": "Subtle light-mode separation without lift." },
+      { "name": "dashboard-float", "value": "0 18px 50px rgb(15 23 42 / 0.08)", "purpose": "Dialogs and genuinely floating dashboard surfaces." }
+    ],
+    "motion": [
+      { "name": "state-fast", "value": "150ms ease-out", "purpose": "Hover, focus, and direct control feedback." },
+      { "name": "topology-snap", "value": "220ms cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Group expansion and execution-graph geometry changes." }
+    ],
+    "breakpoints": [
+      { "name": "desktop-graph", "value": "768px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Compact primary action with explicit focus and no positional movement.",
+      "html": "<button class=\"ds-button-primary\">New Request</button>",
+      "css": ".ds-button-primary { height: 36px; border: 0; border-radius: 6px; background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); padding: 8px 16px; font: 500 14px/20px var(--font-geist-sans); transition: background-color 150ms ease-out, box-shadow 150ms ease-out; } .ds-button-primary:hover { background: hsl(var(--primary) / 0.9); } .ds-button-primary:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Compact dashboard field with a clear focus ring.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search WorkRequests\" />",
+      "css": ".ds-input { box-sizing: border-box; width: 100%; height: 36px; border: 1px solid hsl(var(--input)); border-radius: 6px; background: hsl(var(--background)); color: hsl(var(--foreground)); padding: 4px 12px; font: 400 14px/20px var(--font-geist-sans); } .ds-input::placeholder { color: hsl(var(--muted-foreground)); } .ds-input:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 1px; } .ds-input:disabled { cursor: not-allowed; opacity: 0.5; }"
+    },
+    {
+      "name": "Lifecycle Chip",
+      "kind": "chip",
+      "refersTo": "status-chip",
+      "description": "Text-first lifecycle state with matching border and tint.",
+      "html": "<span class=\"ds-status-chip\">Waiting 1/2</span>",
+      "css": ".ds-status-chip { display: inline-flex; border: 1px solid color-mix(in oklch, #778192 38%, transparent); border-radius: 999px; background: color-mix(in oklch, #778192 8%, hsl(var(--background))); color: #596477; padding: 4px 8px; font: 650 11px/1 var(--font-geist-sans); white-space: nowrap; }"
+    },
+    {
+      "name": "Execution Card",
+      "kind": "card",
+      "refersTo": "execution-card",
+      "description": "Dense WorkPackage entity carrying only title, lifecycle, progress, and PR presence.",
+      "html": "<article class=\"ds-execution-card\"><strong>Validate recovery</strong><span>Waiting 1/2</span></article>",
+      "css": ".ds-execution-card { display: grid; gap: 6px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--card)); color: hsl(var(--card-foreground)); padding: 8px 10px; box-shadow: 0 3px 10px rgb(22 27 39 / 0.06); font: 400 13px/1.2 var(--font-geist-sans); transition: border-color 150ms ease-out, box-shadow 150ms ease-out; } .ds-execution-card:hover, .ds-execution-card:focus-visible { border-color: hsl(var(--ring) / 0.62); box-shadow: 0 0 0 3px hsl(var(--ring) / 0.14), 0 9px 24px rgb(22 27 39 / 0.1); outline: none; } .ds-execution-card strong { font-weight: 720; } .ds-execution-card span { color: hsl(var(--muted-foreground)); font-size: 11px; font-weight: 650; }"
+    },
+    {
+      "name": "Board Tab",
+      "kind": "nav",
+      "description": "Familiar compact navigation with surface-based selection.",
+      "html": "<button class=\"ds-board-tab\" aria-selected=\"true\">WorkRequests</button>",
+      "css": ".ds-board-tab { border: 0; border-radius: 6px; background: transparent; color: hsl(var(--muted-foreground)); padding: 4px 12px; font: 500 14px/20px var(--font-geist-sans); } .ds-board-tab:hover { color: hsl(var(--foreground)); } .ds-board-tab[aria-selected=\"true\"] { background: hsl(var(--background)); color: hsl(var(--foreground)); box-shadow: 0 1px 2px rgb(22 27 39 / 0.08); } .ds-board-tab:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Live Control Room",
+    "overview": "Symphony++ is a calm operational surface for supervising live agent work. It is information-dense without becoming visually loud: inactive structure recedes, active work carries motion, and meaningful state changes are visible immediately. The interface rejects nested-card labyrinths, oversized execution records, beige neutral states, and decorative workflow graphics. Geometry must stay stable while status changes.",
+    "keyCharacteristics": ["Compact, state-first information hierarchy.", "Cool neutral surfaces with restrained semantic signals.", "Stable spatial organization from overview to detail.", "Motion only for activity, topology changes, and direct feedback.", "Familiar product controls with explicit keyboard and focus behavior."],
+    "rules": [
+      { "name": "The Operational Signal Rule", "body": "Semantic color describes current state; it is never decoration.", "section": "colors" },
+      { "name": "The No Beige Rule", "body": "Planned, waiting, and inactive states use cool neutral or violet-neutral tones. Cream, parchment, tan, and beige are prohibited.", "section": "colors" },
+      { "name": "The Hierarchy Before Size Rule", "body": "Weight, alignment, and spacing establish importance before larger text does.", "section": "typography" },
+      { "name": "The No Lift Rule", "body": "Hover, focus, and selection never move cards. Use outline, border, shadow, or shine instead.", "section": "elevation" }
+    ],
+    "dos": ["Do keep title, lifecycle state, progress, and PR presence as the primary execution-card content.", "Do preserve dependency ranks and stable geometry during lifecycle updates and group expansion.", "Do route dependencies right-to-left through reserved gutters, corridors, and outer buses without shared segments.", "Do use shine and animated dashes only for genuinely active state.", "Do preserve keyboard focus, reduced motion, and non-color state labels."],
+    "donts": ["Don't create nested-card labyrinths that make hierarchy harder to read.", "Don't use oversized execution cards filled with bookkeeping details.", "Don't use beige, cream, parchment, or tan for neutral, planned, or waiting states.", "Don't draw decorative workflow lines that cross cards, overlap unpredictably, or imply false sequencing.", "Don't elevate internal execution records above product-facing work.", "Don't encode guardrails and lifecycle copy that make ordinary recovery harder than the work itself.", "Don't move cards on hover, focus, selection, or status change."]
+  }
+}

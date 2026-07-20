@@ -38,6 +38,18 @@ export type ProductTreeDependencyEdge = {
   created_at?: string | null;
 };
 
+export type ProductTreeExecutionGraph = {
+  available?: boolean;
+  work_package_ids?: string[];
+  effective_edges?: Array<{
+    prerequisite_work_package_id: string;
+    dependent_work_package_id: string;
+    dependency_ids?: string[];
+  }>;
+  topological_order?: string[];
+  cycles?: string[][];
+};
+
 export type ProductTreeProjection = {
   available?: boolean;
   schema_version?: string;
@@ -46,6 +58,7 @@ export type ProductTreeProjection = {
   root_work_package_ids?: string[];
   nodes?: ProductTreeNode[];
   dependency_edges?: ProductTreeDependencyEdge[];
+  execution_graph?: ProductTreeExecutionGraph;
   summary?: {
     node_count?: number;
     root_node_count?: number;

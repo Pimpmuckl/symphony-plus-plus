@@ -1,14 +1,24 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   use ExUnit.Case, async: false
 
+  alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
+  alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository, as: ProductTreeRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
+
+  defmodule MissingProductTreeRepo do
+    def all(_query), do: raise(%Exqlite.Error{message: "no such table: sympp_product_tree_nodes"})
+  end
 
   setup_all do
     database_path = database_path()
@@ -22,11 +32,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   end
 
   setup %{repo: repo} do
+    repo.delete_all(AgentRun)
     repo.delete_all(ProgressEvent)
     repo.delete_all(WorkPackageDelivery)
+    repo.delete_all(DependencyEdge)
+    repo.delete_all(Node)
     repo.delete_all(WorkPackage)
     repo.delete_all(WorkRequest)
     :ok
+  end
+
+  test "keeps delivery signals available before product-tree migrations" do
+    work_request = %WorkRequest{id: "WR-BOARD-LEGACY"}
+
+    assert {:ok, %{}} =
+             Signals.execution_graphs(
+               MissingProductTreeRepo,
+               [work_request],
+               %{work_request.id => []},
+               %{},
+               []
+             )
   end
 
   test "projects ordered slices with delivery outcome, linked WorkPackage summary, reason codes, and successor context", %{repo: repo} do
@@ -655,6 +681,168 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
 
     assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert String.length(slice.delivery.no_pr_evidence) == 240
+  end
+
+  test "projects provider-neutral worker, PR, review, and authoritative dependency signals", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-BOARD-GRAPH-SIGNALS")
+    last_activity = DateTime.utc_now(:microsecond)
+    active_since = DateTime.add(last_activity, -60, :second)
+
+    {_satisfied, satisfied} =
+      linked_slice!(repo, work_request,
+        id: "WP-GRAPH-SATISFIED",
+        work_package_id: "WP-GRAPH-SATISFIED",
+        status: "skipped"
+      )
+
+    {_active, active} =
+      linked_slice!(repo, work_request,
+        id: "WP-GRAPH-ACTIVE",
+        work_package_id: "WP-GRAPH-ACTIVE",
+        status: "implementing"
+      )
+
+    {_blocked, blocked} =
+      linked_slice!(repo, work_request,
+        id: "WP-GRAPH-BLOCKED",
+        work_package_id: "WP-GRAPH-BLOCKED",
+        status: "blocked"
+      )
+
+    {_waiting, waiting} =
+      linked_slice!(repo, work_request,
+        id: "WP-GRAPH-WAITING",
+        work_package_id: "WP-GRAPH-WAITING",
+        status: "ready_for_worker"
+      )
+
+    {_join, join} =
+      linked_slice!(repo, work_request,
+        id: "WP-GRAPH-JOIN",
+        work_package_id: "WP-GRAPH-JOIN",
+        status: "ready_for_worker",
+        review_requirement: %{
+          "type" => "review-suite",
+          "args" => %{"mode" => "normal", "current" => 1, "total" => 2, "step" => "analysis"}
+        }
+      )
+
+    assert {:ok, run} =
+             AgentRunRepository.start_run(repo, %{
+               work_package_id: active.id,
+               status: "running",
+               attempt: 1,
+               worker_task_handle: "fictional-worker-a",
+               started_at: active_since,
+               last_seen_at: last_activity
+             })
+
+    assert {:ok, _blocker} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: blocked.id,
+               summary: "Waiting for fictional input",
+               status: "blocked",
+               idempotency_key: "graph-signal-blocker",
+               payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "fictional-input", active: true},
+               created_at: ~U[2026-07-18 08:02:00.000000Z]
+             })
+
+    assert {:ok, _branch} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: join.id,
+               summary: "Branch attached",
+               status: "branch_attached",
+               payload: %{type: "branch", source_tool: "attach_branch", branch: "feat/fictional-join", head_sha: "0123456"},
+               created_at: ~U[2026-07-18 08:03:00.000000Z]
+             })
+
+    assert {:ok, _pr} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: join.id,
+               summary: "PR attached with checks running",
+               status: "pr_attached",
+               payload: %{
+                 type: "pr",
+                 source_tool: "attach_pr",
+                 url: "https://github.com/example/fictional/pull/42",
+                 number: 42,
+                 repository: "example/fictional",
+                 head_sha: "0123456789abcdef0123456789abcdef01234567",
+                 check_summary: %{status: "completed", conclusion: "failure", completed: 1, total: 3},
+                 merge_state: %{merged: false}
+               },
+               created_at: ~U[2026-07-18 08:04:00.000000Z]
+             })
+
+    assert {:ok, _review} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: join.id,
+               summary: "Review running",
+               status: "review_package_submitted",
+               payload: %{
+                 type: "review_package",
+                 source_tool: "submit_review_package",
+                 head_sha: "0123456789abcdef0123456789abcdef01234567",
+                 status: "running",
+                 evidence_id: "review-join-42",
+                 artifacts: ["review.txt"]
+               },
+               created_at: ~U[2026-07-18 08:05:00.000000Z]
+             })
+
+    for {prerequisite, index} <- Enum.with_index([satisfied, active, blocked, waiting], 1) do
+      assert {:ok, _edge} =
+               ProductTreeRepository.create_dependency_edge(repo, %{
+                 id: "edge-graph-join-#{index}",
+                 work_request_id: work_request.id,
+                 source_kind: "work_package",
+                 source_id: join.id,
+                 target_kind: "work_package",
+                 target_id: prerequisite.id,
+                 kind: "depends_on",
+                 reason: "Fictional join input #{index}",
+                 created_by: "fixture",
+                 created_at: DateTime.add(~U[2026-07-18 08:00:00.000000Z], index, :second)
+               })
+    end
+
+    assert {:ok, board} = DeliveryBoard.project(repo, work_request.id)
+    packages = Map.new(board.work_packages, &{&1.id, &1.work_package})
+    projected_join = Enum.find(board.work_packages, &(&1.id == join.id))
+
+    assert projected_join.operational_state.key == "dependency_blocked"
+    assert projected_join.operational_state.attention_reason_codes == ["unmet_dependencies"]
+    assert projected_join.operational_state.reason =~ join.id
+    refute projected_join.operational_state.reason =~ "Ready for worker pickup"
+
+    assert %{status: "active", run_label: "fictional-worker-a"} = packages[active.id].worker_signal
+    assert packages[active.id].worker_signal.active_since == active_since
+    assert packages[active.id].worker_signal.last_activity == run.updated_at
+
+    assert %{status: "open", number: 42, current_head_sha: "0123456", head_matches: true} =
+             packages[join.id].pr_signal
+
+    assert packages[join.id].pr_signal.checks == %{status: "failing", current: 1, total: 3}
+
+    assert %{type: "review-suite", status: "in_progress", current: 1, total: 2, step: "analysis", evidence_id: "review-join-42"} =
+             packages[join.id].review_signal
+
+    secret_requirement = put_in(join.review_requirement, ["args", "api_key"], "fixture-secret")
+    assert Signals.review(%{join | review_requirement: secret_requirement}, %{}).args["api_key"] == "[REDACTED]"
+
+    assert packages[join.id].dependency_signal == %{
+             satisfied: 1,
+             required: 4,
+             active: 1,
+             blocked: 1,
+             unmet_work_package_ids: [active.id, blocked.id, waiting.id],
+             inputs: [
+               %{work_package_id: active.id, status: "active"},
+               %{work_package_id: blocked.id, status: "blocked"},
+               %{work_package_id: satisfied.id, status: "satisfied"},
+               %{work_package_id: waiting.id, status: "waiting"}
+             ]
+           }
   end
 
   defp linked_slice!(repo, work_request, overrides) do

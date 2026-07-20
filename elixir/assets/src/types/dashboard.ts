@@ -1,4 +1,6 @@
 import type { ProductTreeProjection } from "./product-tree";
+import type { DeliveryBoardWorkPackageSummary } from "./delivery-signals";
+export type * from "./delivery-signals";
 export type { ActiveBlockingEdge, ActiveBlockingEdgeEndpoint, BlockerActor, WorkPackageBlocker } from "./dashboard-blockers";
 import type { ActiveBlockingEdge, WorkPackageBlocker } from "./dashboard-blockers";
 export type MarkdownText = string;
@@ -284,6 +286,7 @@ export type ClarificationQuestion = {
 export type WorkRequestPackage = {
   id: string;
   work_request_id: string;
+  product_tree_node_id?: string | null;
   sequence?: number;
   title?: string | null;
   goal?: MarkdownText | null;
@@ -352,6 +355,7 @@ export type WorkRequestDeliveryBoard = {
     raw_status?: string | null;
     delivery_outcome?: string | null;
     delivery?: WorkPackageDelivery | null;
+    work_package?: DeliveryBoardWorkPackageSummary | null;
     successor?: WorkPackageSuccessor | null;
     operational_state?: PackageOperationalState | null;
     attention_reason_codes?: string[];

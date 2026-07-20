@@ -1,3 +1,5 @@
+Code.require_file(Path.expand("../../support/symphony_plus_plus/dashboard_fixture_database_test.exs", __DIR__))
+
 defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   use ExUnit.Case, async: false
 
@@ -22,9 +24,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Repository, as: GuidanceRequestRepository
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
@@ -48,6 +53,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -4211,6 +4217,204 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end
   end
 
+  test "dashboard fixture export builds a deterministic isolated graph ledger" do
+    path = Path.join(System.tmp_dir!(), "sympp-dashboard-graph-fixture-#{System.unique_integer([:positive])}.sqlite3")
+    clone_path = path <> ".clone"
+    on_exit(fn -> Enum.each([path, path <> "-wal", path <> "-shm", clone_path, clone_path <> "-wal", clone_path <> "-shm"], &File.rm/1) end)
+
+    assert :ok = DashboardFixtureDatabase.export!(path)
+    File.cp!(path, clone_path)
+    refute File.exists?(clone_path <> "-wal")
+    refute File.exists?(clone_path <> "-shm")
+
+    {:ok, pid} = Repo.start_link(database: clone_path, name: nil, pool_size: 1, log: false)
+    previous_repo = Repo.put_dynamic_repo(pid)
+
+    try do
+      assert %{rows: [["ok"]]} = Repo.query!("PRAGMA quick_check")
+
+      assert Repo.all(WorkRequest) |> Enum.map(& &1.id) |> Enum.sort() == [
+               "WR-FIXTURE-DENSE",
+               "WR-FIXTURE-FANOUT",
+               "WR-FIXTURE-KRAKEN-SCALE",
+               "WR-FIXTURE-RECOVERY"
+             ]
+
+      assert Repo.all(WorkRequest) |> Enum.all?(&(&1.inserted_at == ~U[2026-07-18 08:00:00.000000Z]))
+
+      assert {:ok, fanout} = DeliveryBoard.project(Repo, "WR-FIXTURE-FANOUT")
+      fanout_packages = Map.new(fanout.work_packages, &{&1.id, &1})
+      assert fanout_packages["WP-FANOUT-PARSE"].work_package.worker_signal.status == "active"
+      assert fanout_packages["WP-FANOUT-SOURCE"].work_package.pr_signal.status == "merged"
+      assert fanout_packages["WP-FANOUT-INDEX"].work_package.review_signal.status == "passed"
+      assert fanout_packages["WP-FANOUT-JOIN"].work_package.dependency_signal.required == 2
+      assert fanout_packages["WP-FANOUT-JOIN"].operational_state.key == "dependency_blocked"
+      assert fanout_packages["WP-FANOUT-PLAYTEST"].operational_state.key == "ready_for_worker"
+      assert fanout_packages["WP-FANOUT-PLAYTEST"].work_package.dependency_signal.satisfied == 1
+
+      assert {:ok, [fanout_detail]} = Dashboard.work_request_board_details(Repo, ["WR-FIXTURE-FANOUT"])
+      assert fanout_detail.product_tree.execution_graph.available
+      assert length(fanout_detail.product_tree.execution_graph.effective_edges) == 6
+      assert length(fanout_detail.product_tree.execution_graph.topological_order) == 6
+      assert fanout_detail.product_tree.root_work_package_ids == ["WP-FANOUT-PLAYTEST"]
+
+      assert {:ok, [kraken_detail]} = Dashboard.work_request_board_details(Repo, ["WR-FIXTURE-KRAKEN-SCALE"])
+      assert length(kraken_detail.delivery_board["work_packages"]) == 49
+      assert length(kraken_detail.product_tree.nodes) == 10
+      assert length(kraken_detail.product_tree.execution_graph.effective_edges) == 11
+
+      kraken_edges =
+        kraken_detail.product_tree.execution_graph.effective_edges
+        |> Enum.map(&{&1.prerequisite_work_package_id, &1.dependent_work_package_id})
+        |> MapSet.new()
+
+      assert MapSet.subset?(
+               MapSet.new([
+                 {"WP-KRAKEN-07", "WP-KRAKEN-04"},
+                 {"WP-KRAKEN-31", "WP-KRAKEN-27"},
+                 {"WP-KRAKEN-47", "WP-KRAKEN-10"}
+               ]),
+               kraken_edges
+             )
+
+      projected_parse =
+        Enum.find(fanout_detail.delivery_board["work_packages"], &(&1["id"] == "WP-FANOUT-PARSE"))
+
+      assert get_in(projected_parse, ["work_package", "worker_signal", "status"]) == "active"
+      assert get_in(projected_parse, ["work_package", "pr_signal", "checks", "status"]) == "pending"
+
+      parse = Repo.get!(WorkPackage, "WP-FANOUT-PARSE")
+      parse_context = Dashboard.work_package_contexts(Repo, [parse])[parse.id]
+      assert parse_context.worker_signal.status == "active"
+      assert parse_context.runtime_state.active?
+
+      Repo.get!(ClaimLease, "LEASE-RUN-FANOUT-PARSE")
+      |> ClaimLease.update_changeset(%{status: "released", released_at: ~U[2026-07-18 09:00:00.000000Z]})
+      |> Repo.update!()
+
+      Repo.get!(AgentRun, "RUN-FANOUT-PARSE")
+      |> AgentRun.update_changeset(%{status: "running", last_seen_at: ~U[2020-01-01 00:00:00.000000Z]})
+      |> Repo.update!()
+
+      stale_context = Dashboard.work_package_contexts(Repo, [parse])[parse.id]
+      assert stale_context.worker_signal.status == "stale"
+      refute stale_context.runtime_state.active?
+      refute stale_context.card.operational_state.has_active_worker
+
+      assert {:ok, _branch_advance} =
+               PlanningRepository.append_progress_event(Repo, %{
+                 work_package_id: parse.id,
+                 summary: "Fixture branch advanced",
+                 status: "branch_attached",
+                 payload: %{type: "branch", source_tool: "attach_branch", branch: "feat/fixture-parse", head_sha: "parse-next-head"},
+                 created_at: ~U[2026-07-18 09:01:00.000000Z]
+               })
+
+      assert {:ok, advanced_fanout} = DeliveryBoard.project(Repo, "WR-FIXTURE-FANOUT")
+      advanced_parse = Enum.find(advanced_fanout.work_packages, &(&1.id == parse.id))
+      assert advanced_parse.work_package.review_signal.status == "pending"
+
+      assert {:ok, recovery} = DeliveryBoard.project(Repo, "WR-FIXTURE-RECOVERY")
+      recovery_packages = Map.new(recovery.work_packages, &{&1.id, &1})
+      assert recovery_packages["WP-RECOVERY-OLD"].successor.work_package_id == "WP-RECOVERY-SUCCESSOR"
+      assert recovery_packages["WP-RECOVERY-SKIPPED"].raw_status == "skipped"
+      assert recovery_packages["WP-RECOVERY-SUCCESSOR"].work_package.review_signal.status == "failed"
+      assert Enum.count(recovery.work_packages, &(get_in(&1, [:work_package, :blocker_state, :active?]) == true)) == 1
+      assert Repo.all(ClaimLease) |> length() == 6
+
+      assert {:ok, [recovery_detail]} = Dashboard.work_request_board_details(Repo, ["WR-FIXTURE-RECOVERY"])
+      assert recovery_detail.product_tree.summary.blocker_count == 1
+
+      architect_anchor =
+        Repo.get!(WorkPackage, "WP-RECOVERY-OLD")
+        |> Ecto.Changeset.change(kind: "delegation")
+        |> Repo.update!()
+
+      assert {:ok, _architect_lease} =
+               ClaimLeaseService.claim(
+                 Repo,
+                 architect_anchor.id,
+                 %{"actor_kind" => "agent", "actor_id" => "fixture:architect", "actor_display_name" => "fixture-architect"},
+                 stale_after_ms: 60_000
+               )
+
+      architect_context = Dashboard.work_package_contexts(Repo, [architect_anchor])[architect_anchor.id]
+      assert architect_context.runtime_state.active?
+      assert is_nil(architect_context.worker_signal)
+      refute architect_context.card.operational_state.has_active_worker
+
+      assert {:ok, dense_tree} = ProductTree.tree_for_work_request(Repo, "WR-FIXTURE-DENSE")
+      assert length(dense_tree.nodes) == 3
+      assert length(dense_tree.dependency_edges) == 18
+      assert Repo.all(AgentRun) |> length() == 6
+
+      assert %AccessGrant{
+               id: "GRANT-FANOUT-PLAYTEST",
+               display_key: "PLAY",
+               claimed_at: nil,
+               grant_role: "worker",
+               expires_at: ~U[2099-01-01 00:00:00.000000Z]
+             } = Repo.get_by(AccessGrant, work_package_id: "WP-FANOUT-PLAYTEST")
+
+      assert Repo.all(PlanNode)
+             |> Enum.filter(&(&1.work_package_id == "WP-FANOUT-PLAYTEST"))
+             |> Enum.map(& &1.id)
+             |> Enum.sort() == ["PLAN-FANOUT-PLAYTEST-01", "PLAN-FANOUT-PLAYTEST-02"]
+
+      {claim_response, claimed_server} =
+        Server.handle_response_state(
+          %{
+            "jsonrpc" => "2.0",
+            "id" => "fixture-playtest-claim",
+            "method" => "tools/call",
+            "params" => %{
+              "name" => "claim_local_assignment",
+              "arguments" => %{
+                "work_package_id" => "WP-FANOUT-PLAYTEST",
+                "claimed_by" => "fictional-playtest-worker"
+              }
+            }
+          },
+          Server.new(Config.default(repo: Repo, repo_root: @repo_root), initialized: true)
+        )
+
+      assert get_in(claim_response, ["result", "structuredContent", "assignment", "work_package_id"]) ==
+               "WP-FANOUT-PLAYTEST"
+
+      playtest = Repo.get!(WorkPackage, "WP-FANOUT-PLAYTEST")
+      active_context = Dashboard.work_package_contexts(Repo, [playtest])[playtest.id]
+      assert active_context.worker_signal.status == "active"
+      assert active_context.runtime_state.active?
+      assert active_context.card.operational_state.has_active_worker
+
+      ready_playtest = playtest |> Ecto.Changeset.change(status: "ready_for_merge") |> Repo.update!()
+
+      {release_response, _released_server} =
+        Server.handle_response_state(
+          %{
+            "jsonrpc" => "2.0",
+            "id" => "fixture-playtest-release",
+            "method" => "tools/call",
+            "params" => %{
+              "name" => "release_current_assignment",
+              "arguments" => %{"reason" => "fixture playtest ready"}
+            }
+          },
+          claimed_server
+        )
+
+      assert get_in(release_response, ["result", "structuredContent", "binding_cleared"]) == true
+
+      released_context = Dashboard.work_package_contexts(Repo, [ready_playtest])[ready_playtest.id]
+      assert released_context.worker_signal.status == "idle"
+      refute released_context.runtime_state.active?
+      refute released_context.card.operational_state.has_active_worker
+    after
+      Repo.put_dynamic_repo(previous_repo)
+      GenServer.stop(pid)
+    end
+  end
+
   test "hydrated dashboard rejects unsupported methods" do
     assert json_response(post(build_conn(), "/api/v1/sympp/operator/dashboard/hydrated", %{}), 405) ==
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
@@ -7739,14 +7943,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     {payload, %{requests: requests, queries: DashboardQueryCountingRepo.count(), settle_ms: elapsed_ms}}
   end
 
-  defp maybe_export_dashboard_fixture(repo) do
+  defp maybe_export_dashboard_fixture(_repo) do
     case System.get_env("SYMPP_DASHBOARD_FIXTURE_DATABASE") do
       path when is_binary(path) and path != "" ->
-        path = Path.expand(path)
-        File.mkdir_p!(Path.dirname(path))
-        if File.exists?(path), do: File.rm!(path)
-        repo.query!("VACUUM INTO ?", [path])
-        :ok
+        DashboardFixtureDatabase.export!(path)
 
       _path ->
         :ok

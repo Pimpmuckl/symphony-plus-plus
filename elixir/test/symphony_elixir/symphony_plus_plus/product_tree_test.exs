@@ -135,6 +135,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTreeTest do
     left = create_work_request!(repo, id: "WR-LEFT")
     right = create_work_request!(repo, id: "WR-RIGHT")
     left_node = create_node!(repo, left, id: "node_left")
+    left_package = add_work_package!(repo, left, id: "wp_left")
     right_package = add_work_package!(repo, right, id: "wp_right")
 
     assert {:error, :not_found} =
@@ -154,6 +155,59 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTreeTest do
                target_kind: "work_package",
                target_id: right_package.id
              })
+
+    assert {:ok, edge} =
+             ProductTree.create_dependency_edge(repo, %{
+               work_request_id: left.id,
+               source_kind: "product_node",
+               source_id: left_node.id,
+               target_kind: "work_package",
+               target_id: left_package.id,
+               kind: "depends_on",
+               reason: "Scoped dependency fixture"
+             })
+
+    assert {:error, {:constraint_failed, "product_tree_dependency_target_scope"}} =
+             ProductTree.upsert_dependency_edge(repo, %{
+               id: edge.id,
+               work_request_id: left.id,
+               target_id: right_package.id
+             })
+
+    assert repo.get!(DependencyEdge, edge.id).target_id == left_package.id
+  end
+
+  test "dependency updates preserve hard-edge context invariants", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-DEPENDENCY-CONTEXT")
+    source = add_work_package!(repo, work_request, id: "wp_context_source")
+    target = add_work_package!(repo, work_request, id: "wp_context_target")
+
+    assert {:ok, edge} =
+             ProductTree.create_dependency_edge(repo, %{
+               work_request_id: work_request.id,
+               source_kind: "work_package",
+               source_id: source.id,
+               target_kind: "work_package",
+               target_id: target.id,
+               kind: "depends_on",
+               decision_ref: %{"id" => "WRD-CONTEXT"}
+             })
+
+    assert {:error, changeset} =
+             ProductTree.upsert_dependency_edge(repo, %{
+               id: edge.id,
+               work_request_id: work_request.id,
+               source_kind: edge.source_kind,
+               source_id: edge.source_id,
+               target_kind: edge.target_kind,
+               target_id: edge.target_id,
+               kind: edge.kind,
+               reason: "",
+               decision_ref: %{}
+             })
+
+    assert {"hard dependency edges require a reason or decision reference", _metadata} = changeset.errors[:kind]
+    assert repo.get!(DependencyEdge, edge.id).decision_ref == %{"id" => "WRD-CONTEXT"}
   end
 
   test "records revisions and no removed product-tree linkage table remains", %{repo: repo} do

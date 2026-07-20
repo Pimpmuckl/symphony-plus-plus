@@ -3,7 +3,6 @@ import type { ProductTreeCompletionMark, ProductTreeNode } from "@/types/product
 import { isFinishedBoardStatus, operationalLabel, sliceOperationalState } from "@/lib/operational-state";
 import type { BadgeTone } from "@/lib/operational-state";
 import type { StateCardTone } from "@/components/dashboard/state-card-style";
-import { productNodeProgressPercent } from "./workstream-progress";
 
 const MIN_STATUS_LABEL_LENGTH = 8;
 const MIN_STATUS_BADGE_WIDTH_REM = 6.1;
@@ -119,96 +118,6 @@ function longestStatusLabelLength(labels: Iterable<string | null | undefined>) {
   }
 
   return longest;
-}
-
-function activeBlockerCountForNode(
-  node: ProductTreeNode,
-  treeIndex: { childrenByParent: Map<string, ProductTreeNode[]> },
-  activeBlockerCountBySliceId: Map<string, number>,
-  activeBlockerKeysBySliceId?: Map<string, Set<string>>,
-  visited = new Set<string>(),
-) {
-  if (visited.has(node.id)) return 0;
-  visited.add(node.id);
-
-  if (activeBlockerKeysBySliceId) {
-    return activeBlockerKeysForNode(node, treeIndex, activeBlockerKeysBySliceId, visited).size;
-  }
-
-  let count = 0;
-  for (const sliceId of node.work_package_ids ?? []) {
-    count += activeBlockerCountBySliceId.get(sliceId) ?? 0;
-  }
-
-  for (const child of treeIndex.childrenByParent.get(node.id) ?? []) {
-    count += activeBlockerCountForNode(child, treeIndex, activeBlockerCountBySliceId, undefined, visited);
-  }
-
-  return count;
-}
-
-function activeBlockerKeysForNode(
-  node: ProductTreeNode,
-  treeIndex: { childrenByParent: Map<string, ProductTreeNode[]> },
-  activeBlockerKeysBySliceId: Map<string, Set<string>>,
-  visited: Set<string>,
-) {
-  const blockerKeys = new Set<string>();
-
-  for (const sliceId of node.work_package_ids ?? []) {
-    for (const blockerKey of activeBlockerKeysBySliceId.get(sliceId) ?? []) {
-      blockerKeys.add(blockerKey);
-    }
-  }
-
-  for (const child of treeIndex.childrenByParent.get(node.id) ?? []) {
-    if (visited.has(child.id)) continue;
-    visited.add(child.id);
-    for (const blockerKey of activeBlockerKeysForNode(child, treeIndex, activeBlockerKeysBySliceId, visited)) {
-      blockerKeys.add(blockerKey);
-    }
-  }
-
-  return blockerKeys;
-}
-
-export function productNodeState(
-  node: ProductTreeNode,
-  nodeSliceCount: number,
-  treeIndex: { childrenByParent: Map<string, ProductTreeNode[]> },
-  activeBlockerCountBySliceId: Map<string, number>,
-  activeBlockerKeysBySliceId?: Map<string, Set<string>>,
-  nodeSubtreeSlices: WorkRequestPackage[] = [],
-  packageById: Map<string, WorkPackageCard> = new Map(),
-) {
-  const activeBlockerCount = activeBlockerCountForNode(node, treeIndex, activeBlockerCountBySliceId, activeBlockerKeysBySliceId);
-  const blockerCount = Math.max(node.blocker_count ?? 0, activeBlockerCount);
-  const guidanceCount = node.guidance_count ?? Math.max((node.attention_count ?? 0) - blockerCount, 0);
-  const mark = node.computed_completion_mark || node.completion_mark || "unknown";
-  const progress = productNodeProgressPercent(node, nodeSubtreeSlices, packageById);
-  const boardState = aggregateBoardRowState({
-    blockerCount,
-    completionDeferred: mark === "deferred",
-    completionDone: mark === "done",
-    fallbackLabel: productNodeStatusLabel(node, mark),
-    fallbackStatus: mark,
-    guidanceCount,
-    packageById,
-    progress,
-    slices: nodeSubtreeSlices,
-  });
-
-  return {
-    badgeVariant: boardState.badgeVariant,
-    blockerCount,
-    guidanceCount,
-    nodeSliceCount: node.work_package_count || nodeSliceCount,
-    progress,
-    statusKind: boardState.kind,
-    statusLabel: boardState.label,
-    tone: boardState.tone,
-    visibleNodeKind: node.node_kind === "product_plan_node" ? null : node.node_kind,
-  };
 }
 
 function productNodeStatusLabel(node: ProductTreeNode, mark = node.computed_completion_mark || node.completion_mark || "unknown") {

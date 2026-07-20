@@ -18,13 +18,14 @@ slices, and dispatch approved WorkPackages through the normal ledger-backed
 local assignment flow.
 
 Architect MCP sessions can mutate the optional product tree with
-`upsert_plan_node`,
-`move_plan_node`,
-`set_plan_node_completion`, and
+`upsert_group`,
+`delete_group`,
+`upsert_dependency`,
+`delete_dependency`, and
 `update_work_package` while the WorkRequest is in an
-authoring status. Copied-ledger preview and migration flows may still seed plan
-nodes through helpers, but helper seeding is not the normal architect authoring
-path. Automatic question generation, automatic slicing/planning, live Linear
+authoring status. Groups organize WorkPackages without lifecycle; dependency
+intents expand into the effective WorkPackage graph used by `read_plan` and
+dispatch. Automatic question generation, automatic slicing/planning, live Linear
 state creation, richer planner/intake plugin surfaces, and automatic Codex
 spawning remain future work.
 
@@ -54,8 +55,8 @@ updated_at
 ### WorkPackage
 
 The architect-to-worker execution unit. A WorkPackage belongs to one
-WorkRequest and may link to one product plan node or sit directly under the
-WorkRequest. Approved slices can dispatch into WorkPackages.
+WorkRequest and may link to one Group or sit directly under the WorkRequest.
+Approved slices can dispatch into WorkPackages.
 
 ### WorkPackage
 

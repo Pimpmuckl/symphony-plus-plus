@@ -1,5 +1,10 @@
 # Symphony++ V3 Product Tree Rework
 
+> Historical foundation for the product-tree storage model. The public
+> `product_tree.v4` contract now exposes optional Groups without lifecycle or
+> completion marks. Current operator truth lives in
+> `implementation_docs_symphplusplus/mcp/MCP_TOOLS_CONTRACT.md`.
+
 ## North Star
 
 V3 makes the cockpit answer the product-progress question first:
@@ -160,20 +165,17 @@ This branch introduces the v3 foundation:
 Architect-facing MCP mutation tools maintain product trees:
 
 - `read_plan` reads the current scoped product tree without
-  direct ledger queries. `nodes_only` returns product plan nodes, the default
-  `nodes_with_work_package_refs` includes compact package id/status refs, and
-  `nodes_with_work_packages` includes visible WorkPackage payloads. Completion and
-  attention rollups use scoped delivery-board operational state for canonical
-  WorkPackages.
-- `upsert_plan_node` creates product plan nodes
-  and edits their title, description, or node kind inside a scoped WorkRequest.
-- `move_plan_node` reparents or reorders product plan nodes
-  inside a scoped WorkRequest.
-- `set_plan_node_completion` updates product plan node
-  completion marks and uses the existing blocker closeout guard for terminal
-  marks.
+  direct ledger queries. `groups_only` returns Groups, the default
+  `groups_with_work_package_refs` includes compact package id/status refs, and
+  `groups_with_work_packages` includes visible WorkPackage payloads. The public
+  projection includes the derived execution graph used by dispatch.
+- `upsert_group` creates, edits, reparents, or reorders Groups inside a scoped
+  WorkRequest; Groups have no lifecycle or completion mark.
+- `delete_group` removes a Group and reparents its direct contents.
+- `upsert_dependency` and `delete_dependency` maintain execution intent between
+  Groups or WorkPackages.
 - `update_work_package` changes a planned WorkPackage contract, including its
-  optional `product_tree_node_id`, using optimistic contract revision checking.
+  optional public `group_id`, using optimistic contract revision checking.
 
 These tools are intentionally small rearrangement primitives. They do not
 dispatch WorkPackages, create WorkPackages, mutate Linear, or force every WorkRequest

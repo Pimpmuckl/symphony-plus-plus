@@ -5,11 +5,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   import Ecto.Query, only: [from: 2]
 
   @active_grant_roles ["worker", "architect"]
+  @ready_package_statuses ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"]
   @terminal_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
   @recycle_source_tools ["claim_local_assignment", "revoke_child_worker_key", "revoke_work_package_worker_key", "cleanup_work_request_work_package_runtime"]
   @stale_heartbeat_after_seconds 300
@@ -37,19 +39,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
     Map.new(work_package_ids, fn work_package_id ->
       progress_events = Map.get(progress_events_by_id, work_package_id, [])
       work_package = Map.get(work_packages_by_id, work_package_id)
+      grants = Map.get(grants_by_id, work_package_id, [])
+      agent_runs = Map.get(agent_runs_by_id, work_package_id, [])
+      claim_leases = Map.get(claim_leases_by_id, work_package_id, [])
 
-      {work_package_id,
-       %{
-         blocker_state: blocker_state(progress_events),
-         runtime_state:
-           runtime_state(
-             Map.get(grants_by_id, work_package_id, []),
-             Map.get(agent_runs_by_id, work_package_id, []),
-             Map.get(claim_leases_by_id, work_package_id, []),
-             progress_events,
-             work_package
-           )
-       }}
+      {work_package_id, project_context(grants, agent_runs, claim_leases, progress_events, work_package)}
     end)
   end
 
@@ -75,9 +69,84 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
         lifecycle_state: "idle",
         latest_gate_at: nil,
         reason_codes: []
-      }
+      },
+      worker_signal: nil
     }
   end
+
+  @spec project_context(
+          [AccessGrant.t()],
+          [AgentRun.t()],
+          [ClaimLease.t()],
+          [ProgressEvent.t()],
+          WorkPackage.t() | nil
+        ) :: map()
+  def project_context(grants, agent_runs, claim_leases, progress_events, work_package)
+      when is_list(grants) and is_list(agent_runs) and is_list(claim_leases) and is_list(progress_events) do
+    now = DateTime.utc_now(:microsecond)
+    runtime_evidence = runtime_evidence(grants, agent_runs, claim_leases, work_package, now)
+    {worker_grants, worker_runs, worker_leases} = worker_evidence(grants, agent_runs, claim_leases, work_package)
+    worker_runtime_evidence = runtime_evidence(worker_grants, worker_runs, worker_leases, work_package, now)
+
+    %{
+      blocker_state: blocker_state(progress_events),
+      runtime_state: runtime_state(runtime_evidence, grants, agent_runs, claim_leases, progress_events, work_package),
+      worker_signal: worker_signal(worker_grants, worker_runs, worker_leases, worker_runtime_evidence)
+    }
+  end
+
+  defp worker_signal(grants, agent_runs, claim_leases, runtime_evidence) do
+    evidence = grants ++ agent_runs ++ claim_leases
+
+    if evidence == [] do
+      nil
+    else
+      %{
+        status:
+          worker_signal_status(
+            runtime_evidence.paused?,
+            runtime_evidence.stale_claim_leases,
+            runtime_evidence.stale_agent_runs,
+            runtime_evidence.active_claim_leases,
+            runtime_evidence.active_agent_runs,
+            runtime_evidence.active_grants
+          ),
+        active_since: worker_active_since(evidence, runtime_evidence),
+        last_activity: evidence |> Enum.flat_map(&worker_activity_at/1) |> latest_timestamp(),
+        run_label: worker_run_label(evidence)
+      }
+      |> reject_nil_values()
+    end
+  end
+
+  defp worker_evidence(grants, agent_runs, claim_leases, work_package) do
+    worker_grants = Enum.filter(grants, &(&1.grant_role == "worker"))
+    worker_grant_ids = worker_grants |> Enum.map(& &1.id) |> MapSet.new()
+    unlinked_worker? = match?(%WorkPackage{kind: kind} when kind != "delegation", work_package)
+
+    {
+      worker_grants,
+      Enum.filter(agent_runs, &worker_linked?(&1, worker_grant_ids, unlinked_worker?)),
+      claim_leases
+      |> Enum.reject(&failed_local_assignment_claim_lease?/1)
+      |> Enum.filter(&worker_linked?(&1, worker_grant_ids, unlinked_worker?))
+    }
+  end
+
+  defp failed_local_assignment_claim_lease?(%ClaimLease{
+         status: "released",
+         release_reason: "local_assignment_claim_failed"
+       }),
+       do: true
+
+  defp failed_local_assignment_claim_lease?(%ClaimLease{}), do: false
+
+  defp worker_linked?(%{access_grant_id: access_grant_id}, worker_grant_ids, _unlinked_worker?)
+       when is_binary(access_grant_id) and access_grant_id != "" do
+    MapSet.member?(worker_grant_ids, access_grant_id)
+  end
+
+  defp worker_linked?(_evidence, _worker_grant_ids, unlinked_worker?), do: unlinked_worker?
 
   defp grouped_progress_events(repo, work_package_ids) do
     repo.all(
@@ -163,50 +232,67 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
     {event.sequence || 0, timestamp_sort_value(event.created_at), event.id || ""}
   end
 
-  defp runtime_state(grants, agent_runs, claim_leases, progress_events, work_package) do
-    now = DateTime.utc_now(:microsecond)
+  defp runtime_evidence(grants, agent_runs, claim_leases, work_package, %DateTime{} = now) do
     current_claim_leases = Enum.filter(claim_leases, &current_claim_lease?/1)
     paused? = Enum.any?(current_claim_leases, &paused_claim_lease?/1)
     stale_claim_leases = Enum.filter(current_claim_leases, &stale_claim_lease?(&1, now))
     active_claim_leases = Enum.filter(current_claim_leases, &active_claim_lease?(&1, now))
     {active_agent_runs, stale_agent_runs} = agent_runtime_evidence(agent_runs, paused?, now)
-    active_grants = active_grants(grants, current_claim_leases, now)
+
+    active_grants =
+      grants
+      |> active_grants(current_claim_leases, now)
+      |> suppress_grant_only_worker_activity(work_package, active_claim_leases, active_agent_runs)
+
+    %{
+      now: now,
+      paused?: paused?,
+      current_claim_leases: current_claim_leases,
+      stale_claim_leases: stale_claim_leases,
+      active_claim_leases: active_claim_leases,
+      active_agent_runs: active_agent_runs,
+      stale_agent_runs: stale_agent_runs,
+      active_grants: active_grants
+    }
+  end
+
+  defp runtime_state(evidence, grants, agent_runs, claim_leases, progress_events, work_package) do
     recycled? = recycled_runtime?(claim_leases, progress_events)
     terminal? = terminal_package?(work_package)
 
     active? =
       active_runtime?(
-        paused?,
-        stale_claim_leases,
-        active_claim_leases,
-        active_agent_runs,
-        active_grants
+        evidence.paused?,
+        evidence.stale_claim_leases,
+        evidence.active_claim_leases,
+        evidence.active_agent_runs,
+        evidence.active_grants
       )
 
-    stale? = stale_runtime?(paused?, stale_claim_leases, stale_agent_runs)
+    stale? = stale_runtime?(evidence.paused?, evidence.stale_claim_leases, evidence.stale_agent_runs)
 
     reason_codes =
       runtime_reason_codes(
-        active_grants,
-        active_agent_runs,
-        active_claim_leases,
-        stale_agent_runs,
-        stale_claim_leases,
-        paused?,
+        evidence.active_grants,
+        evidence.active_agent_runs,
+        evidence.active_claim_leases,
+        evidence.stale_agent_runs,
+        evidence.stale_claim_leases,
+        evidence.paused?,
         recycled?,
         terminal?
       )
 
     %{
       active?: active?,
-      paused?: paused?,
+      paused?: evidence.paused?,
       stale?: stale?,
       recycled?: recycled?,
       terminal?: terminal?,
-      active_agent_run_ids: runtime_ids(active_agent_runs),
-      stale_agent_run_ids: runtime_ids(stale_agent_runs),
-      lifecycle_state: runtime_lifecycle_state(active?, paused?, stale?, recycled?, terminal?),
-      latest_gate_at: latest_runtime_gate_at(grants, agent_runs, claim_leases, progress_events, work_package, now),
+      active_agent_run_ids: runtime_ids(evidence.active_agent_runs),
+      stale_agent_run_ids: runtime_ids(evidence.stale_agent_runs),
+      lifecycle_state: runtime_lifecycle_state(active?, evidence.paused?, stale?, recycled?, terminal?),
+      latest_gate_at: latest_runtime_gate_at(grants, agent_runs, claim_leases, progress_events, work_package, evidence.now),
       reason_codes: reason_codes
     }
   end
@@ -275,6 +361,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   end
 
   defp superseded_worker_grant?(%AccessGrant{}, _superseded_worker_claimants), do: false
+
+  defp suppress_grant_only_worker_activity(grants, %WorkPackage{status: status}, [], [])
+       when status in @ready_package_statuses or status in @terminal_package_statuses,
+       do: Enum.reject(grants, &(&1.grant_role == "worker"))
+
+  defp suppress_grant_only_worker_activity(grants, _work_package, _active_claim_leases, _active_agent_runs), do: grants
 
   defp recycled_runtime?(claim_leases, progress_events) do
     Enum.any?(claim_leases, &reclaimed_claim_lease?/1) or Enum.any?(progress_events, &recycle_event?/1)
@@ -380,6 +472,73 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   defp runtime_lifecycle_state(_active?, _paused?, _stale?, _recycled?, true = _terminal?), do: "terminal"
   defp runtime_lifecycle_state(_active?, _paused?, _stale?, _recycled?, _terminal?), do: "idle"
 
+  defp worker_signal_status(true = _paused?, _stale_claims, _stale_runs, _active_claims, _active_runs, _active_grants),
+    do: "paused"
+
+  defp worker_signal_status(_paused?, stale_claims, stale_runs, _active_claims, _active_runs, _active_grants)
+       when stale_claims != [] or stale_runs != [],
+       do: "stale"
+
+  defp worker_signal_status(_paused?, _stale_claims, _stale_runs, active_claims, active_runs, active_grants)
+       when active_claims != [] or active_runs != [] or active_grants != [],
+       do: "active"
+
+  defp worker_signal_status(_paused?, _stale_claims, _stale_runs, _active_claims, _active_runs, _active_grants),
+    do: "idle"
+
+  defp worker_started_at(%AccessGrant{} = grant), do: [grant.claimed_at || grant.inserted_at]
+  defp worker_started_at(%AgentRun{} = run), do: [run.started_at || run.inserted_at]
+  defp worker_started_at(%ClaimLease{} = lease), do: [lease.lease_started_at || lease.inserted_at]
+
+  defp worker_active_since(evidence, runtime_evidence) do
+    current_runs = runtime_evidence.active_agent_runs ++ runtime_evidence.stale_agent_runs
+
+    cond do
+      runtime_evidence.current_claim_leases != [] -> started_at(runtime_evidence.current_claim_leases, :earliest)
+      current_runs != [] -> started_at(current_runs, :earliest)
+      runtime_evidence.active_grants != [] -> started_at(runtime_evidence.active_grants, :latest)
+      true -> started_at(evidence, :earliest)
+    end
+  end
+
+  defp started_at(evidence, order) do
+    timestamps = Enum.flat_map(evidence, &worker_started_at/1)
+    if order == :latest, do: latest_timestamp(timestamps), else: earliest_timestamp(timestamps)
+  end
+
+  defp worker_activity_at(%AccessGrant{} = grant), do: [grant.revoked_at, grant.updated_at, grant.claimed_at, grant.inserted_at]
+
+  defp worker_activity_at(%AgentRun{} = run) do
+    [run.finished_at, run.last_seen_at, run.updated_at, run.started_at, run.inserted_at]
+  end
+
+  defp worker_activity_at(%ClaimLease{} = lease) do
+    [
+      lease.released_at,
+      lease.reclaimed_at,
+      lease.paused_at,
+      lease.last_seen_at,
+      lease.updated_at,
+      lease.lease_started_at
+    ]
+  end
+
+  defp worker_run_label(evidence) do
+    evidence
+    |> Enum.map(&{worker_label_timestamp(&1), worker_label(&1)})
+    |> Enum.filter(fn {timestamp, label} -> match?(%DateTime{}, timestamp) and filled_string?(label) end)
+    |> Enum.max_by(fn {%DateTime{} = timestamp, _label} -> DateTime.to_unix(timestamp, :microsecond) end, fn -> nil end)
+    |> case do
+      {_timestamp, label} -> label |> Redactor.redact_text() |> String.slice(0, 80)
+      nil -> nil
+    end
+  end
+
+  defp worker_label_timestamp(evidence), do: evidence |> worker_activity_at() |> latest_timestamp()
+  defp worker_label(%AgentRun{} = run), do: run.worker_task_handle || run.actor_id
+  defp worker_label(%ClaimLease{} = lease), do: lease.actor_display_name || lease.actor_id
+  defp worker_label(%AccessGrant{} = grant), do: grant.claimed_by
+
   defp claim_lease_gate_at(%ClaimLease{status: "paused"} = claim_lease) do
     latest_timestamp([claim_lease.paused_at, claim_lease.updated_at])
   end
@@ -423,5 +582,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   defp normalize_blocker_id(value) when is_binary(value), do: String.trim(value)
   defp normalize_blocker_id(value), do: to_string(value)
 
+  defp reject_nil_values(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
   defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
 end

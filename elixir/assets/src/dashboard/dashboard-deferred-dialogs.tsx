@@ -1,4 +1,5 @@
-import { lazy, Suspense } from "react";
+import type { ComponentProps } from "react";
+import { lazy, Suspense, useRef } from "react";
 
 import type { CopyArchitectHandoff, GuidanceAnswerSubmission, GuidanceItem } from "@/types/dashboard";
 import type { AppDialogState } from "./dashboard-state";
@@ -66,28 +67,53 @@ export function DashboardDeferredDialogs({
         </Suspense>
       ) : null}
       {dialogState.selectedCardDetail ? (
-        <Suspense fallback={null}>
-          <CardDetailDialog
-            selection={dialogState.selectedCardDetail}
-            onOpenChange={(open) => {
-              if (!open) onSelectCard(null);
-            }}
-            onSelectGuidance={onSelectGuidance}
-            onCopyArchitectHandoff={copyArchitectHandoff}
-            onArchiveWorkRequest={onArchiveWorkRequest}
-            onChangeWorkRequestState={changeWorkRequestState}
-            onDeleteWorkRequest={onDeleteWorkRequest}
-            onChangeWorkPackageState={changeWorkPackageState}
-            onArchiveWorkPackage={onArchiveWorkPackage}
-            onClearWorkPackageBlocker={onClearWorkPackageBlocker}
-            canMutateOperatorActions={canMutateOperatorActions}
-            linkedWorkPackageIds={linkedWorkPackageIds}
-            onSubmitComment={onSubmitComment}
-            onResolveComment={onResolveComment}
-            canMutateComments={canMutateComments}
-          />
-        </Suspense>
+        <CardDetailDialogWithFocusReturn
+          selection={dialogState.selectedCardDetail}
+          onOpenChange={(open) => {
+            if (!open) onSelectCard(null);
+          }}
+          onSelectGuidance={onSelectGuidance}
+          onCopyArchitectHandoff={copyArchitectHandoff}
+          onArchiveWorkRequest={onArchiveWorkRequest}
+          onChangeWorkRequestState={changeWorkRequestState}
+          onDeleteWorkRequest={onDeleteWorkRequest}
+          onChangeWorkPackageState={changeWorkPackageState}
+          onArchiveWorkPackage={onArchiveWorkPackage}
+          onClearWorkPackageBlocker={onClearWorkPackageBlocker}
+          canMutateOperatorActions={canMutateOperatorActions}
+          linkedWorkPackageIds={linkedWorkPackageIds}
+          onSubmitComment={onSubmitComment}
+          onResolveComment={onResolveComment}
+          canMutateComments={canMutateComments}
+        />
       ) : null}
     </>
   );
+}
+
+function CardDetailDialogWithFocusReturn(props: ComponentProps<typeof CardDetailDialog>) {
+  const triggerRef = useRef(activeHTMLElement());
+
+  return (
+    <Suspense fallback={null}>
+      <CardDetailDialog
+        {...props}
+        onCloseAutoFocus={(event) => restoreCardDetailTriggerFocus(event, triggerRef.current)}
+      />
+    </Suspense>
+  );
+}
+
+function activeHTMLElement() {
+  if (typeof document === "undefined") return null;
+  return document.activeElement instanceof HTMLElement ? document.activeElement : null;
+}
+
+export function restoreCardDetailTriggerFocus(
+  event: Pick<Event, "preventDefault">,
+  trigger: Pick<HTMLElement, "focus" | "isConnected"> | null,
+) {
+  if (!trigger?.isConnected) return;
+  event.preventDefault();
+  trigger.focus();
 }
