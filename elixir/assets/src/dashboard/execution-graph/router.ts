@@ -29,6 +29,7 @@ export type WireGate = {
 };
 
 type Point = { x: number; y: number };
+type SourcePort = Point & { index: number; count: number; roofIndex?: number; roofCount?: number };
 type AxisPoint = { primary: number; cross: number };
 type AxisRect = { start: number; end: number; crossStart: number; crossExtent: number };
 type RouteKind = "direct" | "corridor" | "local";
@@ -38,7 +39,7 @@ type RouteCandidate = {
   target: GraphEntityRect;
   sourceRoot: GraphEntityRect;
   targetRoot: GraphEntityRect;
-  start: Point;
+  start: SourcePort;
   end: Point;
   kind: RouteKind;
 };
@@ -153,24 +154,17 @@ function mobilePaths(candidates: RouteCandidate[]) {
 
 function routeOptions(candidate: RouteCandidate, model: ExecutionGraphLayoutModel) {
   const routing = model.routing;
-  if (candidate.kind === "direct") {
-    const direct = directOptions(candidate);
-    if (!routing) return direct;
-    const corridor = sameBandOptions(
-      candidate,
-      sourceLaneOptions(candidate, routing),
-      bandLaneOptions(candidate.targetRoot.row, model, "target"),
-      targetLaneOptions(candidate, model),
-    );
-    return [...direct, ...corridor];
-  }
+  if (candidate.kind === "direct") return directOptions(candidate, routing);
   if (!routing) return [routeFromPoints([candidate.start, candidate.end])];
 
   const sourceXs = sourceLaneOptions(candidate, routing);
   const targetXs = targetLaneOptions(candidate, model);
   const targetYs = candidate.kind === "local"
-    ? spread(candidate.sourceRoot.y + candidate.sourceRoot.height + 8, candidate.sourceRoot.y + candidate.sourceRoot.height + 18, 3)
-    : bandLaneOptions(candidate.targetRoot.row, model, "target");
+    ? spread(candidate.sourceRoot.y + candidate.sourceRoot.height + 16, candidate.sourceRoot.y + candidate.sourceRoot.height + 28, 3)
+    : [
+        ...lowerBandLaneOptions(candidate, model),
+        ...bandLaneOptions(candidate.targetRoot.row, model, "target"),
+      ];
   const crossBand = candidate.sourceRoot.row !== candidate.targetRoot.row;
   if (!crossBand) return sameBandOptions(candidate, sourceXs, targetYs, targetXs);
   return crossBandOptions(candidate, model, sourceXs, targetYs, targetXs);
@@ -190,19 +184,28 @@ function crossBandOptions(candidate: RouteCandidate, model: ExecutionGraphLayout
       routeFromPoints([candidate.start, { x: busX, y: candidate.start.y }, { x: busX, y: targetY }, { x: targetX, y: targetY }, { x: targetX, y: candidate.end.y }, candidate.end])
     ))));
   }
-  const sourceYs = bandLaneOptions(candidate.sourceRoot.row, model, "source");
+  const sourceYs = sourceBandLaneOptions(candidate, model);
   return sourceXs.flatMap((sourceX) => sourceYs.flatMap((sourceY) => busXs.flatMap((busX) => targetYs.flatMap((targetY) => targetXs.map((targetX) => (
     routeFromPoints([candidate.start, { x: sourceX, y: candidate.start.y }, { x: sourceX, y: sourceY }, { x: busX, y: sourceY }, { x: busX, y: targetY }, { x: targetX, y: targetY }, { x: targetX, y: candidate.end.y }, candidate.end])
   ))))));
 }
 
-function directOptions(candidate: RouteCandidate) {
+function directOptions(candidate: RouteCandidate, routing?: ExecutionGraphLayoutModel["routing"]) {
   if (Math.abs(candidate.start.y - candidate.end.y) < 1) return [routeFromPoints([candidate.start, candidate.end])];
-  return spread(candidate.start.x + BRANCH_STUB, candidate.end.x - BRANCH_STUB, 8)
+  const laneIndex = candidate.end.y > candidate.start.y
+    ? candidate.start.count - candidate.start.index - 1
+    : candidate.start.index;
+  const fanoutLane = routing && sourceFanoutLane(candidate, routing, laneIndex);
+  const tracks = fanoutLane === undefined
+    ? spread(candidate.start.x + BRANCH_STUB, candidate.end.x - BRANCH_STUB, 8)
+    : [fanoutLane];
+  return tracks
     .map((track) => routeFromPoints([candidate.start, { x: track, y: candidate.start.y }, { x: track, y: candidate.end.y }, candidate.end]));
 }
 
 function sourceLaneOptions(candidate: RouteCandidate, routing: NonNullable<ExecutionGraphLayoutModel["routing"]>) {
+  const fanoutLane = sourceFanoutLane(candidate, routing);
+  if (fanoutLane !== undefined) return [fanoutLane];
   if (candidate.kind === "local") return spread(candidate.sourceRoot.x + candidate.sourceRoot.width + 8, candidate.sourceRoot.x + candidate.sourceRoot.width + 18, 3);
   if (candidate.sourceRoot.column < 2) {
     const right = candidate.sourceRoot.x + candidate.sourceRoot.width;
@@ -216,12 +219,47 @@ function targetLaneOptions(candidate: RouteCandidate, model: ExecutionGraphLayou
   const previousRight = candidate.targetRoot.column === 0
     ? 8
     : Math.max(...model.rects.filter((rect) => !rect.parent_group_id && rect.row === candidate.targetRoot.row && rect.column === candidate.targetRoot.column - 1).map((rect) => rect.x + rect.width), 8) + 8;
-  return spread(previousRight, candidate.end.x - BRANCH_STUB, 6).reverse();
+  const lanes = spread(previousRight, candidate.end.x - BRANCH_STUB, 6);
+  return candidate.kind === "local" ? lanes.reverse() : lanes;
+}
+
+function sourceFanoutLane(candidate: RouteCandidate, routing: NonNullable<ExecutionGraphLayoutModel["routing"]>, laneIndex = candidate.start.index) {
+  if (candidate.start.count <= 1) return undefined;
+  const right = candidate.sourceRoot.x + candidate.sourceRoot.width;
+  const max = candidate.sourceRoot.column < 2
+    ? (routing.columnGutters.get(candidate.sourceRoot.column) ?? right + BRANCH_STUB + WIRE_CLEARANCE) - WIRE_CLEARANCE
+    : right + BRANCH_STUB + (candidate.start.count - 1) * WIRE_CLEARANCE;
+  const requiredMax = right + BRANCH_STUB + (candidate.start.count - 1) * WIRE_CLEARANCE;
+  return spread(right + BRANCH_STUB, Math.max(max, requiredMax), candidate.start.count)[laneIndex];
+}
+
+function sourceBandLaneOptions(candidate: RouteCandidate, model: ExecutionGraphLayoutModel) {
+  const lanes = bandLaneOptions(candidate.sourceRoot.row, model, "source");
+  const count = candidate.start.roofCount || candidate.start.count;
+  const index = candidate.start.roofIndex ?? candidate.start.index;
+  if (count <= 1) return candidate.start.count > 1 ? [lanes[0]] : lanes;
+  const requiredSpan = (count - 1) * WIRE_CLEARANCE;
+  const span = Math.max((lanes.at(-1) as number) - lanes[0], requiredSpan);
+  const low = Math.max(4, (lanes[0] + (lanes.at(-1) as number) - span) / 2);
+  return [spread(low, low + span, count)[index]];
+}
+
+function lowerBandLaneOptions(candidate: RouteCandidate, model: ExecutionGraphLayoutModel) {
+  if (candidate.kind !== "corridor" || candidate.sourceRoot.row !== candidate.targetRoot.row) return [];
+  const bottoms = model.rects
+    .filter((rect) => !rect.parent_group_id
+      && rect.row === candidate.sourceRoot.row
+      && rect.column >= candidate.sourceRoot.column
+      && rect.column < candidate.targetRoot.column)
+    .map((rect) => rect.y + rect.height);
+  const bottom = Math.max(candidate.sourceRoot.y + candidate.sourceRoot.height, ...bottoms);
+  return spread(bottom + 16, bottom + 28, 3);
 }
 
 function bandLaneOptions(row: number, model: ExecutionGraphLayoutModel, side: "source" | "target") {
   const routing = model.routing as NonNullable<ExecutionGraphLayoutModel["routing"]>;
   const bandTop = Math.min(...model.rects.filter((rect) => !rect.parent_group_id && rect.row === row).map((rect) => rect.y));
+  if (row === 0 && side === "source") return spread(bandTop - 28, bandTop - 16, 3);
   const previousBottom = row > 0 ? (routing.bandBottoms.get(row - 1) ?? 0) : 0;
   const low = previousBottom + 12;
   const high = bandTop - 18;
@@ -318,14 +356,30 @@ function sourcePorts(
   rects: Map<string, GraphEntityRect>,
   orientation: GraphOrientation,
 ) {
-  const ports = new Map<string, Point>();
+  const ports = new Map<string, SourcePort>();
   groupBy(dependencies, ({ source_key }) => source_key).forEach((members, sourceKey) => {
     const source = rects.get(sourceKey);
     if (!source) return;
     members.sort((left, right) => portPriority(left, rects, orientation) - portPriority(right, rects, orientation)
       || targetDistance(right, source, rects) - targetDistance(left, source, rects)
       || compareTargetPosition(left, right, rects));
-    members.forEach((dependency, index) => ports.set(dependency.key, sourcePort(source, orientation, index, members.length)));
+    const sourceRoot = rootRect(source, rects);
+    const roofMembers = orientation === "desktop"
+      ? members.filter((dependency) => {
+          const target = rects.get(dependency.target_key);
+          if (!target) return false;
+          const targetRoot = rootRect(target, rects);
+          return sourceRoot.column < 2 && sourceRoot.row !== targetRoot.row;
+        })
+      : [];
+    const roofIndexes = new Map(roofMembers.map((dependency, index) => [dependency.key, index]));
+    members.forEach((dependency, index) => ports.set(dependency.key, {
+      ...sourcePort(source, orientation, index, members.length),
+      index,
+      count: members.length,
+      roofIndex: roofIndexes.get(dependency.key),
+      roofCount: roofMembers.length,
+    }));
   });
   return ports;
 }
@@ -440,7 +494,10 @@ function portPriority(dependency: VisibleGraphDependency, rects: Map<string, Gra
   const source = rects.get(dependency.source_key);
   const target = rects.get(dependency.target_key);
   if (!source || !target) return 0;
-  const kind = routeKind(rootRect(source, rects), rootRect(target, rects), orientation);
+  const sourceRoot = rootRect(source, rects);
+  const targetRoot = rootRect(target, rects);
+  const kind = routeKind(sourceRoot, targetRoot, orientation);
+  if (kind === "corridor" && sourceRoot.row === targetRoot.row && target.y + target.height / 2 > sourceRoot.y + sourceRoot.height) return 2;
   return kind === "corridor" ? 0 : kind === "direct" ? 1 : 2;
 }
 

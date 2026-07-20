@@ -150,8 +150,12 @@ describe("WorkRequestExecutionGraph", () => {
       .filter((dependency) => dependency.source_key === "group:source")
       .sort((left, right) => rect(fanoutModel, left.target_key).y - rect(fanoutModel, right.target_key).y)
       .map((dependency) => fanout.find((route) => route.edge === dependency.key) as WirePath);
+    const sourceTracks = sourcePaths.map((path) => firstHorizontalTrack(path.path));
 
     expect(sourcePaths.map((path) => path.source?.y)).toEqual([...sourcePaths.map((path) => path.source?.y)].sort((left, right) => (left ?? 0) - (right ?? 0)));
+    expect(sourceTracks).toEqual([...sourceTracks].sort((left, right) => right - left));
+    expect(sourceTracks.slice(1).every((track, index) => sourceTracks[index] - track >= 6)).toBe(true);
+    expect(sourcePaths.every((path) => routeSegments(path.path).length <= 3)).toBe(true);
     expect(routeConflicts(sourcePaths)).toEqual([]);
     expect(routeSegments(publishPath ?? "").some((segment) => segment.y1 === segment.y2 && segment.y1 > output.y + output.height)).toBe(true);
 
@@ -200,23 +204,34 @@ describe("WorkRequestExecutionGraph", () => {
     const source = rect(model, "work_package:wp-0");
     const target = rect(model, "work_package:wp-7");
     const route = routes.paths.find((path) => path.intentIds.includes("0-7"));
+    const roof = routeSegments(route?.path ?? "").find((segment) => segment.y1 === segment.y2 && segment.y1 < source.y);
     expect(model.routing?.wrapped).toBe(true);
     expect(model.width).toBeLessThan(1_200);
     expect([...new Set(model.rects.map((item) => item.column))]).toEqual([0, 1, 2]);
     expect(target.row).toBe(2);
     expect(route?.path).toMatch(new RegExp(`^M ${source.x + source.width} [\\d.]+ H [\\d.]+ V [\\d.]+ H [\\d.]+ V [\\d.]+ H [\\d.]+ V [\\d.]+ H ${target.x - 22}$`));
+    expect(source.y - (roof?.y1 ?? source.y)).toBeGreaterThanOrEqual(16);
+    expect(source.y - (roof?.y1 ?? source.y)).toBeLessThanOrEqual(44);
     expect(routes.paths.flatMap((path) => unrelatedCardIntersections(path, model))).toEqual([]);
     expect(routeConflicts(routes.paths)).toEqual([]);
   });
 
-  it("keeps expanded-child dependencies attached right-to-left without cutting through a sibling root", () => {
-    const model = buildExecutionGraphLayout(nestedCorridorFixture, "desktop", new Set(["source"]));
+  it("routes a deep expanded-child dependency below the current roots and into the target from the leading lane", () => {
+    const model = buildExecutionGraphLayout(nestedCorridorFixture, "desktop", new Set(["source", "target"]));
     const child = rect(model, "work_package:bottom");
+    const source = rect(model, "group:source");
+    const middle = rect(model, "group:middle");
     const route = graphWireRoutes(model, "desktop").paths.find((path) => path.intentIds.includes("bottom-target"));
-    const target = rect(model, "group:target");
+    const target = rect(model, "work_package:target-e");
+    const segments = routeSegments(route?.path ?? "");
+    const currentRootsBottom = Math.max(source.y + source.height, middle.y + middle.height);
+    const targetApproach = segments.at(-2);
 
-    expect(route?.path).toMatch(new RegExp(`^M ${child.x + child.width} [\\d.]+ H [\\d.]+ V [\\d.]+ H ${target.x}$`));
+    expect(route?.path).toMatch(new RegExp(`^M ${child.x + child.width} [\\d.]+ H [\\d.]+ V [\\d.]+ H [\\d.]+ V [\\d.]+ H ${target.x}$`));
     expect(route?.path).not.toContain(`M ${child.x + child.width / 2} ${child.y} V`);
+    expect(segments.some((segment) => segment.y1 === segment.y2 && segment.y1 - currentRootsBottom >= 16)).toBe(true);
+    expect(targetApproach?.x1).toBe(middle.x + middle.width + 8);
+    expect(targetApproach?.x2).toBe(targetApproach?.x1);
     expect(unrelatedCardIntersections(route!, model)).toEqual([]);
   });
 
@@ -439,19 +454,20 @@ const nestedCorridorFixture: WorkRequestExecutionGraphModel = {
   groups: [
     { id: "source", title: "Source", position: 1, work_package_ids: ["top", "bottom"] },
     { id: "middle", title: "Middle", position: 2, work_package_ids: ["middle-wp"] },
-    { id: "target", title: "Target", position: 3, work_package_ids: ["target-wp"] },
+    { id: "target", title: "Target", position: 3, work_package_ids: ["target-a", "target-b", "target-c", "target-d", "target-e"] },
   ],
   work_packages: [
     { id: "top", group_id: "source", title: "Top", status: "merged" },
     { id: "bottom", group_id: "source", title: "Bottom", status: "merged" },
     { id: "middle-wp", group_id: "middle", title: "Middle", status: "planned" },
-    { id: "target-wp", group_id: "target", title: "Target", status: "planned" },
+    ...["a", "b", "c", "d", "e"].map((id) => ({ id: `target-${id}`, group_id: "target", title: `Target ${id.toUpperCase()}`, status: "planned" })),
   ],
   dependency_intents: [
     { id: "source-middle", prerequisite: { kind: "group", id: "source" }, dependent: { kind: "group", id: "middle" } },
-    { id: "bottom-target", prerequisite: { kind: "work_package", id: "bottom" }, dependent: { kind: "group", id: "target" } },
+    { id: "middle-target", prerequisite: { kind: "group", id: "middle" }, dependent: { kind: "work_package", id: "target-a" } },
+    { id: "bottom-target", prerequisite: { kind: "work_package", id: "bottom" }, dependent: { kind: "work_package", id: "target-e" } },
   ],
-  topological_order: ["top", "bottom", "middle-wp", "target-wp"],
+  topological_order: ["top", "bottom", "middle-wp", "target-a", "target-b", "target-c", "target-d", "target-e"],
 };
 
 function render() {
