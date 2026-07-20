@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import {
   buildExecutionGraphLayout,
@@ -186,10 +186,10 @@ function WorkPackageCard({
   const dependencyLabel = accessibleDependencyLabel(model, rect.key, progress.satisfied, progress.required);
   const groupLabel = groupAncestryLabel(model, ref.group_id);
   const cardContextPath = contextPath ? contextPathValue([...contextPath, ...groupAncestryPath(model, ref.group_id)]) : undefined;
-  const interaction = cardInteraction(rect.id, onSelectWorkPackage);
   const scope = scopeLabel(model.packageScopes.get(ref.id));
   const pr = signal?.pr_signal;
   const prLabel = prBadgeLabel(pr);
+  const accessibleLabel = sentenceLabel([title, groupLabel, scope, state.label, reason, prLabel, dependencyLabel]);
 
   return (
     <article
@@ -202,14 +202,15 @@ function WorkPackageCard({
       data-state={state.tone}
       data-parent-group-id={rect.parent_group_id}
       data-v3-context-path={cardContextPath}
-      aria-label={sentenceLabel([title, groupLabel, scope, state.label, reason, prLabel, dependencyLabel])}
-      {...interaction}
     >
       <span className="execution-graph__title-stack">
         <h3 className="execution-graph__card-title" title={title}>{title}</h3>
         {scope ? <span className="execution-graph__scope" title={scope}>{scope}</span> : null}
       </span>
       <span className="execution-graph__status">{state.label}</span>
+      {onSelectWorkPackage ? (
+        <button className="execution-graph__card-action" type="button" aria-label={accessibleLabel} onClick={() => onSelectWorkPackage(rect.id)} />
+      ) : null}
       {prLabel ? <PrBadge signal={pr} label={prLabel} /> : null}
       <span className="sr-only">{groupLabel}</span>
       <span className="sr-only">{dependencyLabel}</span>
@@ -220,7 +221,7 @@ function WorkPackageCard({
 function PrBadge({ signal, label }: { signal: ExecutionGraphWorkPackageSignals["pr_signal"]; label: string }) {
   if (!signal?.url) return <span className="execution-graph__pr-badge">{label}</span>;
   return (
-    <a className="execution-graph__pr-badge" href={signal.url} target="_blank" rel="noreferrer" title={`Open ${label}`} onClick={(event) => event.stopPropagation()}>
+    <a className="execution-graph__pr-badge" href={signal.url} target="_blank" rel="noreferrer" title={`Open ${label}`}>
       {label}
     </a>
   );
@@ -268,22 +269,6 @@ function groupAncestryPath(model: ExecutionGraphLayoutModel, groupId?: string | 
     currentId = group.parent_group_id;
   }
   return path;
-}
-
-function cardInteraction(id: string, onSelect?: (id: string) => void) {
-  if (!onSelect) return {};
-  return {
-    role: "button" as const,
-    tabIndex: 0,
-    onClick: () => onSelect(id),
-    onKeyDown: (event: KeyboardEvent<HTMLElement>) => activateCard(event, id, onSelect),
-  };
-}
-
-function activateCard(event: KeyboardEvent<HTMLElement>, id: string, onSelect: (id: string) => void) {
-  if (event.key !== "Enter" && event.key !== " ") return;
-  event.preventDefault();
-  onSelect(id);
 }
 
 function cardState(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals, now?: string | number | Date) {

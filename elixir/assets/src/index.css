@@ -3951,7 +3951,7 @@
   }
 
   .execution-graph__card:hover,
-  .execution-graph__card:focus-visible,
+  .execution-graph__card:has(> .execution-graph__card-action:focus-visible),
   .execution-graph__group-card:has(> .execution-graph__group-header:hover),
   .execution-graph__group-card:has(> .execution-graph__group-header:focus-visible) {
     border-color: color-mix(in oklch, var(--graph-hover-color) 62%, transparent);
@@ -3960,7 +3960,17 @@
       0 9px 24px hsl(224 27% 12% / 0.1);
   }
 
-  .execution-graph__card[role="button"] {
+  .execution-graph__card:has(> .execution-graph__card-action) {
+    cursor: pointer;
+  }
+
+  .execution-graph__card-action {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    border: 0;
+    border-radius: inherit;
+    background: transparent;
     cursor: pointer;
   }
 
@@ -4156,6 +4166,8 @@
   }
 
   .execution-graph__pr-badge {
+    position: relative;
+    z-index: 2;
     display: inline-flex;
     align-items: center;
     border: 1px solid hsl(var(--border) / 0.82);

@@ -305,10 +305,12 @@ describe("WorkRequestExecutionGraph", () => {
 
   it("keeps cards accessible and avoids empty signal chrome", () => {
     const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ work_packages: [{ id: "long", title: longTitle, status: "planned" }], topological_order: ["long"] }} />);
+    const interactive = renderToStaticMarkup(<WorkRequestExecutionGraph model={{ work_packages: [{ id: "long" }], topological_order: ["long"] }} onSelectWorkPackage={() => {}} />);
 
     expect(html).toContain(`title="${longTitle}"`);
     expect(firstCard(html, "long")).not.toContain('tabindex="0"');
-    expect(renderToStaticMarkup(<WorkRequestExecutionGraph model={{ work_packages: [{ id: "long" }], topological_order: ["long"] }} onSelectWorkPackage={() => {}} />)).toContain('role="button" tabindex="0"');
+    expect(interactive).toContain('<button class="execution-graph__card-action" type="button" aria-label=');
+    expect(firstCard(interactive, "long")).not.toContain('role="button"');
     expect(html).toContain("No prerequisites");
     expect(html).not.toContain("execution-graph__signals");
     expect(html).toContain('role="region" tabindex="0"');
