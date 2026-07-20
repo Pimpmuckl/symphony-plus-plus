@@ -13,6 +13,7 @@ const POWERSHELL_FALLBACK = 43;
 const BOARD_PATH = "/sympp/board";
 const MAX_DASHBOARD_REDIRECTS = 3;
 const GENERATION_SETTLE_MS = 100;
+const CLEANUP_SOURCE_CHANGED = Symbol("cleanup_source_changed");
 const synchronousWait = new Int32Array(new SharedArrayBuffer(4));
 const agent = new http.Agent({ keepAlive: true });
 const generationWatchers = [];
@@ -202,7 +203,6 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
   if (!watched) return null;
 
   let watchVersion = generationWatchVersion;
-  await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
   let generation = liveGeneration(markerFile);
   if (generation && generationWatchVersion === watchVersion) {
     trace("generation_cache_hit");
@@ -216,7 +216,6 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
     if (lock !== null) {
       try {
         watchVersion = generationWatchVersion;
-        await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
         generation = liveGeneration(markerFile);
         if (generation && generationWatchVersion === watchVersion) return { key: generation, watchVersion };
         for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -226,7 +225,6 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
           trace("generation_scan_complete");
           await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
           const confirmed = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
-          await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
           if (!confirmed || confirmed !== generation || generationWatchVersion !== watchVersion) {
             trace("generation_scan_retry");
             continue;
@@ -235,7 +233,6 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
           fs.writeFileSync(temporary, `${JSON.stringify({ generation_key: generation, validated_at_ms: performance.timeOrigin + performance.now() })}\n`);
           try { fs.unlinkSync(markerFile); } catch (_) { }
           fs.renameSync(temporary, markerFile);
-          await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
           if (generationWatchVersion !== watchVersion || liveGeneration(markerFile) !== generation) {
             trace("generation_scan_retry");
             continue;
@@ -300,14 +297,19 @@ function prepareCleanupScript(identity) {
   try {
     const names = fs.readdirSync(__dirname).filter((name) => name.toLowerCase().endsWith(".ps1"));
     const directory = path.join(resolveHome(), "runtime", "launcher-cleanup", `${identity.revision}-${identity.generationKey.slice(0, 12)}`);
+    const marketplaceScripts = path.join(identity.sourceRoot, "plugins", path.basename(path.dirname(identity.pluginRoot)), "scripts");
     fs.mkdirSync(directory, { recursive: true });
     for (const name of names) {
       const source = path.join(__dirname, name);
       const destination = path.join(directory, name);
+      const sourceHash = sha256(fs.readFileSync(source));
+      let marketplaceHash;
+      try { marketplaceHash = sha256(fs.readFileSync(path.join(marketplaceScripts, name))); } catch (_) { return CLEANUP_SOURCE_CHANGED; }
+      if (sourceHash !== marketplaceHash) return CLEANUP_SOURCE_CHANGED;
       try { fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL); } catch (error) {
         if (error.code !== "EEXIST") throw error;
       }
-      if (sha256(fs.readFileSync(destination)) !== sha256(fs.readFileSync(source))) return null;
+      if (sha256(fs.readFileSync(destination)) !== sourceHash) return null;
     }
     const script = path.join(directory, "start-sympp-mcp.ps1");
     if (!fs.existsSync(script)) return null;
@@ -605,6 +607,7 @@ async function bridge(identity, state, runtimeFile) {
   const clientId = `bridge-${process.pid}-${crypto.randomUUID().replace(/-/g, "")}`;
   let localLease = null;
   let cleanupScript = null;
+  let cleanupAllowed = true;
   let startupLock = null;
   let attached = false;
   let heartbeat = null;
@@ -625,6 +628,11 @@ async function bridge(identity, state, runtimeFile) {
       return false;
     }
     cleanupScript = prepareCleanupScript(identity);
+    if (cleanupScript === CLEANUP_SOURCE_CHANGED) {
+      cleanupAllowed = false;
+      cleanupScript = null;
+      throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
+    }
     if (!cleanupScript) {
       trace("warm_miss_cleanup");
       return false;
@@ -650,6 +658,15 @@ async function bridge(identity, state, runtimeFile) {
     }
     if (!await preflightRuntimeHealth(runtimeFile, confirmedState, confirmed)) {
       trace("warm_miss_health");
+      return false;
+    }
+    const confirmedCleanupScript = prepareCleanupScript(identity);
+    if (confirmedCleanupScript === CLEANUP_SOURCE_CHANGED) {
+      cleanupAllowed = false;
+      throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
+    }
+    if (!confirmedCleanupScript) {
+      trace("warm_miss_cleanup");
       return false;
     }
     if (!await generationValidAtAttachment(identity)) {
@@ -704,7 +721,7 @@ async function bridge(identity, state, runtimeFile) {
     if (localLease) { try { fs.unlinkSync(localLease); } catch (_) { } }
     if (attached) await clientLease(mcpUrl, clientId, "detach", false);
     closeGenerationWatchers();
-    cleanupLastDetach(runtimeFile, identity.runtimeKey, cleanupScript);
+    if (cleanupAllowed) cleanupLastDetach(runtimeFile, identity.runtimeKey, cleanupScript);
     closeLivenessProbe();
   }
 }
