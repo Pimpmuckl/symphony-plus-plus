@@ -9,7 +9,7 @@ const readline = require("readline");
 const { spawn } = require("child_process");
 const { performance } = require("perf_hooks");
 
-const warmSamples = Number(process.argv[2] || 10);
+const warmSamples = Number(process.argv[2] || 30);
 if (!Number.isInteger(warmSamples) || warmSamples < 1) throw new Error("usage: node measure-attach.js [warm-samples]");
 
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -34,6 +34,10 @@ function hash(value) {
 function percentile(values, fraction) {
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)];
+}
+
+function round(value) {
+  return Math.round(value * 100) / 100;
 }
 
 function writeJson(file, value) {
@@ -101,9 +105,19 @@ function prepareInstall(origin) {
   });
 }
 
-function startClient() {
+function clientCommand(mode) {
   const script = path.join(pluginRoot, "scripts", "start-sympp-mcp-bridge.js");
-  const child = spawn(process.execPath, [script], {
+  if (mode === "controlled") return { file: process.execPath, args: [script] };
+  if (mode === "cmd_passthrough") {
+    return { file: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", "node.exe scripts\\start-sympp-mcp-bridge.js"] };
+  }
+  const server = JSON.parse(fs.readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")).symphony_plus_plus;
+  return { file: server.command, args: server.args };
+}
+
+function startClient(mode = "controlled") {
+  const command = clientCommand(mode);
+  const child = spawn(command.file, command.args, {
     cwd: pluginRoot,
     env: bridgeEnvironment(),
     stdio: ["pipe", "pipe", "pipe"],
@@ -165,6 +179,16 @@ async function closeClient(client) {
   clients.delete(client);
 }
 
+function summary(samples) {
+  const ready = samples.map((sample) => sample.ready_ms);
+  return { samples: ready.length, p50_ready_ms: round(percentile(ready, 0.5)), p95_ready_ms: round(percentile(ready, 0.95)), max_ready_ms: round(percentile(ready, 1)) };
+}
+
+function medianDelta(before, after) {
+  const absolute = after.p50_ready_ms - before.p50_ready_ms;
+  return { p50_ms: round(absolute), p50_percentage: round((absolute / before.p50_ready_ms) * 100) };
+}
+
 async function main() {
   const server = await startBackend();
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -172,16 +196,44 @@ async function main() {
   try {
     const anchor = startClient();
     const cold = await anchor.ready;
-    const warm = [];
-    for (let index = 0; index < warmSamples; index += 1) {
-      const sample = startClient();
-      warm.push(await sample.ready);
-      await closeClient(sample.child);
+    for (const mode of ["cmd_passthrough", "exact_shipped"]) {
+      const client = startClient(mode);
+      await client.ready;
+      await closeClient(client.child);
     }
-    const ready = warm.map((sample) => sample.ready_ms);
+    const warm = { controlled: [], cmd_passthrough: [], exact_shipped: [] };
+    for (let index = 0; index < warmSamples; index += 1) {
+      const order = index % 2 === 0
+        ? ["controlled", "cmd_passthrough", "exact_shipped"]
+        : ["exact_shipped", "cmd_passthrough", "controlled"];
+      for (const mode of order) {
+        const client = startClient(mode);
+        warm[mode].push(await client.ready);
+        await closeClient(client.child);
+      }
+    }
     await closeClient(anchor.child);
     const integrity = await verifyIntegrityRejection();
-    console.log(JSON.stringify({ command: "node scripts/start-sympp-mcp-bridge.js", cold, warm, summary: { samples: warm.length, p50_ready_ms: percentile(ready, 0.5), p95_ready_ms: percentile(ready, 0.95) }, integrity }, null, 2));
+    const summaries = Object.fromEntries(Object.entries(warm).map(([mode, samples]) => [mode, summary(samples)]));
+    const attribution = {
+      cmd_process: medianDelta(summaries.controlled, summaries.cmd_passthrough),
+      shipped_batch: medianDelta(summaries.cmd_passthrough, summaries.exact_shipped),
+      total_shipped_gap: medianDelta(summaries.controlled, summaries.exact_shipped),
+    };
+    console.log(JSON.stringify({
+      commands: {
+        controlled: "node scripts/start-sympp-mcp-bridge.js",
+        cmd_passthrough: "cmd.exe /d /s /c node scripts/start-sympp-mcp-bridge.js",
+        exact_shipped: "cmd.exe /d /s /c scripts\\start-sympp-mcp.cmd",
+      },
+      cold,
+      warm,
+      summary: {
+        ...summaries,
+        attribution,
+      },
+      integrity,
+    }, null, 2));
   } finally {
     for (const client of clients) client.kill();
     await new Promise((resolve) => server.close(resolve));
