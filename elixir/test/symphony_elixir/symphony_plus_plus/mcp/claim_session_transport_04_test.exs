@@ -325,6 +325,53 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert DateTime.compare(refreshed_lease.last_seen_at, old_seen_at) == :gt
   end
 
+  test "fresh claim worker calls stay within query and write budgets", %{repo: repo} do
+    package = create_local_claim_package!(repo, "SYMPP-STATE-QUERY-BUDGET")
+    assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+
+    {_claim_response, claimed_server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "claim-query-budget",
+          "method" => "tools/call",
+          "params" => %{"name" => "claim_local_assignment", "arguments" => local_assignment_claim_args(package)}
+        },
+        local_mcp_server(local_mcp_config(repo), "claim-query-budget-state")
+      )
+
+    {{assignment_response, read_server}, read_queries} =
+      capture_queries(repo, fn ->
+        Server.handle_state(
+          %{"jsonrpc" => "2.0", "id" => "read-query-budget", "method" => "tools/call", "params" => %{"name" => "get_current_assignment", "arguments" => %{}}},
+          claimed_server
+        )
+      end)
+
+    {{progress_response, _server}, write_queries} =
+      capture_queries(repo, fn ->
+        Server.handle_state(
+          %{
+            "jsonrpc" => "2.0",
+            "id" => "write-query-budget",
+            "method" => "tools/call",
+            "params" => %{
+              "name" => "append_progress",
+              "arguments" => %{"summary" => "Query budget write", "idempotency_key" => "query-budget-write"}
+            }
+          },
+          read_server
+        )
+      end)
+
+    assert get_in(assignment_response, ["result", "structuredContent", "assignment", "work_package_id"]) == package.id
+    assert get_in(progress_response, ["result", "structuredContent", "progress_event", "summary"]) == "Query budget write"
+    assert length(read_queries) <= 9
+    assert write_query_count(read_queries) == 0
+    assert length(write_queries) <= 25
+    assert write_query_count(write_queries) <= 4
+  end
+
   test "batched bound tool calls preserve refreshed claim lease state", %{repo: repo} do
     package = create_local_claim_package!(repo, "SYMPP-STATE-BATCH-HEARTBEAT")
     assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
@@ -863,4 +910,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert %Server{session: %Session{assignment: %{work_package_id: package_id}}} = HTTPStateStore.get(config, client_key, init_result.state_key)
     assert package_id == package.id
   end
+
+  defp capture_queries(repo, fun) do
+    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
+    event = repo.config()[:telemetry_prefix] ++ [:query]
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn _event, _measurements, metadata, test_pid -> send(test_pid, {handler_id, to_string(metadata.query || "")}) end,
+        self()
+      )
+
+    try do
+      result = fun.()
+      {result, drain_queries(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_queries(handler_id, queries) do
+    receive do
+      {^handler_id, query} -> drain_queries(handler_id, [query | queries])
+    after
+      0 -> Enum.reverse(queries)
+    end
+  end
+
+  defp write_query_count(queries), do: Enum.count(queries, &Regex.match?(~r/^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i, &1))
 end
