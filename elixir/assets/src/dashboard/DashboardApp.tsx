@@ -22,9 +22,7 @@ import { filterWorkstreamsBySearch } from "./dashboard-search";
 import { activeWorkRequestDetails, packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
 import { useDashboardUpdateAnimations } from "./update-animations";
 import { useDashboardSurfaceLoading } from "./dashboard-surface-loading";
-
 type DashboardLoadMode = "initial" | "refresh" | "silent" | "reconnect";
-
 function mergeDashboardLoadMode(pending: DashboardLoadMode, next: DashboardLoadMode) {
   return pending === "reconnect" || next === "reconnect" ? "reconnect" : next;
 }
@@ -43,6 +41,7 @@ function useDashboardController() {
   const initialDashboardFingerprint = useMemo(() => dashboardContentFingerprint(dashboard), [dashboard]);
   const dashboardFingerprintRef = useRef(initialDashboardFingerprint);
   const connectionIssueRef = useRef<DashboardConnectionIssue | null>(null);
+  const failureVersionRef = useRef(0);
   const refreshQueueRef = useRef(createLatestTaskQueue<DashboardLoadMode>());
   const loadSequenceRef = useRef(0);
   const deferredLoadSequenceRef = useRef(0);
@@ -58,7 +57,7 @@ function useDashboardController() {
   const setLoading = useCallback((nextLoading: boolean) => dispatchApp({ type: "patch", state: { loading: nextLoading } }), []);
   const setRefreshing = useCallback((nextRefreshing: boolean) => dispatchApp({ type: "patch", state: { refreshing: nextRefreshing } }), []);
   const setError = useCallback((nextError: string | null) => dispatchApp({ type: "patch", state: { error: nextError } }), []);
-  const clearConnectionFailure = useCallback(() => { connectionIssueRef.current = null; setConnectionIssue(null); setError(null); }, [setError]);
+  const clearConnectionFailure = useCallback((failureVersion = failureVersionRef.current) => { if (failureVersion !== failureVersionRef.current) return; connectionIssueRef.current = null; setConnectionIssue(null); setError(null); }, [setError]);
   const setWorkspaceTab = useCallback((nextWorkspaceTab: WorkspaceTab) => dispatchApp({ type: "patch", state: { workspaceTab: nextWorkspaceTab } }), []);
   const updateDashboardSearchQuery = useCallback((query: string) => {
     setDashboardSearchQuery(query);
@@ -73,18 +72,16 @@ function useDashboardController() {
   useEffect(() => {
     connectionIssueRef.current = connectionIssue;
   }, [connectionIssue]);
-
   const recordConnectionFailure = useCallback(
     (message: string, immediate = false, reconnectableLocalSession = false) => {
+      failureVersionRef.current += 1;
       const now = Date.now();
       const canGrace = !immediate && Boolean(dashboardRef.current);
-
       if (!canGrace) {
         setConnectionIssue(null);
         setError(message);
         return;
       }
-
       const currentIssue = connectionIssueRef.current;
       const firstFailedAt = currentIssue?.firstFailedAt ?? now;
       const nextIssue = { firstFailedAt, lastFailedAt: now, message, reconnectableLocalSession };
@@ -113,7 +110,7 @@ function useDashboardController() {
   }, []);
 
   const applyDashboardResponse = useCallback(
-    async (response: Response, fallbackMessage: string, selectDashboard: DashboardResponseSelector = (payload) => payload as DashboardPayload, loadMutationVersion = mutationVersionRef.current, shouldApply: () => boolean = () => true) => {
+    async (response: Response, fallbackMessage: string, selectDashboard: DashboardResponseSelector = (payload) => payload as DashboardPayload, loadMutationVersion = mutationVersionRef.current, shouldApply: () => boolean = () => true, failureVersion = failureVersionRef.current) => {
       const payload = await readDashboardApiResponse(response, fallbackMessage);
       if (!shouldApply()) return null;
       const nextDashboard = selectDashboard(payload);
@@ -122,7 +119,7 @@ function useDashboardController() {
       }
       if (loadMutationVersion !== mutationVersionRef.current) return nextDashboard;
       setDashboard(mergeDashboardPayload(dashboardRef.current, nextDashboard));
-      clearConnectionFailure();
+      clearConnectionFailure(failureVersion);
       return nextDashboard;
     },
     [clearConnectionFailure, setDashboard],
@@ -134,6 +131,7 @@ function useDashboardController() {
   }, [recordConnectionFailure]);
 
   const runDashboardLoad = useCallback(async (mode: DashboardLoadMode) => {
+    const failureVersion = failureVersionRef.current;
     const loadMutationVersion = mutationVersionRef.current;
     const loadSequence = loadSequenceRef.current + 1;
     const showsRefreshing = mode === "refresh" || mode === "reconnect";
@@ -151,7 +149,7 @@ function useDashboardController() {
         setRuntimeConfig(config);
         const response = await operatorFetch(operatorApiUrl(dashboardRefreshPath()), { headers: jsonHeaders() });
         if (loadSequence !== loadSequenceRef.current) return;
-        const loaded = await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current);
+        const loaded = await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current, failureVersion);
         if (loaded) setSurfaceRefreshVersion((version) => version + 1);
       });
     } catch (caught) {
@@ -176,6 +174,7 @@ function useDashboardController() {
   const loadDashboardDeferred = useCallback(async () => {
     const baseDashboard = dashboardRef.current;
     if (!baseDashboard?.deferred?.dashboard_sections) return;
+    const failureVersion = failureVersionRef.current;
     const loadSequence = deferredLoadSequenceRef.current + 1;
     deferredLoadSequenceRef.current = loadSequence;
 
@@ -186,7 +185,7 @@ function useDashboardController() {
         if (loadSequence !== deferredLoadSequenceRef.current || dashboardRef.current !== baseDashboard) return;
         const nextDashboard = mergeDashboardPayload(dashboardRef.current, payload as DashboardPayload);
         if (nextDashboard) setDashboard(nextDashboard);
-        clearConnectionFailure();
+        clearConnectionFailure(failureVersion);
       });
     } catch (caught) {
       if (loadSequence !== deferredLoadSequenceRef.current) return;
@@ -197,6 +196,7 @@ function useDashboardController() {
   const { archivedLoading, loadArchived, soloLoading } = useDashboardSurfaceLoading({
     dashboardRef,
     clearFailure: clearConnectionFailure,
+    failureVersionRef,
     recordFailure: recordConnectionFailure,
     refreshVersion: surfaceRefreshVersion,
     setDashboard,
