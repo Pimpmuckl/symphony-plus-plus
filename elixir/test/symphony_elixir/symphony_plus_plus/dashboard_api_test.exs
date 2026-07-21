@@ -4139,23 +4139,51 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       |> Ecto.Changeset.change(archived_at: DateTime.add(DateTime.utc_now(:microsecond), -1, :day))
       |> repo.update!()
 
-      payload = local_operator_dashboard_payload()
+      initial_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
+      deferred_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/deferred"), 200)
+      archived_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=archived"), 200)
+      solo_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=solo"), 200)
       hydrated_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/hydrated"), 200)
 
-      assert payload["work_requests"]["total_count"] == 1
-      assert [%{"work_request" => %{"id" => work_request_id}}] = payload["work_request_details"]
+      assert initial_payload["work_requests"]["total_count"] == 1
+
+      assert [%{"id" => work_request_id, "repo" => "symphony-plus-plus", "base_branch" => "main", "status" => "ready_for_clarification"}] =
+               initial_payload["work_requests"]["work_requests"]
+
       assert work_request_id == work_request.id
-      refute Enum.any?(payload["work_requests"]["work_requests"], &(&1["id"] == archived_request.id))
+      refute Enum.any?(initial_payload["work_requests"]["work_requests"], &(&1["id"] == archived_request.id))
+      refute Map.has_key?(initial_payload, "board")
+      refute Map.has_key?(initial_payload, "work_request_details")
+      refute Map.has_key?(initial_payload, "archived_work_requests")
+      refute Map.has_key?(initial_payload, "solo_sessions")
+      assert initial_payload["deferred"] == %{"dashboard_sections" => true}
+
+      assert [%{"work_request" => %{"id" => ^work_request_id}}] = deferred_payload["work_request_details"]
+      assert is_map(deferred_payload["board"])
+      refute Map.has_key?(deferred_payload, "archived_work_requests")
+      refute Map.has_key?(deferred_payload, "solo_sessions")
+      assert deferred_payload["deferred"] == %{"dashboard_sections" => false}
+
+      assert [%{"id" => archived_id}] = archived_payload["archived_work_requests"]["work_requests"]
+      assert archived_id == archived_request.id
+      refute Map.has_key?(archived_payload, "work_request_details")
+      refute Map.has_key?(archived_payload, "solo_sessions")
+      assert solo_payload["solo_sessions"] == %{"total_count" => 0, "solo_sessions" => []}
+      refute Map.has_key?(solo_payload, "archived_work_requests")
+      refute Map.has_key?(solo_payload, "work_request_details")
+
       assert hydrated_payload["deferred"] == %{"dashboard_sections" => false}
-      assert hydrated_payload["work_requests"] == payload["work_requests"]
-      assert hydrated_payload["work_request_details"] == payload["work_request_details"]
+      assert hydrated_payload["work_requests"] == initial_payload["work_requests"]
+      assert hydrated_payload["work_request_details"] == deferred_payload["work_request_details"]
+      refute Map.has_key?(hydrated_payload, "archived_work_requests")
+      refute Map.has_key?(hydrated_payload, "solo_sessions")
 
       assert {:ok, archived} = WorkRequestRepository.get(repo, archived_request.id)
       assert %DateTime{} = archived.archived_at
     end)
   end
 
-  test "hydrated dashboard refresh reuses one context for a deterministic workload", %{repo: repo} do
+  test "priority dashboard responds before compact execution signals for a deterministic workload", %{repo: repo} do
     for index <- 1..20 do
       work_request =
         create_work_request!(repo,
@@ -4183,13 +4211,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     RetentionThrottle.reset(DashboardQueryCountingRepo)
     assert {:ok, _payload} = LocalOperatorDashboard.operator_dashboard_hydrated_payload(DashboardQueryCountingRepo)
 
-    {split_payloads, split_metrics} =
-      dashboard_benchmark(2, fn ->
-        with {:ok, base} <- LocalOperatorDashboard.operator_dashboard_payload(DashboardQueryCountingRepo),
-             {:ok, deferred} <-
-               LocalOperatorDashboard.operator_dashboard_deferred_payload(DashboardQueryCountingRepo) do
-          {:ok, [base, deferred]}
-        end
+    {base_payload, priority_metrics} =
+      dashboard_benchmark(1, fn ->
+        LocalOperatorDashboard.operator_dashboard_payload(DashboardQueryCountingRepo)
       end)
 
     {hydrated_payload, hydrated_metrics} =
@@ -4197,25 +4221,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         LocalOperatorDashboard.operator_dashboard_hydrated_payload(DashboardQueryCountingRepo)
       end)
 
-    [base_payload, deferred_payload] = split_payloads
-    split_bytes = byte_size(Jason.encode!(base_payload)) + byte_size(Jason.encode!(deferred_payload))
+    {:ok, deferred_payload} = LocalOperatorDashboard.operator_dashboard_deferred_payload(DashboardQueryCountingRepo)
+    priority_metrics = Map.put(priority_metrics, :bytes, byte_size(Jason.encode!(base_payload)))
     hydrated_metrics = Map.put(hydrated_metrics, :bytes, byte_size(Jason.encode!(hydrated_payload)))
-    split_metrics = Map.put(split_metrics, :bytes, split_bytes)
 
     assert base_payload.deferred == %{dashboard_sections: true}
     assert deferred_payload.deferred == %{dashboard_sections: false}
     assert hydrated_payload.deferred == %{dashboard_sections: false}
     assert hydrated_payload.work_requests.total_count == 20
     assert hydrated_payload.board.visible_count == 50
-    assert split_metrics.queries <= 110
+    assert priority_metrics.queries <= 20
     assert hydrated_metrics.queries <= 105
-    assert hydrated_metrics.queries < split_metrics.queries
-    assert hydrated_metrics.bytes < split_metrics.bytes
+    assert priority_metrics.queries < hydrated_metrics.queries
+    assert priority_metrics.bytes < hydrated_metrics.bytes
 
     maybe_export_dashboard_fixture(repo)
 
     if System.get_env("SYMPP_DASHBOARD_BENCHMARK") == "1" do
-      IO.puts("DASHBOARD_BENCHMARK " <> Jason.encode!(%{split: split_metrics, hydrated: hydrated_metrics}))
+      IO.puts("DASHBOARD_BENCHMARK " <> Jason.encode!(%{priority: priority_metrics, hydrated: hydrated_metrics}))
     end
   end
 
@@ -4589,10 +4612,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       [slice] = detail["work_packages"]
       [card] = Enum.filter(payload["work_requests"]["work_requests"], &(&1["id"] == work_request.id))
 
-      assert card["operational_state"]["key"] == "delivered"
-      assert card["operational_state"]["has_started"] == true
-      assert card["operational_state"]["has_active_worker"] == false
-      assert card["operational_state"]["is_stale"] == true
+      assert card["status"] == "sliced"
+      refute Map.has_key?(card, "operational_state")
       assert get_in(detail, ["work_request", "operational_state", "key"]) == "delivered"
       assert get_in(detail, ["work_request", "operational_state", "has_started"]) == true
       assert get_in(detail, ["work_request", "operational_state", "has_active_worker"]) == false
@@ -4665,9 +4686,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
         payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
         deferred_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/deferred"), 200)
+        archived_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=archived"), 200)
+        solo_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=solo"), 200)
 
         package_card =
-          payload["board"]["groups"]["created"]
+          deferred_payload["board"]["groups"]["created"]
           |> Enum.find(&(&1["id"] == work_package.id))
 
         assert package_card["repo"] == "symphony-plus-plus"
@@ -4690,15 +4713,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                    "repo_remote" => "Pimpmuckl/symphony-plus-plus",
                    "repo_aliases" => ["Pimpmuckl/symphony-plus-plus", "symphony-plus-plus"]
                  }
-               ] = payload["guidance_requests"]["guidance_requests"]
+               ] = deferred_payload["guidance_requests"]["guidance_requests"]
 
-        assert payload["archived_work_requests"] == %{"total_count" => 0, "work_requests" => []}
-        assert payload["solo_sessions"] == %{"total_count" => 0, "solo_sessions" => []}
-        assert payload["work_request_details"] == []
+        refute Map.has_key?(payload, "archived_work_requests")
+        refute Map.has_key?(payload, "solo_sessions")
+        refute Map.has_key?(payload, "work_request_details")
+        refute Map.has_key?(payload, "board")
         assert payload["deferred"] == %{"dashboard_sections" => true}
         assert deferred_payload["deferred"] == %{"dashboard_sections" => false}
+        assert archived_payload["archived_work_requests"] == %{"total_count" => 0, "work_requests" => []}
 
-        solo_sessions = deferred_payload["solo_sessions"]["solo_sessions"]
+        solo_sessions = solo_payload["solo_sessions"]["solo_sessions"]
         assert Enum.map(solo_sessions, & &1["id"]) |> Enum.sort() == Enum.sort([owner_session.id, bare_session.id])
         assert Enum.all?(solo_sessions, &(&1["repo_key"] == "symphony-plus-plus"))
         assert Enum.all?(solo_sessions, &(&1["repo_display"] == "symphony-plus-plus"))
@@ -5349,7 +5374,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       payload =
         config_conn
         |> recycle_local_operator_conn("http://localhost")
-        |> get("/api/v1/sympp/operator/dashboard")
+        |> get("/api/v1/sympp/operator/dashboard/deferred")
         |> json_response(200)
 
       assert Enum.any?(board_work_package_ids(payload), &(&1 == work_package.id))
@@ -7960,8 +7985,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   defp local_operator_dashboard_payload do
     initial = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard"), 200)
     deferred = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard/deferred"), 200)
+    archived = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=archived"), 200)
+    solo = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=solo"), 200)
 
-    Map.merge(initial, deferred)
+    initial
+    |> Map.merge(deferred)
+    |> Map.merge(archived)
+    |> Map.merge(solo)
   end
 
   defp dashboard_benchmark(requests, fun) do

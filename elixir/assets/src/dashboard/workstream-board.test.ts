@@ -4,9 +4,24 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkRequestDetail } from "@/types/dashboard";
 import { mergeRequestDetailsWithExiting, WorkstreamBoard } from "./workstream-board";
-import { finishedRequestChildrenStorageKey } from "./workstream-data";
+import { activeWorkRequestDetails, finishedRequestChildrenStorageKey } from "./workstream-data";
 
 describe("workstream board removal rendering", () => {
+  it("renders priority WorkRequest cards before compact execution details arrive", () => {
+    const [detail] = activeWorkRequestDetails({
+      work_requests: {
+        work_requests: [{ id: "wr-priority", title: "Priority request", work_package_count: 3, open_question_count: 1 }],
+        total_count: 1,
+      },
+    });
+
+    expect(detail).toMatchObject({
+      work_request: { id: "wr-priority", title: "Priority request" },
+      summary: { work_package_count: 3, open_question_count: 1 },
+    });
+    expect(detail?.work_packages).toBeUndefined();
+  });
+
   it("keeps removed request details renderable while they exit", () => {
     const active = requestDetail("wr-active");
     const removed = requestDetail("wr-removed");

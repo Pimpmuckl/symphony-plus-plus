@@ -19,8 +19,9 @@ import { applyDashboardTheme, repoWorkstreamHasWorkItems, shouldShowUpdateSimula
 import { canMutateDashboardComments, canMutateDashboardOperatorActions } from "./detail-utils";
 import { useDashboardOperatorSettings } from "./dashboard-operator-settings";
 import { filterWorkstreamsBySearch } from "./dashboard-search";
-import { packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
+import { activeWorkRequestDetails, packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
 import { useDashboardUpdateAnimations } from "./update-animations";
+import { useDashboardSurfaceLoading } from "./dashboard-surface-loading";
 
 type DashboardLoadMode = "initial" | "refresh" | "silent" | "reconnect";
 
@@ -28,10 +29,7 @@ function mergeDashboardLoadMode(pending: DashboardLoadMode, next: DashboardLoadM
   return pending === "reconnect" || next === "reconnect" ? "reconnect" : next;
 }
 
-export function DashboardApp() {
-  const shellProps = useDashboardController();
-  return <DashboardShell {...shellProps} />;
-}
+export function DashboardApp() { return <DashboardShell {...useDashboardController()} />; }
 function useDashboardController() {
   const [appState, dispatchApp] = useReducer(appStateReducer, null, createInitialAppState);
   const { dashboard, error, hideEmptyWorkstreams, loading, refreshing, showWelcomeToast, showWorkstreamContextBar, theme, workspaceTab } = appState;
@@ -155,7 +153,7 @@ function useDashboardController() {
       await withLocalOperatorReconnect(async () => {
         const config = mode === "reconnect" ? await reconnectLocalOperatorSession() : await ensureDashboardRuntimeConfig();
         setRuntimeConfig(config);
-        const response = await operatorFetch(operatorApiUrl(dashboardRefreshPath(dashboardRef.current)), { headers: jsonHeaders() });
+        const response = await operatorFetch(operatorApiUrl(dashboardRefreshPath()), { headers: jsonHeaders() });
         if (loadSequence !== loadSequenceRef.current) return;
         await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current);
       });
@@ -194,6 +192,13 @@ function useDashboardController() {
       recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard details unavailable"), false, isReconnectableLocalOperatorError(caught));
     }
   }, [recordConnectionFailure, setDashboard]);
+
+  const { archivedLoading, loadArchived, soloLoading } = useDashboardSurfaceLoading({
+    dashboardRef,
+    recordFailure: recordConnectionFailure,
+    setDashboard,
+    soloOpen: dashboard !== null && workspaceTab === "solo",
+  });
 
   const refreshAfterMutation = useCallback(async (payload?: DashboardMutationPayload) => {
     if (payload?.dashboard) {
@@ -461,7 +466,7 @@ function useDashboardController() {
   const packages = useMemo(() => allPackages(dashboard), [dashboard]);
   const requests = useMemo(() => dashboard?.work_requests?.work_requests ?? [], [dashboard]);
   const archivedRequests = useMemo(() => dashboard?.archived_work_requests?.work_requests ?? [], [dashboard]);
-  const requestDetails = useMemo(() => dashboard?.work_request_details ?? [], [dashboard]);
+  const requestDetails = useMemo(() => activeWorkRequestDetails(dashboard), [dashboard]);
   const linkedWorkPackageIds = useMemo(() => new Set(dashboard?.linked_work_package_ids ?? []), [dashboard]);
   const requestDetailsByRepo = useMemo(() => requestDetailsByRepoKey(requestDetails), [requestDetails]);
   const packageSelections = useMemo(() => packageSelectionIndex(requestDetails, packages), [packages, requestDetails]);
@@ -516,7 +521,7 @@ function useDashboardController() {
           updateAnimations={updateAnimations}
         />
       ),
-      solo: <SoloSessions sessions={soloSessions} onSelectCard={setSelectedCardDetail} updateAnimations={updateAnimations} />,
+      solo: <SoloSessions loading={soloLoading} sessions={soloSessions} onSelectCard={setSelectedCardDetail} updateAnimations={updateAnimations} />,
     }),
     [
       copyArchitectHandoff,
@@ -530,12 +535,14 @@ function useDashboardController() {
       setSelectedGuidance,
       showWorkstreamContextBar,
       soloSessions,
+      soloLoading,
       updateAnimations,
     ],
   );
 
   return {
     archiveAfterDays,
+    archivedRequestsLoading: archivedLoading,
     archivedRequests,
     blockerItems,
     canMutateComments: canMutateDashboardComments(runtimeConfig),
@@ -557,6 +564,7 @@ function useDashboardController() {
     onArchiveWorkPackage: archiveWorkPackage,
     onClearWorkPackageBlocker: clearWorkPackageBlocker,
     onArchiveWorkRequest: archiveWorkRequest,
+    onOpenArchivedRequests: loadArchived,
     onDeleteWorkRequest: deleteWorkRequest,
     onDashboardSearchQueryChange: updateDashboardSearchQuery,
     onHideEmptyWorkstreamsChange: setHideEmptyWorkstreams,

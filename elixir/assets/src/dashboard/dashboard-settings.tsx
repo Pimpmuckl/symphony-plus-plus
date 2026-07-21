@@ -335,11 +335,15 @@ function workstreamHiddenSummary(hiddenWorkstreamCount: number) {
 
 export function ArchivedRequestsDialog({
   canRestoreWorkRequest,
+  loading,
   requests,
+  onOpen,
   onRestoreWorkRequest,
 }: {
   canRestoreWorkRequest: boolean;
+  loading: boolean;
   requests: WorkRequestCard[];
+  onOpen: () => Promise<void>;
   onRestoreWorkRequest: WorkRequestMutation;
 }) {
   const [open, setOpen] = useState(false);
@@ -373,6 +377,7 @@ export function ArchivedRequestsDialog({
             onClick={() => {
               setError(null);
               setOpen(true);
+              void onOpen();
             }}
           >
             <Archive className="size-4" />
@@ -401,7 +406,11 @@ export function ArchivedRequestsDialog({
 
           {error ? <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}
 
-          {sortedRequests.length > 0 ? (
+          {loading ? (
+            <p className="flex items-center justify-center gap-2 rounded-md border bg-card/60 px-3 py-6 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> Loading archived requests
+            </p>
+          ) : sortedRequests.length > 0 ? (
             <ScrollArea className="max-h-[55vh] pr-3">
               <div className="grid gap-2">
                 {sortedRequests.map((request) => (

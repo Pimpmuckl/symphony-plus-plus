@@ -240,9 +240,7 @@ export function dashboardEventsUrl() {
   return operatorApiUrl("/dashboard/events");
 }
 
-export function dashboardRefreshPath(dashboard: DashboardPayload | null) {
-  return dashboard?.deferred?.dashboard_sections === false ? "/dashboard/hydrated" : "/dashboard";
-}
+export const dashboardRefreshPath = () => "/dashboard";
 
 function operatorConfigUrl() {
   const url = operatorApiUrl("/config");
@@ -457,15 +455,27 @@ function removeWorkRequestDetails(details: WorkRequestDetail[] | undefined, work
 export function mergeDashboardPayload(dashboard: DashboardPayload | null, patch: DashboardPayload | null | undefined): DashboardPayload | null {
   if (!dashboard || !patch) return patch ?? dashboard;
 
-  const deferredSections = patch.deferred?.dashboard_sections
-    ? {
-        archived_work_requests: dashboard.archived_work_requests,
-        solo_sessions: dashboard.solo_sessions,
-        work_request_details: dashboard.work_request_details,
-      }
-    : {};
+  const activeIds = patch.work_requests?.work_requests?.map((request) => request.id);
+  const currentDetails = activeIds
+    ? dashboard.work_request_details?.filter((detail) => activeIds.includes(detail.work_request.id))
+    : dashboard.work_request_details;
+  const workRequestDetails = patch.work_request_details ?? currentDetails;
+  const cardDetails = patch.work_request_details ?? (patch.work_requests ? undefined : currentDetails);
+  const hydratedCards = hydrateWorkRequestCards(patch.work_requests ?? dashboard.work_requests, cardDetails);
 
-  return { ...dashboard, ...patch, ...deferredSections };
+  return {
+    ...dashboard,
+    ...patch,
+    deferred: { ...dashboard.deferred, ...patch.deferred },
+    work_request_details: workRequestDetails,
+    work_requests: hydratedCards,
+  };
+}
+
+function hydrateWorkRequestCards(section: DashboardPayload["work_requests"], details: WorkRequestDetail[] | undefined) {
+  if (!section || !details) return section;
+  const detailsById = new Map(details.map((detail) => [detail.work_request.id, detail.work_request]));
+  return { ...section, work_requests: section.work_requests?.map((card) => ({ ...card, ...detailsById.get(card.id) })) };
 }
 
 function patchWorkRequestCards(cards: WorkRequestCard[], workRequest: WorkRequestMutationPatch, archive: boolean) {
