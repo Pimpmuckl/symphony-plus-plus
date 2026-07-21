@@ -99,13 +99,11 @@ describe("workstream board removal rendering", () => {
     expect(collapsed).toContain("Implementing");
     expect(collapsed).toContain("Review 3/4");
     expect(collapsed).toContain("CI 2/3");
-    expect(collapsed.match(/data-first="true"/g)).toHaveLength(2);
     expect(collapsed.match(/data-last="true"/g)).toHaveLength(2);
-    expect(collapsed.match(/data-frontier-wire-source="true"/g)).toHaveLength(2);
     expect(collapsed.match(/data-frontier-wire-trunk="true"/g)).toHaveLength(2);
     expect(collapsed.match(/data-frontier-wire="true"/g)).toHaveLength(4);
-    expect(collapsed).toContain('<span class="v3-request-frontier-group-title-label" data-frontier-measure="group">Graph group</span><span class="v3-request-frontier-source" data-frontier-wire-source="true" aria-hidden="true"></span>');
-    expect(collapsed).toContain('class="v3-request-frontier-title" data-frontier-measure="title" title="Active package"');
+    expect(collapsed).toContain('<span class="v3-request-frontier-group-title-label">Graph group</span>');
+    expect(collapsed).toContain('class="v3-request-frontier-title" title="Active package"');
     expect(collapsed).not.toMatch(/[├└→]/);
     expect(collapsed).not.toContain("more active");
     expect(collapsed).not.toContain("Terminal stale package");
@@ -117,7 +115,7 @@ describe("workstream board removal rendering", () => {
     expect(collapsed).toContain('aria-valuenow="59"');
     expect(collapsed).toContain('<span class="v3-progress-value" aria-hidden="true">59%</span>');
     expect(collapsed.indexOf("v3-request-main")).toBeLessThan(collapsed.indexOf("v3-request-progress"));
-    expect(collapsed.indexOf("v3-request-progress")).toBeLessThan(collapsed.indexOf("v3-row-badge-slot"));
+    expect(collapsed.indexOf("v3-row-badge-slot")).toBeLessThan(collapsed.indexOf("v3-request-progress"));
     expect(collapsed.indexOf("v3-request-progress")).toBeLessThan(collapsed.indexOf("v3-request-frontier"));
     expect(collapsed).not.toContain('class="v3-row-status"');
     expect(collapsed).not.toContain("v3-progress-state");

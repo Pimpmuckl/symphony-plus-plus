@@ -59,7 +59,7 @@ describe("focus board", () => {
       html.indexOf(`aria-labelledby="focus-board-${lane}"`),
       nextLane ? html.indexOf(`aria-labelledby="focus-board-${nextLane}"`) : undefined,
     );
-    const frontierTitle = (title: string) => `class="v3-request-frontier-title" data-frontier-measure="title" title="${title}">${title}`;
+    const frontierTitle = (title: string) => `class="v3-request-frontier-title" title="${title}">${title}`;
 
     expect(disclosureTag("attention")).toContain("open");
     expect(disclosureTag("active")).toContain("open");

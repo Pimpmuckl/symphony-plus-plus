@@ -230,11 +230,13 @@ export function ProductRequestRow({
           <ChevronRight className={cn("size-4 transition-transform duration-200", expanded && "rotate-90")} />
         </button>
         <RequestInfoButton detail={detail} onSelectCard={onSelectCard} />
-        <button type="button" className="v3-request-main" aria-expanded={expanded} onClick={() => onSetOpen(!expanded)}>
-          <RequestIdentity detail={detail} branch={branch} />
-        </button>
+        <div className="v3-request-heading">
+          <RowBadgeSlot active={requestState.kind === "active"} label={badgeLabel} variant={requestState.badgeVariant} />
+          <button type="button" className="v3-request-main" aria-expanded={expanded} onClick={() => onSetOpen(!expanded)}>
+            <RequestIdentity detail={detail} branch={branch} />
+          </button>
+        </div>
         <RequestProgressBar progress={progress} />
-        <RowBadgeSlot active={requestState.kind === "active"} label={badgeLabel} variant={requestState.badgeVariant} />
         <RequestFrontier summary={frontier} />
       </div>
       {expanded ? <RequestExpandedBody detail={detail} now={now} packageById={packageById} openQuestion={openQuestion} onSelectGuidance={onSelectGuidance} onSelectCard={onSelectCard} requestPath={requestPath} /> : null}
@@ -315,17 +317,18 @@ function RequestFrontier({ summary }: { summary: RequestFrontierSummary | null }
         <div className="v3-request-frontier-group" data-grouped={group.title ? "true" : "false"} role={group.title ? "group" : undefined} aria-label={group.title} key={group.id}>
           {group.title ? (
             <span className="v3-request-frontier-group-title" title={group.title}>
-              <span className="v3-request-frontier-group-title-label" data-frontier-measure="group">{group.title}</span>
-              <span className="v3-request-frontier-source" data-frontier-wire-source="true" aria-hidden="true" />
+              <span className="v3-request-frontier-group-title-label">{group.title}</span>
             </span>
           ) : null}
           <div className="v3-request-frontier-packages" data-frontier-wire-trunk={group.title ? "true" : undefined} role="list">
             {group.items.map((item, index) => (
-              <div className="v3-request-frontier-package" data-first={group.title && index === 0 ? "true" : undefined} data-last={group.title && index === group.items.length - 1 ? "true" : undefined} role="listitem" key={item.id}>
+              <div className="v3-request-frontier-package" data-last={group.title && index === group.items.length - 1 ? "true" : undefined} role="listitem" key={item.id}>
                 {group.title ? <span className="v3-request-frontier-wire" data-frontier-wire="true" aria-hidden="true" /> : null}
-                <span className="v3-request-frontier-title" data-frontier-measure="title" title={item.title}>{item.title}</span>
-                <PullRequestBadge signal={item.pr} layout="frontier" />
-                {item.activity ? <span className="v3-request-frontier-activity" data-frontier-measure="state">{item.activity}</span> : null}
+                <span className="v3-request-frontier-title" title={item.title}>{item.title}</span>
+                <span className="v3-request-frontier-meta">
+                  <PullRequestBadge signal={item.pr} layout="frontier" />
+                  {item.activity ? <span className="v3-request-frontier-activity" data-frontier-measure="state" title={item.activity}>{item.activity}</span> : null}
+                </span>
               </div>
             ))}
           </div>

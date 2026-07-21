@@ -39,8 +39,8 @@ const ACTIVE_STATES = new Set([
 ]);
 const READY_STATES = new Set(["approved", "ready_for_worker"]);
 const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
-const FOCUS_BOARD_COLUMNS = ["group", "title", "pr", "state"] as const;
-const FOCUS_BOARD_COLUMN_CAPS_REM = { group: 14, title: 20, pr: Number.POSITIVE_INFINITY, state: Number.POSITIVE_INFINITY };
+const FOCUS_BOARD_COLUMNS = ["pr", "state"] as const;
+const FOCUS_BOARD_COLUMN_CAPS_REM = { pr: Number.POSITIVE_INFINITY, state: Number.POSITIVE_INFINITY };
 
 export function buildFocusBoardItems(details: WorkRequestDetail[], now: string | number | Date = Date.now()): FocusBoardItem[] {
   const nowMs = new Date(now).getTime();
@@ -150,6 +150,21 @@ export function FocusBoard({
       updateAnimations={updateAnimations}
     />
   );
+  const previewQuery = import.meta.env.DEV && typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search).get("focus-card-preview")?.trim().toLowerCase()
+    : undefined;
+  const previewItem = previewQuery
+    ? items.find((item) => (item.detail.work_request.title || item.id).toLowerCase().includes(previewQuery))
+    : undefined;
+
+  if (previewItem) {
+    return (
+      <section ref={boardRef} className="focus-card-preview" aria-label="WorkRequest card preview">
+        <div className="workstream-board-shell"><div className="v3-workstream-board">{renderItem(previewItem, 0)}</div></div>
+      </section>
+    );
+  }
+
   const waiting = items.filter((item) => item.lane === "waiting");
   const openCount = items.filter((item) => item.lane !== "recent").length;
 
