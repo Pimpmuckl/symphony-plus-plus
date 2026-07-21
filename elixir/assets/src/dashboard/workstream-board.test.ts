@@ -22,6 +22,26 @@ describe("workstream board removal rendering", () => {
     expect(detail?.work_packages).toBeUndefined();
   });
 
+  it("overlays fresh priority fields while retaining compact execution children", () => {
+    const [detail] = activeWorkRequestDetails({
+      work_requests: {
+        work_requests: [{ id: "wr-priority", title: "Fresh title", status: "sliced", work_package_count: 4 }],
+        total_count: 1,
+      },
+      work_request_details: [{
+        work_request: { id: "wr-priority", title: "Stale title", status: "clarifying" },
+        summary: { work_package_count: 2, decision_count: 1 },
+        work_packages: [{ id: "slice-1", work_request_id: "wr-priority" }],
+      }],
+    });
+
+    expect(detail).toMatchObject({
+      work_request: { title: "Fresh title", status: "sliced" },
+      summary: { work_package_count: 4, decision_count: 1 },
+      work_packages: [{ id: "slice-1" }],
+    });
+  });
+
   it("keeps removed request details renderable while they exit", () => {
     const active = requestDetail("wr-active");
     const removed = requestDetail("wr-removed");
