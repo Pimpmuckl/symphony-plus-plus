@@ -50,8 +50,8 @@ function useDashboardController() {
   const setDashboard = useCallback((nextDashboard: DashboardPayload | null) => {
     const nextFingerprint = dashboardContentFingerprint(nextDashboard);
     if (dashboardFingerprintRef.current === nextFingerprint) return;
-
     dashboardFingerprintRef.current = nextFingerprint;
+    dashboardRef.current = nextDashboard;
     dispatchApp({ type: "patch", state: { dashboard: nextDashboard } });
   }, []);
   const setLoading = useCallback((nextLoading: boolean) => dispatchApp({ type: "patch", state: { loading: nextLoading } }), []);
@@ -68,9 +68,6 @@ function useDashboardController() {
   const setSelectedGuidance = useCallback((selectedGuidance: GuidanceItem | null) => dispatchDialog({ type: "guidance", selectedGuidance }), []);
   const setSelectedCardDetail = useCallback((selectedCardDetail: CardDetailSelection | null) => dispatchDialog({ type: "cardDetail", selectedCardDetail }), []);
   const setNewRequestOpen = useCallback((open: boolean) => dispatchDialog({ type: "newRequest", open }), []);
-  useEffect(() => {
-    dashboardRef.current = dashboard;
-  }, [dashboard]);
   useEffect(() => {
     connectionIssueRef.current = connectionIssue;
   }, [connectionIssue]);
