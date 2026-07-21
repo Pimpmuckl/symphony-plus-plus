@@ -78,6 +78,7 @@ export function DashboardShell({
   openDashboardOnBoot,
   showWelcomeToast,
   soloSessionDeleteAfterDays,
+  surfaceRefreshVersion,
   theme,
   toggleTheme,
   updateAnimations,
@@ -132,6 +133,7 @@ export function DashboardShell({
   openDashboardOnBoot: boolean;
   showWelcomeToast: boolean;
   soloSessionDeleteAfterDays: number;
+  surfaceRefreshVersion: number;
   theme: DashboardTheme;
   toggleTheme: () => void;
   updateAnimations: DashboardUpdateAnimations;
@@ -205,6 +207,7 @@ export function DashboardShell({
                 requests={archivedRequests}
                 onOpen={onOpenArchivedRequests}
                 onRestoreWorkRequest={onRestoreWorkRequest}
+                refreshVersion={surfaceRefreshVersion}
               />
               <Button variant="outline" size="sm" onClick={() => void onRefreshDashboard()} disabled={refreshing} className="button-lift">
                 {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}

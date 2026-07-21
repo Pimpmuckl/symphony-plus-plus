@@ -9,7 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { WorkRequestCard } from "@/types/dashboard";
 import { cn } from "@/lib/utils";
 import { sortedCopy } from "@/lib/collections";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DashboardTheme, REPO_SUMMARY_PLATE_TONES, RepoSummaryPlateTone, WorkRequestMutation } from "./runtime";
 import { detailDate } from "./detail-utils";
 import { repoDisplayName } from "./dashboard-persistence";
@@ -339,17 +339,23 @@ export function ArchivedRequestsDialog({
   requests,
   onOpen,
   onRestoreWorkRequest,
+  refreshVersion,
 }: {
   canRestoreWorkRequest: boolean;
   loading: boolean;
   requests: WorkRequestCard[];
   onOpen: () => Promise<void>;
   onRestoreWorkRequest: WorkRequestMutation;
+  refreshVersion: number;
 }) {
   const [open, setOpen] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const sortedRequests = useMemo(() => sortedCopy(requests, (left, right) => sortableTime(right.archived_at) - sortableTime(left.archived_at)), [requests]);
+
+  useEffect(() => {
+    if (open) void onOpen();
+  }, [onOpen, open, refreshVersion]);
 
   async function restoreRequest(workRequestId: string) {
     setPendingId(workRequestId);
@@ -377,7 +383,6 @@ export function ArchivedRequestsDialog({
             onClick={() => {
               setError(null);
               setOpen(true);
-              void onOpen();
             }}
           >
             <Archive className="size-4" />

@@ -28,7 +28,6 @@ type DashboardLoadMode = "initial" | "refresh" | "silent" | "reconnect";
 function mergeDashboardLoadMode(pending: DashboardLoadMode, next: DashboardLoadMode) {
   return pending === "reconnect" || next === "reconnect" ? "reconnect" : next;
 }
-
 export function DashboardApp() { return <DashboardShell {...useDashboardController()} />; }
 function useDashboardController() {
   const [appState, dispatchApp] = useReducer(appStateReducer, null, createInitialAppState);
@@ -36,6 +35,7 @@ function useDashboardController() {
   const [dialogState, dispatchDialog] = useReducer(appDialogReducer, initialAppDialogState);
   const [connectionIssue, setConnectionIssue] = useState<DashboardConnectionIssue | null>(null);
   const [dashboardSearchQuery, setDashboardSearchQuery] = useState("");
+  const [surfaceRefreshVersion, setSurfaceRefreshVersion] = useState(0);
   const showUpdateSimulationControls = useMemo(() => shouldShowUpdateSimulationControls(), []);
   const [runtimeConfig, setRuntimeConfig] = useState<DashboardRuntimeConfig | undefined>(() => dashboardRuntimeConfig);
   const canMutateOperatorActions = canMutateDashboardOperatorActions(runtimeConfig);
@@ -68,11 +68,9 @@ function useDashboardController() {
   const setSelectedGuidance = useCallback((selectedGuidance: GuidanceItem | null) => dispatchDialog({ type: "guidance", selectedGuidance }), []);
   const setSelectedCardDetail = useCallback((selectedCardDetail: CardDetailSelection | null) => dispatchDialog({ type: "cardDetail", selectedCardDetail }), []);
   const setNewRequestOpen = useCallback((open: boolean) => dispatchDialog({ type: "newRequest", open }), []);
-
   useEffect(() => {
     dashboardRef.current = dashboard;
   }, [dashboard]);
-
   useEffect(() => {
     connectionIssueRef.current = connectionIssue;
   }, [connectionIssue]);
@@ -155,7 +153,8 @@ function useDashboardController() {
         setRuntimeConfig(config);
         const response = await operatorFetch(operatorApiUrl(dashboardRefreshPath()), { headers: jsonHeaders() });
         if (loadSequence !== loadSequenceRef.current) return;
-        await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current);
+        const loaded = await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current);
+        if (loaded) setSurfaceRefreshVersion((version) => version + 1);
       });
     } catch (caught) {
       recordDashboardLoadFailure(loadSequence, caught, mode);
@@ -196,6 +195,7 @@ function useDashboardController() {
   const { archivedLoading, loadArchived, soloLoading } = useDashboardSurfaceLoading({
     dashboardRef,
     recordFailure: recordConnectionFailure,
+    refreshVersion: surfaceRefreshVersion,
     setDashboard,
     soloOpen: dashboard !== null && workspaceTab === "solo",
   });
@@ -366,9 +366,10 @@ function useDashboardController() {
         body: JSON.stringify({}),
       });
       const payload = (await readDashboardApiResponse(response, "WorkRequest was not restored")) as DashboardMutationPayload;
+      setDashboard(removeDashboardWorkRequest(dashboardRef.current, workRequestId));
       await refreshAfterMutation(payload);
     });
-  }, [refreshAfterMutation]);
+  }, [refreshAfterMutation, setDashboard]);
 
   const changeWorkRequestState = useCallback<WorkRequestStateMutation>((workRequestId, nextState) => mutateWorkRequest(workRequestId, "state", { state: nextState }, "WorkRequest state was not changed"), [mutateWorkRequest]);
 
@@ -589,6 +590,7 @@ function useDashboardController() {
     openDashboardOnBoot,
     showWelcomeToast,
     soloSessionDeleteAfterDays,
+    surfaceRefreshVersion,
     theme,
     toggleTheme,
     updateAnimations,

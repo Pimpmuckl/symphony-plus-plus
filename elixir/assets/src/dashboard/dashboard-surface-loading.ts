@@ -1,6 +1,6 @@
 import type { DashboardPayload } from "@/types/dashboard";
 import type { RefObject } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   dashboardCaughtMessage,
   isReconnectableLocalOperatorError,
@@ -19,33 +19,44 @@ export function useDashboardSurfaceLoading({
   recordFailure,
   setDashboard,
   soloOpen,
+  refreshVersion,
 }: {
   dashboardRef: RefObject<DashboardPayload | null>;
   recordFailure: (message: string, immediate?: boolean, reconnectable?: boolean) => void;
   setDashboard: (dashboard: DashboardPayload | null) => void;
   soloOpen: boolean;
+  refreshVersion: number;
 }) {
   const [loading, setLoading] = useState<Record<DashboardSurface, boolean>>({ archived: false, solo: false });
+  const requestVersions = useRef<Record<DashboardSurface, number>>({ archived: 0, solo: 0 });
 
   const loadSurface = useCallback(async (surface: DashboardSurface) => {
+    const requestVersion = requestVersions.current[surface] + 1;
+    requestVersions.current[surface] = requestVersion;
     setLoading((state) => ({ ...state, [surface]: true }));
 
     try {
       await withLocalOperatorReconnect(async () => {
         const response = await operatorFetch(operatorApiUrl(`/dashboard?surface=${surface}`), { headers: jsonHeaders() });
         const payload = (await readDashboardApiResponse(response, `Dashboard ${surface} data unavailable`)) as DashboardPayload;
+        if (requestVersions.current[surface] !== requestVersion) return;
         setDashboard(mergeDashboardPayload(dashboardRef.current, payload));
       });
     } catch (caught) {
+      if (requestVersions.current[surface] !== requestVersion) return;
       recordFailure(
         dashboardCaughtMessage(caught, `Dashboard ${surface} data unavailable`),
         false,
         isReconnectableLocalOperatorError(caught),
       );
     } finally {
-      setLoading((state) => ({ ...state, [surface]: false }));
+      if (requestVersions.current[surface] === requestVersion) {
+        setLoading((state) => ({ ...state, [surface]: false }));
+      }
     }
   }, [dashboardRef, recordFailure, setDashboard]);
+
+  const loadArchived = useCallback(() => loadSurface("archived"), [loadSurface]);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,11 +66,11 @@ export function useDashboardSurfaceLoading({
     return () => {
       cancelled = true;
     };
-  }, [loadSurface, soloOpen]);
+  }, [loadSurface, refreshVersion, soloOpen]);
 
   return {
     archivedLoading: loading.archived,
-    loadArchived: () => loadSurface("archived"),
+    loadArchived,
     soloLoading: loading.solo,
   };
 }
