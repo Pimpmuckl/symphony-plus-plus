@@ -339,32 +339,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RepoIdentity do
         :binary,
         :exit_status,
         :stderr_to_stdout,
+        {:line, @max_git_origin_output_bytes},
         args: ["-C", repo_path, "remote", "get-url", "origin"]
       ])
 
-    collect_git_origin_remote(port, "", @max_git_origin_output_bytes)
+    collect_git_origin_remote(port, "", @max_git_origin_output_bytes, nil, false)
   rescue
     _error -> nil
   end
 
-  defp collect_git_origin_remote(port, output, remaining_bytes) do
-    receive do
-      {^port, {:data, data}} when byte_size(data) <= remaining_bytes ->
-        collect_git_origin_remote(port, output <> data, remaining_bytes - byte_size(data))
-
-      {^port, {:data, _data}} ->
+  defp collect_git_origin_remote(port, output, remaining_bytes, exit_status, complete?) do
+    cond do
+      is_integer(exit_status) and exit_status != 0 ->
         close_port(port)
         nil
 
-      {^port, {:exit_status, 0}} ->
+      exit_status == 0 and complete? ->
+        close_port(port)
         {:ok, output}
 
-      {^port, {:exit_status, _status}} ->
-        nil
-    after
-      @git_origin_timeout_ms ->
-        close_port(port)
-        nil
+      true ->
+        receive do
+          {^port, {:data, {:noeol, data}}} when byte_size(data) <= remaining_bytes ->
+            collect_git_origin_remote(port, output <> data, remaining_bytes - byte_size(data), exit_status, false)
+
+          {^port, {:data, {:eol, data}}} when byte_size(data) <= remaining_bytes ->
+            collect_git_origin_remote(port, output <> data, remaining_bytes - byte_size(data), exit_status, true)
+
+          {^port, {:data, _data}} ->
+            close_port(port)
+            nil
+
+          {^port, {:exit_status, status}} ->
+            collect_git_origin_remote(port, output, remaining_bytes, status, complete?)
+        after
+          @git_origin_timeout_ms ->
+            close_port(port)
+            nil
+        end
     end
   end
 
