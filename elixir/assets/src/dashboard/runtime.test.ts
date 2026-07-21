@@ -173,6 +173,9 @@ describe("dashboard runtime mutation helpers", () => {
     expect(merged?.solo_sessions).toBe(dashboard.solo_sessions);
     expect(merged?.work_request_details).toEqual([{ work_request: { id: "wr-1", title: "Hydrated" } }]);
     expect(merged?.deferred).toEqual({ dashboard_sections: true });
+
+    const lazyMerged = mergeDashboardPayload(merged, { solo_sessions: { solo_sessions: [{ id: "solo-2" }], total_count: 1 } });
+    expect(lazyMerged?.work_requests?.work_requests?.[0]).toMatchObject({ title: "Fresh card" });
   });
 
   it("uses the local operator API base for dashboard events", () => {

@@ -460,8 +460,7 @@ export function mergeDashboardPayload(dashboard: DashboardPayload | null, patch:
     ? dashboard.work_request_details?.filter((detail) => activeIds.includes(detail.work_request.id))
     : dashboard.work_request_details;
   const workRequestDetails = patch.work_request_details ?? currentDetails;
-  const cardDetails = patch.work_request_details ?? (patch.work_requests ? undefined : currentDetails);
-  const hydratedCards = hydrateWorkRequestCards(patch.work_requests ?? dashboard.work_requests, cardDetails);
+  const hydratedCards = hydrateWorkRequestCards(patch.work_requests ?? dashboard.work_requests, patch.work_request_details);
 
   return {
     ...dashboard,
