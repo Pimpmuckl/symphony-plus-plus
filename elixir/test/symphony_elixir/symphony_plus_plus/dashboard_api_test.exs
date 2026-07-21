@@ -4261,7 +4261,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert fanout_detail.product_tree.root_work_package_ids == ["WP-FANOUT-PLAYTEST"]
 
       assert {:ok, [kraken_detail]} = Dashboard.work_request_board_details(Repo, ["WR-FIXTURE-KRAKEN-SCALE"])
-      assert length(kraken_detail.delivery_board["work_packages"]) == 49
+      assert length(kraken_detail.work_packages) == 49
+      refute Map.has_key?(kraken_detail, :delivery_board)
       assert length(kraken_detail.product_tree.nodes) == 10
       assert length(kraken_detail.product_tree.execution_graph.effective_edges) == 11
 
@@ -4280,10 +4281,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              )
 
       projected_parse =
-        Enum.find(fanout_detail.delivery_board["work_packages"], &(&1["id"] == "WP-FANOUT-PARSE"))
+        Enum.find(fanout_detail.work_packages, &(&1.id == "WP-FANOUT-PARSE"))
 
-      assert get_in(projected_parse, ["work_package", "worker_signal", "status"]) == "active"
-      assert get_in(projected_parse, ["work_package", "pr_signal", "checks", "status"]) == "pending"
+      assert projected_parse.worker_signal["status"] == "active"
+      assert get_in(projected_parse.pr_signal, ["checks", "status"]) == "pending"
 
       parse = Repo.get!(WorkPackage, "WP-FANOUT-PARSE")
       parse_context = Dashboard.work_package_contexts(Repo, [parse])[parse.id]
@@ -4600,7 +4601,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert get_in(slice, ["operational_state", "work_package_status"]) == "ready_for_worker"
       assert get_in(slice, ["delivery", "outcome"]) == "pr_merged"
       assert "work_package_status_stale_after_delivery" in slice["attention_reason_codes"]
-      assert get_in(detail, ["delivery_board", "work_packages", Access.at(0), "operational_state", "key"]) == "delivered"
     end)
   end
 

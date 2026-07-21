@@ -13,6 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
   import Ecto.Query, only: [from: 2]
 
   @work_request_detail_comment_target_chunk_size 500
+  @delivery_signal_keys [:dependency_signal, :pr_signal, :review_signal, :worker_signal]
 
   @type repo :: module()
   @type dashboard_error :: Dashboard.dashboard_error()
@@ -181,6 +182,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
         delivery_board: delivery_board
       )
       |> Enum.map(&Dashboard.compact_work_package/1)
+      |> put_delivery_signals(delivery_board)
 
     {:ok,
      %{
@@ -188,13 +190,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDetails do
        clarification_questions: Enum.map(questions, &Dashboard.clarification_question/1),
        work_packages: work_package_payloads,
        product_tree: ProductTree.project(repo, work_request.id, work_package_payloads),
-       delivery_board: Dashboard.compact_delivery_evidence(Dashboard.redacted_json(delivery_board)),
        summary: Dashboard.work_request_board_summary(questions, work_packages, work_request_comment_context)
      }}
   end
 
   defp build_work_request_board_detail(_repo, %WorkRequest{}, _context, _opts, :error) do
     {:error, :not_found}
+  end
+
+  defp put_delivery_signals(work_packages, delivery_board) do
+    signals_by_id =
+      delivery_board
+      |> Map.get(:work_packages, [])
+      |> Map.new(fn item ->
+        signals =
+          item
+          |> Map.get(:work_package)
+          |> Kernel.||(%{})
+          |> Map.take(@delivery_signal_keys)
+          |> Map.reject(fn {_key, value} -> is_nil(value) end)
+          |> Map.new(fn {key, value} -> {key, Dashboard.redacted_json(value)} end)
+
+        {Map.fetch!(item, :id), signals}
+      end)
+
+    Enum.map(work_packages, &Map.merge(&1, Map.get(signals_by_id, Map.fetch!(&1, :id), %{})))
   end
 
   defp work_request_board_detail_comment_context(repo, work_requests, work_packages) do
