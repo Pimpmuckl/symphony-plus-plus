@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import type { WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import {
   requestBoardState,
-  rowProgressAttentionState,
-  rowProgressIconState,
   requestStatusLabels,
   sliceBlockerCount,
   sliceGuidanceCount,
@@ -16,27 +14,6 @@ describe("workstream row state", () => {
   it("sizes status badges from the longest rendered label without the old wide bucket", () => {
     expect(statusBadgeWidthForLabels(["Delivered", "Clarifying"])).toBe("6.2rem");
     expect(statusBadgeWidthForLabels(["Delivered", "Completed Without PR", "Ready For Worker"])).toBe("9.2rem");
-  });
-
-  it("maps row progress icons by attention, completion, and active progress priority", () => {
-    expect(rowProgressIconState({ progress: 100, tone: "finished" })).toBe("done");
-    expect(rowProgressIconState({ progress: 100, blockerCount: 1, tone: "finished" })).toBe("done");
-    expect(rowProgressIconState({ progress: 100, guidanceCount: 1, tone: "finished" })).toBe("done");
-    expect(rowProgressIconState({ progress: 100, blockerCount: 1, tone: "blocked" })).toBe("active");
-    expect(rowProgressAttentionState({ blockerCount: 1, tone: "finished" })).toBe("blocked");
-    expect(rowProgressAttentionState({ guidanceCount: 1, tone: "finished" })).toBe("guidance");
-    expect(rowProgressIconState({ progress: 45, blockerCount: 1, tone: "implementing" })).toBe("active");
-    expect(rowProgressIconState({ progress: 45, guidanceCount: 1, tone: "implementing" })).toBe("active");
-    expect(rowProgressAttentionState({ blockerCount: 1, tone: "implementing" })).toBe("blocked");
-    expect(rowProgressAttentionState({ guidanceCount: 1, tone: "implementing" })).toBe("guidance");
-    expect(rowProgressIconState({ blockerCount: 1, tone: "blocked" })).toBe("blocked");
-    expect(rowProgressIconState({ tone: "ready" })).toBe("ready");
-    expect(rowProgressIconState({ blockerCount: 1, tone: "ready" })).toBe("blocked");
-    expect(rowProgressIconState({ guidanceCount: 1, tone: "ready" })).toBe("guidance");
-    expect(rowProgressIconState({ progress: 45, tone: "ready" })).toBe("active");
-    expect(rowProgressIconState({ tone: "muted" })).toBe("muted");
-    expect(rowProgressIconState({ progress: 100, tone: "muted" })).toBe("muted");
-    expect(rowProgressIconState({ progress: 45, tone: "implementing" })).toBe("active");
   });
 
   it("collects request, product node, and slice status labels for one row group", () => {
@@ -211,13 +188,7 @@ describe("workstream row state", () => {
 
     expect(sliceBlockerCount(siblingSlice, { id: "pkg-shared", status: "active" }, new Map())).toBe(0);
     expect(sliceBlockerCount(siblingSlice, { id: "pkg-shared", status: "active" }, packageOnlyBlockerCounts)).toBe(0);
-    expect(
-      sliceBlockerCount(
-        siblingSlice,
-        { id: "pkg-shared", status: "active", active_blocker_count: 1 },
-        new Map(),
-      ),
-    ).toBe(1);
+    expect(sliceBlockerCount(siblingSlice, { id: "pkg-shared", status: "active", active_blocker_count: 1 }, new Map())).toBe(1);
   });
 
   it("does not show delivery-board attention reasons as human guidance on slice rows", () => {
@@ -244,6 +215,7 @@ describe("workstream row state", () => {
     expect(sliceGuidanceCount(plannedSlice("slice-human", "pkg-human", "human_info_needed", "Human Info Needed"), undefined)).toBe(1);
     expect(sliceGuidanceCount(questionSlice, undefined)).toBe(1);
   });
+
 });
 
 function plannedSlice(id: string, workPackageId: string | undefined, stateKey: string, label: string): WorkRequestPackage {

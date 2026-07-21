@@ -8,8 +8,6 @@ const MIN_STATUS_LABEL_LENGTH = 8;
 const MIN_STATUS_BADGE_WIDTH_REM = 6.1;
 const MAX_STATUS_BADGE_WIDTH_REM = 11;
 
-export type RowProgressIconState = "active" | "blocked" | "done" | "guidance" | "muted" | "ready";
-export type RowProgressAttentionState = "blocked" | "guidance" | null;
 export type BoardRowStateKind = "active" | "blocked" | "deferred" | "done" | "guidance" | "not_started" | "partial" | "planned" | "ready" | "unknown";
 export type BoardRowState = {
   badgeVariant: BadgeTone;
@@ -30,40 +28,6 @@ const BOARD_ROW_STATES: Record<BoardRowStateKind, BoardRowState> = {
   ready: { badgeVariant: "ready", kind: "ready", label: "Ready", tone: "ready" },
   unknown: { badgeVariant: "secondary", kind: "unknown", label: "Unknown", tone: "slice" },
 };
-
-export function rowProgressIconState({
-  blockerCount = 0,
-  guidanceCount = 0,
-  progress = 0,
-  tone,
-}: {
-  blockerCount?: number;
-  guidanceCount?: number;
-  progress?: number;
-  tone?: string | null;
-}): RowProgressIconState {
-  if (tone === "muted") return "muted";
-  if (tone === "finished") return "done";
-  if (progress > 0) return "active";
-  if (blockerCount > 0 || tone === "blocked") return "blocked";
-  if (guidanceCount > 0 || tone === "guidance") return "guidance";
-  if (tone === "ready") return "ready";
-  return "active";
-}
-
-export function rowProgressAttentionState({
-  blockerCount = 0,
-  guidanceCount = 0,
-  tone,
-}: {
-  blockerCount?: number;
-  guidanceCount?: number;
-  tone?: string | null;
-}): RowProgressAttentionState {
-  if (blockerCount > 0 || tone === "blocked") return "blocked";
-  if (guidanceCount > 0 || tone === "guidance") return "guidance";
-  return null;
-}
 
 export function statusBadgeWidthForLabels(labels: Iterable<string | null | undefined>) {
   const width = Math.min(MAX_STATUS_BADGE_WIDTH_REM, Math.max(MIN_STATUS_BADGE_WIDTH_REM, longestStatusLabelLength(labels) * 0.3 + 3.2));
@@ -340,9 +304,7 @@ function attentionBlockerCount(operational?: WorkPackageCard["operational_state"
     if (!attentionItemIsBlocker(item)) continue;
 
     fallbackCount += 1;
-    for (const blockerId of item.blocker_ids ?? []) {
-      blockerIds.add(blockerId);
-    }
+    for (const blockerId of item.blocker_ids ?? []) blockerIds.add(blockerId);
   }
 
   return blockerIds.size || fallbackCount;

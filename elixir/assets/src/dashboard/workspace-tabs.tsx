@@ -1,8 +1,9 @@
-import type { ActiveBlockingEdge, CopyArchitectHandoff, GuidanceItem, WorkRequestDetail } from "@/types/dashboard";
+import type { ActiveBlockingEdge, GuidanceItem, WorkRequestDetail } from "@/types/dashboard";
 import type * as React from "react";
 import { WORKSPACE_TAB_SLIDE_MS } from "@/components/dashboard/motion";
 import { clearMotionTimers, later, measureElementHeight, nextFrame } from "@/components/dashboard/motion-utils";
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef } from "react";
+import { ChevronRight } from "lucide-react";
 import { CardDetailSelect, DashboardUpdateAnimations, TopPanelDirection, WorkspaceTab, WorkspaceTabPhase } from "./runtime";
 import { EmptyPanel } from "./empty-panel";
 import { RepoSummary } from "./dashboard-data";
@@ -17,6 +18,7 @@ import {
 import { repoWorkstreamStateKey, workspaceTabDirection } from "./dashboard-persistence";
 import { statusBadgeWidthForRequestDetails } from "./workstream-row-state";
 import { workstreamCategoryCounts } from "./workstream-data";
+import { FocusBoard } from "./focus-board";
 
 export function WorkstreamsPane({
   repos,
@@ -25,11 +27,8 @@ export function WorkstreamsPane({
   requestDetailsByRepo,
   now,
   activeBlockingEdges,
-  guidanceItems,
   onSelectGuidance,
   onSelectCard,
-  onCopyArchitectHandoff,
-  canMutateOperatorActions,
   showWorkstreamContextBar,
   updateAnimations,
 }: {
@@ -39,11 +38,8 @@ export function WorkstreamsPane({
   requestDetailsByRepo: Map<string, WorkRequestDetail[]>;
   now?: string;
   activeBlockingEdges: ActiveBlockingEdge[];
-  guidanceItems: GuidanceItem[];
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
-  onCopyArchitectHandoff: CopyArchitectHandoff;
-  canMutateOperatorActions: boolean;
   showWorkstreamContextBar: boolean;
   updateAnimations: DashboardUpdateAnimations;
 }) {
@@ -68,6 +64,10 @@ export function WorkstreamsPane({
     const packageById = new Map(repos.flatMap((repo) => repo.packages.map((pkg) => [pkg.id, pkg] as const)));
     return statusBadgeWidthForRequestDetails(details, packageById);
   }, [repos, requestDetailsByRepo]);
+  const primaryBranchByRepo = useMemo(
+    () => new Map(repos.map((repo) => [repo.repoKey, repositoryPrimaryBranch(repo.baseBranches)] as const)),
+    [repos],
+  );
   const paneStyle = {
     ...repoSummaryPlateWidthVars,
     "--v3-row-badge-width": rowStatusBadgeWidth,
@@ -77,26 +77,49 @@ export function WorkstreamsPane({
     return <EmptyPanel title={searchActive ? "No matches" : hiddenRepoCount > 0 ? "No active repositories" : "No repositories yet"} />;
   }
 
+  const focusDetails = Array.from(requestDetailsByRepo.values()).flat();
+
   return (
     <div className="v3-workstreams-pane grid gap-5" style={paneStyle}>
-      {repos.map((repo) => (
-        <RepoWorkstream
-          key={repoWorkstreamStateKey(repo)}
-          repo={repo}
-          requestDetailsByRepo={requestDetailsByRepo}
-          now={now}
-          activeBlockingEdges={activeBlockingEdges}
-          guidanceItems={guidanceItems}
-          onSelectGuidance={onSelectGuidance}
-          onSelectCard={onSelectCard}
-          onCopyArchitectHandoff={onCopyArchitectHandoff}
-          canMutateOperatorActions={canMutateOperatorActions}
-          showWorkstreamContextBar={showWorkstreamContextBar}
-          updateAnimations={updateAnimations}
-        />
-      ))}
+      <FocusBoard
+        details={focusDetails}
+        now={now}
+        packages={repos.flatMap((repo) => repo.packages)}
+        activeBlockingEdges={activeBlockingEdges}
+        onSelectGuidance={onSelectGuidance}
+        onSelectCard={onSelectCard}
+        primaryBranchByRepo={primaryBranchByRepo}
+        updateAnimations={updateAnimations}
+      />
+      <details className="group rounded-lg border bg-card text-card-foreground shadow-sm">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-semibold [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="size-4 transition-transform group-open:rotate-90" aria-hidden="true" />
+          <span>All Work</span>
+          <span className="ml-auto text-xs text-muted-foreground">{repos.length} {repos.length === 1 ? "repository" : "repositories"}</span>
+        </summary>
+        <div className="grid gap-5 border-t p-4">
+          {repos.map((repo) => (
+            <RepoWorkstream
+              key={repoWorkstreamStateKey(repo)}
+              repo={repo}
+              requestDetailsByRepo={requestDetailsByRepo}
+              now={now}
+              activeBlockingEdges={activeBlockingEdges}
+              onSelectGuidance={onSelectGuidance}
+              onSelectCard={onSelectCard}
+              primaryBranch={primaryBranchByRepo.get(repo.repoKey)}
+              showWorkstreamContextBar={showWorkstreamContextBar}
+              updateAnimations={updateAnimations}
+            />
+          ))}
+        </div>
+      </details>
     </div>
   );
+}
+
+function repositoryPrimaryBranch(branches: string[]) {
+  return branches.find((branch) => ["main", "master"].includes(branch.trim().toLowerCase())) ?? branches[0];
 }
 
 export type WorkspaceTabCarouselState = {

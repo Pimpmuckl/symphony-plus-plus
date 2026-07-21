@@ -513,11 +513,8 @@ function useDashboardController() {
           requestDetailsByRepo={searchedWorkstreams.requestDetailsByRepo}
           now={dashboard?.generated_at}
           activeBlockingEdges={dashboard?.active_blocking_edges ?? []}
-          guidanceItems={guidanceItems}
           onSelectGuidance={setSelectedGuidance}
           onSelectCard={setSelectedCardDetail}
-          onCopyArchitectHandoff={copyArchitectHandoff}
-          canMutateOperatorActions={canMutateOperatorActions}
           showWorkstreamContextBar={showWorkstreamContextBar}
           updateAnimations={updateAnimations}
         />
@@ -525,11 +522,8 @@ function useDashboardController() {
       solo: <SoloSessions loading={soloLoading} sessions={soloSessions} onSelectCard={setSelectedCardDetail} updateAnimations={updateAnimations} />,
     }),
     [
-      copyArchitectHandoff,
-      canMutateOperatorActions,
       dashboard?.active_blocking_edges,
       dashboard?.generated_at,
-      guidanceItems,
       hiddenWorkstreamCount,
       searchedWorkstreams,
       setSelectedCardDetail,

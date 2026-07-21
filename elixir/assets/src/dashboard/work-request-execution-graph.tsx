@@ -212,18 +212,41 @@ function WorkPackageCard({
       {onSelectWorkPackage ? (
         <button className="execution-graph__card-action" type="button" aria-label={accessibleLabel} onClick={() => onSelectWorkPackage(rect.id)} />
       ) : null}
-      {prLabel ? <PrBadge signal={pr} label={prLabel} /> : null}
+      {prLabel ? <PullRequestBadge signal={pr} label={prLabel} /> : null}
       <span className="sr-only">{groupLabel}</span>
       <span className="sr-only">{dependencyLabel}</span>
     </article>
   );
 }
 
-function PrBadge({ signal, label }: { signal: ExecutionGraphWorkPackageSignals["pr_signal"]; label: string }) {
+export function PullRequestBadge({
+  signal,
+  label = prBadgeLabel(signal),
+  layout = "default",
+}: {
+  signal: ExecutionGraphWorkPackageSignals["pr_signal"];
+  label?: string;
+  layout?: "default" | "frontier";
+}) {
+  if (!label) return null;
+  if (layout === "frontier") return <FrontierPullRequestBadge signal={signal} label={label} />;
   if (!signal?.url) return <span className="execution-graph__pr-badge">{label}</span>;
   return (
     <a className="execution-graph__pr-badge" href={signal.url} target="_blank" rel="noreferrer" title={`Open ${label}`}>
       {label}
+    </a>
+  );
+}
+
+function FrontierPullRequestBadge({ signal, label }: { signal: ExecutionGraphWorkPackageSignals["pr_signal"]; label: string }) {
+  const content = <>
+    <span className="v3-request-frontier-pr-label" aria-hidden="true">PR</span>
+    {signal?.number == null ? null : <span className="v3-request-frontier-pr-number" aria-hidden="true">#{signal.number}</span>}
+  </>;
+  if (!signal?.url) return <span className="execution-graph__pr-badge v3-request-frontier-pr" aria-label={label} data-frontier-measure="pr">{content}</span>;
+  return (
+    <a className="execution-graph__pr-badge v3-request-frontier-pr" href={signal.url} target="_blank" rel="noreferrer" title={`Open ${label}`} aria-label={label} data-frontier-measure="pr">
+      {content}
     </a>
   );
 }
@@ -338,7 +361,7 @@ function fallbackCardState(status: string, operational?: ExecutionGraphWorkPacka
   return { label: firstText([operational?.label]) ?? humanize(source), tone: cardTone(source.toLowerCase()) };
 }
 
-function elapsedLabel(activeSince: string | null | undefined, now?: string | number | Date) {
+export function elapsedLabel(activeSince: string | null | undefined, now?: string | number | Date) {
   if (!activeSince || now == null) return undefined;
   const elapsed = new Date(now).getTime() - Date.parse(activeSince);
   if (!Number.isFinite(elapsed) || elapsed < 0) return undefined;
