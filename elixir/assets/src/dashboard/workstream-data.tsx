@@ -1,4 +1,4 @@
-import type { WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
+import type { DashboardPayload, WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import { sliceLane } from "@/lib/operational-state";
 import { sortedCopy } from "@/lib/collections";
 import type { CardDetailSelection } from "./runtime";
@@ -13,6 +13,33 @@ export function requestDetailsByRepoKey(details: WorkRequestDetail[]) {
     byRepo.set(repoKey, repoDetails);
     return byRepo;
   }, new Map());
+}
+
+export function activeWorkRequestDetails(dashboard: DashboardPayload | null): WorkRequestDetail[] {
+  const detailsById = new Map((dashboard?.work_request_details ?? []).map((detail) => [detail.work_request.id, detail]));
+
+  return (dashboard?.work_requests?.work_requests ?? []).map((request) => {
+    const detail = detailsById.get(request.id);
+    return {
+      ...detail,
+      work_request: { ...detail?.work_request, ...request },
+      summary: priorityRequestSummary(request, detail?.summary),
+    };
+  });
+}
+
+function priorityRequestSummary(request: WorkRequestDetail["work_request"], current: WorkRequestDetail["summary"] = {}) {
+  return {
+    ...current,
+    open_question_count: request.open_question_count ?? current.open_question_count,
+    answered_question_count: request.answered_question_count ?? current.answered_question_count,
+    work_package_count: request.work_package_count ?? current.work_package_count,
+    planned_work_package_count: request.planned_work_package_count ?? current.planned_work_package_count,
+    dispatched_work_package_count: request.dispatched_work_package_count ?? current.dispatched_work_package_count,
+    skipped_work_package_count: request.skipped_work_package_count ?? current.skipped_work_package_count,
+    comment_count: request.comment_count ?? current.comment_count,
+    open_comment_count: request.open_comment_count ?? current.open_comment_count,
+  };
 }
 
 export function packageSelectionIndex(details: WorkRequestDetail[], packages: WorkPackageCard[]) {

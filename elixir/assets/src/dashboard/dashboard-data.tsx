@@ -37,7 +37,31 @@ export type RepoSummary = {
 
 export function allPackages(dashboard: DashboardPayload | null): WorkPackageCard[] {
   const groups = dashboard?.board?.groups || {};
-  return Object.values(groups).flat();
+  const packages = new Map(Object.values(groups).flat().map((pkg) => [pkg.id, pkg]));
+
+  (dashboard?.work_request_details ?? []).forEach((detail) => {
+    (detail.work_packages ?? []).forEach((slice) => {
+      if (!slice.work_package_id || packages.has(slice.work_package_id)) return;
+
+      packages.set(slice.work_package_id, {
+        id: slice.work_package_id,
+        title: slice.title,
+        kind: slice.kind,
+        status: slice.work_package_status || slice.status,
+        repo: slice.repo || detail.work_request.repo,
+        repo_key: detail.work_request.repo_key,
+        repo_display: detail.work_request.repo_display,
+        repo_remote: detail.work_request.repo_remote,
+        repo_aliases: detail.work_request.repo_aliases,
+        base_branch: slice.base_branch || detail.work_request.base_branch,
+        operational_state: slice.operational_state,
+        inserted_at: slice.inserted_at,
+        updated_at: slice.updated_at,
+      });
+    });
+  });
+
+  return [...packages.values()];
 }
 
 export function allGuidanceItems(dashboard: DashboardPayload | null): GuidanceItem[] {

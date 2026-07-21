@@ -31,6 +31,7 @@ type DashboardDisplayPreferences = {
 
 export function DashboardShell({
   archiveAfterDays,
+  archivedRequestsLoading,
   archivedRequests,
   blockerItems,
   canMutateComments,
@@ -51,6 +52,7 @@ export function DashboardShell({
   canMutateOperatorActions,
   onArchiveWorkPackage,
   onArchiveWorkRequest,
+  onOpenArchivedRequests,
   onClearWorkPackageBlocker,
   onDeleteWorkRequest,
   onDashboardSearchQueryChange,
@@ -76,6 +78,7 @@ export function DashboardShell({
   openDashboardOnBoot,
   showWelcomeToast,
   soloSessionDeleteAfterDays,
+  surfaceRefreshVersion,
   theme,
   toggleTheme,
   updateAnimations,
@@ -83,6 +86,7 @@ export function DashboardShell({
   workspaceTab,
 }: {
   archiveAfterDays: number;
+  archivedRequestsLoading: boolean;
   archivedRequests: WorkRequestCard[];
   blockerItems: BlockerItem[];
   canMutateComments: boolean;
@@ -103,6 +107,7 @@ export function DashboardShell({
   canMutateOperatorActions: boolean;
   onArchiveWorkPackage: WorkPackageArchiveMutation;
   onArchiveWorkRequest: WorkRequestMutation;
+  onOpenArchivedRequests: () => Promise<void>;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
   onDeleteWorkRequest: WorkRequestMutation;
   onDashboardSearchQueryChange: (query: string) => void;
@@ -128,6 +133,7 @@ export function DashboardShell({
   openDashboardOnBoot: boolean;
   showWelcomeToast: boolean;
   soloSessionDeleteAfterDays: number;
+  surfaceRefreshVersion: number;
   theme: DashboardTheme;
   toggleTheme: () => void;
   updateAnimations: DashboardUpdateAnimations;
@@ -195,7 +201,14 @@ export function DashboardShell({
                 onHideEmptyWorkstreamsChange={onHideEmptyWorkstreamsChange}
                 onShowWorkstreamContextBarChange={onShowWorkstreamContextBarChange}
               />
-              <ArchivedRequestsDialog canRestoreWorkRequest={canMutateOperatorActions} requests={archivedRequests} onRestoreWorkRequest={onRestoreWorkRequest} />
+              <ArchivedRequestsDialog
+                canRestoreWorkRequest={canMutateOperatorActions}
+                loading={archivedRequestsLoading}
+                requests={archivedRequests}
+                onOpen={onOpenArchivedRequests}
+                onRestoreWorkRequest={onRestoreWorkRequest}
+                refreshVersion={surfaceRefreshVersion}
+              />
               <Button variant="outline" size="sm" onClick={() => void onRefreshDashboard()} disabled={refreshing} className="button-lift">
                 {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
                 Refresh

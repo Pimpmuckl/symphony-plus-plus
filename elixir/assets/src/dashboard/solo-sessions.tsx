@@ -22,14 +22,17 @@ import { repoDisplayName, repoIdentityKey, repoRemoteName } from "./dashboard-pe
 import { soloSessionAttention, soloSessionLane, soloSessionStatusVariant, soloSessionUpdateKey } from "./solo-session-utils";
 
 export function SoloSessions({
+  loading,
   sessions,
   onSelectCard,
   updateAnimations,
 }: {
+  loading: boolean;
   sessions: SoloSession[];
   onSelectCard: CardDetailSelect;
   updateAnimations: DashboardUpdateAnimations;
 }) {
+  if (loading) return <EmptyPanel title="Loading Solo Sessions" />;
   if (sessions.length === 0) {
     return <EmptyPanel title="No solo sessions" />;
   }

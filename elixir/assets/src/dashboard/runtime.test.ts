@@ -74,10 +74,8 @@ describe("dashboard runtime mutation helpers", () => {
     expect(queue).toEqual({ active: null, pending: null });
   });
 
-  it("keeps cold loading split and uses one endpoint after hydration", () => {
-    expect(dashboardRefreshPath(null)).toBe("/dashboard");
-    expect(dashboardRefreshPath({ deferred: { dashboard_sections: true } })).toBe("/dashboard");
-    expect(dashboardRefreshPath({ deferred: { dashboard_sections: false } })).toBe("/dashboard/hydrated");
+  it("refreshes from the operator-priority base endpoint", () => {
+    expect(dashboardRefreshPath()).toBe("/dashboard");
   });
 
   it("patches completed WorkRequests in-place", () => {
@@ -144,7 +142,7 @@ describe("dashboard runtime mutation helpers", () => {
       work_request_details: [{ work_request: { id: "wr-1", title: "Hydrated" }, work_packages: [{ id: "slice-1", work_request_id: "wr-1" }] }],
     });
 
-    expect(merged?.work_requests).toBe(dashboard.work_requests);
+    expect(merged?.work_requests?.work_requests?.[0]).toMatchObject({ id: "wr-1", title: "Hydrated" });
     expect(merged).toMatchObject({
       archived_work_requests: { work_requests: [{ id: "wr-old" }] },
       deferred: { dashboard_sections: false },
@@ -153,28 +151,31 @@ describe("dashboard runtime mutation helpers", () => {
     });
   });
 
-  it("keeps hydrated sections visible while a refresh defers their replacements", () => {
+  it("preserves lazy surfaces and drops stale active details during a priority refresh", () => {
     const dashboard = {
       ...dashboardWithRequest({ id: "wr-1", title: "Hydrated" }),
       archived_work_requests: { work_requests: [{ id: "wr-old", title: "Archived" }], total_count: 1 },
       solo_sessions: { solo_sessions: [{ id: "solo-1" }], total_count: 1 },
+      work_request_details: [
+        { work_request: { id: "wr-1", title: "Hydrated" } },
+        { work_request: { id: "wr-stale", title: "No longer active" } },
+      ],
       deferred: { dashboard_sections: false },
     } satisfies DashboardPayload;
 
     const merged = mergeDashboardPayload(dashboard, {
-      board: { groups: { created: [{ id: "pkg-1", title: "Fresh package" }] } },
       work_requests: { work_requests: [{ id: "wr-1", title: "Fresh card" }], total_count: 1 },
-      archived_work_requests: { work_requests: [], total_count: 0 },
-      solo_sessions: { solo_sessions: [], total_count: 0 },
-      work_request_details: [],
       deferred: { dashboard_sections: true },
     });
 
-    expect(merged?.board?.groups?.created?.[0]).toMatchObject({ id: "pkg-1" });
     expect(merged?.work_requests?.work_requests?.[0]).toMatchObject({ title: "Fresh card" });
     expect(merged?.archived_work_requests).toBe(dashboard.archived_work_requests);
     expect(merged?.solo_sessions).toBe(dashboard.solo_sessions);
-    expect(merged?.work_request_details).toBe(dashboard.work_request_details);
+    expect(merged?.work_request_details).toEqual([{ work_request: { id: "wr-1", title: "Hydrated" } }]);
+    expect(merged?.deferred).toEqual({ dashboard_sections: true });
+
+    const lazyMerged = mergeDashboardPayload(merged, { solo_sessions: { solo_sessions: [{ id: "solo-2" }], total_count: 1 } });
+    expect(lazyMerged?.work_requests?.work_requests?.[0]).toMatchObject({ title: "Fresh card" });
   });
 
   it("uses the local operator API base for dashboard events", () => {

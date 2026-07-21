@@ -59,6 +59,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     end
   end
 
+  @spec priority_cards(repo(), [WorkRequest.t()], keyword()) :: {:ok, [map()]} | {:error, dashboard_error()}
+  def priority_cards(repo, work_requests, opts) do
+    work_request_ids = Enum.map(work_requests, & &1.id)
+
+    with {:ok, question_context} <- question_context(repo, work_request_ids),
+         {:ok, work_packages} <- work_packages(repo, work_request_ids),
+         {:ok, comment_context} <- card_comment_context(repo, work_requests, work_packages) do
+      work_packages_by_request = Enum.group_by(work_packages, & &1.work_request_id)
+      work_package_counts = work_packages |> Enum.map(&{&1.work_request_id, &1.status}) |> status_counts()
+
+      summaries =
+        Map.new(work_requests, fn work_request ->
+          request_work_packages = Map.get(work_packages_by_request, work_request.id, [])
+          comment_counts = CommentProjection.work_request_counts(comment_context, work_request, request_work_packages)
+
+          {work_request.id,
+           Map.merge(comment_counts, %{
+             open_question_count: status_count(question_context.counts, work_request.id, "open"),
+             answered_question_count: status_count(question_context.counts, work_request.id, "answered"),
+             work_package_count: length(request_work_packages),
+             planned_work_package_count: Enum.count(request_work_packages, &(&1.status == "planned")),
+             dispatched_work_package_count: Enum.count(request_work_packages, &(not is_nil(&1.dispatched_at))),
+             skipped_work_package_count: status_count(work_package_counts, work_request.id, "skipped"),
+             completed_at: timestamp(work_request.completed_at),
+             completion_source: work_request.completion_source,
+             archived_at: timestamp(work_request.archived_at),
+             archive_reason: work_request.archive_reason
+           })}
+        end)
+
+      repo_identity_catalog = Dashboard.repo_identity_catalog_from_opts(opts, Enum.map(work_requests, & &1.repo))
+      {:ok, Enum.map(work_requests, &card(&1, summaries, repo_identity_catalog))}
+    end
+  end
+
   @spec visible_cards([map()]) :: [map()]
   def visible_cards(cards), do: Enum.reject(cards, &(not is_nil(&1.archived_at)))
 

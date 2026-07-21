@@ -613,6 +613,14 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   end
 
   @spec operator_dashboard(Conn.t(), map()) :: Conn.t()
+  def operator_dashboard(conn, %{"surface" => surface}) when surface in ["archived", "solo"] do
+    send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_dashboard_surface, fn repo ->
+      with {:ok, payload} <- LocalOperatorDashboard.operator_dashboard_surface_payload(repo, surface) do
+        json(conn, payload)
+      end
+    end)
+  end
+
   def operator_dashboard(conn, _params) do
     send_local_operator_response(conn, :dashboard_read, Target.new(:dashboard), :operator_dashboard, fn repo ->
       with {:ok, payload} <- LocalOperatorDashboard.operator_dashboard_payload(repo) do

@@ -204,7 +204,9 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
       assert_received {:mix_shell, :info, ["Bootstrap URL browser open attempted; token redacted from logs."]}
       assert_received {:mix_shell, :info, ["Press Ctrl+C to stop."]}
       assert_received {:cockpit_response, 200, nil, 401, 200, payload}
-      assert payload["board"]["total_count"] == 0
+      assert payload["work_requests"]["total_count"] == 0
+      assert payload["deferred"] == %{"dashboard_sections" => true}
+      refute Map.has_key?(payload, "board")
       assert File.exists?(database_path)
     after
       File.rm(database_path)

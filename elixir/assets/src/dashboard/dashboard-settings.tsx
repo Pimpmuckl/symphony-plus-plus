@@ -9,7 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { WorkRequestCard } from "@/types/dashboard";
 import { cn } from "@/lib/utils";
 import { sortedCopy } from "@/lib/collections";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DashboardTheme, REPO_SUMMARY_PLATE_TONES, RepoSummaryPlateTone, WorkRequestMutation } from "./runtime";
 import { detailDate } from "./detail-utils";
 import { repoDisplayName } from "./dashboard-persistence";
@@ -335,17 +335,27 @@ function workstreamHiddenSummary(hiddenWorkstreamCount: number) {
 
 export function ArchivedRequestsDialog({
   canRestoreWorkRequest,
+  loading,
   requests,
+  onOpen,
   onRestoreWorkRequest,
+  refreshVersion,
 }: {
   canRestoreWorkRequest: boolean;
+  loading: boolean;
   requests: WorkRequestCard[];
+  onOpen: () => Promise<void>;
   onRestoreWorkRequest: WorkRequestMutation;
+  refreshVersion: number;
 }) {
   const [open, setOpen] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const sortedRequests = useMemo(() => sortedCopy(requests, (left, right) => sortableTime(right.archived_at) - sortableTime(left.archived_at)), [requests]);
+
+  useEffect(() => {
+    if (open) void onOpen();
+  }, [onOpen, open, refreshVersion]);
 
   async function restoreRequest(workRequestId: string) {
     setPendingId(workRequestId);
@@ -401,7 +411,11 @@ export function ArchivedRequestsDialog({
 
           {error ? <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}
 
-          {sortedRequests.length > 0 ? (
+          {loading ? (
+            <p className="flex items-center justify-center gap-2 rounded-md border bg-card/60 px-3 py-6 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> Loading archived requests
+            </p>
+          ) : sortedRequests.length > 0 ? (
             <ScrollArea className="max-h-[55vh] pr-3">
               <div className="grid gap-2">
                 {sortedRequests.map((request) => (

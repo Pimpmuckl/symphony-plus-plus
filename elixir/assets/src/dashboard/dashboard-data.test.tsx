@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { activeBlockerItems, FINISHED_HIGHLIGHT_LIMIT, recentFinishedHighlights, repoSummaries } from "./dashboard-data";
+import { activeBlockerItems, allPackages, FINISHED_HIGHLIGHT_LIMIT, recentFinishedHighlights, repoSummaries } from "./dashboard-data";
 import { RepoSummaryStrip } from "./repo-workstream";
 import type { ActiveBlockingEdge, WorkPackageCard, WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
 import type { RepoSummary } from "./dashboard-data";
@@ -232,6 +232,45 @@ describe("dashboard data helpers", () => {
     const [repo] = repoSummaries([pkg], [request], [], [], [detail]);
 
     expect(repo?.implementing).toBe(1);
+  });
+
+  it("projects compact active WorkRequest slices into package cards without duplicating board cards", () => {
+    const request: WorkRequestCard = {
+      id: "wr-priority",
+      repo: "symphony-plus-plus",
+      repo_key: "symphony-plus-plus",
+      base_branch: "main",
+    };
+    const detail: WorkRequestDetail = {
+      work_request: request,
+      work_packages: [
+        {
+          id: "slice-priority",
+          work_request_id: request.id,
+          work_package_id: "pkg-priority",
+          title: "Priority package",
+          status: "approved",
+          work_package_status: "implementing",
+          operational_state: { key: "active", label: "Active" },
+        },
+      ],
+    };
+
+    const packages = allPackages({
+      board: { groups: { implementing: [{ id: "pkg-existing", title: "Existing package", status: "implementing" }] } },
+      work_request_details: [detail],
+    });
+
+    expect(packages).toEqual([
+      expect.objectContaining({ id: "pkg-existing" }),
+      expect.objectContaining({
+        id: "pkg-priority",
+        repo: "symphony-plus-plus",
+        base_branch: "main",
+        status: "implementing",
+        operational_state: { key: "active", label: "Active" },
+      }),
+    ]);
   });
 
   it("hides zero plan and attention plates from repo summaries", () => {

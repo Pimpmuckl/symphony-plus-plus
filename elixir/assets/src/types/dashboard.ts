@@ -594,6 +594,7 @@ export type DashboardPayload = {
     visible_count?: number;
   };
   linked_work_package_ids?: string[];
+  work_request_work_package_ids?: string[];
   work_requests?: {
     work_requests?: WorkRequestCard[];
     total_count?: number;
