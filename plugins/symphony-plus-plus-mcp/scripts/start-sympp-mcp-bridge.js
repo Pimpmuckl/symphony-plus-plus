@@ -291,6 +291,15 @@ function generationStillValid(identity) {
     liveGeneration(identity.generationMarker) === identity.generationKey;
 }
 
+function generationValidForAttachment(identity) {
+  if (generationStillValid(identity)) return true;
+  trace("warm_miss_generation");
+  if (prepareCleanupScript(identity) === CLEANUP_SOURCE_CHANGED) {
+    throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
+  }
+  return false;
+}
+
 function prepareCleanupScript(identity) {
   if (!identity || !/^[0-9a-f]{40}$/i.test(String(identity.revision || "")) ||
       !/^[0-9a-f]{64}$/i.test(String(identity.generationKey || ""))) return null;
@@ -321,7 +330,7 @@ function prepareCleanupScript(identity) {
 }
 
 async function generationValidAtAttachment(identity) {
-  if (!generationStillValid(identity)) return false;
+  if (!generationValidForAttachment(identity)) return false;
   closeGenerationWatchers();
   const pluginRoot = identity.pluginRoot;
   const sourceRoot = identity.sourceRoot;
@@ -623,10 +632,7 @@ async function bridge(identity, state, runtimeFile) {
     }
     trace("generation_attach_preflight");
     await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
-    if (!generationStillValid(identity)) {
-      trace("warm_miss_generation");
-      return false;
-    }
+    if (!generationValidForAttachment(identity)) return false;
     cleanupScript = prepareCleanupScript(identity);
     if (cleanupScript === CLEANUP_SOURCE_CHANGED) {
       cleanupAllowed = false;
@@ -646,10 +652,7 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_backend");
       return false;
     }
-    if (!generationStillValid(identity)) {
-      trace("warm_miss_generation");
-      return false;
-    }
+    if (!generationValidForAttachment(identity)) return false;
     const confirmedState = readJson(runtimeFile);
     const confirmed = resolveStateIdentity(confirmedState, path.resolve(__dirname, ".."), identity);
     if (!confirmed || confirmed.runtimeKey.toLowerCase() !== identity.runtimeKey.toLowerCase()) {
@@ -721,7 +724,7 @@ async function bridge(identity, state, runtimeFile) {
     if (localLease) { try { fs.unlinkSync(localLease); } catch (_) { } }
     if (attached) await clientLease(mcpUrl, clientId, "detach", false);
     closeGenerationWatchers();
-    if (cleanupAllowed) cleanupLastDetach(runtimeFile, identity.runtimeKey, cleanupScript);
+    if (cleanupAllowed && cleanupScript) cleanupLastDetach(runtimeFile, identity.runtimeKey, cleanupScript);
     closeLivenessProbe();
   }
 }
