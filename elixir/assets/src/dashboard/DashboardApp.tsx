@@ -45,6 +45,7 @@ function useDashboardController() {
   const connectionIssueRef = useRef<DashboardConnectionIssue | null>(null);
   const refreshQueueRef = useRef(createLatestTaskQueue<DashboardLoadMode>());
   const loadSequenceRef = useRef(0);
+  const deferredLoadSequenceRef = useRef(0);
   const refreshingSequenceRef = useRef(0);
   const mutationVersionRef = useRef(0);
   const setDashboard = useCallback((nextDashboard: DashboardPayload | null) => {
@@ -57,6 +58,7 @@ function useDashboardController() {
   const setLoading = useCallback((nextLoading: boolean) => dispatchApp({ type: "patch", state: { loading: nextLoading } }), []);
   const setRefreshing = useCallback((nextRefreshing: boolean) => dispatchApp({ type: "patch", state: { refreshing: nextRefreshing } }), []);
   const setError = useCallback((nextError: string | null) => dispatchApp({ type: "patch", state: { error: nextError } }), []);
+  const clearConnectionFailure = useCallback(() => { connectionIssueRef.current = null; setConnectionIssue(null); setError(null); }, [setError]);
   const setWorkspaceTab = useCallback((nextWorkspaceTab: WorkspaceTab) => dispatchApp({ type: "patch", state: { workspaceTab: nextWorkspaceTab } }), []);
   const updateDashboardSearchQuery = useCallback((query: string) => {
     setDashboardSearchQuery(query);
@@ -120,11 +122,10 @@ function useDashboardController() {
       }
       if (loadMutationVersion !== mutationVersionRef.current) return nextDashboard;
       setDashboard(mergeDashboardPayload(dashboardRef.current, nextDashboard));
-      setConnectionIssue(null);
-      setError(null);
+      clearConnectionFailure();
       return nextDashboard;
     },
-    [setDashboard, setError],
+    [clearConnectionFailure, setDashboard],
   );
 
   const recordDashboardLoadFailure = useCallback((loadSequence: number, caught: unknown, mode: DashboardLoadMode) => {
@@ -175,22 +176,27 @@ function useDashboardController() {
   const loadDashboardDeferred = useCallback(async () => {
     const baseDashboard = dashboardRef.current;
     if (!baseDashboard?.deferred?.dashboard_sections) return;
+    const loadSequence = deferredLoadSequenceRef.current + 1;
+    deferredLoadSequenceRef.current = loadSequence;
 
     try {
       await withLocalOperatorReconnect(async () => {
         const response = await operatorFetch(operatorApiUrl("/dashboard/deferred"), { headers: jsonHeaders() });
         const payload = await readDashboardApiResponse(response, "Dashboard details unavailable");
-        if (dashboardRef.current !== baseDashboard) return;
+        if (loadSequence !== deferredLoadSequenceRef.current || dashboardRef.current !== baseDashboard) return;
         const nextDashboard = mergeDashboardPayload(dashboardRef.current, payload as DashboardPayload);
         if (nextDashboard) setDashboard(nextDashboard);
+        clearConnectionFailure();
       });
     } catch (caught) {
+      if (loadSequence !== deferredLoadSequenceRef.current) return;
       recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard details unavailable"), false, isReconnectableLocalOperatorError(caught));
     }
-  }, [recordConnectionFailure, setDashboard]);
+  }, [clearConnectionFailure, recordConnectionFailure, setDashboard]);
 
   const { archivedLoading, loadArchived, soloLoading } = useDashboardSurfaceLoading({
     dashboardRef,
+    clearFailure: clearConnectionFailure,
     recordFailure: recordConnectionFailure,
     refreshVersion: surfaceRefreshVersion,
     setDashboard,
@@ -200,19 +206,17 @@ function useDashboardController() {
   const refreshAfterMutation = useCallback(async (payload?: DashboardMutationPayload) => {
     if (payload?.dashboard) {
       setDashboard(payload.dashboard);
-      setConnectionIssue(null);
-      setError(null);
+      clearConnectionFailure();
       return;
     }
 
     if (!mutationShouldRefreshDashboard(payload)) {
-      setConnectionIssue(null);
-      setError(null);
+      clearConnectionFailure();
       return;
     }
 
     await loadDashboard("refresh");
-  }, [loadDashboard, setDashboard, setError]);
+  }, [clearConnectionFailure, loadDashboard, setDashboard]);
 
   const mutateWorkRequest = useCallback(
     async (workRequestId: string, action: "archive" | "delete" | "state", body: Record<string, unknown>, fallbackMessage: string, options: { archive?: boolean; remove?: boolean } = {}) => {
@@ -229,12 +233,11 @@ function useDashboardController() {
       mutationVersionRef.current += 1;
       if (options.remove) setDashboard(removeDashboardWorkRequest(dashboardRef.current, workRequestId));
       else if (workRequest) setDashboard(patchDashboardWorkRequest(dashboardRef.current, workRequest, options));
-      setConnectionIssue(null);
-      setError(null);
+      clearConnectionFailure();
       setSelectedCardDetail(null);
       if (mutationShouldRefreshDashboard(payload)) void loadDashboard("silent");
     },
-    [loadDashboard, setDashboard, setError, setSelectedCardDetail],
+    [clearConnectionFailure, loadDashboard, setDashboard, setSelectedCardDetail],
   );
   const submitGuidanceAnswer = useCallback(async (item: GuidanceItem, submission: GuidanceAnswerSubmission) => {
     await withLocalOperatorReconnect(async () => {
@@ -423,7 +426,7 @@ function useDashboardController() {
 
   useEffect(() => {
     if (dashboard?.deferred?.dashboard_sections) void loadDashboardDeferred();
-  }, [dashboard, dashboard?.deferred?.dashboard_sections, loadDashboardDeferred]);
+  }, [dashboard, dashboard?.deferred?.dashboard_sections, loadDashboardDeferred, surfaceRefreshVersion]);
 
   const dashboardReady = dashboard !== null;
 

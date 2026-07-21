@@ -16,12 +16,14 @@ export type DashboardSurface = "archived" | "solo";
 
 export function useDashboardSurfaceLoading({
   dashboardRef,
+  clearFailure,
   recordFailure,
   setDashboard,
   soloOpen,
   refreshVersion,
 }: {
   dashboardRef: RefObject<DashboardPayload | null>;
+  clearFailure: () => void;
   recordFailure: (message: string, immediate?: boolean, reconnectable?: boolean) => void;
   setDashboard: (dashboard: DashboardPayload | null) => void;
   soloOpen: boolean;
@@ -41,6 +43,7 @@ export function useDashboardSurfaceLoading({
         const payload = (await readDashboardApiResponse(response, `Dashboard ${surface} data unavailable`)) as DashboardPayload;
         if (requestVersions.current[surface] !== requestVersion) return;
         setDashboard(mergeDashboardPayload(dashboardRef.current, payload));
+        clearFailure();
       });
     } catch (caught) {
       if (requestVersions.current[surface] !== requestVersion) return;
@@ -54,7 +57,7 @@ export function useDashboardSurfaceLoading({
         setLoading((state) => ({ ...state, [surface]: false }));
       }
     }
-  }, [dashboardRef, recordFailure, setDashboard]);
+  }, [clearFailure, dashboardRef, recordFailure, setDashboard]);
 
   const loadArchived = useCallback(() => loadSurface("archived"), [loadSurface]);
 
