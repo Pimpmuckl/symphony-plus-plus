@@ -81,6 +81,9 @@ $preflightCall = $node.IndexOf('if (!await preflightRuntimeHealth')
 $stdinRead = $node.IndexOf('readline.createInterface')
 $watchRelease = $node.IndexOf('trace("generation_attach_handles_released");')
 $watchClose = if ($watchRelease -ge 0) { $node.LastIndexOf('closeGenerationWatchers();', $watchRelease) } else { -1 }
+$bridgeStart = $node.IndexOf('async function bridge(')
+$bridgeEnd = $node.IndexOf('async function main()', $bridgeStart)
+$bridgeSource = $node.Substring($bridgeStart, $bridgeEnd - $bridgeStart)
 Assert-True ($cmd.Contains('%%~$PATH:I') -and -not $cmd.Contains('where node.exe') -and $cmd.Contains('-PrepareRuntimeOnly') -and $cmd.Contains('if "%bridge_exit%"=="42" goto :run_pwsh')) "Bootstrap must select Node without a per-client discovery process and preserve PowerShell fallback after preparation"
 Assert-True ($cmd.Contains('-CleanupPreparedRuntime') -and $source.Contains('if ($CleanupPreparedRuntime)')) "Unexpected post-prepare Node failures must clean an unleased managed runtime"
 Assert-True ($source.Contains('if ($PrepareRuntimeOnly)') -and $source.IndexOf('if ($PrepareRuntimeOnly)') -lt $source.LastIndexOf('Invoke-HttpMcpBridge')) "Prepared cold runtime must exit before any PowerShell stdio bridge"
@@ -94,6 +97,8 @@ Assert-True ($node.Contains('/^(disabled|failed)/.test(String(state.frontend.sta
 Assert-True ($node.Contains('SYMPP_STARTUP_LOCK_TIMEOUT_SEC || 1800') -and $node.Contains('trace("warm_miss_lock");')) "Node startup locking must honor the configured timeout and remain recoverable"
 Assert-True ($watchClose -ge 0 -and $watchClose -lt $watchRelease -and $watchRelease -lt $stdinRead) "Node warm attach must close marketplace and plugin-cache watchers before retaining the bridge on stdin"
 Assert-True ($node.Contains('validated_at_ms') -and -not $node.Contains('ownedGenerationMarker')) "Node generation coalescing must reject markers older than each attach without a process-lifetime marker owner"
+Assert-True ([regex]::Matches($node, 'setTimeout\(resolve, GENERATION_SETTLE_MS\)').Count -eq 4) "Generation validation must retain only the four mutation-boundary settle waits"
+Assert-True ([regex]::Matches($bridgeSource, 'generationValidForAttachment\(identity\)').Count -eq 2 -and [regex]::Matches($bridgeSource, 'generationValidAtAttachment\(identity\)').Count -eq 1) "Warm bridge attachment must keep only its three required generation validation steps"
 Assert-True ($cmd.Contains('cd /d "%SystemRoot%"') -and $cmd.IndexOf('cd /d "%SystemRoot%"') -lt $cmd.IndexOf('start-sympp-mcp-bridge.js') -and -not $cmd.Contains('cd /d "%TEMP%"')) "Shipped launcher must leave the installed plugin working directory without relying on TEMP"
 Assert-True ($node.IndexOf('cleanupScript = prepareCleanupScript(identity);') -lt $watchRelease -and $node.Contains('cleanupLastDetach(runtimeFile, identity.runtimeKey, cleanupScript)')) "Node warm attach must preserve last-detach cleanup outside the invalidatable plugin cache"
 Assert-True ($node -match '(?s)function prepareCleanupScript\(identity\).*?try \{\s*const names = fs\.readdirSync\(__dirname\).*?\} catch \(_\) \{\s*return null;') "Cleanup staging must fail closed when the invalidatable plugin cache disappears"

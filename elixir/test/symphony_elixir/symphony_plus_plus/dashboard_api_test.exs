@@ -4234,6 +4234,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     try do
       assert %{rows: [["ok"]]} = Repo.query!("PRAGMA quick_check")
+      assert {:ok, fixture_payload} = LocalOperatorDashboard.operator_dashboard_hydrated_payload(Repo)
+      assert byte_size(Jason.encode!(fixture_payload)) <= 350_000
 
       assert Repo.all(WorkRequest) |> Enum.map(& &1.id) |> Enum.sort() == [
                "WR-FIXTURE-DENSE",
