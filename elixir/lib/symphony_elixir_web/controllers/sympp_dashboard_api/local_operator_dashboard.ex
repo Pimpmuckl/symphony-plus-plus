@@ -93,6 +93,13 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   @spec operator_dashboard_hydrated_payload(module()) :: {:ok, map()} | {:error, term()}
   def operator_dashboard_hydrated_payload(repo) do
+    case repo.transaction(fn -> hydrated_dashboard_payload(repo) end) do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp hydrated_dashboard_payload(repo) do
     with {:ok, context} <- operator_execution_context(repo),
          {:ok, work_requests} <- WorkRequestRepository.list(repo),
          {:ok, base} <- priority_dashboard_payload(repo, context, work_requests),
