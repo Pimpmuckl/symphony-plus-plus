@@ -234,7 +234,7 @@ describe("dashboard data helpers", () => {
     expect(repo?.implementing).toBe(1);
   });
 
-  it("projects compact active WorkRequest slices into package cards without duplicating board cards", () => {
+  it("merges compact runtime signals into active WorkRequest package cards", () => {
     const request: WorkRequestCard = {
       id: "wr-priority",
       repo: "symphony-plus-plus",
@@ -257,20 +257,25 @@ describe("dashboard data helpers", () => {
     };
 
     const packages = allPackages({
-      board: { groups: { implementing: [{ id: "pkg-existing", title: "Existing package", status: "implementing" }] } },
+      work_packages: [{ id: "pkg-priority", active_blocker_count: 1, runtime: { active_count: 1 } }],
       work_request_details: [detail],
     });
 
     expect(packages).toEqual([
-      expect.objectContaining({ id: "pkg-existing" }),
       expect.objectContaining({
         id: "pkg-priority",
         repo: "symphony-plus-plus",
         base_branch: "main",
         status: "implementing",
         operational_state: { key: "active", label: "Active" },
+        active_blocker_count: 1,
+        runtime: { active_count: 1 },
       }),
     ]);
+  });
+
+  it("does not render unowned runtime signals as WorkPackage cards", () => {
+    expect(allPackages({ work_packages: [{ id: "pkg-unowned", status: "implementing" }] })).toEqual([]);
   });
 
   it("hides zero plan and attention plates from repo summaries", () => {

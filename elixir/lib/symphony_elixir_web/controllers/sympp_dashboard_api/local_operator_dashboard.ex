@@ -53,17 +53,16 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   defp execution_dashboard_payload(repo, context, work_requests) do
     opts = dashboard_opts(context)
 
-    with {:ok, board} <- Dashboard.operator_board(repo, opts),
+    with {:ok, execution_signals} <-
+           Dashboard.operator_work_package_signals(repo, context.active_work_request_work_package_ids, opts),
          {:ok, guidance_requests} <- Dashboard.human_guidance_requests(repo, opts),
          {:ok, work_request_details} <-
            operator_work_request_board_details(repo, work_requests, context.repo_identity_catalog) do
-      {board, active_blocking_edges} = local_operator_board(board, context.hidden_work_package_ids)
-
       {:ok,
        %{
          generated_at: DateTime.utc_now(:microsecond) |> DateTime.to_iso8601(),
-         active_blocking_edges: active_blocking_edges,
-         board: board,
+         active_blocking_edges: execution_signals.active_blocking_edges,
+         work_packages: execution_signals.work_packages,
          work_request_details: work_request_details,
          guidance_requests: guidance_requests,
          deferred: %{dashboard_sections: false}
@@ -122,8 +121,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
          settings_record: settings,
          settings: operator_settings_payload(settings),
          active_work_request_work_package_ids: work_request_work_package_id_sets.active |> MapSet.to_list() |> Enum.sort(),
-         archived_work_request_work_package_ids: work_request_work_package_id_sets.archived_only,
-         work_request_work_package_ids: work_request_work_package_id_sets.persisted |> MapSet.to_list() |> Enum.sort()
+         archived_work_request_work_package_ids: work_request_work_package_id_sets.archived_only
        }}
     end
   end
@@ -155,42 +153,13 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     ]
   end
 
-  defp local_operator_board(board, hidden_work_package_ids) do
-    active_blocking_edges = Map.get(board, :active_blocking_edges, [])
-
-    board =
-      board
-      |> Map.delete(:active_blocking_edges)
-      |> hide_local_operator_work_packages(hidden_work_package_ids)
-
-    {board, hide_local_operator_blocking_edges(active_blocking_edges, hidden_work_package_ids)}
-  end
-
   defp base_payload(context) do
     %{
       generated_at: DateTime.utc_now(:microsecond) |> DateTime.to_iso8601(),
       ledger: %{database: dashboard_ledger_database(context.repo)},
       settings: context.settings,
-      linked_work_package_ids: context.active_work_request_work_package_ids,
-      work_request_work_package_ids: context.work_request_work_package_ids
+      linked_work_package_ids: context.active_work_request_work_package_ids
     }
-  end
-
-  defp hide_local_operator_work_packages(board, hidden_ids) do
-    groups = Map.get(board, :groups, %{})
-
-    groups =
-      Map.new(groups, fn {status, cards} ->
-        {status, Enum.reject(cards, &MapSet.member?(hidden_ids, Map.get(&1, :id)))}
-      end)
-
-    board
-    |> Map.put(:groups, groups)
-    |> Map.put(:visible_count, groups |> Map.values() |> Enum.map(&length/1) |> Enum.sum())
-  end
-
-  defp hide_local_operator_blocking_edges(active_blocking_edges, hidden_ids) do
-    Enum.reject(active_blocking_edges, &MapSet.member?(hidden_ids, Map.get(&1, :work_package_id)))
   end
 
   defp effective_hidden_work_package_ids(%OperatorSettings{} = settings, work_request_work_package_ids) do
@@ -248,28 +217,19 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       )
 
     sets =
-      Enum.reduce(rows, %{persisted: MapSet.new(), active: MapSet.new(), archived: MapSet.new()}, fn
-        {work_package_id, nil, _archived_at}, sets ->
-          %{sets | persisted: MapSet.put(sets.persisted, work_package_id)}
+      Enum.reduce(rows, %{active: MapSet.new(), archived: MapSet.new()}, fn
+        {_work_package_id, nil, _archived_at}, sets ->
+          sets
 
         {work_package_id, _work_request_id, nil}, sets ->
-          %{
-            sets
-            | persisted: MapSet.put(sets.persisted, work_package_id),
-              active: MapSet.put(sets.active, work_package_id)
-          }
+          %{sets | active: MapSet.put(sets.active, work_package_id)}
 
         {work_package_id, _work_request_id, _archived_at}, sets ->
-          %{
-            sets
-            | persisted: MapSet.put(sets.persisted, work_package_id),
-              archived: MapSet.put(sets.archived, work_package_id)
-          }
+          %{sets | archived: MapSet.put(sets.archived, work_package_id)}
       end)
 
     {:ok,
      %{
-       persisted: sets.persisted,
        active: sets.active,
        archived_only: MapSet.difference(sets.archived, sets.active)
      }}
