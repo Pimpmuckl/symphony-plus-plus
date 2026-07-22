@@ -66,7 +66,11 @@ when package bodies are needed. The projection includes effective WorkPackage
 edges, cycle/topology evidence, and unmet dependencies.
 
 Design one PR-sized WorkPackage per worker unless the operator approves
-another shape. Each WorkPackage needs:
+another shape. Error on the size of smaller PRs, if possible without major
+drawbacks. It is better to have smaller PRs that aren't stuck in reviews 
+than a larger one.
+
+Each WorkPackage needs:
 
 - Outcome-focused title and goal.
 - Owned globs. Keep this boundary explicit.
