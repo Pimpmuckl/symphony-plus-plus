@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createLatestTaskQueue, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, enqueueLatestTask, mergeDashboardPayload, mutationShouldRefreshDashboard, patchDashboardWorkRequest, removeDashboardWorkRequest } from "./runtime";
+import { createDashboardEventRefresh } from "./dashboard-demand-loading";
 import type { DashboardPayload, WorkRequestCard } from "@/types/dashboard";
 
 describe("dashboard runtime mutation helpers", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("refreshes the board after slim mutation responses by default", () => {
     expect(mutationShouldRefreshDashboard({ ok: true, refresh: { dashboard: true, work_request_id: "wr-1" } })).toBe(true);
     expect(mutationShouldRefreshDashboard({ ok: true })).toBe(true);
@@ -72,6 +75,36 @@ describe("dashboard runtime mutation helpers", () => {
     await enqueueLatestTask(queue, "first", run);
     expect(runs).toEqual(["first", "late"]);
     expect(queue).toEqual({ active: null, pending: null });
+  });
+
+  it("defers hidden dashboard events and refreshes once when visible", () => {
+    let visibility: DocumentVisibilityState = "hidden";
+    const refresh = vi.fn();
+    const eventRefresh = createDashboardEventRefresh(refresh, () => visibility);
+
+    eventRefresh.dashboardChanged();
+    eventRefresh.dashboardChanged();
+    expect(refresh).not.toHaveBeenCalled();
+
+    visibility = "visible";
+    eventRefresh.visibilityChanged();
+    eventRefresh.visibilityChanged();
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs one immediate refresh and one trailing refresh for a visible burst", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const refresh = vi.fn();
+    const eventRefresh = createDashboardEventRefresh(refresh, () => "visible", 100);
+
+    eventRefresh.dashboardChanged();
+    eventRefresh.dashboardChanged();
+    eventRefresh.dashboardChanged();
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(100);
+    expect(refresh).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes from the operator-priority base endpoint", () => {

@@ -36,12 +36,12 @@ export type RepoSummary = {
 };
 
 export function allPackages(dashboard: DashboardPayload | null): WorkPackageCard[] {
-  const groups = dashboard?.board?.groups || {};
-  const packages = new Map(Object.values(groups).flat().map((pkg) => [pkg.id, pkg]));
+  const signals = new Map((dashboard?.work_packages ?? []).map((pkg) => [pkg.id, pkg]));
+  const packages = new Map<string, WorkPackageCard>();
 
   (dashboard?.work_request_details ?? []).forEach((detail) => {
     (detail.work_packages ?? []).forEach((slice) => {
-      if (!slice.work_package_id || packages.has(slice.work_package_id)) return;
+      if (!slice.work_package_id) return;
 
       packages.set(slice.work_package_id, {
         id: slice.work_package_id,
@@ -57,6 +57,7 @@ export function allPackages(dashboard: DashboardPayload | null): WorkPackageCard
         operational_state: slice.operational_state,
         inserted_at: slice.inserted_at,
         updated_at: slice.updated_at,
+        ...signals.get(slice.work_package_id),
       });
     });
   });
