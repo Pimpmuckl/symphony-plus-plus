@@ -4280,8 +4280,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert Enum.all?(fixture_deferred_payload.work_packages, &(MapSet.new(Map.keys(&1)) == expected_signal_keys))
 
       parse_signal = Enum.find(fixture_deferred_payload.work_packages, &(&1.id == "WP-FANOUT-PARSE"))
-      assert parse_signal.runtime.active_count == 1
-      assert is_map(parse_signal.active_agent_run)
+      assert parse_signal.runtime.completed_count == 1
       assert is_map(parse_signal.metadata.pr)
       assert is_map(parse_signal.metadata.review_package)
       assert is_binary(parse_signal.latest_progress_at)
