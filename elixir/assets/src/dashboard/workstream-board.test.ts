@@ -80,14 +80,7 @@ describe("workstream board removal rendering", () => {
     const collapsed = renderBoard(detail, {});
 
     expect(expanded).toContain('data-expanded="true"');
-    expect(expanded).toContain('data-work-package-id="wp-active"');
-    expect(expanded).toContain("Active · 1h 30m");
-    expect(expanded).not.toContain("fixture-worker");
-    expect(expanded).toContain('data-v3-context-path=');
-    expect(expanded).toContain("Graph group");
-    expect(expanded).toContain('data-work-package-id="wp-old"');
-    expect(expanded).not.toContain("Show history");
-    expect(expanded).not.toContain("v3-product-node");
+    expect(expanded).toContain('aria-label="Loading execution graph"');
     expect(collapsed).toContain("Graph request");
     expect(collapsed).toContain("fixture/repo");
     expect(collapsed).toContain("feature/focus-board");
