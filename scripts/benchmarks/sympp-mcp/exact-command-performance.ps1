@@ -488,6 +488,7 @@ exit /b %ERRORLEVEL%
       Stop-ExactClient $scanClient
       if (-not $mutation.scan_race_detected) { throw "Installed payload mutation during generation scan was not retried or rejected safely." }
     }
+    $attachRejectionBefore = [int](Get-TraceCounts)["warm_miss_generation"]
     $attachTraceOffsets = Get-TraceFileOffsets
     $mutated = Start-ExactClient $environment
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
@@ -500,7 +501,8 @@ exit /b %ERRORLEVEL%
     $mutation.shortcut_rejected = $mutated.process.HasExited -and
       $mutated.line_task.IsCompleted -and
       [string]::IsNullOrWhiteSpace([string]$mutated.line_task.GetAwaiter().GetResult())
-    $mutation.attach_race_rejected = $LauncherMode -ne "NodePresent" -or ([int](Get-TraceCounts)["warm_miss_generation"] -gt 0 -and $mutation.shortcut_rejected)
+    $mutation.attach_race_rejected = $LauncherMode -ne "NodePresent" -or
+      ([int](Get-TraceCounts)["warm_miss_generation"] -gt $attachRejectionBefore -and $mutation.shortcut_rejected)
     $mutation.unsafe_cleanup_skipped = -not (Test-Path -LiteralPath $environment.SYMPP_INTEGRITY_MARKER)
     if ($LauncherMode -ne "NodePresent") { $mutation.scan_race_detected = $true }
     Stop-ExactClient $mutated
