@@ -23,6 +23,7 @@ import { filterWorkstreamsBySearch } from "./dashboard-search";
 import { activeWorkRequestDetails, packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
 import { useDashboardUpdateAnimations } from "./update-animations";
 import { useDashboardSurfaceLoading } from "./dashboard-surface-loading";
+import { createDashboardEventRefresh } from "./dashboard-demand-loading";
 type DashboardLoadMode = "initial" | "refresh" | "silent" | "reconnect";
 function mergeDashboardLoadMode(pending: DashboardLoadMode, next: DashboardLoadMode) {
   return pending === "reconnect" || next === "reconnect" ? "reconnect" : next;
@@ -86,9 +87,7 @@ function useDashboardController() {
       const currentIssue = connectionIssueRef.current;
       const firstFailedAt = currentIssue?.firstFailedAt ?? now;
       const nextIssue = { firstFailedAt, lastFailedAt: now, message, reconnectableLocalSession };
-
       setConnectionIssue(nextIssue);
-
       if (now - firstFailedAt >= DASHBOARD_RECONNECT_GRACE_MS) {
         setError(message);
       } else {
@@ -435,8 +434,14 @@ function useDashboardController() {
     if (!dashboardReady || typeof EventSource === "undefined") return;
 
     const events = new EventSource(dashboardEventsUrl(), { withCredentials: true });
-    events.addEventListener("dashboard_changed", () => void loadDashboard("silent"));
-    return () => events.close();
+    const eventRefresh = createDashboardEventRefresh(() => void loadDashboard("silent"), () => document.visibilityState);
+    events.addEventListener("dashboard_changed", eventRefresh.dashboardChanged);
+    document.addEventListener("visibilitychange", eventRefresh.visibilityChanged);
+    return () => {
+      events.close();
+      eventRefresh.dispose();
+      document.removeEventListener("visibilitychange", eventRefresh.visibilityChanged);
+    };
   }, [dashboardReady, loadDashboard]);
 
   useEffect(() => {
