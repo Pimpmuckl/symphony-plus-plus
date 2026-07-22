@@ -62,18 +62,27 @@ function Get-TraceCounts {
   return $counts
 }
 
-function Get-TraceFileSet {
-  $files = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+function Get-TraceFileOffsets {
+  $offsets = [System.Collections.Generic.Dictionary[string, long]]::new([System.StringComparer]::OrdinalIgnoreCase)
   foreach ($file in @(Get-ChildItem -LiteralPath $traceDir -Filter "*.log" -File -ErrorAction SilentlyContinue)) {
-    [void]$files.Add($file.FullName)
+    $offsets[$file.FullName] = $file.Length
   }
-  return $files
+  return $offsets
 }
 
-function Test-NewTraceEvent($ExistingFiles, [string]$Event) {
+function Test-NewTraceEvent($ExistingOffsets, [string]$Event) {
   foreach ($file in @(Get-ChildItem -LiteralPath $traceDir -Filter "*.log" -File -ErrorAction SilentlyContinue)) {
-    if ($ExistingFiles.Contains($file.FullName)) { continue }
-    if (@(Get-Content -LiteralPath $file.FullName -ErrorAction SilentlyContinue) -contains $Event) { return $true }
+    $offset = if ($ExistingOffsets.ContainsKey($file.FullName)) { [long]$ExistingOffsets[$file.FullName] } else { 0L }
+    if ($file.Length -le $offset) { continue }
+    $stream = [System.IO.File]::Open($file.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+      [void]$stream.Seek($offset, [System.IO.SeekOrigin]::Begin)
+      $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $true, 1024, $true)
+      try { $appended = $reader.ReadToEnd() } finally { $reader.Dispose() }
+    } finally {
+      $stream.Dispose()
+    }
+    if (@($appended -split "`r?`n") -contains $Event) { return $true }
   }
   return $false
 }
@@ -463,14 +472,14 @@ exit /b %ERRORLEVEL%
       $originalWriteTime = [System.IO.File]::GetLastWriteTimeUtc($mutationFile)
       $retryBefore = [int](Get-TraceCounts)["generation_scan_retry"]
       $scanRejectionBefore = [int](Get-TraceCounts)["warm_miss_generation"]
-      $scanTraceFiles = Get-TraceFileSet
+      $scanTraceOffsets = Get-TraceFileOffsets
       $scanClient = Start-ExactClient $environment
       $deadline = [DateTime]::UtcNow.AddSeconds(60)
-      while (-not (Test-NewTraceEvent $scanTraceFiles "generation_scan_complete") -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
-      if (-not (Test-NewTraceEvent $scanTraceFiles "generation_scan_complete")) { throw "Mutation race did not observe an in-progress generation scan." }
+      while (-not (Test-NewTraceEvent $scanTraceOffsets "generation_scan_complete") -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+      if (-not (Test-NewTraceEvent $scanTraceOffsets "generation_scan_complete")) { throw "Mutation race did not observe an in-progress generation scan." }
       [System.IO.File]::AppendAllText($mutationFile, "`n# transient benchmark mutation")
-      while (-not (Test-NewTraceEvent $scanTraceFiles "generation_watch_invalidated") -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
-      if (-not (Test-NewTraceEvent $scanTraceFiles "generation_watch_invalidated")) { throw "Installed payload mutation was not observed by the generation watcher." }
+      while (-not (Test-NewTraceEvent $scanTraceOffsets "generation_watch_invalidated") -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+      if (-not (Test-NewTraceEvent $scanTraceOffsets "generation_watch_invalidated")) { throw "Installed payload mutation was not observed by the generation watcher." }
       [System.IO.File]::WriteAllBytes($mutationFile, $originalBytes)
       [System.IO.File]::SetLastWriteTimeUtc($mutationFile, $originalWriteTime)
       Wait-ClientsReady @($scanClient) $StartupTimeoutSec
@@ -479,12 +488,12 @@ exit /b %ERRORLEVEL%
       Stop-ExactClient $scanClient
       if (-not $mutation.scan_race_detected) { throw "Installed payload mutation during generation scan was not retried or rejected safely." }
     }
-    $attachTraceFiles = Get-TraceFileSet
+    $attachTraceOffsets = Get-TraceFileOffsets
     $mutated = Start-ExactClient $environment
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     if ($LauncherMode -eq "NodePresent") {
-      while (-not (Test-NewTraceEvent $attachTraceFiles "generation_identity_resolved") -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
-      if (-not (Test-NewTraceEvent $attachTraceFiles "generation_identity_resolved")) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
+      while (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved") -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+      if (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved")) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
     }
     Set-Content -LiteralPath $mutationFile -Value 'Set-Content -LiteralPath $env:SYMPP_INTEGRITY_MARKER -Value invoked' -Encoding utf8NoBOM
     while (-not $mutated.process.HasExited -and -not $mutated.line_task.IsCompleted -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
