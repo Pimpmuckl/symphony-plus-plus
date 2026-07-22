@@ -53,6 +53,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   @finished_work_package_min_candidate_limit 40
   @finished_progress_lookup_chunk_size 500
   @finished_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
+  @operator_work_package_signal_keys [
+    :active_agent_run,
+    :active_blocker_count,
+    :active_blockers,
+    :id,
+    :inserted_at,
+    :latest_progress_at,
+    :metadata,
+    :runtime,
+    :updated_at
+  ]
+  @operator_work_package_metadata_keys [:pr, :review_package, :review_progress, :review_suite_result]
 
   @type repo :: module()
   @type dashboard_error :: :not_found | :forbidden | :database_busy | {:storage_failed, String.t()} | term()
@@ -79,6 +91,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       |> Keyword.put(:active_blocking_edges?, true)
       |> Keyword.put_new(:finished_work_package_limit, @operator_finished_work_package_limit)
       |> then(&build_board(repo, &1))
+    end)
+  end
+
+  @spec operator_work_package_signals(repo(), [String.t()], keyword()) :: {:ok, map()} | {:error, dashboard_error()}
+  def operator_work_package_signals(repo, work_package_ids, opts)
+      when is_atom(repo) and is_list(work_package_ids) and is_list(opts) do
+    safe_read(fn ->
+      visible_ids = MapSet.difference(MapSet.new(work_package_ids), hidden_work_package_ids(opts))
+
+      with {:ok, work_packages} <- WorkPackageRepository.list(repo),
+           work_packages = Enum.filter(work_packages, &MapSet.member?(visible_ids, &1.id)),
+           {:ok, repo_identity_catalog} <- repo_identity_catalog_from_repo(repo, opts, Enum.map(work_packages, & &1.repo)),
+           {:ok, contexts} <- card_contexts_for_packages(repo, work_packages, repo_identity_catalog),
+           {:ok, active_blocking_edges} <- active_blocking_edges_from_card_contexts(repo, contexts) do
+        signals =
+          contexts
+          |> Enum.map(&compact_operator_work_package_signal(&1.card))
+          |> Enum.sort_by(& &1.id)
+
+        {:ok, %{work_packages: signals, active_blocking_edges: active_blocking_edges}}
+      end
+    end)
+  end
+
+  defp compact_operator_work_package_signal(card) do
+    card
+    |> Map.take(@operator_work_package_signal_keys)
+    |> Map.update(:metadata, nil, fn
+      metadata when is_map(metadata) -> Map.take(metadata, @operator_work_package_metadata_keys)
+      _metadata -> nil
     end)
   end
 

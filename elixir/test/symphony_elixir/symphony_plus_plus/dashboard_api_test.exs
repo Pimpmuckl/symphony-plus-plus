@@ -4159,7 +4159,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert initial_payload["deferred"] == %{"dashboard_sections" => true}
 
       assert [%{"work_request" => %{"id" => ^work_request_id}}] = deferred_payload["work_request_details"]
-      assert is_map(deferred_payload["board"])
+      refute Map.has_key?(deferred_payload, "board")
+      assert is_list(deferred_payload["work_packages"])
+      refute Map.has_key?(initial_payload, "work_request_work_package_ids")
       refute Map.has_key?(deferred_payload, "archived_work_requests")
       refute Map.has_key?(deferred_payload, "solo_sessions")
       assert deferred_payload["deferred"] == %{"dashboard_sections" => false}
@@ -4229,7 +4231,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert deferred_payload.deferred == %{dashboard_sections: false}
     assert hydrated_payload.deferred == %{dashboard_sections: false}
     assert hydrated_payload.work_requests.total_count == 20
-    assert hydrated_payload.board.visible_count == 50
+    assert hydrated_payload.work_packages == []
     assert priority_metrics.queries <= 20
     assert hydrated_metrics.queries <= 105
     assert priority_metrics.queries < hydrated_metrics.queries
@@ -4257,8 +4259,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     try do
       assert %{rows: [["ok"]]} = Repo.query!("PRAGMA quick_check")
-      assert {:ok, fixture_payload} = LocalOperatorDashboard.operator_dashboard_hydrated_payload(Repo)
-      assert byte_size(Jason.encode!(fixture_payload)) <= 350_000
+      assert {:ok, _fixture_payload} = LocalOperatorDashboard.operator_dashboard_hydrated_payload(Repo)
+      assert {:ok, fixture_deferred_payload} = LocalOperatorDashboard.operator_dashboard_deferred_payload(Repo)
+      assert byte_size(Jason.encode!(fixture_deferred_payload)) <= 180_000
+      refute Map.has_key?(fixture_deferred_payload, :board)
+
+      expected_signal_keys =
+        MapSet.new([
+          :active_agent_run,
+          :active_blocker_count,
+          :active_blockers,
+          :id,
+          :inserted_at,
+          :latest_progress_at,
+          :metadata,
+          :runtime,
+          :updated_at
+        ])
+
+      assert Enum.all?(fixture_deferred_payload.work_packages, &(MapSet.new(Map.keys(&1)) == expected_signal_keys))
+
+      parse_signal = Enum.find(fixture_deferred_payload.work_packages, &(&1.id == "WP-FANOUT-PARSE"))
+      assert parse_signal.runtime.completed_count == 1
+      assert is_map(parse_signal.metadata.pr)
+      assert is_map(parse_signal.metadata.review_package)
+      assert is_binary(parse_signal.latest_progress_at)
+
+      blocker_signal = Enum.find(fixture_deferred_payload.work_packages, &(&1.id == "WP-RECOVERY-SUCCESSOR"))
+      assert blocker_signal.active_blocker_count == 1
+      assert [%{id: "fixture-schema", active: true}] = blocker_signal.active_blockers
+      assert is_binary(blocker_signal.inserted_at)
+      assert is_binary(blocker_signal.updated_at)
 
       assert Repo.all(WorkRequest) |> Enum.map(& &1.id) |> Enum.sort() == [
                "WR-FIXTURE-DENSE",
@@ -4689,15 +4720,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         archived_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=archived"), 200)
         solo_payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/dashboard?surface=solo"), 200)
 
-        package_card =
-          deferred_payload["board"]["groups"]["created"]
-          |> Enum.find(&(&1["id"] == work_package.id))
-
-        assert package_card["repo"] == "symphony-plus-plus"
-        assert package_card["repo_key"] == "symphony-plus-plus"
-        assert package_card["repo_display"] == "symphony-plus-plus"
-        assert package_card["repo_remote"] == "Pimpmuckl/symphony-plus-plus"
-        assert package_card["repo_aliases"] == ["Pimpmuckl/symphony-plus-plus", "symphony-plus-plus"]
+        refute Enum.any?(deferred_payload["work_packages"], &(&1["id"] == work_package.id))
 
         assert [%{"repo_key" => "symphony-plus-plus", "repo_remote" => "Pimpmuckl/symphony-plus-plus"}] =
                  payload["work_requests"]["work_requests"]
@@ -4905,17 +4928,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  })
 
         payload = local_operator_dashboard_payload()
-        expected_aliases = Enum.sort_by([repo_path, "nextide-saas-live-chat", "Pimpmuckl/nextide-saas-live-chat"], &String.downcase/1)
-
-        package_card =
-          payload["board"]["groups"]["created"]
-          |> Enum.find(&(&1["id"] == work_package.id))
-
-        assert package_card["repo"] == repo_path
-        assert package_card["repo_key"] == "nextide-saas-live-chat"
-        assert package_card["repo_display"] == "nextide-saas-live-chat"
-        assert package_card["repo_remote"] == "Pimpmuckl/nextide-saas-live-chat"
-        assert package_card["repo_aliases"] == expected_aliases
+        refute Enum.any?(payload["work_packages"], &(&1["id"] == work_package.id))
 
         assert [%{"repo" => ^repo_path, "repo_key" => "nextide-saas-live-chat", "repo_remote" => "Pimpmuckl/nextide-saas-live-chat"}] =
                  payload["work_requests"]["work_requests"]
@@ -4983,14 +4996,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
         payload = local_operator_dashboard_payload()
 
-        package_card =
-          payload["board"]["groups"]["created"]
-          |> Enum.find(&(&1["id"] == work_package.id))
-
-        assert package_card["repo"] == raw_remote
-        assert package_card["repo_key"] == bare_repo
-        assert package_card["repo_display"] == bare_repo
-        assert package_card["repo_remote"] == raw_remote
+        refute Enum.any?(payload["work_packages"], &(&1["id"] == work_package.id))
 
         assert [%{"id" => work_request_id, "repo" => ^bare_repo, "repo_key" => ^bare_repo, "repo_remote" => ^raw_remote}] =
                  payload["work_requests"]["work_requests"]
@@ -5215,10 +5221,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       payload = local_operator_dashboard_payload()
       edges = payload["active_blocking_edges"]
 
-      assert Enum.map(edges, & &1["blocker_id"]) == ["blocker-linked", "blocker-unlinked"]
+      assert Enum.map(edges, & &1["blocker_id"]) == ["blocker-linked"]
       refute Enum.any?(edges, &(&1["blocker_id"] == "blocker-resolved"))
 
-      assert [linked_edge, unlinked_edge] = edges
+      assert [linked_edge] = edges
       assert linked_edge["from"] == %{"kind" => "work_package", "id" => linked_package.id}
       assert linked_edge["to"] == %{"kind" => "work_package", "id" => linked_package.id}
       assert linked_edge["work_request_id"] == work_request.id
@@ -5226,12 +5232,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert linked_edge["summary"] == "[REDACTED]"
       assert linked_edge["body"] == "[REDACTED]"
 
-      assert unlinked_edge["from"] == %{"kind" => "work_package", "id" => unlinked_package.id}
-      assert unlinked_edge["to"] == %{"kind" => "work_package", "id" => unlinked_package.id}
-      assert unlinked_edge["work_package_id"] == unlinked_package.id
-
       linked_card =
-        payload["board"]["groups"]["planning"]
+        payload["work_packages"]
         |> Enum.find(&(&1["id"] == linked_package.id))
 
       assert linked_card["active_blocker_count"] == 1
@@ -5377,7 +5379,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> get("/api/v1/sympp/operator/dashboard/deferred")
         |> json_response(200)
 
-      assert Enum.any?(board_work_package_ids(payload), &(&1 == work_package.id))
+      refute Enum.any?(dashboard_work_package_ids(payload), &(&1 == work_package.id))
     end)
   end
 
@@ -5992,7 +5994,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, ^recent} = WorkRequestService.get(repo, recent.id)
       assert {:ok, ^kept_comment} = CommentService.get(repo, kept_comment.id)
       assert linked_package.id in payload["settings"]["hidden_work_package_ids"]
-      refute linked_package.id in board_work_package_ids(payload)
+      refute linked_package.id in dashboard_work_package_ids(payload)
     end)
   end
 
@@ -6078,7 +6080,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "local operator dashboard retention hides stale terminal unlinked WorkPackages only", %{repo: repo} do
+  test "local operator dashboard retention keeps only linked WorkPackage signals", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"work_request_archive_after_days" => 1})
 
@@ -6178,16 +6180,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                existing_hidden_package.id
              ]
 
-      package_ids = board_work_package_ids(payload)
+      package_ids = dashboard_work_package_ids(payload)
 
       refute stale_terminal_package.id in package_ids
       refute existing_hidden_package.id in package_ids
-      assert recent_terminal_package.id in package_ids
-      assert active_package.id in package_ids
-      assert terminal_parent_package.id in package_ids
-      assert child_package.id in package_ids
+      refute recent_terminal_package.id in package_ids
+      refute active_package.id in package_ids
+      refute terminal_parent_package.id in package_ids
+      refute child_package.id in package_ids
       assert linked_terminal_package.id in package_ids
-      assert linked_terminal_package.id in payload["work_request_work_package_ids"]
+      refute Map.has_key?(payload, "work_request_work_package_ids")
     end)
   end
 
@@ -6354,7 +6356,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       dashboard_payload = local_operator_dashboard_payload()
 
-      package_card = dashboard_payload["board"]["groups"] |> Map.values() |> List.flatten() |> Enum.find(&(&1["id"] == work_package.id))
+      package_card = Enum.find(dashboard_payload["work_packages"], &(&1["id"] == work_package.id))
       assert package_card["active_blocker_count"] == 0
       assert package_card["active_blockers"] == []
     end)
@@ -6433,7 +6435,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       refreshed_dashboard_payload = local_operator_dashboard_payload()
 
       assert get_in(refreshed_dashboard_payload, ["settings", "hidden_work_package_ids"]) == [archive_package.id]
-      refute archive_package.id in board_work_package_ids(refreshed_dashboard_payload)
+      refute archive_package.id in dashboard_work_package_ids(refreshed_dashboard_payload)
     end)
   end
 
@@ -6582,8 +6584,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       dashboard_payload = local_operator_dashboard_payload()
 
       assert get_in(dashboard_payload, ["settings", "hidden_work_package_ids"]) == [merge_package.id, close_package.id]
-      refute merge_package.id in board_work_package_ids(dashboard_payload)
-      refute close_package.id in board_work_package_ids(dashboard_payload)
+      refute merge_package.id in dashboard_work_package_ids(dashboard_payload)
+      refute close_package.id in dashboard_work_package_ids(dashboard_payload)
 
       assert {:ok, persisted_merge_package} = WorkPackageRepository.get(repo, merge_package.id)
       assert persisted_merge_package.status == "merged"
@@ -6761,7 +6763,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       refute Enum.any?(dashboard_payload["work_requests"]["work_requests"], &(&1["id"] == work_request.id))
       refute Enum.any?(dashboard_payload["archived_work_requests"]["work_requests"], &(&1["id"] == work_request.id))
-      refute linked_package.id in board_work_package_ids(dashboard_payload)
+      refute linked_package.id in dashboard_work_package_ids(dashboard_payload)
 
       assert [%OperatorAudit{} = audit] = repo.all(OperatorAudit)
       assert audit.action == "dangerous_delete"
@@ -8025,12 +8027,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     |> Enum.find(&(get_in(&1, ["work_request", "id"]) == work_request_id))
   end
 
-  defp board_work_package_ids(dashboard) do
+  defp dashboard_work_package_ids(dashboard) do
     dashboard
-    |> get_in(["board", "groups"])
-    |> Kernel.||(%{})
-    |> Map.values()
-    |> List.flatten()
+    |> Map.get("work_packages", [])
     |> Enum.map(& &1["id"])
   end
 

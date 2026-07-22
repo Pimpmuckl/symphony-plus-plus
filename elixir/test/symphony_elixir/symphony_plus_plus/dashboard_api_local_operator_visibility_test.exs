@@ -121,15 +121,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
 
       payload = local_operator_dashboard_payload()
 
-      package_ids = board_work_package_ids(payload)
+      package_ids = dashboard_work_package_ids(payload)
 
       refute terminal_package.id in package_ids
       refute stale_package.id in package_ids
       assert active_package.id in package_ids
 
-      assert terminal_package.id in payload["work_request_work_package_ids"]
-      assert stale_package.id in payload["work_request_work_package_ids"]
-      assert active_package.id in payload["work_request_work_package_ids"]
+      refute Map.has_key?(payload, "work_request_work_package_ids")
+      assert payload["linked_work_package_ids"] == [active_package.id]
 
       refute Enum.any?(payload["work_request_details"], &(get_in(&1, ["work_request", "id"]) == archived_request.id))
 
@@ -138,7 +137,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     end)
   end
 
-  test "local operator dashboard hides architect handoff anchor WorkPackages", %{repo: repo} do
+  test "local operator dashboard omits unowned execution records", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       anchor =
         create_work_package!(repo,
@@ -172,11 +171,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
 
       payload = local_operator_dashboard_payload()
 
-      package_ids = board_work_package_ids(payload)
+      package_ids = dashboard_work_package_ids(payload)
 
       refute anchor.id in package_ids
-      assert ordinary_delegation.id in package_ids
-      assert prefixed_delivery_package.id in package_ids
+      refute ordinary_delegation.id in package_ids
+      refute prefixed_delivery_package.id in package_ids
     end)
   end
 
@@ -212,8 +211,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
       dashboard_payload = local_operator_dashboard_payload()
 
       assert get_in(dashboard_payload, ["settings", "hidden_work_package_ids"]) == [delivered_package.id]
-      assert active_package.id in board_work_package_ids(dashboard_payload)
-      refute delivered_package.id in board_work_package_ids(dashboard_payload)
+      refute active_package.id in dashboard_work_package_ids(dashboard_payload)
+      refute delivered_package.id in dashboard_work_package_ids(dashboard_payload)
 
       assert {:ok, persisted_package} = WorkPackageRepository.get(repo, delivered_package.id)
       assert persisted_package.status == "merged"
@@ -311,12 +310,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     |> Enum.find(&(get_in(&1, ["work_request", "id"]) == work_request_id))
   end
 
-  defp board_work_package_ids(dashboard) do
+  defp dashboard_work_package_ids(dashboard) do
     dashboard
-    |> get_in(["board", "groups"])
-    |> Kernel.||(%{})
-    |> Map.values()
-    |> List.flatten()
+    |> Map.get("work_packages", [])
     |> Enum.map(& &1["id"])
   end
 
