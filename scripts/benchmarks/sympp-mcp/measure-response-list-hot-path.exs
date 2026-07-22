@@ -239,11 +239,11 @@ result = %{
     "http" =>
       measure.(fn -> server_call.(http_config, plan_request) end)
       |> Map.put("text_encodes", trace_encoders.(fn -> server_call.(http_config, plan_request) end))
-      |> Map.put("structured_nodes", http_plan_probe |> get_in(["result", "structuredContent", "product_tree", "nodes"]) |> length()),
+      |> Map.put("structured_nodes", http_plan_probe |> get_in(["result", "structuredContent", "product_tree", "groups"]) |> length()),
     "legacy_full_stdio" =>
       measure.(fn -> server_call.(stdio_config, plan_request) end)
       |> Map.put("text_encodes", trace_encoders.(fn -> server_call.(stdio_config, plan_request) end))
-      |> Map.put("structured_nodes", stdio_plan_probe |> get_in(["result", "structuredContent", "product_tree", "nodes"]) |> length())
+      |> Map.put("structured_nodes", stdio_plan_probe |> get_in(["result", "structuredContent", "product_tree", "groups"]) |> length())
   },
   "list_work_requests" =>
     measure.(fn -> server_call.(http_config, list_request) end)

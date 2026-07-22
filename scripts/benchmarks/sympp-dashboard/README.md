@@ -1,19 +1,24 @@
 # Symphony++ dashboard load benchmark
 
-This benchmark exports the deterministic realistic graph fixture, serves it through an isolated cockpit, and records API response duration and bytes plus browser time-to-usable for cold load and refresh. Each browser sample uses a new context.
+This benchmark exports the deterministic realistic graph fixture, serves it through an isolated cockpit, and records API response duration and bytes plus browser time-to-usable, focus-board expansion and large-graph collapse, and refresh. Each browser sample uses a new context.
 
 From `elixir/`, create the fixture:
 
 ```powershell
 $env:MIX_ENV = "test"
-mix run ../scripts/benchmarks/sympp-dashboard/fixture.exs -- ../scripts/benchmarks/sympp-dashboard/fixture.sqlite3
+mise exec -- mix run ../scripts/benchmarks/sympp-dashboard/fixture.exs ../scripts/benchmarks/sympp-dashboard/fixture.sqlite3
 ```
 
 Start the isolated fixture server:
 
 ```powershell
 $env:MIX_ENV = "dev"
-mix run --no-start ../scripts/benchmarks/sympp-dashboard/serve.exs -- ../scripts/benchmarks/sympp-dashboard/fixture.sqlite3 20051
+mise exec -- mix compile
+Push-Location assets
+npm ci
+npm run build
+Pop-Location
+mise exec -- mix run --no-start ../scripts/benchmarks/sympp-dashboard/serve.exs ../scripts/benchmarks/sympp-dashboard/fixture.sqlite3 20051
 ```
 
 In another terminal, from the repository root:
@@ -28,5 +33,5 @@ Profile backend assembly, JSON encoding, response bytes, and the largest seriali
 
 ```powershell
 $env:MIX_ENV = "test"
-mix run ../scripts/benchmarks/sympp-dashboard/profile.exs -- ../scripts/benchmarks/sympp-dashboard/fixture.sqlite3 11
+mise exec -- mix run ../scripts/benchmarks/sympp-dashboard/profile.exs ../scripts/benchmarks/sympp-dashboard/fixture.sqlite3 11
 ```
