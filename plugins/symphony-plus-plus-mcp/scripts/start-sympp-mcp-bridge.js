@@ -247,7 +247,6 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
     watchVersion = generationWatchVersion;
-    await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
     generation = liveGeneration(markerFile);
     if (generation && generationWatchVersion === watchVersion) {
       trace("generation_cache_hit");
@@ -287,8 +286,7 @@ async function resolveCachedIdentity(pluginRoot) {
 }
 
 function generationStillValid(identity) {
-  return identity && generationWatchReady && generationWatchVersion === identity.generationWatchVersion &&
-    liveGeneration(identity.generationMarker) === identity.generationKey;
+  return identity && generationWatchReady && generationWatchVersion === identity.generationWatchVersion;
 }
 
 function generationValidForAttachment(identity) {
@@ -331,15 +329,16 @@ function prepareCleanupScript(identity) {
 
 async function generationValidAtAttachment(identity) {
   if (!generationValidForAttachment(identity)) return false;
-  closeGenerationWatchers();
   const pluginRoot = identity.pluginRoot;
   const sourceRoot = identity.sourceRoot;
   const sourcePluginRoot = path.join(sourceRoot, "plugins", path.basename(path.dirname(pluginRoot)));
   const generation = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
   await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
   const confirmed = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
+  const valid = generationValidForAttachment(identity) && generation === identity.generationKey && confirmed === identity.generationKey;
+  closeGenerationWatchers();
   trace("generation_attach_full_validation");
-  return generation === identity.generationKey && confirmed === identity.generationKey;
+  return valid;
 }
 
 function trimOrigin(value) {
@@ -631,7 +630,6 @@ async function bridge(identity, state, runtimeFile) {
       return false;
     }
     trace("generation_attach_preflight");
-    await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
     if (!generationValidForAttachment(identity)) return false;
     cleanupScript = prepareCleanupScript(identity);
     if (cleanupScript === CLEANUP_SOURCE_CHANGED) {
@@ -661,15 +659,6 @@ async function bridge(identity, state, runtimeFile) {
     }
     if (!await preflightRuntimeHealth(runtimeFile, confirmedState, confirmed)) {
       trace("warm_miss_health");
-      return false;
-    }
-    const confirmedCleanupScript = prepareCleanupScript(identity);
-    if (confirmedCleanupScript === CLEANUP_SOURCE_CHANGED) {
-      cleanupAllowed = false;
-      throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
-    }
-    if (!confirmedCleanupScript) {
-      trace("warm_miss_cleanup");
       return false;
     }
     if (!await generationValidAtAttachment(identity)) {
@@ -744,6 +733,7 @@ async function main() {
   const cachedIdentity = await resolveCachedIdentity(pluginRoot);
   const identity = resolveStateIdentity(state, pluginRoot, cachedIdentity);
   if (!identity) { trace("warm_miss_state"); process.exit(WARM_MISS); }
+  trace("generation_identity_resolved");
   if (!await dashboardHealthy(identity)) { trace("warm_miss_dashboard"); process.exit(WARM_MISS); }
   if (!await bridge(identity, state, runtimeFile)) process.exit(WARM_MISS);
 }

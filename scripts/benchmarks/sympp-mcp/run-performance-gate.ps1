@@ -83,7 +83,7 @@ function Get-GateFailures($Metrics, $Limits) {
   if ([int]$Metrics.exact.node.cold.trace.installed_identity_full_validation -ne 1 -or [int]$Metrics.exact.node.cold.trace.payload_hash_validation -ne 0 -or [int]$Metrics.exact.node.cold.trace.marketplace_git_validation -ne 0 -or [int]$Metrics.exact.node.cold.trace.artifact_manifest_resolution -ne 1) { $failures.Add("exact.node.cold_resolution") }
   if (-not $Metrics.exact.node.lock_recovery.checked -or -not $Metrics.exact.node.lock_recovery.reclaimed) { $failures.Add("exact.node.lock_recovery") }
   if (-not $Metrics.exact.node.lifecycle_race.checked -or -not $Metrics.exact.node.lifecycle_race.healthy) { $failures.Add("exact.node.lifecycle_race") }
-  if (-not $Metrics.exact.node.recovery.dashboard_healthy -or -not $Metrics.exact.node.mutation.checked -or -not $Metrics.exact.node.mutation.shortcut_rejected -or -not $Metrics.exact.node.mutation.scan_race_retried -or -not $Metrics.exact.node.mutation.attach_race_rejected) { $failures.Add("exact.node.recovery_integrity") }
+  if (-not $Metrics.exact.node.recovery.dashboard_healthy -or -not $Metrics.exact.node.mutation.checked -or -not $Metrics.exact.node.mutation.shortcut_rejected -or -not $Metrics.exact.node.mutation.scan_race_detected -or -not $Metrics.exact.node.mutation.attach_race_rejected) { $failures.Add("exact.node.recovery_integrity") }
   $fallbackCohorts = @($Metrics.exact.fallback.warm)
   if (@($fallbackCohorts | Where-Object { $_.clients -eq 10 }).Count -eq 0 -or -not $Metrics.exact.fallback.recovery.dashboard_healthy) { $failures.Add("exact.fallback.functional") }
   foreach ($name in $Limits.profile_caps.Keys) {
@@ -223,7 +223,8 @@ function Start-IsolatedLauncher([hashtable]$Environment) {
 function Invoke-CapturedProcess($Info, [int]$TimeoutMs, [string]$Label) {
   $Info.UseShellExecute = $false; $Info.CreateNoWindow = $true
   $Info.RedirectStandardOutput = $true; $Info.RedirectStandardError = $true
-  $process = [System.Diagnostics.Process]::Start($Info)
+  $process = [System.Diagnostics.Process]::new(); $process.StartInfo = $Info
+  if (-not $process.Start()) { throw "$Label failed to start" }
   $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
   if (-not $process.WaitForExit($TimeoutMs)) { $process.Kill($true); throw "$Label timed out" }
   $stdout = $stdoutTask.GetAwaiter().GetResult(); $stderr = $stderrTask.GetAwaiter().GetResult()
@@ -286,7 +287,7 @@ function Invoke-SelfTest {
     warm = [pscustomobject]@{ clients = 100; p95_ms = 1; backend_processes = 1; leases_peak = 100; leases_after = 0; remote_resolution_attempts = 0 }
     direct = [pscustomobject]@{ clients = 100; elapsed_ms = 1; backend_processes = 1; backend_pid = 1; backend_start_ticks = 1; transport_processes = 0; transport_private_bytes = 0; backend_private_bytes = 1 }
     exact = [pscustomobject]@{
-      node = [pscustomobject]@{ cold = [pscustomobject]@{ trace = [pscustomobject]@{ installed_identity_full_validation = 1; payload_hash_validation = 0; marketplace_git_validation = 0; artifact_manifest_resolution = 1 } }; warm = @(New-SelfTestExactCohort 1; New-SelfTestExactCohort 10; New-SelfTestExactCohort 100); lock_recovery = [pscustomobject]@{ checked = $true; reclaimed = $true }; lifecycle_race = [pscustomobject]@{ checked = $true; healthy = $true }; recovery = [pscustomobject]@{ dashboard_healthy = $true }; mutation = [pscustomobject]@{ checked = $true; shortcut_rejected = $true; scan_race_retried = $true; attach_race_rejected = $true } }
+      node = [pscustomobject]@{ cold = [pscustomobject]@{ trace = [pscustomobject]@{ installed_identity_full_validation = 1; payload_hash_validation = 0; marketplace_git_validation = 0; artifact_manifest_resolution = 1 } }; warm = @(New-SelfTestExactCohort 1; New-SelfTestExactCohort 10; New-SelfTestExactCohort 100); lock_recovery = [pscustomobject]@{ checked = $true; reclaimed = $true }; lifecycle_race = [pscustomobject]@{ checked = $true; healthy = $true }; recovery = [pscustomobject]@{ dashboard_healthy = $true }; mutation = [pscustomobject]@{ checked = $true; shortcut_rejected = $true; scan_race_detected = $true; attach_race_rejected = $true } }
       fallback = [pscustomobject]@{ warm = @([pscustomobject]@{ clients = 10; p95_initialize_ms = 1; process_tree = [pscustomobject]@{ median_private_bytes_per_client = 1 } }); recovery = [pscustomobject]@{ dashboard_healthy = $true } }
     }
     profiles = [pscustomobject]@{ full = @{ tools = 1; bytes = 1 }; worker = @{ tools = 1; bytes = 1 }; architect = @{ tools = 1; bytes = 1 }; coordinator = @{ tools = 1; bytes = 1 }; solo = @{ tools = 1; bytes = 1 } }
