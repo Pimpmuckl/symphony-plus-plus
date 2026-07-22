@@ -223,6 +223,7 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
           generation = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
           if (!generation) return null;
           trace("generation_scan_complete");
+          await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
           const confirmed = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
           if (!confirmed || confirmed !== generation || generationWatchVersion !== watchVersion) {
             trace("generation_scan_retry");
