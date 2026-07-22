@@ -4,6 +4,7 @@ import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, DashboardRuntimeConfig, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, createLatestTaskQueue, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, dashboardRuntimeConfig, enqueueLatestTask, ensureDashboardRuntimeConfig, isReconnectableLocalOperatorError, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, reconnectLocalOperatorSession, removeDashboardWorkRequest, withLocalOperatorReconnect } from "./runtime";
 import { DashboardShell } from "./dashboard-shell";
+import { DashboardDebugTools } from "./dashboard-debug-tools";
 import { SoloSessions } from "./solo-sessions";
 import { WorkstreamsPane } from "./workspace-tabs";
 import {
@@ -26,7 +27,7 @@ type DashboardLoadMode = "initial" | "refresh" | "silent" | "reconnect";
 function mergeDashboardLoadMode(pending: DashboardLoadMode, next: DashboardLoadMode) {
   return pending === "reconnect" || next === "reconnect" ? "reconnect" : next;
 }
-export function DashboardApp() { return <DashboardShell {...useDashboardController()} />; }
+export function DashboardApp() { return <><DashboardDebugTools /><DashboardShell {...useDashboardController()} /></>; }
 function useDashboardController() {
   const [appState, dispatchApp] = useReducer(appStateReducer, null, createInitialAppState);
   const { dashboard, error, hideEmptyWorkstreams, loading, refreshing, showWelcomeToast, showWorkstreamContextBar, theme, workspaceTab } = appState;
@@ -513,11 +514,8 @@ function useDashboardController() {
           requestDetailsByRepo={searchedWorkstreams.requestDetailsByRepo}
           now={dashboard?.generated_at}
           activeBlockingEdges={dashboard?.active_blocking_edges ?? []}
-          guidanceItems={guidanceItems}
           onSelectGuidance={setSelectedGuidance}
           onSelectCard={setSelectedCardDetail}
-          onCopyArchitectHandoff={copyArchitectHandoff}
-          canMutateOperatorActions={canMutateOperatorActions}
           showWorkstreamContextBar={showWorkstreamContextBar}
           updateAnimations={updateAnimations}
         />
@@ -525,11 +523,8 @@ function useDashboardController() {
       solo: <SoloSessions loading={soloLoading} sessions={soloSessions} onSelectCard={setSelectedCardDetail} updateAnimations={updateAnimations} />,
     }),
     [
-      copyArchitectHandoff,
-      canMutateOperatorActions,
       dashboard?.active_blocking_edges,
       dashboard?.generated_at,
-      guidanceItems,
       hiddenWorkstreamCount,
       searchedWorkstreams,
       setSelectedCardDetail,

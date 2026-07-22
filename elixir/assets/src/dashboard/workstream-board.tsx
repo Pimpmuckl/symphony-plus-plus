@@ -1,37 +1,35 @@
-import type { ActiveBlockingEdge, CopyArchitectHandoff, GuidanceItem, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
-import { AlertTriangle, ChevronRight, CircleDashed, GitBranch, Layers3, MessageSquareText, Split } from "lucide-react";
-import type { CSSProperties } from "react";
+import type { ActiveBlockingEdge, GuidanceItem, WorkPackageCard, WorkRequestDetail, WorkRequestPackage } from "@/types/dashboard";
+import { AlertTriangle, ChevronRight, Copy, GitBranch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { copyTextToClipboard, CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
 import { clarificationGuidanceItem } from "./dashboard-data";
 import { finishedRequestChildrenStorageKey, sortWorkRequestPackages, sortWorkRequestDetails } from "./workstream-data";
 import { activeBlockerEntityCounts, productTreeCounts, requestProgress } from "./workstream-progress";
-import { requestBoardState, rowProgressAttentionState, rowProgressIconState } from "./workstream-row-state";
-import { EntityCountChips, EntityKindSlot, ProgressPill, RequestHeaderActions, RowBadgeSlot } from "./workstream-row-ui";
-import { openBlockersForRequest, requestGuidanceItem } from "./workstream-board-actions";
+import { requestBoardState, sliceBlockerCount, sliceGuidanceCount, type BoardRowStateKind } from "./workstream-row-state";
+import { RequestIdentityCopyButton, RequestInfoButton, RequestProgressBar, RowBadgeSlot } from "./workstream-row-ui";
 import { requestUpdateKey } from "./update-animations";
 import { dashboardPrefersReducedMotion, updateMotionAttributes } from "@/components/dashboard/motion-utils";
 import { useAutoCollapseWhenDone } from "./workstream-auto-collapse";
 import { WorkstreamContextBar } from "./workstream-context-bar";
 import { contextPathValue, type ContextPathPart } from "./workstream-context-path";
 import { workRequestExecutionGraphModel } from "./execution-graph/adapter";
-import { WorkRequestExecutionGraph } from "./work-request-execution-graph";
-
+import { isFinishedBoardStatus, operationalLabel, operationalStatusIsRunning, sliceOperationalState } from "@/lib/operational-state";
+import { PullRequestBadge, WorkRequestExecutionGraph } from "./work-request-execution-graph";
+import { requestBadgeLabel } from "./workstream-row-age";
+import { architectStartPrompt, mergeRequestDetailsWithExiting, visibleRequestBranch } from "./workstream-utils";
 const REQUEST_EXIT_MOTION_MS = 320;
-
+export type RequestFrontierMode = "attention" | "active" | "next" | "recent" | "waiting";
 export function WorkstreamBoard({
   repoLabel,
   repoDetails,
   now,
   packages,
   activeBlockingEdges,
-  guidanceItems,
   onSelectGuidance,
   onSelectCard,
-  onCopyArchitectHandoff,
-  canMutateOperatorActions,
+  primaryBranch,
   expandedFinishedRequests,
   finishedRequestScopeKey,
   onSetFinishedRequestChildrenOpen,
@@ -43,11 +41,9 @@ export function WorkstreamBoard({
   now?: string;
   packages: WorkPackageCard[];
   activeBlockingEdges: ActiveBlockingEdge[];
-  guidanceItems: GuidanceItem[];
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
-  onCopyArchitectHandoff: CopyArchitectHandoff;
-  canMutateOperatorActions: boolean;
+  primaryBranch?: string;
   expandedFinishedRequests: Record<string, boolean>;
   finishedRequestScopeKey: string;
   onSetFinishedRequestChildrenOpen: (workRequestId: string, open: boolean) => void;
@@ -79,16 +75,15 @@ export function WorkstreamBoard({
               exiting={exiting}
               packageById={packageById}
               activeBlockerCount={blockerCounts.requests.get(detail.work_request.id) ?? 0}
-              activeBlockingEdges={activeBlockingEdges}
               activeBlockerCountBySliceId={blockerCounts.slices}
-              guidanceItems={guidanceItems}
               expanded={expanded}
+              detachedExpandedBody={false}
+              focusSelected={false}
               index={index}
               onSetOpen={(open) => onSetFinishedRequestChildrenOpen(detail.work_request.id, open)}
               onSelectGuidance={onSelectGuidance}
               onSelectCard={onSelectCard}
-              onCopyArchitectHandoff={onCopyArchitectHandoff}
-              canMutateOperatorActions={canMutateOperatorActions}
+              primaryBranch={primaryBranch}
               updateAnimations={updateAnimations}
             />
           );
@@ -138,11 +133,6 @@ function useExitingRequestDetails(currentDetails: WorkRequestDetail[]) {
   return [renderDetails, exitingIds] as const;
 }
 
-export function mergeRequestDetailsWithExiting(currentDetails: WorkRequestDetail[], exitingDetails: WorkRequestDetail[]) {
-  const currentIds = new Set(currentDetails.map(requestDetailId));
-  return [...currentDetails, ...exitingDetails.filter((detail) => !currentIds.has(requestDetailId(detail)))];
-}
-
 function requestDetailId(detail: WorkRequestDetail) {
   return detail.work_request.id;
 }
@@ -166,22 +156,25 @@ function workstreamContextSignature(details: WorkRequestDetail[]) {
   );
 }
 
-function ProductRequestRow({
+export function ProductRequestRow({
   detail,
   now,
   exiting = false,
   packageById,
   activeBlockerCount,
-  activeBlockingEdges,
   activeBlockerCountBySliceId,
-  guidanceItems,
   expanded,
+  expandedBodyVisible = expanded,
+  detachedExpandedBody,
+  focusEjected = false,
+  focusSelected,
   index,
   onSetOpen,
   onSelectGuidance,
   onSelectCard,
-  onCopyArchitectHandoff,
-  canMutateOperatorActions,
+  primaryBranch,
+  frontierMode,
+  autoCollapseWhenDone = true,
   updateAnimations,
 }: {
   detail: WorkRequestDetail;
@@ -189,105 +182,131 @@ function ProductRequestRow({
   exiting?: boolean;
   packageById: Map<string, WorkPackageCard>;
   activeBlockerCount: number;
-  activeBlockingEdges: ActiveBlockingEdge[];
   activeBlockerCountBySliceId: Map<string, number>;
-  guidanceItems: GuidanceItem[];
   expanded: boolean;
+  expandedBodyVisible?: boolean;
+  detachedExpandedBody: boolean;
+  focusEjected?: boolean;
+  focusSelected: boolean;
   index: number;
   onSetOpen: (open: boolean) => void;
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
-  onCopyArchitectHandoff: CopyArchitectHandoff;
-  canMutateOperatorActions: boolean;
+  primaryBranch?: string;
+  frontierMode?: RequestFrontierMode;
+  autoCollapseWhenDone?: boolean;
   updateAnimations: DashboardUpdateAnimations;
 }) {
   const request = detail.work_request;
   const requestTitle = request.title || request.id;
-  const requestPath = [{ id: request.id, label: requestTitle }];
-  const slices = sortWorkRequestPackages(detail.work_packages ?? []);
+  const requestPath = useMemo(() => [{ id: request.id, label: requestTitle }], [request.id, requestTitle]);
+  const slices = useMemo(() => sortWorkRequestPackages(detail.work_packages ?? []), [detail.work_packages]);
   const progress = requestProgress(detail, packageById);
   const counts = productTreeCounts(detail, activeBlockerCount);
   const openQuestion = detail.clarification_questions?.find((question) => question.status === "open");
-  const openGuidance = () => {
-    const item = requestGuidanceItem(detail, guidanceItems) ?? (openQuestion ? clarificationGuidanceItem(detail, openQuestion) : null);
-    if (item) {
-      onSelectGuidance(item);
-      return;
-    }
-
-    onSelectCard({ kind: "request", detail });
-  };
-  const openBlockers = () => openBlockersForRequest(detail, slices, packageById, activeBlockerCountBySliceId, activeBlockingEdges, onSelectCard);
+  const branch = visibleRequestBranch(request.base_branch, primaryBranch);
   const requestState = requestBoardState(detail, packageById, counts, progress);
   const tone = requestState.tone;
   const requestLabel = requestState.label;
-  const rowStyle = {
-    animationDelay: `${index * 30}ms`,
-  } as CSSProperties;
+  const frontier = requestFrontier(detail, slices, packageById, activeBlockerCountBySliceId, frontierMode ?? requestFrontierMode(requestState.kind), requestLabel);
+  const badgeLabel = requestBadgeLabel(requestLabel, detail, packageById, now);
+  const selectWorkPackage = (id: string) => {
+    const slice = slices.find((item) => item.id === id);
+    const pkg = packageById.get(slice?.work_package_id || id);
+    if (slice) onSelectCard({ kind: "slice", detail, slice, pkg });
+    else if (pkg) onSelectCard({ kind: "package", detail, pkg });
+  };
+  const rowStyle = { animationDelay: `${index * 30}ms` } as CSSProperties;
+  const rowHidden = requestRowIsHidden(exiting, focusEjected);
+  const frontierHidden = requestFrontierIsHidden(focusSelected, expanded);
   const requestFinished = requestState.kind === "done";
   const collapseRequest = useCallback(() => onSetOpen(false), [onSetOpen]);
-  useAutoCollapseWhenDone(requestFinished, expanded, collapseRequest, requestFinished);
+  useAutoCollapseWhenDone(requestFinished, expanded, collapseRequest, requestFinished && autoCollapseWhenDone);
   const updateMotion = requestRowUpdateMotion(exiting, detail, updateAnimations);
-
+  const [inlineExpandedBody, detachedBodyNode] = placeExpandedRequestBody(
+    <RequestExpandedBody detail={detail} now={now} packageById={packageById} openQuestion={openQuestion} onSelectGuidance={onSelectGuidance} onSelectCard={onSelectCard} requestPath={requestPath} />,
+    expandedBodyVisible, detachedExpandedBody, requestTitle,
+  );
   return (
-    <section
-      className="v3-request-row stagger-item"
-      aria-hidden={exiting}
-      inert={exiting}
-      data-expanded={expanded ? "true" : "false"}
-      data-v3-context-path={contextPathValue(requestPath)}
-      data-tone={tone}
-      style={rowStyle}
-      {...updateMotionAttributes(updateMotion)}
-    >
-      <div className="v3-request-header v3-entity-row" data-tone={tone}>
-        <button type="button" className="v3-request-chevron-button" aria-expanded={expanded} aria-label={`${expanded ? "Collapse" : "Expand"} ${requestTitle}`} onClick={() => onSetOpen(!expanded)}>
-          <ChevronRight className={cn("size-4 transition-transform duration-200", expanded && "rotate-90")} />
-        </button>
-        <RequestHeaderActions
-          detail={detail}
-          progress={progress}
-          progressAttentionState={rowProgressAttentionState({ blockerCount: counts.blockerCount, guidanceCount: counts.guidanceCount, tone })}
-          progressIconState={rowProgressIconState({ blockerCount: counts.blockerCount, guidanceCount: counts.guidanceCount, progress, tone })}
-          progressLabel={requestLabel}
-          onSelectCard={onSelectCard}
-          onCopyArchitectHandoff={onCopyArchitectHandoff}
-          canMutateOperatorActions={canMutateOperatorActions}
-        />
-        <button type="button" className="v3-request-main" aria-expanded={expanded} onClick={() => onSetOpen(!expanded)}>
-          <span className="v3-request-title-group">
-            <span className="v3-request-title">{requestTitle}</span>
-            <span className="v3-request-meta">
-              <GitBranch className="size-3.5" />
-              <span>{request.repo_display || request.repo || "repo"}</span>
-              <span>{request.base_branch || "main"}</span>
-            </span>
-          </span>
-        </button>
-        <RequestProgressSummary counts={counts} onOpenGuidance={openGuidance} onOpenBlockers={openBlockers} />
-        <span className="v3-row-status">
-          <ProgressPill progress={progress} />
-          <RowBadgeSlot active={requestState.kind === "active"} label={requestLabel} variant={requestState.badgeVariant} />
-        </span>
-        <RequestScopeSlot counts={counts} />
-      </div>
-      {expanded ? (
-        <div className="v3-request-body">
-          <RequestActions
-            detail={detail}
-            openQuestion={openQuestion}
-            onSelectGuidance={onSelectGuidance}
-          />
-          <ExecutionGraphBody
-            detail={detail}
-            now={now}
-            packageById={packageById}
-            onSelectCard={onSelectCard}
-            requestPath={requestPath}
-          />
+    <>
+      <section
+        className="v3-request-row stagger-item"
+        aria-hidden={rowHidden}
+        inert={rowHidden}
+        data-expanded={expanded ? "true" : "false"}
+        data-focus-selected={String(focusSelected)}
+        data-request-id={request.id}
+        data-v3-context-path={contextPathValue(requestPath)}
+        data-tone={tone}
+        style={rowStyle}
+        {...updateMotionAttributes(updateMotion)}
+      >
+        <div className="v3-request-header v3-entity-row" data-tone={tone}>
+          <div className="v3-request-controls">
+            <button type="button" className="v3-request-chevron-button" aria-expanded={expanded} aria-label={`${expanded ? "Collapse" : "Expand"} ${requestTitle}`} onClick={() => onSetOpen(!expanded)}><ChevronRight className={cn("size-4 transition-transform duration-200", expanded && "rotate-90")} /></button>
+            <RequestInfoButton detail={detail} onSelectCard={onSelectCard} />
+            <RequestIdentityCopyButton detail={detail} />
+          </div>
+          <div className="v3-request-heading">
+            <RowBadgeSlot active={requestState.kind === "active"} label={badgeLabel} variant={requestState.badgeVariant} />
+            <button type="button" className="v3-request-main" aria-expanded={expanded} onClick={() => onSetOpen(!expanded)}>
+              <RequestIdentity detail={detail} branch={branch} />
+            </button>
+          </div>
+          <RequestProgressBar progress={progress} />
+          <RequestFrontier summary={frontier} onSelectWorkPackage={selectWorkPackage} hidden={frontierHidden} />
         </div>
-      ) : null}
-    </section>
+        {inlineExpandedBody}
+      </section>
+      {detachedBodyNode}
+    </>
+  );
+}
+function requestRowIsHidden(exiting: boolean, focusEjected: boolean) { return exiting || focusEjected; }
+function requestFrontierIsHidden(focusSelected: boolean, expanded: boolean) { return focusSelected && expanded; }
+function placeExpandedRequestBody(body: ReactNode, visible: boolean, detached: boolean, title: string) {
+  if (!visible) return [null, null] as const;
+  if (!detached) return [body, null] as const;
+  return [null, <div key="expanded-request" className="focus-board__expanded-slot"><section className="focus-board__expanded-request" aria-label={`${title} execution graph`}>{body}</section></div>] as const;
+}
+function RequestIdentity({ detail, branch }: { detail: WorkRequestDetail; branch?: string }) {
+  const request = detail.work_request;
+  return (
+    <span className="v3-request-title-group">
+      <span className="v3-request-title">{request.title || request.id}</span>
+      <span className="v3-request-meta">
+        <GitBranch className="size-3.5" />
+        <span>{request.repo_display || request.repo || "repo"}</span>
+        {branch ? <span className="v3-request-branch">{branch}</span> : null}
+      </span>
+    </span>
+  );
+}
+
+function RequestExpandedBody({
+  detail,
+  now,
+  packageById,
+  openQuestion,
+  onSelectGuidance,
+  onSelectCard,
+  requestPath,
+}: {
+  detail: WorkRequestDetail;
+  now?: string;
+  packageById: Map<string, WorkPackageCard>;
+  openQuestion?: NonNullable<WorkRequestDetail["clarification_questions"]>[number];
+  onSelectGuidance: (item: GuidanceItem) => void;
+  onSelectCard: CardDetailSelect;
+  requestPath: ContextPathPart[];
+}) {
+  return (
+    <div className="v3-request-body">
+      {requestHasWork(detail) ? <>
+        <RequestActions detail={detail} openQuestion={openQuestion} onSelectGuidance={onSelectGuidance} />
+        <ExecutionGraphBody detail={detail} now={now} packageById={packageById} onSelectCard={onSelectCard} requestPath={requestPath} />
+      </> : <EmptyWorkRequest workRequestId={detail.work_request.id} />}
+    </div>
   );
 }
 
@@ -296,38 +315,238 @@ function requestRowUpdateMotion(exiting: boolean, detail: WorkRequestDetail, upd
   return updateAnimations.motionFor(requestUpdateKey(detail));
 }
 
-function RequestProgressSummary({
-  counts,
-  onOpenGuidance,
-  onOpenBlockers,
-}: {
-  counts: ReturnType<typeof productTreeCounts>;
-  onOpenGuidance: () => void;
-  onOpenBlockers: () => void;
-}) {
+type RequestFrontierItem = { activity?: string; id: string; pr?: WorkRequestPackage["pr_signal"]; title: string };
+type RequestFrontierGroup = { id: string; items: RequestFrontierItem[]; title?: string };
+
+type RequestFrontierSummary = { groups: RequestFrontierGroup[]; moreLabel?: string };
+
+function RequestFrontier({ summary, onSelectWorkPackage, hidden }: { summary: RequestFrontierSummary | null; onSelectWorkPackage: (id: string) => void; hidden: boolean }) {
+  if (!summary) return <div className="v3-request-frontier" aria-hidden={hidden} inert={hidden} />;
+
   return (
-    <EntityCountChips
-      className="v3-request-summary"
-      items={[
-        { key: "nodes", icon: <Layers3 className="size-3.5" />, count: counts.nodeCount, label: "plan nodes", showZero: true },
-        { key: "slices", icon: <Split className="size-3.5" />, count: counts.sliceCount, label: "WorkPackages", showZero: true },
-        { key: "guidance", icon: <MessageSquareText className="size-3.5" />, count: counts.guidanceCount, label: "guidance needed", onClick: counts.guidanceCount > 0 ? onOpenGuidance : undefined, tone: "guidance", showZero: true },
-        { key: "blockers", icon: <AlertTriangle className="size-3.5" />, count: counts.blockerCount, label: "active blockers", onClick: counts.blockerCount > 0 ? onOpenBlockers : undefined, tone: "blocker", showZero: true },
-      ]}
-    />
+    <div className="v3-request-frontier" aria-hidden={hidden} inert={hidden} data-only-ungrouped={summary.groups.every((group) => !group.title) ? "true" : undefined}>
+      <div className="v3-request-frontier-content">
+      {summary.groups.map((group) => (
+        <div className="v3-request-frontier-group" data-grouped={group.title ? "true" : "false"} role={group.title ? "group" : undefined} aria-label={group.title} key={group.id}>
+          {group.title ? (
+            <span className="v3-request-frontier-group-title" title={group.title}>
+              <span className="v3-request-frontier-group-title-label">{group.title}</span>
+            </span>
+          ) : null}
+          <ul className="v3-request-frontier-packages" data-frontier-wire-trunk={group.title ? "true" : undefined}>
+            {group.items.map((item, index) => (
+              <li className="v3-request-frontier-package" data-last={group.title && index === group.items.length - 1 ? "true" : undefined} key={item.id}>
+                {group.title ? <span className="v3-request-frontier-wire" data-frontier-wire="true" aria-hidden="true" /> : null}
+                <button type="button" className="v3-request-frontier-package-action" aria-label={`Open WorkPackage details for ${item.title}`} onClick={() => onSelectWorkPackage(item.id)} />
+                <span className="v3-request-frontier-title" title={item.title}><span className="v3-request-frontier-title-copy">{item.title}</span></span>
+                <span className="v3-request-frontier-meta">
+                  <PullRequestBadge signal={item.pr} layout="frontier" />
+                  {item.activity ? <span className="v3-request-frontier-activity" data-frontier-measure="state" title={item.activity}>{item.activity}</span> : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      {summary.moreLabel ? <span className="v3-request-frontier-more">{summary.moreLabel}</span> : null}
+      </div>
+    </div>
   );
 }
 
-function RequestScopeSlot({ counts }: { counts: ReturnType<typeof productTreeCounts> }) {
-  if (counts.nodeCount > 0) {
-    return <EntityKindSlot icon={<Layers3 className="size-3.5" />} value={counts.nodeCount} title={`${counts.nodeCount} plan nodes`} />;
-  }
+function requestFrontier(
+  detail: WorkRequestDetail,
+  slices: WorkRequestPackage[],
+  packageById: Map<string, WorkPackageCard>,
+  activeBlockerCountBySliceId: Map<string, number>,
+  mode: RequestFrontierMode,
+  overallLabel: string,
+): RequestFrontierSummary | null {
+  const relevant = slices.filter((slice) => frontierSliceMatches(mode, slice, packageById.get(slice.work_package_id || slice.id), activeBlockerCountBySliceId));
+  if (!relevant.length) return null;
 
-  if (counts.sliceCount > 0) {
-    return <EntityKindSlot icon={<Split className="size-3.5" />} value={counts.sliceCount} title={`${counts.sliceCount} WorkPackages`} />;
-  }
+  const visible = mode === "active" ? relevant : relevant.slice(0, 3);
+  const groups = frontierGroups(detail, visible, packageById, overallLabel);
+  const hiddenCount = relevant.length - visible.length;
+  return { groups, moreLabel: hiddenCount ? `+${hiddenCount} more ${frontierMoreNoun(mode)}` : undefined };
+}
 
-  return <EntityKindSlot icon={<CircleDashed className="size-3.5" />} title="No product plan or WorkPackages attached" muted />;
+function frontierGroups(
+  detail: WorkRequestDetail,
+  slices: WorkRequestPackage[],
+  packageById: Map<string, WorkPackageCard>,
+  overallLabel: string,
+) {
+  const groups = new Map<string, RequestFrontierGroup>();
+  for (const slice of slices) {
+    const identity = frontierGroupIdentity(detail, slice);
+    let entry = groups.get(identity.id);
+    if (!entry) {
+      entry = { ...identity, items: [] };
+      groups.set(identity.id, entry);
+    }
+    entry.items.push(frontierItem(slice, packageById, overallLabel));
+  }
+  return [...groups.values()];
+}
+
+function frontierGroupIdentity(detail: WorkRequestDetail, slice: WorkRequestPackage) {
+  const group = workPackageOwnerNode(detail, slice);
+  return { id: group?.id ?? "ungrouped", title: group?.title?.trim() || undefined };
+}
+
+function frontierItem(slice: WorkRequestPackage, packageById: Map<string, WorkPackageCard>, overallLabel: string): RequestFrontierItem {
+  const pkg = packageById.get(slice.work_package_id || slice.id);
+  return {
+    activity: frontierActivity(slice, pkg, overallLabel),
+    id: slice.id,
+    pr: slice.pr_signal ?? undefined,
+    title: slice.title?.trim() || slice.id,
+  };
+}
+
+function workPackageOwnerNode(detail: WorkRequestDetail, slice: WorkRequestPackage) {
+  const nodes = detail.product_tree?.nodes ?? [];
+  return slice.product_tree_node_id
+    ? nodes.find((node) => node.id === slice.product_tree_node_id)
+    : nodes.find((node) => node.work_package_ids?.some((id) => id === slice.id || id === slice.work_package_id));
+}
+
+function requestFrontierMode(kind: BoardRowStateKind): RequestFrontierMode {
+  if (kind === "active") return "active";
+  if (kind === "blocked" || kind === "guidance") return "attention";
+  if (kind === "done") return "recent";
+  if (["not_started", "planned", "ready"].includes(kind)) return "next";
+  return "waiting";
+}
+
+function frontierSliceMatches(mode: RequestFrontierMode, slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, activeBlockerCountBySliceId: Map<string, number>) {
+  if (mode === "attention") return sliceNeedsAttention(slice, pkg, activeBlockerCountBySliceId);
+  if (mode === "active") return sliceIsRunning(slice, pkg);
+  if (mode === "recent") return sliceIsFinished(slice, pkg);
+  if (mode === "waiting") return sliceIsWaiting(slice, pkg);
+  return !sliceIsFinished(slice, pkg) && !sliceIsRunning(slice, pkg) && !sliceNeedsAttention(slice, pkg, activeBlockerCountBySliceId) && !sliceIsWaiting(slice, pkg);
+}
+
+function sliceNeedsAttention(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, activeBlockerCountBySliceId: Map<string, number>) {
+  const dependencyWaiting = sliceHasUnsatisfiedDependencies(slice);
+  return slice.review_signal?.status === "failed"
+    || slice.pr_signal?.checks?.status === "failing"
+    || sliceGuidanceCount(slice, pkg) > 0
+    || (sliceBlockerCount(slice, pkg, activeBlockerCountBySliceId) > 0 && (!dependencyWaiting || sliceHasActiveBlockerEdge(slice, pkg, activeBlockerCountBySliceId)));
+}
+
+function sliceHasActiveBlockerEdge(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, counts: Map<string, number>) {
+  return (counts.get(slice.id) ?? 0) > 0 || (pkg?.active_blocker_count ?? 0) > 0;
+}
+
+function sliceIsWaiting(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
+  if (sliceHasUnsatisfiedDependencies(slice)) return true;
+  const status = sliceStatus(slice, pkg).toLowerCase();
+  return /blocked|deferred|paused|pending|queued|waiting/.test(status);
+}
+
+function sliceHasUnsatisfiedDependencies(slice: WorkRequestPackage) {
+  const dependency = slice.dependency_signal;
+  return Boolean(dependency && (dependency.required > dependency.satisfied || dependency.blocked > 0));
+}
+
+function frontierActivity(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, overallLabel: string) {
+  const review = slice.review_signal;
+  const checks = slice.pr_signal?.checks;
+  const status = sliceStatus(slice, pkg);
+  const activity = frontierFailureActivity(review, checks)
+    ?? frontierCurrentActivity(slice, review, checks, status)
+    ?? frontierWaitingActivity(slice)
+    ?? frontierCompletionActivity(slice, review, checks)
+    ?? operationalLabel(sliceOperationalState(slice, pkg), status);
+  return activity.trim().toLowerCase() === overallLabel.trim().toLowerCase() ? undefined : activity;
+}
+
+function frontierFailureActivity(review: WorkRequestPackage["review_signal"], checks: NonNullable<WorkRequestPackage["pr_signal"]>["checks"]) {
+  if (review?.status === "failed") return `Review${signalProgress(review.current, review.total)} failed`;
+  if (checks?.status === "failing") return `CI${signalProgress(checks.current, checks.total)} failed`;
+  return undefined;
+}
+
+function frontierCurrentActivity(
+  slice: WorkRequestPackage,
+  review: WorkRequestPackage["review_signal"],
+  checks: NonNullable<WorkRequestPackage["pr_signal"]>["checks"],
+  status: string,
+) {
+  if (review?.status === "in_progress") return `Review${signalProgress(review.current, review.total)}`;
+  if (checks?.status === "pending") return `CI${signalProgress(checks.current, checks.total)}`;
+  if (["merge_ready", "ready_for_merge", "ready_for_architect_merge", "ready_for_human_merge"].includes(status)) return "Ready to merge";
+  if (slice.worker_signal?.status === "active") return "Implementing";
+  return undefined;
+}
+
+function frontierWaitingActivity(slice: WorkRequestPackage) {
+  if (sliceHasUnsatisfiedDependencies(slice)) {
+    const dependency = slice.dependency_signal!;
+    return `Waiting ${dependency.satisfied}/${dependency.required}`;
+  }
+  return undefined;
+}
+
+function frontierCompletionActivity(
+  slice: WorkRequestPackage,
+  review: WorkRequestPackage["review_signal"],
+  checks: NonNullable<WorkRequestPackage["pr_signal"]>["checks"],
+) {
+  if (slice.pr_signal?.status === "merged") return "Merged";
+  if (review?.status === "passed") return "Review passed";
+  if (checks?.status === "passing") return "CI passed";
+  return undefined;
+}
+
+function sliceStatus(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
+  return sliceOperationalState(slice, pkg)?.key || slice.work_package_status || pkg?.operational_state?.key || pkg?.status || slice.status || "planned";
+}
+
+function signalProgress(current?: number | null, total?: number | null) {
+  return current == null || total == null ? "" : ` ${current}/${total}`;
+}
+
+function frontierMoreNoun(mode: RequestFrontierMode) {
+  if (mode === "attention") return "needing attention";
+  if (mode === "recent") return "finished";
+  if (mode === "waiting") return "waiting";
+  if (mode === "next") return "ready";
+  return "active";
+}
+
+function sliceIsRunning(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
+  if (sliceIsFinished(slice, pkg)) return false;
+  const status = sliceStatus(slice, pkg);
+  return operationalStatusIsRunning(sliceOperationalState(slice, pkg), status)
+    || slice.worker_signal?.status === "active"
+    || slice.review_signal?.status === "in_progress"
+    || slice.pr_signal?.checks?.status === "pending";
+}
+
+function sliceIsFinished(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
+  const operational = sliceOperationalState(slice, pkg);
+  const status = operational?.key || slice.work_package_status || pkg?.operational_state?.key || pkg?.status || slice.status || slice.delivery?.outcome;
+  return isFinishedBoardStatus(status);
+}
+
+function requestHasWork(detail: WorkRequestDetail) {
+  return Boolean(detail.product_tree?.nodes?.length || detail.work_packages?.length);
+}
+
+function EmptyWorkRequest({ workRequestId }: { workRequestId: string }) {
+  const prompt = architectStartPrompt(workRequestId);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
+      <p className="text-sm text-muted-foreground">No work has been created yet. Copy a prompt to start this WorkRequest with an architect agent.</p>
+      <Button type="button" variant="outline" size="sm" onClick={() => void copyTextToClipboard(prompt)}>
+        <Copy className="size-4" />
+        <span>Copy</span>
+      </Button>
+    </div>
+  );
 }
 
 function RequestActions({
@@ -366,12 +585,12 @@ function ExecutionGraphBody({
 }) {
   const slicesById = useMemo(() => new Map((detail.work_packages ?? []).map((slice) => [slice.id, slice])), [detail.work_packages]);
   const model = useMemo(() => workRequestExecutionGraphModel(detail, { includeHistorical: true }), [detail]);
-  const selectWorkPackage = (workPackageId: string) => {
+  const selectWorkPackage = useCallback((workPackageId: string) => {
     const slice = slicesById.get(workPackageId);
     const pkg = packageById.get(slice?.work_package_id || workPackageId);
     if (slice) onSelectCard({ kind: "slice", detail, slice, pkg });
     else if (pkg) onSelectCard({ kind: "package", detail, pkg });
-  };
+  }, [detail, onSelectCard, packageById, slicesById]);
 
   return (
     <div className="v3-execution-graph">

@@ -105,6 +105,21 @@ export function writeStoredRepoWorkstreamOpen(stateKey: string, open: boolean) {
   }));
 }
 
+export function readStoredFocusBoardSectionOpen(lane: string, fallback: boolean) {
+  const storedOpen = readDashboardUiState().focusBoardSections?.[lane];
+  return typeof storedOpen === "boolean" ? storedOpen : fallback;
+}
+
+export function writeStoredFocusBoardSectionOpen(lane: string, open: boolean) {
+  updateDashboardUiState((state) => ({
+    ...state,
+    focusBoardSections: {
+      ...(state.focusBoardSections || {}),
+      [lane]: open,
+    },
+  }));
+}
+
 export function readStoredFinishedRequestChildren() {
   const stored = readDashboardUiState().finishedRequestChildren;
   return isRecord(stored) ? Object.fromEntries(Object.entries(stored).filter(([, open]) => typeof open === "boolean")) as Record<string, boolean> : {};

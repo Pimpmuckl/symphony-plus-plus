@@ -8,8 +8,6 @@ const MIN_STATUS_LABEL_LENGTH = 8;
 const MIN_STATUS_BADGE_WIDTH_REM = 6.1;
 const MAX_STATUS_BADGE_WIDTH_REM = 11;
 
-export type RowProgressIconState = "active" | "blocked" | "done" | "guidance" | "muted" | "ready";
-export type RowProgressAttentionState = "blocked" | "guidance" | null;
 export type BoardRowStateKind = "active" | "blocked" | "deferred" | "done" | "guidance" | "not_started" | "partial" | "planned" | "ready" | "unknown";
 export type BoardRowState = {
   badgeVariant: BadgeTone;
@@ -31,40 +29,6 @@ const BOARD_ROW_STATES: Record<BoardRowStateKind, BoardRowState> = {
   unknown: { badgeVariant: "secondary", kind: "unknown", label: "Unknown", tone: "slice" },
 };
 
-export function rowProgressIconState({
-  blockerCount = 0,
-  guidanceCount = 0,
-  progress = 0,
-  tone,
-}: {
-  blockerCount?: number;
-  guidanceCount?: number;
-  progress?: number;
-  tone?: string | null;
-}): RowProgressIconState {
-  if (tone === "muted") return "muted";
-  if (tone === "finished") return "done";
-  if (progress > 0) return "active";
-  if (blockerCount > 0 || tone === "blocked") return "blocked";
-  if (guidanceCount > 0 || tone === "guidance") return "guidance";
-  if (tone === "ready") return "ready";
-  return "active";
-}
-
-export function rowProgressAttentionState({
-  blockerCount = 0,
-  guidanceCount = 0,
-  tone,
-}: {
-  blockerCount?: number;
-  guidanceCount?: number;
-  tone?: string | null;
-}): RowProgressAttentionState {
-  if (blockerCount > 0 || tone === "blocked") return "blocked";
-  if (guidanceCount > 0 || tone === "guidance") return "guidance";
-  return null;
-}
-
 export function statusBadgeWidthForLabels(labels: Iterable<string | null | undefined>) {
   const width = Math.min(MAX_STATUS_BADGE_WIDTH_REM, Math.max(MIN_STATUS_BADGE_WIDTH_REM, longestStatusLabelLength(labels) * 0.3 + 3.2));
   return `${Number(width.toFixed(2))}rem`;
@@ -84,6 +48,7 @@ export function requestBoardState(
   const rawStatus = request.operational_state?.key || request.status;
   return aggregateBoardRowState({
     blockerCount: counts.blockerCount,
+    childrenComplete: productTreeIsComplete(detail),
     completionDone: isFinishedBoardStatus(rawStatus),
     fallbackLabel: operationalLabel(request.operational_state, request.status),
     fallbackStatus: rawStatus,
@@ -126,6 +91,7 @@ function productNodeStatusLabel(node: ProductTreeNode, mark = node.computed_comp
 
 function aggregateBoardRowState({
   blockerCount,
+  childrenComplete = true,
   completionDeferred = false,
   completionDone = false,
   fallbackLabel,
@@ -136,6 +102,7 @@ function aggregateBoardRowState({
   slices,
 }: {
   blockerCount: number;
+  childrenComplete?: boolean;
   completionDeferred?: boolean;
   completionDone?: boolean;
   fallbackLabel?: string | null;
@@ -154,7 +121,7 @@ function aggregateBoardRowState({
     [childState.active, "active"],
     [childState.ready, "ready"],
     [childState.planned, "planned"],
-    [childState.done, "done", finishedFallbackLabel(fallbackLabel)],
+    [childState.done && childrenComplete, "done", finishedFallbackLabel(fallbackLabel)],
     [progress > 0 || fallbackStatus === "partial", "partial"],
     [childState.deferred, "deferred", fallbackLabel],
     [childState.notStarted, "not_started"],
@@ -205,6 +172,7 @@ function sliceBoardStateKind(slice: WorkRequestPackage, pkg?: WorkPackageCard): 
   const operational = sliceOperationalState(slice, pkg);
   const status = operational?.key || slice.work_package_status || pkg?.operational_state?.key || pkg?.status || slice.status;
   return firstMatchingBoardRowKind([
+    [sliceHasFailedGate(slice), "blocked"],
     [sliceHasActiveWork(slice, pkg, status), "active"],
     [isFinishedBoardStatus(status), "done"],
     [sliceIsBlocked(slice, pkg, status), "blocked"],
@@ -216,8 +184,17 @@ function sliceBoardStateKind(slice: WorkRequestPackage, pkg?: WorkPackageCard): 
   ]) ?? "unknown";
 }
 
+function sliceHasFailedGate(slice: WorkRequestPackage) {
+  return slice.review_signal?.status === "failed" || slice.pr_signal?.checks?.status === "failing";
+}
+
 function sliceIsBlocked(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, status?: string | null) {
   return status === "blocked" || sliceBlockerCount(slice, pkg, new Map()) > 0;
+}
+
+function productTreeIsComplete(detail: WorkRequestDetail) {
+  const nodes = detail.product_tree?.nodes ?? [];
+  return nodes.length === 0 || nodes.every((node) => ["done", "deferred"].includes(node.computed_completion_mark || node.completion_mark || "unknown"));
 }
 
 function sliceHasActiveWork(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, status?: string | null) {
@@ -311,15 +288,23 @@ export function sliceBlockerCount(
   pkg: WorkPackageCard | undefined,
   activeBlockerCountBySliceId: Map<string, number>,
 ) {
+  const activeCount = sliceActionableBlockerCount(slice, pkg, activeBlockerCountBySliceId);
+  if (activeCount > 0) return activeCount;
+
+  const operational = sliceOperationalState(slice, pkg);
+  return [operational?.key, slice.work_package_status, slice.status, pkg?.status].includes("blocked") ? 1 : 0;
+}
+
+export function sliceActionableBlockerCount(
+  slice: WorkRequestPackage,
+  pkg: WorkPackageCard | undefined,
+  activeBlockerCountBySliceId: Map<string, number>,
+) {
   const operational = sliceOperationalState(slice, pkg);
   const activeCount = Math.max(activeBlockerCountBySliceId.get(slice.id) ?? 0, pkg?.active_blocker_count ?? 0);
 
   if (activeCount > 0) return activeCount;
-
-  const attentionCount = attentionBlockerCount(operational);
-  if (attentionCount > 0) return attentionCount;
-
-  return [operational?.key, slice.work_package_status, slice.status, pkg?.status].includes("blocked") ? 1 : 0;
+  return attentionBlockerCount(operational);
 }
 
 export function sliceGuidanceCount(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined) {
@@ -340,9 +325,7 @@ function attentionBlockerCount(operational?: WorkPackageCard["operational_state"
     if (!attentionItemIsBlocker(item)) continue;
 
     fallbackCount += 1;
-    for (const blockerId of item.blocker_ids ?? []) {
-      blockerIds.add(blockerId);
-    }
+    for (const blockerId of item.blocker_ids ?? []) blockerIds.add(blockerId);
   }
 
   return blockerIds.size || fallbackCount;

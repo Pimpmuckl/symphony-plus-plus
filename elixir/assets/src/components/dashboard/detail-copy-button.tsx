@@ -1,4 +1,5 @@
 import { Check, Copy, Loader2, TriangleAlert } from "lucide-react";
+import type { ComponentProps } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -6,7 +7,12 @@ import { copyTextToClipboard } from "@/dashboard/runtime";
 
 type CopyState = "idle" | "copying" | "copied" | "error";
 
-export function DetailCopyButton({ label, text }: { label: string; text: string }) {
+export function DetailCopyButton({ className = "button-lift size-8 shrink-0", label, text, variant = "ghost" }: {
+  className?: string;
+  label: string;
+  text: string;
+  variant?: ComponentProps<typeof Button>["variant"];
+}) {
   const [state, setState] = useState<CopyState>("idle");
   const timerRef = useRef<number | null>(null);
   const copied = state === "copied";
@@ -40,8 +46,8 @@ export function DetailCopyButton({ label, text }: { label: string; text: string 
     <Button
       type="button"
       size="icon"
-      variant="ghost"
-      className="button-lift size-8 shrink-0"
+      variant={variant}
+      className={className}
       aria-label={title}
       title={title}
       onClick={() => void copyDetails()}

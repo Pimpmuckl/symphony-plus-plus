@@ -1,4 +1,4 @@
-import type { ActiveBlockingEdge, CopyArchitectHandoff, GuidanceItem, WorkRequestDetail } from "@/types/dashboard";
+import type { ActiveBlockingEdge, GuidanceItem, WorkRequestDetail } from "@/types/dashboard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertTriangle, ChevronRight, GitBranch, GitPullRequest, Layers3, MessageSquareText, Split } from "lucide-react";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
@@ -19,11 +19,9 @@ export function RepoWorkstream({
   requestDetailsByRepo,
   now,
   activeBlockingEdges,
-  guidanceItems,
   onSelectGuidance,
   onSelectCard,
-  onCopyArchitectHandoff,
-  canMutateOperatorActions,
+  primaryBranch,
   showWorkstreamContextBar,
   updateAnimations,
 }: {
@@ -31,11 +29,9 @@ export function RepoWorkstream({
   requestDetailsByRepo: Map<string, WorkRequestDetail[]>;
   now?: string;
   activeBlockingEdges: ActiveBlockingEdge[];
-  guidanceItems: GuidanceItem[];
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
-  onCopyArchitectHandoff: CopyArchitectHandoff;
-  canMutateOperatorActions: boolean;
+  primaryBranch?: string;
   showWorkstreamContextBar: boolean;
   updateAnimations: DashboardUpdateAnimations;
 }) {
@@ -135,11 +131,9 @@ export function RepoWorkstream({
               now={now}
               packages={repo.packages}
               activeBlockingEdges={activeBlockingEdges}
-              guidanceItems={guidanceItems}
               onSelectGuidance={onSelectGuidance}
               onSelectCard={onSelectCard}
-              onCopyArchitectHandoff={onCopyArchitectHandoff}
-              canMutateOperatorActions={canMutateOperatorActions}
+              primaryBranch={primaryBranch}
               expandedFinishedRequests={expandedFinishedRequests}
               finishedRequestScopeKey={stateKey}
               onSetFinishedRequestChildrenOpen={setFinishedRequestChildrenOpen}
