@@ -285,8 +285,7 @@ async function resolveCachedIdentity(pluginRoot) {
 }
 
 function generationStillValid(identity) {
-  return identity && generationWatchReady && generationWatchVersion === identity.generationWatchVersion &&
-    liveGeneration(identity.generationMarker) === identity.generationKey;
+  return identity && generationWatchReady && generationWatchVersion === identity.generationWatchVersion;
 }
 
 function generationValidForAttachment(identity) {

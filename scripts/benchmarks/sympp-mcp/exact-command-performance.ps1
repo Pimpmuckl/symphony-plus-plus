@@ -62,6 +62,22 @@ function Get-TraceCounts {
   return $counts
 }
 
+function Get-TraceFileSet {
+  $files = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($file in @(Get-ChildItem -LiteralPath $traceDir -Filter "*.log" -File -ErrorAction SilentlyContinue)) {
+    [void]$files.Add($file.FullName)
+  }
+  return $files
+}
+
+function Test-NewTraceEvent($ExistingFiles, [string]$Event) {
+  foreach ($file in @(Get-ChildItem -LiteralPath $traceDir -Filter "*.log" -File -ErrorAction SilentlyContinue)) {
+    if ($ExistingFiles.Contains($file.FullName)) { continue }
+    if (@(Get-Content -LiteralPath $file.FullName -ErrorAction SilentlyContinue) -contains $Event) { return $true }
+  }
+  return $false
+}
+
 function Get-GitInvocationCount {
   return @(Get-ChildItem -LiteralPath $gitLogDir -Filter "*.log" -File -ErrorAction SilentlyContinue).Count
 }
@@ -445,17 +461,16 @@ exit /b %ERRORLEVEL%
       Remove-Item -LiteralPath $generationMarker[0].FullName -Force -ErrorAction SilentlyContinue
       $originalBytes = [System.IO.File]::ReadAllBytes($mutationFile)
       $originalWriteTime = [System.IO.File]::GetLastWriteTimeUtc($mutationFile)
-      $scanBefore = [int](Get-TraceCounts)["generation_scan_complete"]
-      $invalidationBefore = [int](Get-TraceCounts)["generation_watch_invalidated"]
       $retryBefore = [int](Get-TraceCounts)["generation_scan_retry"]
       $scanRejectionBefore = [int](Get-TraceCounts)["warm_miss_generation"]
+      $scanTraceFiles = Get-TraceFileSet
       $scanClient = Start-ExactClient $environment
       $deadline = [DateTime]::UtcNow.AddSeconds(60)
-      while ([int](Get-TraceCounts)["generation_scan_complete"] -le $scanBefore -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
-      if ([int](Get-TraceCounts)["generation_scan_complete"] -le $scanBefore) { throw "Mutation race did not observe an in-progress generation scan." }
+      while (-not (Test-NewTraceEvent $scanTraceFiles "generation_scan_complete") -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+      if (-not (Test-NewTraceEvent $scanTraceFiles "generation_scan_complete")) { throw "Mutation race did not observe an in-progress generation scan." }
       [System.IO.File]::AppendAllText($mutationFile, "`n# transient benchmark mutation")
-      while ([int](Get-TraceCounts)["generation_watch_invalidated"] -le $invalidationBefore -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
-      if ([int](Get-TraceCounts)["generation_watch_invalidated"] -le $invalidationBefore) { throw "Installed payload mutation was not observed by the generation watcher." }
+      while (-not (Test-NewTraceEvent $scanTraceFiles "generation_watch_invalidated") -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+      if (-not (Test-NewTraceEvent $scanTraceFiles "generation_watch_invalidated")) { throw "Installed payload mutation was not observed by the generation watcher." }
       [System.IO.File]::WriteAllBytes($mutationFile, $originalBytes)
       [System.IO.File]::SetLastWriteTimeUtc($mutationFile, $originalWriteTime)
       Wait-ClientsReady @($scanClient) $StartupTimeoutSec
@@ -464,12 +479,12 @@ exit /b %ERRORLEVEL%
       Stop-ExactClient $scanClient
       if (-not $mutation.scan_race_detected) { throw "Installed payload mutation during generation scan was not retried or rejected safely." }
     }
-    $attachBefore = [int](Get-TraceCounts)["generation_identity_resolved"]
+    $attachTraceFiles = Get-TraceFileSet
     $mutated = Start-ExactClient $environment
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     if ($LauncherMode -eq "NodePresent") {
-      while ([int](Get-TraceCounts)["generation_identity_resolved"] -le $attachBefore -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
-      if ([int](Get-TraceCounts)["generation_identity_resolved"] -le $attachBefore) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
+      while (-not (Test-NewTraceEvent $attachTraceFiles "generation_identity_resolved") -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+      if (-not (Test-NewTraceEvent $attachTraceFiles "generation_identity_resolved")) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
     }
     Set-Content -LiteralPath $mutationFile -Value 'Set-Content -LiteralPath $env:SYMPP_INTEGRITY_MARKER -Value invoked' -Encoding utf8NoBOM
     while (-not $mutated.process.HasExited -and -not $mutated.line_task.IsCompleted -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }

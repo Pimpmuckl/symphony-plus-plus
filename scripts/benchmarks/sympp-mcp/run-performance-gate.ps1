@@ -223,7 +223,8 @@ function Start-IsolatedLauncher([hashtable]$Environment) {
 function Invoke-CapturedProcess($Info, [int]$TimeoutMs, [string]$Label) {
   $Info.UseShellExecute = $false; $Info.CreateNoWindow = $true
   $Info.RedirectStandardOutput = $true; $Info.RedirectStandardError = $true
-  $process = [System.Diagnostics.Process]::Start($Info)
+  $process = [System.Diagnostics.Process]::new(); $process.StartInfo = $Info
+  if (-not $process.Start()) { throw "$Label failed to start" }
   $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
   if (-not $process.WaitForExit($TimeoutMs)) { $process.Kill($true); throw "$Label timed out" }
   $stdout = $stdoutTask.GetAwaiter().GetResult(); $stderr = $stderrTask.GetAwaiter().GetResult()
