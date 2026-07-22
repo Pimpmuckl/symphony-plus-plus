@@ -67,3 +67,28 @@ SLO.
 
 Run `-SelfTest` to prove every documented threshold branch without starting a
 backend.
+
+## Backend startup probe
+
+Prepare the pinned repository toolchain and compiled modes before measuring:
+
+```powershell
+mise trust .\elixir\mise.toml
+Push-Location .\elixir
+mise install
+$env:MIX_ENV = "dev"
+mise exec -- mix compile
+$env:MIX_ENV = "prod"
+mise exec -- mix release --overwrite
+Pop-Location
+```
+
+Then measure source or release startup from the repository root:
+
+```powershell
+pwsh -NoProfile -File .\scripts\benchmarks\sympp-startup\measure.ps1
+pwsh -NoProfile -File .\scripts\benchmarks\sympp-startup\measure.ps1 -Release
+```
+
+The probe refuses missing compiled modes and untrusted or unavailable pinned
+toolchains so compilation is never included in a startup sample.

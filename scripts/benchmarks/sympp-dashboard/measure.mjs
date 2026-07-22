@@ -28,7 +28,10 @@ console.log(JSON.stringify(summarize(results), null, 2));
 async function measureSample(browser) {
   const context = await browser.newContext({ reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
   await context.addInitScript(() => {
-    localStorage.setItem("symphony-plus-plus.dashboard.ui-state.v1", JSON.stringify({ showWelcomeToast: false }));
+    localStorage.setItem("symphony-plus-plus.dashboard.ui-state.v1", JSON.stringify({
+      focusBoardSections: { active: true, attention: true, next: true, recent: true, waiting: true },
+      showWelcomeToast: false,
+    }));
   });
 
   const page = await context.newPage();
@@ -44,18 +47,39 @@ async function measureSample(browser) {
   });
 
   const coldStartedAt = performance.now();
+  const deferredResponsePromise = page.waitForResponse((response) => dashboardSnapshotPath(response.url()) === "/dashboard/deferred");
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-  await page.locator(".v3-request-row").first().waitFor({ state: "attached", timeout: 30_000 });
+  const focusBoard = page.locator(".focus-board");
+  await focusBoard.waitFor({ state: "visible", timeout: 30_000 });
+  await focusBoard.locator(".v3-request-row").first().waitFor({ state: "attached", timeout: 30_000 });
   await paint(page);
   const coldUsableMs = performance.now() - coldStartedAt;
+  const deferredResponse = await deferredResponsePromise;
+  await deferredResponse.finished();
   const coldRequests = await settledRequests(requests);
+
+  const largeRequest = focusBoard.locator('[data-request-id="WR-FIXTURE-KRAKEN-SCALE"]');
+  const expandStartedAt = performance.now();
+  await largeRequest.getByRole("button", { name: /^Expand / }).click();
+  const largeGraph = page.locator('.focus-board[data-focus-request-id="WR-FIXTURE-KRAKEN-SCALE"][data-focus-phase="focused"] .execution-graph');
+  await largeGraph.locator(".execution-graph__card").first().waitFor({ state: "visible" });
+  await paint(page);
+  const expandLargeGraphMs = performance.now() - expandStartedAt;
+
+  const collapseStartedAt = performance.now();
+  await focusBoard.locator('[data-request-id="WR-FIXTURE-KRAKEN-SCALE"]').getByRole("button", { name: /^Collapse / }).click();
+  await page.locator('.focus-board[data-focus-request-id="WR-FIXTURE-KRAKEN-SCALE"]').waitFor({ state: "detached" });
+  await paint(page);
+  const collapseLargeGraphMs = performance.now() - collapseStartedAt;
 
   const refreshButton = page.getByRole("button", { name: "Refresh", exact: true });
   const refreshStartedAt = performance.now();
-  const refreshResponsePromise = page.waitForResponse((response) => dashboardSnapshotPath(response.url()) === "/dashboard/hydrated");
+  const refreshResponsePromise = page.waitForResponse((response) => dashboardSnapshotPath(response.url()) === "/dashboard");
+  const refreshDeferredPromise = page.waitForResponse((response) => dashboardSnapshotPath(response.url()) === "/dashboard/deferred");
   await refreshButton.click();
   const refreshResponse = await refreshResponsePromise;
-  await refreshResponse.finished();
+  const refreshDeferred = await refreshDeferredPromise;
+  await Promise.all([refreshResponse.finished(), refreshDeferred.finished()]);
   await refreshButton.waitFor({ state: "visible" });
   await page.waitForFunction(() =>
     [...document.querySelectorAll("button")].some((button) => button.textContent?.includes("Refresh") && !button.disabled),
@@ -63,7 +87,7 @@ async function measureSample(browser) {
   await paint(page);
   const refreshUsableMs = performance.now() - refreshStartedAt;
   const allRequests = await settledRequests(requests);
-  const refreshRequest = allRequests.at(-1);
+  const refreshRequests = allRequests.slice(coldRequests.length);
 
   await context.close();
 
@@ -75,12 +99,17 @@ async function measureSample(browser) {
       request_count: coldRequests.length,
       paths: coldRequests.map((request) => request.path),
     },
+    focus_board: {
+      collapse_large_graph_ms: collapseLargeGraphMs,
+      expand_large_graph_ms: expandLargeGraphMs,
+      first_usable_ms: coldUsableMs,
+    },
     refresh: {
-      api_ms: refreshRequest.ms,
+      api_ms: batchDuration(refreshRequests),
       browser_usable_ms: refreshUsableMs,
-      bytes: refreshRequest.bytes,
-      request_count: 1,
-      paths: [refreshRequest.path],
+      bytes: sum(refreshRequests.map((request) => request.bytes)),
+      request_count: refreshRequests.length,
+      paths: refreshRequests.map((request) => request.path),
     },
   };
 }
@@ -117,8 +146,14 @@ function summarize(results) {
   return {
     samples: results.length,
     cold: summarizeMode(results.map((result) => result.cold)),
+    focus_board: summarizeJourney(results.map((result) => result.focus_board)),
     refresh: summarizeMode(results.map((result) => result.refresh)),
   };
+}
+
+function summarizeJourney(results) {
+  const summary = Object.fromEntries(Object.keys(results[0]).map((key) => [`${key}_p50`, median(results.map((result) => result[key]))]));
+  return details ? { ...summary, samples: results } : summary;
 }
 
 function summarizeMode(results) {

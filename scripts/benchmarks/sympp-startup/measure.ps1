@@ -12,11 +12,20 @@ if ($ColdSamples -lt 1 -or $WarmSamples -lt 1 -or $TimeoutSeconds -lt 1) {
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
 $elixirRoot = Join-Path $repoRoot "elixir"
 $powershell = (Get-Process -Id $PID).Path
-$mix = (Get-Command mix -ErrorAction Stop).Source
+$mise = (Get-Command mise -ErrorAction Stop).Source
+Push-Location $elixirRoot
+try { $toolchain = & $mise exec -- mix --version 2>&1 } finally { Pop-Location }
+if ($LASTEXITCODE -ne 0) {
+  throw "Repository toolchain unavailable. Run 'mise trust $elixirRoot\mise.toml' and 'mise install' before measuring startup. $toolchain"
+}
 $commandHost = Join-Path $PSScriptRoot "invoke.ps1"
 $releaseEntrypoint = Join-Path $elixirRoot "_build\prod\rel\symphony_elixir\bin\symphony_elixir.bat"
 if ($Release -and -not (Test-Path -LiteralPath $releaseEntrypoint)) {
-  throw "Release not found. Run `$env:MIX_ENV='prod'; mix release --overwrite from $elixirRoot."
+  throw "Release not found. Run `$env:MIX_ENV='prod'; mise exec -- mix release --overwrite from $elixirRoot."
+}
+$sourceEntrypoint = Join-Path $elixirRoot "_build\dev\lib\symphony_elixir\ebin\Elixir.Mix.Tasks.Sympp.Cockpit.beam"
+if (-not $Release -and -not (Test-Path -LiteralPath $sourceEntrypoint)) {
+  throw "Compiled source benchmark not found. Run `$env:MIX_ENV='dev'; mise exec -- mix compile from $elixirRoot before measuring startup."
 }
 $client = [System.Net.Http.HttpClient]::new()
 $client.Timeout = [TimeSpan]::FromSeconds(2)
@@ -77,9 +86,10 @@ try {
       $arguments = @("-NoLogo", "-NoProfile", "-File", $commandHost, $releaseEntrypoint, "start")
       Set-ReleaseEnvironment $startInfo $runRoot $port
     } else {
-      $startInfo.FileName = $powershell
+      $startInfo.FileName = $mise
+      $startInfo.Environment["MIX_ENV"] = "dev"
       $arguments = @(
-        "-NoLogo", "-NoProfile", "-File", $commandHost, $mix, "sympp.cockpit", "--host", "127.0.0.1", "--port", "$port",
+        "exec", "--", "mix", "sympp.cockpit", "--host", "127.0.0.1", "--port", "$port",
         "--database", $database, "--dashboard-origin", "http://127.0.0.1:1", "--no-open-dashboard"
       )
     }
