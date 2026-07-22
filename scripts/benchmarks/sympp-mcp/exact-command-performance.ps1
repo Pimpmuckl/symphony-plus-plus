@@ -437,7 +437,7 @@ exit /b %ERRORLEVEL%
   }
   Stop-ExactClient $recovery
 
-  $mutation = [pscustomobject]@{ checked = $false; shortcut_rejected = $null; scan_race_retried = $null; attach_race_rejected = $null; unsafe_cleanup_skipped = $null }
+  $mutation = [pscustomobject]@{ checked = $false; shortcut_rejected = $null; scan_race_detected = $null; attach_race_rejected = $null; unsafe_cleanup_skipped = $null }
   if (-not $SkipMutationCheck) {
     $mutation.checked = $true
     $mutationFile = Join-Path $pluginRoot "scripts/start-sympp-mcp.ps1"
@@ -446,25 +446,30 @@ exit /b %ERRORLEVEL%
       $originalBytes = [System.IO.File]::ReadAllBytes($mutationFile)
       $originalWriteTime = [System.IO.File]::GetLastWriteTimeUtc($mutationFile)
       $scanBefore = [int](Get-TraceCounts)["generation_scan_complete"]
+      $invalidationBefore = [int](Get-TraceCounts)["generation_watch_invalidated"]
       $retryBefore = [int](Get-TraceCounts)["generation_scan_retry"]
+      $scanRejectionBefore = [int](Get-TraceCounts)["warm_miss_generation"]
       $scanClient = Start-ExactClient $environment
       $deadline = [DateTime]::UtcNow.AddSeconds(60)
       while ([int](Get-TraceCounts)["generation_scan_complete"] -le $scanBefore -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
       if ([int](Get-TraceCounts)["generation_scan_complete"] -le $scanBefore) { throw "Mutation race did not observe an in-progress generation scan." }
       [System.IO.File]::AppendAllText($mutationFile, "`n# transient benchmark mutation")
+      while ([int](Get-TraceCounts)["generation_watch_invalidated"] -le $invalidationBefore -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+      if ([int](Get-TraceCounts)["generation_watch_invalidated"] -le $invalidationBefore) { throw "Installed payload mutation was not observed by the generation watcher." }
       [System.IO.File]::WriteAllBytes($mutationFile, $originalBytes)
       [System.IO.File]::SetLastWriteTimeUtc($mutationFile, $originalWriteTime)
       Wait-ClientsReady @($scanClient) $StartupTimeoutSec
-      $mutation.scan_race_retried = [int](Get-TraceCounts)["generation_scan_retry"] -gt $retryBefore
+      $mutation.scan_race_detected = [int](Get-TraceCounts)["generation_scan_retry"] -gt $retryBefore -or
+        [int](Get-TraceCounts)["warm_miss_generation"] -gt $scanRejectionBefore
       Stop-ExactClient $scanClient
-      if (-not $mutation.scan_race_retried) { throw "Installed payload mutation during generation scan did not force a retry." }
+      if (-not $mutation.scan_race_detected) { throw "Installed payload mutation during generation scan was not retried or rejected safely." }
     }
-    $attachBefore = [int](Get-TraceCounts)["generation_attach_preflight"]
+    $attachBefore = [int](Get-TraceCounts)["generation_identity_resolved"]
     $mutated = Start-ExactClient $environment
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     if ($LauncherMode -eq "NodePresent") {
-      while ([int](Get-TraceCounts)["generation_attach_preflight"] -le $attachBefore -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
-      if ([int](Get-TraceCounts)["generation_attach_preflight"] -le $attachBefore) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
+      while ([int](Get-TraceCounts)["generation_identity_resolved"] -le $attachBefore -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+      if ([int](Get-TraceCounts)["generation_identity_resolved"] -le $attachBefore) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
     }
     Set-Content -LiteralPath $mutationFile -Value 'Set-Content -LiteralPath $env:SYMPP_INTEGRITY_MARKER -Value invoked' -Encoding utf8NoBOM
     while (-not $mutated.process.HasExited -and -not $mutated.line_task.IsCompleted -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
@@ -473,7 +478,7 @@ exit /b %ERRORLEVEL%
       [string]::IsNullOrWhiteSpace([string]$mutated.line_task.GetAwaiter().GetResult())
     $mutation.attach_race_rejected = $LauncherMode -ne "NodePresent" -or ([int](Get-TraceCounts)["warm_miss_generation"] -gt 0 -and $mutation.shortcut_rejected)
     $mutation.unsafe_cleanup_skipped = -not (Test-Path -LiteralPath $environment.SYMPP_INTEGRITY_MARKER)
-    if ($LauncherMode -ne "NodePresent") { $mutation.scan_race_retried = $true }
+    if ($LauncherMode -ne "NodePresent") { $mutation.scan_race_detected = $true }
     Stop-ExactClient $mutated
     if (-not $mutation.shortcut_rejected -or -not $mutation.attach_race_rejected -or -not $mutation.unsafe_cleanup_skipped) { throw "Installed payload mutation at the attachment boundary was not rejected safely before warm attach." }
   }
