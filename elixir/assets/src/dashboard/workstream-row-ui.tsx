@@ -3,8 +3,10 @@ import { Info } from "lucide-react";
 import type { ComponentProps } from "react";
 
 import { AnimatedBadge } from "@/components/dashboard/motion";
+import { DetailCopyButton } from "@/components/dashboard/detail-copy-button";
 import { Button } from "@/components/ui/button";
 import type { CardDetailSelect } from "./runtime";
+import { requestIdentityCopyText } from "./workstream-utils";
 
 export function RequestInfoButton({ detail, onSelectCard }: { detail: WorkRequestDetail; onSelectCard: CardDetailSelect }) {
   return (
@@ -12,13 +14,24 @@ export function RequestInfoButton({ detail, onSelectCard }: { detail: WorkReques
       type="button"
       variant="secondary"
       size="icon"
-      className="v3-request-action-button"
+      className="v3-request-action-button v3-request-info-button"
       aria-label="Open request details"
       title="Request details"
       onClick={() => onSelectCard({ kind: "request", detail })}
     >
       <Info className="size-4" />
     </Button>
+  );
+}
+
+export function RequestIdentityCopyButton({ detail }: { detail: WorkRequestDetail }) {
+  return (
+    <DetailCopyButton
+      variant="secondary"
+      className="v3-request-action-button v3-request-copy-button"
+      label="Copy WorkRequest identity"
+      text={requestIdentityCopyText(detail)}
+    />
   );
 }
 

@@ -6,7 +6,7 @@ import { buildExecutionGraphLayout, defaultExpandedGroupIds } from "@/dashboard/
 import type { WorkRequestExecutionGraphModel } from "@/dashboard/execution-graph/model";
 import { graphWireRoutes } from "@/dashboard/execution-graph/router";
 import type { WirePath } from "@/dashboard/execution-graph/router";
-import { wireMorphs } from "@/dashboard/execution-graph/wires";
+import { wireMorphs } from "@/dashboard/execution-graph/wire-morphs";
 import { WorkRequestExecutionGraph } from "@/dashboard/work-request-execution-graph";
 import type { WorkRequestDetail } from "@/types/dashboard";
 

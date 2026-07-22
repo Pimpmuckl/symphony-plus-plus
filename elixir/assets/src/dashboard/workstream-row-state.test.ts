@@ -150,6 +150,25 @@ describe("workstream row state", () => {
     expect(requestState.kind).toBe("active");
   });
 
+  it("does not finish a request while product work remains incomplete", () => {
+    const detail: WorkRequestDetail = {
+      work_request: { id: "wr-incomplete-product", status: "sliced" },
+      product_tree: { nodes: [{ id: "node-open", completion_mark: "not_done" }] },
+      work_packages: [plannedSlice("slice-done", undefined, "delivered", "Delivered")],
+    };
+
+    expect(requestBoardState(detail, new Map(), { blockerCount: 0, guidanceCount: 0 }, 100).kind).toBe("partial");
+  });
+
+  it("uses current slice operational state ahead of stale terminal projections", () => {
+    const slice = plannedSlice("slice-current", undefined, "active", "Active");
+    slice.work_package_status = "delivered";
+    slice.delivery = { outcome: "delivered" };
+    const detail: WorkRequestDetail = { work_request: { id: "wr-current", status: "sliced" }, work_packages: [slice] };
+
+    expect(requestBoardState(detail, new Map(), { blockerCount: 0, guidanceCount: 0 }, 100).kind).toBe("active");
+  });
+
   it("keeps terminal request state ahead of stale active children", () => {
     const detail: WorkRequestDetail = {
       work_request: {

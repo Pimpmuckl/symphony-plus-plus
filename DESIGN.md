@@ -95,6 +95,67 @@ The interface rejects nested-card labyrinths, oversized execution records, beige
 - Motion only for activity, topology changes, and direct feedback.
 - Familiar product controls with explicit keyboard and focus behavior.
 
+### WorkRequest Reveal Motion Contract
+
+The WorkRequest transition has three explicit keyframes in each direction. The
+Focus Board shell, its header, and the selected category label stay mounted and
+visible throughout. Later sibling categories stay mounted but leave and return
+as whole sections, so their labels never become stranded from their cards.
+
+#### Reveal
+
+1. **The space.** WorkRequests above the selected WorkRequest stay fixed.
+   WorkRequests to its left slide through the left viewport edge, those to its
+   right through the right edge, and those below through the bottom edge. The
+   selected WorkRequest slides horizontally to the left edge of its current
+   category while remaining in the same grid row. Only cards in that category
+   participate. Travel scales with the measured execution-board height: compact
+   boards use a short slide and fade, while large boards keep the full push. The
+   camera stays put.
+2. **The group.** Everything below the selected WorkRequest's progress divider
+   slides quickly upward behind that divider, like a drawer closing into the
+   progress bar. The execution graph or empty-state body is already mounted at
+   zero height so its natural expanded height is known before the next keyframe.
+3. **The expanse.** The full-width execution graph reserves its natural height,
+   paints one fully clipped frame, then reveals through a clipping window from the selected WorkRequest's
+   bottom edge. The
+   compact title block keeps its width while the graph surface extends across
+   the category, sharing one continuous outline rather than appearing as a
+   second card. As the page regains height, the camera aligns the selected
+   WorkRequest near the top with a thin margin. The graph is revealed in place
+   and does not translate or redraw.
+
+Before the sequence starts, measure unused height beneath the selected card in
+its current grid row and subtract the frontier that keyframe two will close. The
+attached graph consumes that resulting slack first, so short empty-state cards
+and cards with only one or two WorkPackages meet the graph at the same one-pixel
+seam as taller grouped cards.
+
+#### Collapse
+
+1. **The unexpanse.** The still-mounted execution graph closes through the same
+   clipping window before its reserved space is removed.
+2. **The group.** The compact group summary slides back out beneath the progress
+   divider only after the graph has fully contracted.
+3. **The return.** The selected WorkRequest and every displaced WorkRequest
+   retrace their paths to their exact original grid positions while the camera
+   returns to its original position.
+
+Do not replace these keyframes with `display: none`, a fullscreen card, or a
+different grid placement. Keep the selected card in its original grid cell and
+move it only with a horizontal transform. Reduced motion performs the equivalent
+state change immediately.
+
+Focus Board category disclosures use the same drawer principle without replaying
+the WorkRequest choreography. Their content stays mounted and spatially fixed;
+only an outer clipping window changes height beneath the category heading. No
+card translation, opacity, or stagger animation runs when a category opens or
+closes.
+
+All Repositories uses the same reserved-space clipping pattern. Opening and
+closing reveal or hide the mounted board without animating intrinsic height;
+the opening camera movement remains synchronized with that clipping window.
+
 ## Colors
 
 The palette is an operational signal system. Cool neutrals carry the interface; saturation is reserved for identity, focus, and real lifecycle state.

@@ -2,11 +2,58 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { WorkRequestDetail, WorkRequestPackage } from "@/types/dashboard";
+import type { WorkPackageCard, WorkRequestDetail, WorkRequestPackage } from "@/types/dashboard";
 
-import { buildFocusBoardItems, FocusBoard } from "./focus-board";
+import { FocusBoard } from "./focus-board";
+import { buildFocusBoardItems } from "./focus-board-data";
+import { focusAttachOffset, focusSectionOffset, focusSpaceOffsets, focusTravelScale } from "./focus-board-motion";
 
 describe("focus board", () => {
+  it("uses existing row slack before reserving expanded board space", () => {
+    const rects = [
+      { id: "selected", left: 400, top: 300, width: 200, height: 100 },
+      { id: "tall-peer", left: 700, top: 300, width: 200, height: 160 },
+      { id: "below", left: 400, top: 500, width: 200, height: 200 },
+    ];
+
+    expect(focusAttachOffset(rects, "selected")).toBe(60);
+    expect(focusAttachOffset(rects, "tall-peer")).toBe(0);
+    expect(focusAttachOffset(rects.map((rect) => rect.id === "tall-peer" ? { ...rect, height: 40 } : rect), "tall-peer")).toBe(60);
+  });
+
+  it("makes directional space without moving the selected request to another row", () => {
+    const offsets = focusSpaceOffsets([
+      { id: "selected", left: 400, top: 300, width: 200, height: 100 },
+      { id: "above", left: 400, top: 100, width: 200, height: 100 },
+      { id: "left", left: 100, top: 300, width: 200, height: 100 },
+      { id: "right", left: 700, top: 300, width: 200, height: 100 },
+      { id: "below", left: 400, top: 550, width: 200, height: 100 },
+    ], "selected", { width: 1200, height: 800 }, 40);
+
+    expect(offsets.get("selected")).toEqual({ opacity: 1, x: -360, y: 0 });
+    expect(offsets.get("above")).toEqual({ opacity: 1, x: 0, y: 0 });
+    expect(offsets.get("left")?.x).toBeLessThan(0);
+    expect(offsets.get("right")?.x).toBeGreaterThan(0);
+    expect(offsets.get("below")).toMatchObject({ opacity: 0, x: 0 });
+    expect(offsets.get("below")?.y).toBeGreaterThan(0);
+  });
+
+  it("keeps small boards from over-ejecting surrounding requests", () => {
+    expect(focusTravelScale(120, 800)).toBe(0.35);
+    expect(focusTravelScale(640, 800)).toBe(1);
+
+    const offsets = focusSpaceOffsets([
+      { id: "selected", left: 400, top: 300, width: 200, height: 100 },
+      { id: "right", left: 700, top: 300, width: 200, height: 100 },
+      { id: "offscreen", left: 400, top: 900, width: 200, height: 100 },
+    ], "selected", { width: 1200, height: 800 }, 40, 0.35);
+
+    expect(offsets.get("right")?.x).toBe(192);
+    expect(offsets.get("offscreen")).toEqual({ opacity: 1, x: 0, y: 0 });
+    expect(focusSectionOffset(600, 800, 0.35)).toBe(87);
+    expect(focusSectionOffset(900, 800)).toBe(0);
+  });
+
   it("assigns each request to one operational category and keeps only recently finished work", () => {
     const items = buildFocusBoardItems([
       request("wr-human", "Needs a decision", [slice("human", "ready_for_clarification")], { openQuestions: 1, status: "clarifying" }),
@@ -14,8 +61,8 @@ describe("focus board", () => {
       request("wr-clarifying", "Still shaping", [], { status: "clarifying" }),
       request("wr-ready-to-clarify", "Ready to clarify", [slice("clarification-ready", "ready_for_clarification")], { status: "ready_for_clarification" }),
       request("wr-next", "Ready work", [slice("ready", "approved")]),
-      request("wr-dependency", "Dependency wait", [slice("waiting", "blocked", {
-        dependency: { satisfied: 1, required: 2, active: 0, blocked: 1, unmet_work_package_ids: ["upstream"], inputs: [] },
+      request("wr-dependency", "Dependency wait", [slice("already-done", "delivered"), slice("waiting", "blocked", {
+        dependency: { satisfied: 2, required: 2, active: 0, blocked: 1, unmet_work_package_ids: ["upstream"], inputs: [] },
       })]),
       request("wr-recent", "Just shipped", [slice("merged", "merged")], { completedAt: "2026-07-21T09:30:00Z" }),
       request("wr-delivery", "Delivery fallback", [slice("delivered", "merged", { recordedAt: "2026-07-21T09:00:00Z" })]),
@@ -33,6 +80,47 @@ describe("focus board", () => {
       ["wr-delivery", "recent"],
     ]);
     expect(new Set(items.map((item) => item.id)).size).toBe(items.length);
+  });
+
+  it("uses package runtime and active blocker context for request lanes", () => {
+    const detail = request("wr-runtime", "Runtime work", [slice("runtime", "planned", { packageId: "wp-runtime" })]);
+    const packages = new Map<string, WorkPackageCard>([["wp-runtime", { id: "wp-runtime", status: "active" }]]);
+    const dependencyBlocked = request("wr-package-blocker", "Package blocker", [slice("package-blocker", "blocked", {
+      dependency: { satisfied: 0, required: 1, active: 0, blocked: 1, unmet_work_package_ids: ["upstream"], inputs: [] },
+      packageId: "wp-package-blocker",
+    })]);
+    const blockedPackages = new Map<string, WorkPackageCard>([["wp-package-blocker", {
+      active_blocker_count: 1,
+      id: "wp-package-blocker",
+      status: "blocked",
+    }]]);
+
+    expect(buildFocusBoardItems([detail], Date.now(), packages)[0]?.lane).toBe("active");
+    expect(buildFocusBoardItems([detail], Date.now(), packages, new Map([["wr-runtime", 1]]))[0]?.lane).toBe("attention");
+    expect(buildFocusBoardItems([dependencyBlocked], Date.now(), blockedPackages)[0]?.lane).toBe("attention");
+  });
+
+  it("shows the package targeted by an active blocker edge in the attention frontier", () => {
+    const detail = request("wr-edge", "Blocked by edge", [slice("slice-edge", "planned", { packageId: "wp-edge" })]);
+    const html = renderToStaticMarkup(createElement(FocusBoard, {
+      details: [detail],
+      packages: [{ id: "wp-edge", status: "planned" }],
+      activeBlockingEdges: [{
+        id: "edge-1",
+        blocker_id: "blocker-1",
+        from: { kind: "work_package", id: "wp-upstream" },
+        to: { kind: "work_package", id: "wp-edge" },
+        work_request_id: "wr-edge",
+        work_package_id: "wp-edge",
+      }],
+      onSelectGuidance: () => undefined,
+      onSelectCard: () => undefined,
+      primaryBranchByRepo: new Map(),
+      updateAnimations: { motionFor: () => undefined },
+    }));
+
+    expect(html).toContain('aria-labelledby="focus-board-attention"');
+    expect(html).toContain('title="slice-edge"');
   });
 
   it("uses consistent category disclosures with operator-priority defaults", () => {
@@ -54,18 +142,22 @@ describe("focus board", () => {
       primaryBranchByRepo: new Map(),
       updateAnimations: { motionFor: () => undefined },
     }));
-    const disclosureTag = (lane: string) => html.match(new RegExp(`<details[^>]*aria-labelledby="focus-board-${lane}"[^>]*>`))?.[0];
+    const disclosureTag = (lane: string) => html.match(new RegExp(`<section[^>]*aria-labelledby="focus-board-${lane}"[^>]*>`))?.[0];
+    const disclosureToggle = (lane: string) => laneHtml(lane).match(/<button[^>]*aria-expanded="(?:true|false)"[^>]*>/)?.[0];
     const laneHtml = (lane: string, nextLane?: string) => html.slice(
       html.indexOf(`aria-labelledby="focus-board-${lane}"`),
       nextLane ? html.indexOf(`aria-labelledby="focus-board-${nextLane}"`) : undefined,
     );
-    const frontierTitle = (title: string) => `class="v3-request-frontier-title" title="${title}">${title}`;
+    const frontierTitle = (title: string) => `class="v3-request-frontier-title" title="${title}"><span class="v3-request-frontier-title-copy">${title}</span>`;
 
-    expect(disclosureTag("attention")).toContain("open");
-    expect(disclosureTag("active")).toContain("open");
-    expect(disclosureTag("next")).not.toContain("open");
-    expect(disclosureTag("recent")).not.toContain("open");
-    expect(disclosureTag("waiting")).not.toContain("open");
+    expect(disclosureTag("attention")).toContain('data-section-open="true"');
+    expect(disclosureTag("active")).toContain('data-section-open="true"');
+    expect(disclosureTag("next")).toContain('data-section-open="false"');
+    expect(disclosureTag("recent")).toContain('data-section-open="false"');
+    expect(disclosureTag("waiting")).toContain('data-section-open="false"');
+    expect(disclosureToggle("attention")).toContain('aria-expanded="true"');
+    expect(disclosureToggle("next")).toContain('aria-expanded="false"');
+    expect(laneHtml("next", "recent")).toContain('aria-hidden="true" inert=""');
     expect(html.slice(html.indexOf('aria-labelledby="focus-board-recent"'), html.indexOf('aria-labelledby="focus-board-waiting"'))).toContain("text-emerald-600");
     expect(laneHtml("attention", "active")).toContain(frontierTitle("human"));
     expect(laneHtml("active", "next")).toContain(frontierTitle("active"));
@@ -137,6 +229,7 @@ function slice(
   options: {
     dependency?: WorkRequestPackage["dependency_signal"];
     group?: string;
+    packageId?: string;
     recordedAt?: string;
     review?: WorkRequestPackage["review_signal"];
     worker?: WorkRequestPackage["worker_signal"];
@@ -146,6 +239,7 @@ function slice(
     id,
     work_request_id: "fixture",
     product_tree_node_id: options.group,
+    work_package_id: options.packageId,
     title: id,
     status,
     dependency_signal: options.dependency,

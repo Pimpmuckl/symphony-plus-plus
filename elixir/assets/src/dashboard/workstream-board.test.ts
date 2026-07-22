@@ -3,7 +3,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
-import { architectStartPrompt, mergeRequestDetailsWithExiting, visibleRequestBranch, WorkstreamBoard } from "./workstream-board";
+import { WorkstreamBoard } from "./workstream-board";
+import { architectStartPrompt, mergeRequestDetailsWithExiting, requestIdentityCopyText, visibleRequestBranch } from "./workstream-utils";
 import { activeWorkRequestDetails, finishedRequestChildrenStorageKey } from "./workstream-data";
 
 describe("workstream board removal rendering", () => {
@@ -104,6 +105,7 @@ describe("workstream board removal rendering", () => {
     expect(collapsed.match(/data-frontier-wire="true"/g)).toHaveLength(4);
     expect(collapsed).toContain('<span class="v3-request-frontier-group-title-label">Graph group</span>');
     expect(collapsed).toContain('class="v3-request-frontier-title" title="Active package"');
+    expect(collapsed).toContain('aria-label="Open WorkPackage details for Active package"');
     expect(collapsed).not.toMatch(/[├└→]/);
     expect(collapsed).not.toContain("more active");
     expect(collapsed).not.toContain("Terminal stale package");
@@ -111,6 +113,9 @@ describe("workstream board removal rendering", () => {
     expect(collapsed).toContain('<span class="v3-request-frontier-pr-label" aria-hidden="true">PR</span><span class="v3-request-frontier-pr-number" aria-hidden="true">#101</span>');
     expect(collapsed).toContain("PR #101");
     expect(collapsed).toContain('aria-label="Open request details"');
+    expect(collapsed).toContain('aria-label="Copy WorkRequest identity"');
+    expect(collapsed).toContain('class="v3-request-controls"');
+    expect(requestIdentityCopyText(detail)).toBe("Graph request - WR ID: wr-graph");
     expect(collapsed).toContain('role="progressbar"');
     expect(collapsed).toContain('aria-valuenow="59"');
     expect(collapsed).toContain('<span class="v3-progress-value" aria-hidden="true">59%</span>');
@@ -127,9 +132,17 @@ describe("workstream board removal rendering", () => {
 
   it("ages the request from the newest update across non-frontier packages", () => {
     const collapsed = renderBoard(graphRequestDetail(), {}, [{ id: "pkg-terminal", updated_at: "2026-07-18T09:25:00Z" }]);
+    const daysOld = renderBoard({ work_request: { id: "wr-old", title: "Old request", status: "active", updated_at: "2026-07-16T07:30:00Z" } }, {});
+    const requestNewer = renderBoard({
+      work_request: { id: "wr-newer", title: "Recently updated request", status: "active", updated_at: "2026-07-18T09:28:00Z" },
+      work_packages: [{ id: "wp-newer", work_request_id: "wr-newer", work_package_id: "pkg-newer", status: "active" }],
+    }, {}, [{ id: "pkg-newer", status: "active", updated_at: "2026-07-18T09:00:00Z" }]);
 
     expect(collapsed).toContain("Active · 5m");
     expect(collapsed).not.toContain("Terminal stale package");
+    expect(daysOld).toContain("Active · 2d");
+    expect(daysOld).not.toContain("Active · 2d 2h");
+    expect(requestNewer).toContain("Active · 2m");
   });
 
   it("omits generic package activity that only repeats the overall request state", () => {
@@ -141,12 +154,17 @@ describe("workstream board removal rendering", () => {
       work_request: { id: "wr-active", title: "Active request", status: "active", updated_at: "2026-07-18T09:20:00Z" },
       work_packages: [{ id: "wp-active", work_request_id: "wr-active", title: "Active package", status: "active" }],
     }, {});
+    const linkedPackageActive = renderBoard({
+      work_request: { id: "wr-linked", title: "Linked runtime", status: "planned" },
+      work_packages: [{ id: "slice-linked", work_request_id: "wr-linked", work_package_id: "wp-linked", title: "Linked active package", status: "planned" }],
+    }, {}, [{ id: "wp-linked", status: "active" }]);
 
     expect(blocked).toContain('class="sr-only">Blocked</span>');
     expect(blocked).not.toContain("data-first");
     expect(blocked).not.toContain('class="v3-request-frontier-activity">Blocked</span>');
     expect(active).toContain('class="sr-only">Active · 10m</span>');
     expect(active).not.toContain('class="v3-request-frontier-activity">Active</span>');
+    expect(linkedPackageActive).toContain("Linked active package");
   });
 
   it("hides primary branches, preserves feature branches, and renders the local empty-work prompt", () => {

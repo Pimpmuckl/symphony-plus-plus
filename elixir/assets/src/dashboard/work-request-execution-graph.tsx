@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 import {
@@ -19,6 +19,7 @@ import type {
 } from "@/dashboard/execution-graph/model";
 import { GraphWires } from "@/dashboard/execution-graph/wires";
 import { contextPathValue, type ContextPathPart } from "./workstream-context-path";
+import { elapsedLabel } from "./workstream-row-age";
 
 export type WorkRequestExecutionGraphProps = {
   model: WorkRequestExecutionGraphModel;
@@ -27,7 +28,7 @@ export type WorkRequestExecutionGraphProps = {
   onSelectWorkPackage?: (workPackageId: string) => void;
   contextPath?: ContextPathPart[];
 };
-export function WorkRequestExecutionGraph({
+export const WorkRequestExecutionGraph = memo(function WorkRequestExecutionGraph({
   model: graph,
   now,
   ariaLabel = "WorkRequest execution graph",
@@ -42,11 +43,14 @@ export function WorkRequestExecutionGraph({
     return expanded;
   }, [graph, groupOverrides]);
   const renderedGroupIds = useMemo(() => new Set((graph.groups ?? []).map((group) => group.id)), [graph.groups]);
+  const layouts = useMemo(() => notice ? undefined : {
+    desktop: buildExecutionGraphLayout(graph, "desktop", expandedGroupIds, renderedGroupIds),
+    mobile: buildExecutionGraphLayout(graph, "mobile", expandedGroupIds, renderedGroupIds),
+  }, [expandedGroupIds, graph, notice, renderedGroupIds]);
 
   if (notice) return <GraphNotice ariaLabel={ariaLabel} title={notice.title} detail={notice.detail} />;
 
-  const desktop = buildExecutionGraphLayout(graph, "desktop", expandedGroupIds, renderedGroupIds);
-  const mobile = buildExecutionGraphLayout(graph, "mobile", expandedGroupIds, renderedGroupIds);
+  const { desktop, mobile } = layouts!;
   const toggleGroup = (id: string) => {
     const current = expandedGroupIds.has(id);
     setGroupOverrides((values) => ({ ...values, [id]: !current }));
@@ -66,7 +70,7 @@ export function WorkRequestExecutionGraph({
       <GraphSurface model={mobile} orientation="mobile" now={now} onSelectWorkPackage={onSelectWorkPackage} onToggleGroup={toggleGroup} contextPath={contextPath} />
     </section>
   );
-}
+});
 function GraphNotice({ ariaLabel, title, detail }: { ariaLabel: string; title: string; detail: string }) {
   return (
     <section className="execution-graph execution-graph--empty" aria-label={ariaLabel} role="status">
@@ -359,18 +363,6 @@ function dependencyCardState(signal?: ExecutionGraphWorkPackageSignals): CardSta
 function fallbackCardState(status: string, operational?: ExecutionGraphWorkPackageRef["operational_state"]): CardState {
   const source = firstText([operational?.key, operational?.label, status]) ?? status;
   return { label: firstText([operational?.label]) ?? humanize(source), tone: cardTone(source.toLowerCase()) };
-}
-
-export function elapsedLabel(activeSince: string | null | undefined, now?: string | number | Date) {
-  if (!activeSince || now == null) return undefined;
-  const elapsed = new Date(now).getTime() - Date.parse(activeSince);
-  if (!Number.isFinite(elapsed) || elapsed < 0) return undefined;
-  const minutes = Math.floor(elapsed / 60_000);
-  if (minutes < 1) return "<1m";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m`;
-  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
 function progressText(current?: number | null, total?: number | null) {

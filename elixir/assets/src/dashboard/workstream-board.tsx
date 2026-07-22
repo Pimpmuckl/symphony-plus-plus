@@ -1,15 +1,14 @@
 import type { ActiveBlockingEdge, GuidanceItem, WorkPackageCard, WorkRequestDetail, WorkRequestPackage } from "@/types/dashboard";
 import { AlertTriangle, ChevronRight, Copy, GitBranch } from "lucide-react";
-import type { CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { copyTextToClipboard, CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
 import { clarificationGuidanceItem } from "./dashboard-data";
 import { finishedRequestChildrenStorageKey, sortWorkRequestPackages, sortWorkRequestDetails } from "./workstream-data";
 import { activeBlockerEntityCounts, productTreeCounts, requestProgress } from "./workstream-progress";
 import { requestBoardState, sliceBlockerCount, sliceGuidanceCount, type BoardRowStateKind } from "./workstream-row-state";
-import { RequestInfoButton, RequestProgressBar, RowBadgeSlot } from "./workstream-row-ui";
+import { RequestIdentityCopyButton, RequestInfoButton, RequestProgressBar, RowBadgeSlot } from "./workstream-row-ui";
 import { requestUpdateKey } from "./update-animations";
 import { dashboardPrefersReducedMotion, updateMotionAttributes } from "@/components/dashboard/motion-utils";
 import { useAutoCollapseWhenDone } from "./workstream-auto-collapse";
@@ -19,12 +18,9 @@ import { workRequestExecutionGraphModel } from "./execution-graph/adapter";
 import { isFinishedBoardStatus, operationalLabel, operationalStatusIsRunning, sliceOperationalState } from "@/lib/operational-state";
 import { PullRequestBadge, WorkRequestExecutionGraph } from "./work-request-execution-graph";
 import { requestBadgeLabel } from "./workstream-row-age";
-
+import { architectStartPrompt, mergeRequestDetailsWithExiting, visibleRequestBranch } from "./workstream-utils";
 const REQUEST_EXIT_MOTION_MS = 320;
-const NO_SLICE_BLOCKERS = new Map<string, number>();
-
 export type RequestFrontierMode = "attention" | "active" | "next" | "recent" | "waiting";
-
 export function WorkstreamBoard({
   repoLabel,
   repoDetails,
@@ -79,7 +75,10 @@ export function WorkstreamBoard({
               exiting={exiting}
               packageById={packageById}
               activeBlockerCount={blockerCounts.requests.get(detail.work_request.id) ?? 0}
+              activeBlockerCountBySliceId={blockerCounts.slices}
               expanded={expanded}
+              detachedExpandedBody={false}
+              focusSelected={false}
               index={index}
               onSetOpen={(open) => onSetFinishedRequestChildrenOpen(detail.work_request.id, open)}
               onSelectGuidance={onSelectGuidance}
@@ -134,11 +133,6 @@ function useExitingRequestDetails(currentDetails: WorkRequestDetail[]) {
   return [renderDetails, exitingIds] as const;
 }
 
-export function mergeRequestDetailsWithExiting(currentDetails: WorkRequestDetail[], exitingDetails: WorkRequestDetail[]) {
-  const currentIds = new Set(currentDetails.map(requestDetailId));
-  return [...currentDetails, ...exitingDetails.filter((detail) => !currentIds.has(requestDetailId(detail)))];
-}
-
 function requestDetailId(detail: WorkRequestDetail) {
   return detail.work_request.id;
 }
@@ -168,7 +162,12 @@ export function ProductRequestRow({
   exiting = false,
   packageById,
   activeBlockerCount,
+  activeBlockerCountBySliceId,
   expanded,
+  expandedBodyVisible = expanded,
+  detachedExpandedBody,
+  focusEjected = false,
+  focusSelected,
   index,
   onSetOpen,
   onSelectGuidance,
@@ -183,7 +182,12 @@ export function ProductRequestRow({
   exiting?: boolean;
   packageById: Map<string, WorkPackageCard>;
   activeBlockerCount: number;
+  activeBlockerCountBySliceId: Map<string, number>;
   expanded: boolean;
+  expandedBodyVisible?: boolean;
+  detachedExpandedBody: boolean;
+  focusEjected?: boolean;
+  focusSelected: boolean;
   index: number;
   onSetOpen: (open: boolean) => void;
   onSelectGuidance: (item: GuidanceItem) => void;
@@ -195,8 +199,8 @@ export function ProductRequestRow({
 }) {
   const request = detail.work_request;
   const requestTitle = request.title || request.id;
-  const requestPath = [{ id: request.id, label: requestTitle }];
-  const slices = sortWorkRequestPackages(detail.work_packages ?? []);
+  const requestPath = useMemo(() => [{ id: request.id, label: requestTitle }], [request.id, requestTitle]);
+  const slices = useMemo(() => sortWorkRequestPackages(detail.work_packages ?? []), [detail.work_packages]);
   const progress = requestProgress(detail, packageById);
   const counts = productTreeCounts(detail, activeBlockerCount);
   const openQuestion = detail.clarification_questions?.find((question) => question.status === "open");
@@ -204,46 +208,67 @@ export function ProductRequestRow({
   const requestState = requestBoardState(detail, packageById, counts, progress);
   const tone = requestState.tone;
   const requestLabel = requestState.label;
-  const frontier = requestFrontier(detail, slices, packageById, frontierMode ?? requestFrontierMode(requestState.kind), requestLabel);
+  const frontier = requestFrontier(detail, slices, packageById, activeBlockerCountBySliceId, frontierMode ?? requestFrontierMode(requestState.kind), requestLabel);
   const badgeLabel = requestBadgeLabel(requestLabel, detail, packageById, now);
-  const rowStyle = {
-    animationDelay: `${index * 30}ms`,
-  } as CSSProperties;
+  const selectWorkPackage = (id: string) => {
+    const slice = slices.find((item) => item.id === id);
+    const pkg = packageById.get(slice?.work_package_id || id);
+    if (slice) onSelectCard({ kind: "slice", detail, slice, pkg });
+    else if (pkg) onSelectCard({ kind: "package", detail, pkg });
+  };
+  const rowStyle = { animationDelay: `${index * 30}ms` } as CSSProperties;
+  const rowHidden = requestRowIsHidden(exiting, focusEjected);
+  const frontierHidden = requestFrontierIsHidden(focusSelected, expanded);
   const requestFinished = requestState.kind === "done";
   const collapseRequest = useCallback(() => onSetOpen(false), [onSetOpen]);
   useAutoCollapseWhenDone(requestFinished, expanded, collapseRequest, requestFinished && autoCollapseWhenDone);
   const updateMotion = requestRowUpdateMotion(exiting, detail, updateAnimations);
-
+  const [inlineExpandedBody, detachedBodyNode] = placeExpandedRequestBody(
+    <RequestExpandedBody detail={detail} now={now} packageById={packageById} openQuestion={openQuestion} onSelectGuidance={onSelectGuidance} onSelectCard={onSelectCard} requestPath={requestPath} />,
+    expandedBodyVisible, detachedExpandedBody, requestTitle,
+  );
   return (
-    <section
-      className="v3-request-row stagger-item"
-      aria-hidden={exiting}
-      inert={exiting}
-      data-expanded={expanded ? "true" : "false"}
-      data-v3-context-path={contextPathValue(requestPath)}
-      data-tone={tone}
-      style={rowStyle}
-      {...updateMotionAttributes(updateMotion)}
-    >
-      <div className="v3-request-header v3-entity-row" data-tone={tone}>
-        <button type="button" className="v3-request-chevron-button" aria-expanded={expanded} aria-label={`${expanded ? "Collapse" : "Expand"} ${requestTitle}`} onClick={() => onSetOpen(!expanded)}>
-          <ChevronRight className={cn("size-4 transition-transform duration-200", expanded && "rotate-90")} />
-        </button>
-        <RequestInfoButton detail={detail} onSelectCard={onSelectCard} />
-        <div className="v3-request-heading">
-          <RowBadgeSlot active={requestState.kind === "active"} label={badgeLabel} variant={requestState.badgeVariant} />
-          <button type="button" className="v3-request-main" aria-expanded={expanded} onClick={() => onSetOpen(!expanded)}>
-            <RequestIdentity detail={detail} branch={branch} />
-          </button>
+    <>
+      <section
+        className="v3-request-row stagger-item"
+        aria-hidden={rowHidden}
+        inert={rowHidden}
+        data-expanded={expanded ? "true" : "false"}
+        data-focus-selected={String(focusSelected)}
+        data-request-id={request.id}
+        data-v3-context-path={contextPathValue(requestPath)}
+        data-tone={tone}
+        style={rowStyle}
+        {...updateMotionAttributes(updateMotion)}
+      >
+        <div className="v3-request-header v3-entity-row" data-tone={tone}>
+          <div className="v3-request-controls">
+            <button type="button" className="v3-request-chevron-button" aria-expanded={expanded} aria-label={`${expanded ? "Collapse" : "Expand"} ${requestTitle}`} onClick={() => onSetOpen(!expanded)}><ChevronRight className={cn("size-4 transition-transform duration-200", expanded && "rotate-90")} /></button>
+            <RequestInfoButton detail={detail} onSelectCard={onSelectCard} />
+            <RequestIdentityCopyButton detail={detail} />
+          </div>
+          <div className="v3-request-heading">
+            <RowBadgeSlot active={requestState.kind === "active"} label={badgeLabel} variant={requestState.badgeVariant} />
+            <button type="button" className="v3-request-main" aria-expanded={expanded} onClick={() => onSetOpen(!expanded)}>
+              <RequestIdentity detail={detail} branch={branch} />
+            </button>
+          </div>
+          <RequestProgressBar progress={progress} />
+          <RequestFrontier summary={frontier} onSelectWorkPackage={selectWorkPackage} hidden={frontierHidden} />
         </div>
-        <RequestProgressBar progress={progress} />
-        <RequestFrontier summary={frontier} />
-      </div>
-      {expanded ? <RequestExpandedBody detail={detail} now={now} packageById={packageById} openQuestion={openQuestion} onSelectGuidance={onSelectGuidance} onSelectCard={onSelectCard} requestPath={requestPath} /> : null}
-    </section>
+        {inlineExpandedBody}
+      </section>
+      {detachedBodyNode}
+    </>
   );
 }
-
+function requestRowIsHidden(exiting: boolean, focusEjected: boolean) { return exiting || focusEjected; }
+function requestFrontierIsHidden(focusSelected: boolean, expanded: boolean) { return focusSelected && expanded; }
+function placeExpandedRequestBody(body: ReactNode, visible: boolean, detached: boolean, title: string) {
+  if (!visible) return [null, null] as const;
+  if (!detached) return [body, null] as const;
+  return [null, <div key="expanded-request" className="focus-board__expanded-slot"><section className="focus-board__expanded-request" aria-label={`${title} execution graph`}>{body}</section></div>] as const;
+}
 function RequestIdentity({ detail, branch }: { detail: WorkRequestDetail; branch?: string }) {
   const request = detail.work_request;
   return (
@@ -290,29 +315,17 @@ function requestRowUpdateMotion(exiting: boolean, detail: WorkRequestDetail, upd
   return updateAnimations.motionFor(requestUpdateKey(detail));
 }
 
-type RequestFrontierItem = {
-  activity?: string;
-  id: string;
-  pr?: WorkRequestPackage["pr_signal"];
-  title: string;
-};
+type RequestFrontierItem = { activity?: string; id: string; pr?: WorkRequestPackage["pr_signal"]; title: string };
+type RequestFrontierGroup = { id: string; items: RequestFrontierItem[]; title?: string };
 
-type RequestFrontierGroup = {
-  id: string;
-  items: RequestFrontierItem[];
-  title?: string;
-};
+type RequestFrontierSummary = { groups: RequestFrontierGroup[]; moreLabel?: string };
 
-type RequestFrontierSummary = {
-  groups: RequestFrontierGroup[];
-  moreLabel?: string;
-};
-
-function RequestFrontier({ summary }: { summary: RequestFrontierSummary | null }) {
-  if (!summary) return <div className="v3-request-frontier" />;
+function RequestFrontier({ summary, onSelectWorkPackage, hidden }: { summary: RequestFrontierSummary | null; onSelectWorkPackage: (id: string) => void; hidden: boolean }) {
+  if (!summary) return <div className="v3-request-frontier" aria-hidden={hidden} inert={hidden} />;
 
   return (
-    <div className="v3-request-frontier">
+    <div className="v3-request-frontier" aria-hidden={hidden} inert={hidden} data-only-ungrouped={summary.groups.every((group) => !group.title) ? "true" : undefined}>
+      <div className="v3-request-frontier-content">
       {summary.groups.map((group) => (
         <div className="v3-request-frontier-group" data-grouped={group.title ? "true" : "false"} role={group.title ? "group" : undefined} aria-label={group.title} key={group.id}>
           {group.title ? (
@@ -320,21 +333,23 @@ function RequestFrontier({ summary }: { summary: RequestFrontierSummary | null }
               <span className="v3-request-frontier-group-title-label">{group.title}</span>
             </span>
           ) : null}
-          <div className="v3-request-frontier-packages" data-frontier-wire-trunk={group.title ? "true" : undefined} role="list">
+          <ul className="v3-request-frontier-packages" data-frontier-wire-trunk={group.title ? "true" : undefined}>
             {group.items.map((item, index) => (
-              <div className="v3-request-frontier-package" data-last={group.title && index === group.items.length - 1 ? "true" : undefined} role="listitem" key={item.id}>
+              <li className="v3-request-frontier-package" data-last={group.title && index === group.items.length - 1 ? "true" : undefined} key={item.id}>
                 {group.title ? <span className="v3-request-frontier-wire" data-frontier-wire="true" aria-hidden="true" /> : null}
-                <span className="v3-request-frontier-title" title={item.title}>{item.title}</span>
+                <button type="button" className="v3-request-frontier-package-action" aria-label={`Open WorkPackage details for ${item.title}`} onClick={() => onSelectWorkPackage(item.id)} />
+                <span className="v3-request-frontier-title" title={item.title}><span className="v3-request-frontier-title-copy">{item.title}</span></span>
                 <span className="v3-request-frontier-meta">
                   <PullRequestBadge signal={item.pr} layout="frontier" />
                   {item.activity ? <span className="v3-request-frontier-activity" data-frontier-measure="state" title={item.activity}>{item.activity}</span> : null}
                 </span>
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       ))}
       {summary.moreLabel ? <span className="v3-request-frontier-more">{summary.moreLabel}</span> : null}
+      </div>
     </div>
   );
 }
@@ -343,10 +358,11 @@ function requestFrontier(
   detail: WorkRequestDetail,
   slices: WorkRequestPackage[],
   packageById: Map<string, WorkPackageCard>,
+  activeBlockerCountBySliceId: Map<string, number>,
   mode: RequestFrontierMode,
   overallLabel: string,
 ): RequestFrontierSummary | null {
-  const relevant = slices.filter((slice) => frontierSliceMatches(mode, slice, packageById.get(slice.work_package_id || slice.id)));
+  const relevant = slices.filter((slice) => frontierSliceMatches(mode, slice, packageById.get(slice.work_package_id || slice.id), activeBlockerCountBySliceId));
   if (!relevant.length) return null;
 
   const visible = mode === "active" ? relevant : relevant.slice(0, 3);
@@ -404,20 +420,24 @@ function requestFrontierMode(kind: BoardRowStateKind): RequestFrontierMode {
   return "waiting";
 }
 
-function frontierSliceMatches(mode: RequestFrontierMode, slice: WorkRequestPackage, pkg?: WorkPackageCard) {
-  if (mode === "attention") return sliceNeedsAttention(slice, pkg);
+function frontierSliceMatches(mode: RequestFrontierMode, slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, activeBlockerCountBySliceId: Map<string, number>) {
+  if (mode === "attention") return sliceNeedsAttention(slice, pkg, activeBlockerCountBySliceId);
   if (mode === "active") return sliceIsRunning(slice, pkg);
   if (mode === "recent") return sliceIsFinished(slice, pkg);
   if (mode === "waiting") return sliceIsWaiting(slice, pkg);
-  return !sliceIsFinished(slice, pkg) && !sliceIsRunning(slice, pkg) && !sliceNeedsAttention(slice, pkg) && !sliceIsWaiting(slice, pkg);
+  return !sliceIsFinished(slice, pkg) && !sliceIsRunning(slice, pkg) && !sliceNeedsAttention(slice, pkg, activeBlockerCountBySliceId) && !sliceIsWaiting(slice, pkg);
 }
 
-function sliceNeedsAttention(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
+function sliceNeedsAttention(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, activeBlockerCountBySliceId: Map<string, number>) {
   const dependencyWaiting = sliceHasUnsatisfiedDependencies(slice);
   return slice.review_signal?.status === "failed"
     || slice.pr_signal?.checks?.status === "failing"
     || sliceGuidanceCount(slice, pkg) > 0
-    || (sliceBlockerCount(slice, pkg, NO_SLICE_BLOCKERS) > 0 && (!dependencyWaiting || (pkg?.active_blocker_count ?? 0) > 0));
+    || (sliceBlockerCount(slice, pkg, activeBlockerCountBySliceId) > 0 && (!dependencyWaiting || sliceHasActiveBlockerEdge(slice, pkg, activeBlockerCountBySliceId)));
+}
+
+function sliceHasActiveBlockerEdge(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, counts: Map<string, number>) {
+  return (counts.get(slice.id) ?? 0) > 0 || (pkg?.active_blocker_count ?? 0) > 0;
 }
 
 function sliceIsWaiting(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
@@ -499,7 +519,7 @@ function frontierMoreNoun(mode: RequestFrontierMode) {
 
 function sliceIsRunning(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
   if (sliceIsFinished(slice, pkg)) return false;
-  const status = slice.work_package_status || slice.status;
+  const status = sliceStatus(slice, pkg);
   return operationalStatusIsRunning(sliceOperationalState(slice, pkg), status)
     || slice.worker_signal?.status === "active"
     || slice.review_signal?.status === "in_progress"
@@ -507,22 +527,13 @@ function sliceIsRunning(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
 }
 
 function sliceIsFinished(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
-  return [slice.delivery?.outcome, slice.work_package_status, slice.status, slice.operational_state?.key, pkg?.status, pkg?.operational_state?.key]
-    .some(isFinishedBoardStatus);
-}
-
-export function visibleRequestBranch(branch?: string | null, primaryBranch?: string | null) {
-  const value = branch?.trim();
-  if (!value || ["main", "master", primaryBranch?.trim().toLowerCase()].includes(value.toLowerCase())) return undefined;
-  return value;
+  const operational = sliceOperationalState(slice, pkg);
+  const status = operational?.key || slice.work_package_status || pkg?.operational_state?.key || pkg?.status || slice.status || slice.delivery?.outcome;
+  return isFinishedBoardStatus(status);
 }
 
 function requestHasWork(detail: WorkRequestDetail) {
   return Boolean(detail.product_tree?.nodes?.length || detail.work_packages?.length);
-}
-
-export function architectStartPrompt(workRequestId: string) {
-  return `Take a look at WorkRequest ${workRequestId} using $symphony-plus-plus-mcp:symphony-architect. Check it out, bring me any questions if there are any, then let's go.`;
 }
 
 function EmptyWorkRequest({ workRequestId }: { workRequestId: string }) {
@@ -574,12 +585,12 @@ function ExecutionGraphBody({
 }) {
   const slicesById = useMemo(() => new Map((detail.work_packages ?? []).map((slice) => [slice.id, slice])), [detail.work_packages]);
   const model = useMemo(() => workRequestExecutionGraphModel(detail, { includeHistorical: true }), [detail]);
-  const selectWorkPackage = (workPackageId: string) => {
+  const selectWorkPackage = useCallback((workPackageId: string) => {
     const slice = slicesById.get(workPackageId);
     const pkg = packageById.get(slice?.work_package_id || workPackageId);
     if (slice) onSelectCard({ kind: "slice", detail, slice, pkg });
     else if (pkg) onSelectCard({ kind: "package", detail, pkg });
-  };
+  }, [detail, onSelectCard, packageById, slicesById]);
 
   return (
     <div className="v3-execution-graph">
