@@ -2578,6 +2578,10 @@
     min-width: 0;
   }
 
+  .v3-execution-graph-loading {
+    min-height: 12rem;
+  }
+
   .v3-unlinked-execution-section {
     display: grid;
     min-width: 0;

@@ -2,7 +2,7 @@ import type { ActiveBlockingEdge, GuidanceItem, WorkPackageCard, WorkRequestDeta
 import { AlertTriangle, ChevronRight, Copy, GitBranch } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { copyTextToClipboard, CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
 import { clarificationGuidanceItem } from "./dashboard-data";
 import { finishedRequestChildrenStorageKey, sortWorkRequestPackages, sortWorkRequestDetails } from "./workstream-data";
@@ -14,12 +14,12 @@ import { dashboardPrefersReducedMotion, updateMotionAttributes } from "@/compone
 import { useAutoCollapseWhenDone } from "./workstream-auto-collapse";
 import { WorkstreamContextBar } from "./workstream-context-bar";
 import { contextPathValue, type ContextPathPart } from "./workstream-context-path";
-import { workRequestExecutionGraphModel } from "./execution-graph/adapter";
 import { isFinishedBoardStatus, operationalLabel, operationalStatusIsRunning, sliceOperationalState } from "@/lib/operational-state";
-import { PullRequestBadge, WorkRequestExecutionGraph } from "./work-request-execution-graph";
+import { PullRequestBadge } from "./execution-graph/pull-request-badge";
 import { requestBadgeLabel } from "./workstream-row-age";
 import { architectStartPrompt, mergeRequestDetailsWithExiting, visibleRequestBranch } from "./workstream-utils";
 const REQUEST_EXIT_MOTION_MS = 320;
+const WorkRequestExecutionGraph = lazy(() => import("./work-request-execution-graph-loading"));
 export type RequestFrontierMode = "attention" | "active" | "next" | "recent" | "waiting";
 export function WorkstreamBoard({
   repoLabel,
@@ -583,18 +583,11 @@ function ExecutionGraphBody({
   onSelectCard: CardDetailSelect;
   requestPath: ContextPathPart[];
 }) {
-  const slicesById = useMemo(() => new Map((detail.work_packages ?? []).map((slice) => [slice.id, slice])), [detail.work_packages]);
-  const model = useMemo(() => workRequestExecutionGraphModel(detail, { includeHistorical: true }), [detail]);
-  const selectWorkPackage = useCallback((workPackageId: string) => {
-    const slice = slicesById.get(workPackageId);
-    const pkg = packageById.get(slice?.work_package_id || workPackageId);
-    if (slice) onSelectCard({ kind: "slice", detail, slice, pkg });
-    else if (pkg) onSelectCard({ kind: "package", detail, pkg });
-  }, [detail, onSelectCard, packageById, slicesById]);
-
   return (
     <div className="v3-execution-graph">
-      <WorkRequestExecutionGraph model={model} now={now} onSelectWorkPackage={selectWorkPackage} contextPath={requestPath} />
+      <Suspense fallback={<div className="v3-execution-graph-loading" role="status" aria-label="Loading execution graph" />}>
+        <WorkRequestExecutionGraph detail={detail} now={now} packageById={packageById} onSelectCard={onSelectCard} requestPath={requestPath} />
+      </Suspense>
     </div>
   );
 }
