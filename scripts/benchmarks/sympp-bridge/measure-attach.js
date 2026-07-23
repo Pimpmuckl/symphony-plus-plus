@@ -82,7 +82,7 @@ function prepareInstall(origin) {
   fs.cpSync(sourcePlugin, pluginRoot, { recursive: true });
   fs.cpSync(sourcePlugin, sourcePluginRoot, { recursive: true });
   writeJson(path.join(sourceRoot, ".codex-marketplace-install.json"), { revision });
-  writeJson(path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp", "mcp_tools_contract.json"), { mcp_contract_fingerprint: contract });
+  writeJson(path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus", "mcp_contract.json"), { mcp_contract_fingerprint: contract });
 
   const generationKey = hash(`${path.resolve(pluginRoot).toLowerCase()}\n${revision}\n${contract}`);
   const cacheName = `${hash(path.resolve(pluginRoot).toLowerCase()).slice(0, 12)}.json`;

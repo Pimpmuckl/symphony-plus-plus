@@ -73,7 +73,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionTest do
       fake_mix = fake_mix_executable(temp_codex_home)
       marketplace_root = write_minimal_marketplace_source(temp_codex_home)
       revision = commit_marketplace_source!(marketplace_root, git)
-      contract_path = Path.join(marketplace_root, "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+      contract_path = Path.join(marketplace_root, "elixir/priv/symphony_plus_plus/mcp_contract.json")
       mcp_cache_root = plugin_cache_path(temp_codex_home, ["1.0.0"], "symphony-plus-plus-mcp")
 
       try do

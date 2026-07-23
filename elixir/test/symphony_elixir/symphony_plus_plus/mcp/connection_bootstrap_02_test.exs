@@ -6,35 +6,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog
 
   @repo_root Path.expand("../../../../../", __DIR__)
-  @contract_path Path.join(@repo_root, "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+  @contract_path Path.join(@repo_root, "elixir/priv/symphony_plus_plus/mcp_contract.json")
 
-  test "published MCP contract tool sets match ToolCatalog" do
+  test "published MCP contract identity matches the runtime" do
     contract = @contract_path |> File.read!() |> Jason.decode!()
-    discovery = Map.fetch!(contract, "discovery_policy")
-    schema_sets = Map.fetch!(discovery, "unbound_schema_sets")
+    tool_sets = Map.fetch!(contract, "tool_sets")
 
+    assert Map.keys(contract) |> Enum.sort() == ["mcp_contract_fingerprint", "tool_sets", "version"]
+    assert Map.fetch!(contract, "version") == 6
     assert Map.fetch!(contract, "mcp_contract_fingerprint") == Server.mcp_contract_identity()["fingerprint"]
-    assert Map.fetch!(discovery, "unbound_tools") == ToolCatalog.contract_unbound_tools()
-    assert Map.fetch!(discovery, "trusted_local_http_extra_tools") == ToolCatalog.contract_trusted_local_http_extra_tools()
-    assert Map.fetch!(schema_sets, "worker_tools") == ToolCatalog.worker_tools()
-    assert Map.fetch!(schema_sets, "architect_tools") == ToolCatalog.architect_tools()
-    assert Map.fetch!(discovery, "bound_worker_tools") == ToolCatalog.contract_bound_worker_tools()
-    assert Map.fetch!(discovery, "bound_architect_tools") == ToolCatalog.contract_bound_architect_tools()
-
-    schema_names =
-      contract
-      |> Map.fetch!("tool_schemas")
-      |> Enum.map(&Map.fetch!(&1, "name"))
-      |> MapSet.new()
-
-    catalog_names =
-      (ToolCatalog.contract_unbound_tools() ++
-         ToolCatalog.contract_trusted_local_http_extra_tools() ++
-         ToolCatalog.worker_tools() ++
-         ToolCatalog.architect_tools())
-      |> MapSet.new()
-
-    assert MapSet.subset?(catalog_names, schema_names)
+    assert Map.fetch!(tool_sets, "unbound_tools") == ToolCatalog.contract_unbound_tools()
+    assert Map.fetch!(tool_sets, "trusted_local_http_extra_tools") == ToolCatalog.contract_trusted_local_http_extra_tools()
+    assert Map.fetch!(tool_sets, "worker_tools") == ToolCatalog.worker_tools()
+    assert Map.fetch!(tool_sets, "architect_tools") == ToolCatalog.architect_tools()
+    assert Map.fetch!(tool_sets, "shared_worker_architect_tools") == ToolCatalog.shared_worker_architect_tools()
   end
 
   test "mix task reuses an already-started repo for the exact SQLite URI" do

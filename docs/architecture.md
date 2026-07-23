@@ -50,7 +50,8 @@ cockpit, and GitHub-backed delivery workflow alongside that behavior.
 
 ## Contract Ownership
 
-`ToolCatalog` and MCP server handlers own live tool schemas and behavior. The
-repository contract file exists only to identify compatible installed runtime
-artifacts before the backend starts; it must not become a second hand-written
-schema authority.
+`ToolCatalog` and MCP server handlers own live tool schemas and behavior.
+[`mcp_contract.json`](../elixir/priv/symphony_plus_plus/mcp_contract.json)
+exports the artifact fingerprint and complete tool-name sets needed by
+non-Elixir release smoke tests. A runtime test keeps those names aligned with
+`ToolCatalog`; the file does not duplicate schemas.

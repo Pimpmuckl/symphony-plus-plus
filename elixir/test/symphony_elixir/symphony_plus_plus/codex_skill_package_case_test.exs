@@ -57,7 +57,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase do
                               )
       @wiring_path Path.join(@repo_root, ".codex/skills/symphony-work-package/references/mcp_wiring.md")
       @mcp_plugin_wiring_path Path.join(@repo_root, "plugins/symphony-plus-plus-mcp/skills/symphony-work-package/references/mcp_wiring.md")
-      @contract_path Path.join(@repo_root, "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+      @contract_path Path.join(@repo_root, "elixir/priv/symphony_plus_plus/mcp_contract.json")
 
       @worker_tools [
         "get_current_assignment",

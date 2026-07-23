@@ -150,7 +150,7 @@ function Get-DirectoryFingerprint([string]$Path) {
 }
 
 function Get-McpContractFingerprint([string]$RepoRoot) {
-  $contractPath = Join-Path $RepoRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json"
+  $contractPath = Join-Path $RepoRoot "elixir/priv/symphony_plus_plus/mcp_contract.json"
   $contract = Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json
   $fingerprint = [string]$contract.mcp_contract_fingerprint
   if ($fingerprint -notmatch '^[0-9a-fA-F]{64}$') {

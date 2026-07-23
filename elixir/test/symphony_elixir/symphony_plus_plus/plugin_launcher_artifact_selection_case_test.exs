@@ -12,7 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionCase do
       @plugin_version @plugin_manifest_path |> File.read!() |> Jason.decode!() |> Map.fetch!("version")
       @marketplace_revision String.duplicate("b", 40)
       @mcp_plugin_start_script_path Path.join(@repo_root, "plugins/symphony-plus-plus-mcp/scripts/start-sympp-mcp.ps1")
-      @contract_path Path.join(@repo_root, "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+      @contract_path Path.join(@repo_root, "elixir/priv/symphony_plus_plus/mcp_contract.json")
 
       defp write_cached_script(cache_root, source_script_path) do
         target = Path.join([cache_root, "scripts", Path.basename(source_script_path)])
@@ -70,8 +70,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionCase do
         File.mkdir_p!(Path.join(marketplace_root, "scripts"))
         File.write!(Path.join(marketplace_root, "scripts/refresh-local-plugin.ps1"), "")
         File.write!(Path.join(marketplace_root, "scripts/smoke-sympp-mcp-http.ps1"), "")
-        File.mkdir_p!(Path.join(marketplace_root, "implementation_docs_symphplusplus/mcp"))
-        File.cp!(@contract_path, Path.join(marketplace_root, "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json"))
+        File.mkdir_p!(Path.join(marketplace_root, "elixir/priv/symphony_plus_plus"))
+        File.cp!(@contract_path, Path.join(marketplace_root, "elixir/priv/symphony_plus_plus/mcp_contract.json"))
         File.mkdir_p!(Path.join(marketplace_root, "plugins/symphony-plus-plus-mcp/scripts"))
 
         File.cp!(

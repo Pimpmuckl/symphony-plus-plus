@@ -88,7 +88,7 @@ function Get-SymppStringSha256([string]$Value) {
 function Get-SymppPluginGenerationKey([string]$PluginRoot, [string]$SourcePluginRoot, [string]$SourceRoot) {
   $revision = Get-SymppMarketplaceSourceRevision $SourceRoot
   try {
-    $contractFingerprint = [string]((Get-Content -LiteralPath (Join-Path $SourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json") -Raw | ConvertFrom-Json).mcp_contract_fingerprint)
+    $contractFingerprint = [string]((Get-Content -LiteralPath (Join-Path $SourceRoot "elixir/priv/symphony_plus_plus/mcp_contract.json") -Raw | ConvertFrom-Json).mcp_contract_fingerprint)
   } catch {
     return $null
   }
@@ -188,7 +188,7 @@ function Resolve-SymppInstalledMarketplaceIdentity([string]$PluginRoot) {
     throw "installed_marketplace_identity_invalid: marketplace revision is missing. Run codex plugin marketplace upgrade."
   }
   try {
-    $contractFingerprint = [string]((Get-Content -LiteralPath (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json") -Raw | ConvertFrom-Json).mcp_contract_fingerprint)
+    $contractFingerprint = [string]((Get-Content -LiteralPath (Join-Path $sourceRoot "elixir/priv/symphony_plus_plus/mcp_contract.json") -Raw | ConvertFrom-Json).mcp_contract_fingerprint)
   } catch {
     $contractFingerprint = $null
   }

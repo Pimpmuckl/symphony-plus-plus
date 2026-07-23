@@ -65,7 +65,7 @@ function generationKey(pluginRoot, sourcePluginRoot, sourceRoot) {
   try {
     if (!fs.statSync(pluginRoot).isDirectory() || !fs.statSync(sourcePluginRoot).isDirectory()) return null;
     const install = readJson(path.join(sourceRoot, ".codex-marketplace-install.json"));
-    const contract = readJson(path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp", "mcp_tools_contract.json"));
+    const contract = readJson(path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus", "mcp_contract.json"));
     const revision = String(install && (install.revision || install.source_revision || install.sourceRevision) || "").toLowerCase();
     const fingerprint = String(contract && contract.mcp_contract_fingerprint || "").toLowerCase();
     if (!/^[0-9a-f]{40}$/.test(revision) || !/^[0-9a-f]{64}$/.test(fingerprint)) return null;
@@ -198,7 +198,7 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
     { path: pluginRoot, recursive: true },
     { path: sourcePluginRoot, recursive: true },
     { path: path.join(sourceRoot, ".codex-marketplace-install.json"), recursive: false },
-    { path: path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp", "mcp_tools_contract.json"), recursive: false },
+    { path: path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus", "mcp_contract.json"), recursive: false },
   ], markerFile);
   if (!watched) return null;
 

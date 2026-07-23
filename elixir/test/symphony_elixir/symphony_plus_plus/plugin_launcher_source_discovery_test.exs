@@ -402,11 +402,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherSourceDiscoveryTest do
     File.mkdir_p!(Path.join(marketplace_root, "scripts"))
     File.write!(Path.join(marketplace_root, "scripts/refresh-local-plugin.ps1"), "")
     File.write!(Path.join(marketplace_root, "scripts/smoke-sympp-mcp-http.ps1"), "")
-    File.mkdir_p!(Path.join(marketplace_root, "implementation_docs_symphplusplus/mcp"))
+    File.mkdir_p!(Path.join(marketplace_root, "elixir/priv/symphony_plus_plus"))
 
     File.cp!(
-      Path.join(@repo_root, "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json"),
-      Path.join(marketplace_root, "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+      Path.join(@repo_root, "elixir/priv/symphony_plus_plus/mcp_contract.json"),
+      Path.join(marketplace_root, "elixir/priv/symphony_plus_plus/mcp_contract.json")
     )
 
     File.mkdir_p!(Path.join(marketplace_root, "plugins/symphony-plus-plus-mcp/scripts"))

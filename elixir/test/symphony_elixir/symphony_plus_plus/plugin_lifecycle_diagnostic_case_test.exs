@@ -70,8 +70,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLifecycleDiagnosticCase do
         File.mkdir_p!(Path.join(marketplace_root, "scripts"))
         File.write!(Path.join(marketplace_root, "scripts/refresh-local-plugin.ps1"), "")
         File.write!(Path.join(marketplace_root, "scripts/smoke-sympp-mcp-http.ps1"), "")
-        File.mkdir_p!(Path.join(marketplace_root, "implementation_docs_symphplusplus/mcp"))
-        File.cp!(@contract_path, Path.join(marketplace_root, "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json"))
+        File.mkdir_p!(Path.join(marketplace_root, "elixir/priv/symphony_plus_plus"))
+        File.cp!(@contract_path, Path.join(marketplace_root, "elixir/priv/symphony_plus_plus/mcp_contract.json"))
         File.mkdir_p!(Path.join(marketplace_root, "plugins/symphony-plus-plus-mcp/scripts"))
 
         File.cp!(

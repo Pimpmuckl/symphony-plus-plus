@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RuntimeArtifactReleaseChannelTest do
 
   @repo_root Path.expand("../../../../", __DIR__)
   @publisher Path.join(@repo_root, "scripts/publish-sympp-runtime-artifact.ps1")
-  @contract_path Path.join(@repo_root, "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+  @contract_path Path.join(@repo_root, "elixir/priv/symphony_plus_plus/mcp_contract.json")
   @plugin_manifest_path Path.join(@repo_root, "plugins/symphony-plus-plus-mcp/.codex-plugin/plugin.json")
 
   test "publisher validates all required platforms and writes launcher-readable aggregate manifest" do

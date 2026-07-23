@@ -158,7 +158,7 @@ print(hashlib.sha256(payload).hexdigest())
 PY
 )"
 
-mcp_contract_fingerprint="$("$python_bin" - "$repo_root/implementation_docs_symphplusplus/mcp/mcp_tools_contract.json" <<'PY'
+mcp_contract_fingerprint="$("$python_bin" - "$repo_root/elixir/priv/symphony_plus_plus/mcp_contract.json" <<'PY'
 import json
 import re
 import sys

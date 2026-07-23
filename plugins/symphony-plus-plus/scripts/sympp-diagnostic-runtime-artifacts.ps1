@@ -467,7 +467,7 @@ function Get-DiagnosticExpectedMcpContractFingerprint([string]$Root) {
       throw "SYMPP_REPO_ROOT does not look like a Symphony++ checkout: $explicitRepoRoot"
     }
 
-    $contractPath = Join-Path $explicitRepoRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json"
+    $contractPath = Join-Path $explicitRepoRoot "elixir/priv/symphony_plus_plus/mcp_contract.json"
     $fingerprint = Get-DiagnosticMcpContractFingerprintFromContractFile $contractPath
     if ($fingerprint) {
       return $fingerprint
@@ -483,7 +483,7 @@ function Get-DiagnosticExpectedMcpContractFingerprint([string]$Root) {
   }
 
   foreach ($candidateRoot in @($candidateRoots | Select-Object -Unique)) {
-    $fingerprint = Get-DiagnosticMcpContractFingerprintFromContractFile (Join-Path $candidateRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+    $fingerprint = Get-DiagnosticMcpContractFingerprintFromContractFile (Join-Path $candidateRoot "elixir/priv/symphony_plus_plus/mcp_contract.json")
     if ($fingerprint) {
       return $fingerprint
     }
@@ -491,7 +491,7 @@ function Get-DiagnosticExpectedMcpContractFingerprint([string]$Root) {
 
   $sourceRoot = Resolve-DiagnosticRuntimeArtifactSourceRoot $Root $null
   if ($sourceRoot) {
-    $fingerprint = Get-DiagnosticMcpContractFingerprintFromContractFile (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+    $fingerprint = Get-DiagnosticMcpContractFingerprintFromContractFile (Join-Path $sourceRoot "elixir/priv/symphony_plus_plus/mcp_contract.json")
     if ($fingerprint) {
       return $fingerprint
     }

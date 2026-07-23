@@ -3,45 +3,20 @@ Code.require_file("codex_skill_package_case_test.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshContractTest do
   use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
-  test "MCP contract lists the current worker tools" do
-    contract =
-      @contract_path
-      |> File.read!()
-      |> Jason.decode!()
-
-    actual_tools = get_in(contract, ["discovery_policy", "unbound_schema_sets", "worker_tools"])
-    bound_worker_tools = get_in(contract, ["discovery_policy", "bound_worker_tools"]) -- ["sympp.health", "release_current_assignment"]
-
-    assert actual_tools == @worker_tools
-    assert bound_worker_tools == @worker_tools
-    refute "request_context" in actual_tools
+  test "ToolCatalog lists the current worker tools" do
+    assert ToolCatalog.worker_tools() == @worker_tools
+    assert ToolCatalog.contract_bound_worker_tools() -- ["sympp.health", "release_current_assignment"] == @worker_tools
+    refute "request_context" in ToolCatalog.worker_tools()
   end
 
-  test "MCP contract and worker prompts align on ledger local claim inputs" do
-    contract =
-      @contract_path
-      |> File.read!()
-      |> Jason.decode!()
+  test "runtime claim schema and worker prompt align on ledger local claim inputs" do
+    claim_schema = ToolCatalog.worker_tool_input_schema("claim_local_assignment")
 
-    worker_claim = get_in(contract, ["claim_policy", "worker_claim"])
-    tool_schemas = Map.new(contract["tool_schemas"], &{&1["name"], &1})
-    claim_tool = Map.fetch!(tool_schemas, "claim_local_assignment")
-
-    assert worker_claim["tool"] == "claim_local_assignment"
-    assert worker_claim["required_arguments"] == ["work_package_id"]
-
-    assert worker_claim["optional_arguments"] == ["claimed_by"]
-
-    assert claim_tool["required_arguments"] == [
-             "work_package_id"
-           ]
-
-    assert claim_tool["optional_arguments"] == ["claimed_by"]
-
-    assert get_in(contract, ["claim_policy", "reclaim_policy"]) =~ "Stale leases may be reclaimed"
-    assert get_in(contract, ["claim_policy", "secret_policy"]) =~ "do not require raw grant secrets"
+    assert claim_schema["required"] == ["work_package_id"]
+    assert Map.keys(claim_schema["properties"]) |> Enum.sort() == ["claimed_by", "work_package_id"]
 
     prompt = File.read!(@mcp_plugin_prompt_path)
 
@@ -56,28 +31,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshContractTest d
     refute prompt =~ "claimed_by: <stable-worker-identity>"
   end
 
-  test "MCP contract enum constraints mirror runtime values" do
-    contract =
-      @contract_path
-      |> File.read!()
-      |> Jason.decode!()
+  test "runtime tool schemas use model enum values" do
+    decision_schema = ToolCatalog.architect_tool_input_schema("record_decision")
+    work_package_schema = ToolCatalog.architect_tool_input_schema("slice_work_request")
 
-    tool_schemas = Map.new(contract["tool_schemas"], &{&1["name"], &1})
-
-    assert get_in(tool_schemas, ["record_decision", "argument_constraints", "source_type"]) ==
+    assert get_in(decision_schema, ["properties", "source_type", "enum"]) ==
              DecisionLogEntry.source_types()
 
-    assert get_in(tool_schemas, ["slice_work_request", "argument_constraints", "work_packages", "kind"]) ==
+    assert get_in(work_package_schema, ["properties", "work_packages", "items", "properties", "kind", "enum"]) ==
              WorkPackage.executable_kinds()
 
-    work_package_tool = Map.fetch!(tool_schemas, "slice_work_request")
+    assert work_package_schema["required"] == ["work_packages"]
 
-    assert work_package_tool["required_arguments"] == ["work_packages", "work_request_id"]
-    assert work_package_tool["optional_arguments"] == []
-    assert work_package_tool["current_work_request_required_arguments"] == ["work_packages"]
-    assert work_package_tool["current_work_request_optional_arguments"] == ["work_request_id"]
-
-    assert get_in(work_package_tool, ["argument_constraints", "work_packages", "required"]) == [
+    assert get_in(work_package_schema, ["properties", "work_packages", "items", "required"]) == [
              "title",
              "goal",
              "allowed_file_globs",
