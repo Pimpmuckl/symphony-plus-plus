@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
@@ -291,6 +292,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
        progress_events: progress_events,
        activity_contexts: activity_contexts,
        metadata_contexts: preloaded_metadata_contexts,
+       review_observations: ReviewObservation.cached(Map.values(work_packages)),
        hidden_work_package_ids: hidden_work_package_ids
      }}
   rescue
@@ -563,7 +565,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           review: review_summary(metadata),
           worker_signal: Map.get(activity, :worker_signal),
           pr_signal: Signals.pr(metadata),
-          review_signal: Signals.review(work_package, metadata),
+          review_signal: Signals.review(work_package, metadata, Map.get(context.review_observations, work_package.id)),
           dependency_signal: Signals.dependency(work_package, context),
           blocker_state: Map.fetch!(activity, :blocker_state),
           runtime_state: Map.fetch!(activity, :runtime_state)

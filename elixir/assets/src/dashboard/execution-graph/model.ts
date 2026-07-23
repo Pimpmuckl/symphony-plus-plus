@@ -86,6 +86,7 @@ export type ExecutionGraphWorkPackageSignals = {
     total?: number | null;
     step?: string | null;
     evidence_id?: string | null;
+    reviewed_head?: string | null;
   } | null;
   dependency_signal?: {
     satisfied: number;

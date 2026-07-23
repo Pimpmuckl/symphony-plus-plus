@@ -7,6 +7,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service, as: SoloSessionService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
@@ -332,6 +333,15 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       |> Enum.map(&Map.get(&1, :id))
       |> Enum.reject(&is_nil/1)
 
+    work_packages =
+      Enum.flat_map(work_request_ids, fn work_request_id ->
+        case WorkRequestRepository.list_work_packages(repo, work_request_id) do
+          {:ok, packages} -> packages
+          _unavailable -> []
+        end
+      end)
+
+    _ = ReviewObservation.observe(work_packages)
     Dashboard.work_request_board_details(repo, work_request_ids, repo_identity_catalog: repo_identity_catalog)
   end
 
