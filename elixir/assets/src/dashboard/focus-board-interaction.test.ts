@@ -33,6 +33,10 @@ describe("focus board interactions", () => {
     const deferredReady = new Promise<void>((resolve) => {
       releaseDeferred = resolve;
     });
+    let markDeferredRequested!: () => void;
+    const deferredRequested = new Promise<void>((resolve) => {
+      markDeferredRequested = resolve;
+    });
     const requests: string[] = [];
 
     await page.route("**/api/v1/sympp/operator/config*", (route) =>
@@ -45,6 +49,7 @@ describe("focus board interactions", () => {
     });
     await page.route("**/api/v1/sympp/operator/dashboard/deferred", async (route) => {
       requests.push("deferred");
+      markDeferredRequested();
       await deferredReady;
       await route.fulfill({ json: deferredDashboard });
     });
@@ -52,6 +57,7 @@ describe("focus board interactions", () => {
     await page.goto(url);
     const board = page.locator(".focus-board");
     await board.getByText("Interaction request", { exact: true }).waitFor({ state: "attached" });
+    await deferredRequested;
     expect(requests).toEqual(["priority", "deferred"]);
 
     releaseDeferred();
