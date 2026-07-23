@@ -60,18 +60,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservation do
   end
 
   @doc false
-  @spec release_refresh(pid(), atom() | reference()) :: :ok
+  @spec release_refresh(pid(), atom() | :ets.tid()) :: :ok
   def release_refresh(owner, table \\ @cache_table) when is_pid(owner) do
-    case table_id(table) do
-      :undefined -> :ok
-      table_id -> :ets.delete_object(table_id, {:refreshing, owner})
+    if table_exists?(table) do
+      :ets.delete_object(table, {:refreshing, owner})
     end
 
     :ok
   end
 
-  defp table_id(table) when is_atom(table), do: :ets.whereis(table)
-  defp table_id(table) when is_reference(table), do: table
+  defp table_exists?(table) when is_atom(table), do: :ets.whereis(table) != :undefined
+  defp table_exists?(_table), do: true
 
   defp observe_worktree({worktree, packages}, script, config) do
     %{table: table, now_ms: now_ms, ttl_ms: ttl_ms, runner: runner, find_executable: find_executable} = config
@@ -136,7 +135,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservation do
   end
 
   defp status(script, worktree, runner, find_executable) do
-    with python when is_binary(python) <- find_executable.("python"),
+    with python when is_binary(python) <- find_executable.("python3") || find_executable.("python"),
          {:ok, output} <-
            runner.(python, [script, "--status", "--json", "--cd", worktree], @timeout_ms, @max_output_bytes),
          {:ok, payload} when is_map(payload) <- Jason.decode(output),
@@ -144,9 +143,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservation do
       {:ok,
        %{
          evidence_id: review,
-         status: observed_status(map_value(payload, "status")),
-         reviewed_head: bounded_string(map_value(payload, "reviewed_head")),
-         step: bounded_string(map_value(payload, "next_action"))
+         status: observed_status(payload),
+         reviewed_head: bounded_string(map_value(payload, "reviewed_head") || map_value(payload, "head")),
+         step: bounded_string(map_value(payload, "current") || progress_step(map_value(payload, "progress")))
        }
        |> Map.merge(progress(map_value(payload, "progress")))
        |> reject_nil_values()}
@@ -155,15 +154,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservation do
     end
   end
 
-  defp observed_status(status) when status in ["done"], do: "passed"
-  defp observed_status(status) when status in ["stale", "fix-pending"], do: "failed"
-  defp observed_status(_status), do: "in_progress"
+  defp observed_status(payload) do
+    case {map_value(payload, "done"), map_value(payload, "status")} do
+      {_done, status} when status in ["stale", "fix-pending", "failed", "invalidated", "head_changed_after_review"] -> "failed"
+      {_done, "done"} -> "passed"
+      {true, _status} -> "passed"
+      _active -> "in_progress"
+    end
+  end
+
+  defp progress_step(value) when is_binary(value) do
+    case Regex.run(~r/^review\s+\d+\/\d+\s+(.+)$/, value) do
+      [_, step] -> step
+      _invalid -> nil
+    end
+  end
+
+  defp progress_step(_value), do: nil
 
   defp progress(value) when is_binary(value) do
-    case Regex.run(~r/(?:review\s+)?(\d+)\/(\d+)(?:\s+(.+))?/, value) do
-      [_, current, total, step] ->
-        %{current: String.to_integer(current), total: String.to_integer(total), step: bounded_string(step)}
-
+    case Regex.run(~r/(?:review\s+)?(\d+)\/(\d+)/, value) do
       [_, current, total] ->
         %{current: String.to_integer(current), total: String.to_integer(total)}
 

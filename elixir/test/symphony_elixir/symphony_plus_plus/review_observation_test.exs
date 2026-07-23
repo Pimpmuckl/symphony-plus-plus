@@ -20,10 +20,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservationTest do
           {:ok,
            Jason.encode!(%{
              "review" => "rvw_observed",
-             "status" => "reviewing",
-             "progress" => "review 2/4 correctness",
+             "done" => false,
+             "review_ladder" => "pending",
              "next_action" => "continue",
-             "reviewed_head" => "abc123"
+             "progress" => "review 2/4 correctness",
+             "status" => "running",
+             "head" => "abc123"
            })}
       end
     end
@@ -43,6 +45,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservationTest do
 
     assert ReviewObservation.observe([package], opts) != %{}
     assert length(Agent.get(calls, & &1)) == 2
+  end
+
+  test "explicit provider failure outranks a done flag", %{test: test} do
+    %{plugin: plugin, package: package} = fixture(test)
+    package_id = package.id
+
+    runner = fn
+      _, ["plugin", "list", "--json"], _, _ ->
+        {:ok, plugin_json(plugin)}
+
+      _, [_script, "--status", "--json", "--cd", _worktree], _, _ ->
+        {:ok, Jason.encode!(%{"review" => "rvw_stale", "done" => true, "status" => "stale"})}
+    end
+
+    assert %{^package_id => %{status: "failed"}} = ReviewObservation.observe([package], test_opts(runner))
   end
 
   test "only live review-suite packages with existing worktrees are observed", %{test: test} do

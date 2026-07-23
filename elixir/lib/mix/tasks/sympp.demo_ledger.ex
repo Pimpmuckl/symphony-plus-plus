@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   @moduledoc """
   Creates a deterministic local Symphony++ operator demo ledger.
 
-      mix sympp.demo_ledger --database <sqlite-path> [--force]
+      mix sympp.demo_ledger --database <sqlite-path> [--scenario <name>] [--force]
   """
 
   use Mix.Task
@@ -20,12 +20,15 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository, as: ProductTreeRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloRepository
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
@@ -36,10 +39,12 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   @demo_repo "nextide/demo-operator"
   @demo_base_branch "main"
   @demo_now ~U[2026-01-02 03:04:05.000000Z]
+  @scenarios ~w(simple multi-repo superseded large)
   @switches [
     database: :string,
     force: :boolean,
-    help: :boolean
+    help: :boolean,
+    scenario: :string
   ]
 
   @impl Mix.Task
@@ -59,9 +64,10 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   @spec usage() :: String.t()
   def usage do
     [
-      "Usage: mix sympp.demo_ledger --database <sqlite-path> [--force]",
+      "Usage: mix sympp.demo_ledger --database <sqlite-path> [--scenario <name>] [--force]",
       "",
       "Creates a deterministic, synthetic local operator ledger for cockpit visual QA.",
+      "Scenarios: #{Enum.join(@scenarios, ", ")}. Defaults to simple.",
       "Fails when the database already exists unless --force is provided."
     ]
     |> Enum.join("\n")
@@ -93,17 +99,21 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       has_blank_option?(opts, [:database]) ->
         {:error, usage()}
 
+      Keyword.get(opts, :scenario, "simple") not in @scenarios ->
+        {:error, usage()}
+
       true ->
-        {:ok, Keyword.put_new(opts, :force, false)}
+        {:ok, opts |> Keyword.put_new(:force, false) |> Keyword.put_new(:scenario, "simple")}
     end
   end
 
   defp run_demo_ledger(opts) do
     database = resolved_database(Keyword.fetch!(opts, :database))
     force? = Keyword.get(opts, :force, false)
+    scenario = Keyword.fetch!(opts, :scenario)
 
     with :ok <- prepare_database(database, force?),
-         {:ok, payload} <- seed_database(database) do
+         {:ok, payload} <- seed_database(database, scenario) do
       payload
       |> Jason.encode!(pretty: true)
       |> Mix.shell().info()
@@ -172,14 +182,14 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
     end
   end
 
-  defp seed_database(database) do
+  defp seed_database(database, scenario) do
     original_repo = Repo.get_dynamic_repo()
 
     case start_repo(database) do
       {:ok, repo_pid} ->
         try do
           case migrate_repositories() do
-            :ok -> seed_demo_records(database)
+            :ok -> seed_demo_records(database, scenario)
             {:error, reason} -> {:error, reason}
           end
         after
@@ -200,7 +210,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
     end
   end
 
-  defp seed_demo_records(database) do
+  defp seed_demo_records(database, scenario) do
     Repo.transaction(fn ->
       with {:ok, work_requests} <- seed_work_requests(),
            {:ok, work_packages} <- seed_work_packages(),
@@ -208,15 +218,17 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
            {:ok, comments} <- seed_comments(),
            {:ok, _evidence} <- seed_work_package_evidence(),
            {:ok, solo_sessions} <- seed_solo_sessions(),
+           {:ok, scenario_records} <- seed_scenario(scenario),
            {_, nil} <- normalize_demo_timestamps() do
         %{
           "database" => database,
           "cockpit_hint" => "mix sympp.cockpit --database #{quote_cli_arg(database)}",
           "cockpit_path" => @board_path,
+          "scenario" => scenario,
           "seed" => %{
-            "work_requests" => Enum.map(work_requests, & &1.id),
+            "work_requests" => Enum.map(work_requests, & &1.id) ++ scenario_records.work_request_ids,
             "guidance_requests" => Enum.map(guidance_requests, & &1.id),
-            "work_packages" => Enum.map(work_packages, & &1.id),
+            "work_packages" => Enum.map(work_packages, & &1.id) ++ scenario_records.work_package_ids,
             "comments" => Enum.map(comments, & &1.id),
             "solo_sessions" => Enum.map(solo_sessions, & &1.id)
           }
@@ -226,6 +238,141 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       end
     end)
   end
+
+  defp seed_scenario("simple"), do: {:ok, %{work_request_ids: [], work_package_ids: []}}
+
+  defp seed_scenario(scenario) do
+    with {:ok, work_requests} <-
+           scenario |> scenario_work_request_specs() |> insert_all(&create_scenario_work_request/1),
+         {:ok, work_packages} <-
+           scenario |> scenario_work_package_specs() |> insert_all(&create_scenario_work_package/1),
+         {:ok, _edges} <- scenario |> scenario_dependency_specs() |> insert_all(&create_scenario_dependency/1),
+         {:ok, _deliveries} <- scenario |> scenario_delivery_specs() |> insert_all(&create_scenario_delivery/1) do
+      {:ok, %{work_request_ids: Enum.map(work_requests, & &1.id), work_package_ids: Enum.map(work_packages, & &1.id)}}
+    end
+  end
+
+  defp scenario_work_request_specs("multi-repo") do
+    repos = ~w(nextide/demo-contracts nextide/demo-api nextide/demo-web nextide/demo-worker)
+    [{"SYMPP-DEMO-WR-MULTI", "Fan out one release across repositories", hd(repos), repos}]
+  end
+
+  defp scenario_work_request_specs("superseded"),
+    do: [{"SYMPP-DEMO-WR-SUPERSEDED", "Recut superseded and skipped work", @demo_repo}]
+
+  defp scenario_work_request_specs("large"),
+    do: [{"SYMPP-DEMO-WR-LARGE", "Render a large execution graph", @demo_repo}]
+
+  defp scenario_work_package_specs("multi-repo") do
+    [
+      {"SYMPP-DEMO-WP-MULTI-CONTRACT", "SYMPP-DEMO-WR-MULTI", 1, "Publish shared contract", "merged", "nextide/demo-contracts"},
+      {"SYMPP-DEMO-WP-MULTI-API", "SYMPP-DEMO-WR-MULTI", 2, "Adopt contract in API", "ready_for_worker", "nextide/demo-api"},
+      {"SYMPP-DEMO-WP-MULTI-WEB", "SYMPP-DEMO-WR-MULTI", 3, "Adopt contract in web", "implementing", "nextide/demo-web"},
+      {"SYMPP-DEMO-WP-MULTI-WORKER", "SYMPP-DEMO-WR-MULTI", 4, "Adopt contract in worker", "planning", "nextide/demo-worker"}
+    ]
+  end
+
+  defp scenario_work_package_specs("superseded") do
+    [
+      {"SYMPP-DEMO-WP-OLD", "SYMPP-DEMO-WR-SUPERSEDED", 1, "Original broad package", "closed", @demo_repo},
+      {"SYMPP-DEMO-WP-REPLACEMENT", "SYMPP-DEMO-WR-SUPERSEDED", 2, "Narrow replacement package", "ready_for_worker", @demo_repo},
+      {"SYMPP-DEMO-WP-DEFERRED-SKIP", "SYMPP-DEMO-WR-SUPERSEDED", 3, "Skipped speculative follow-up", "skipped", @demo_repo}
+    ]
+  end
+
+  defp scenario_work_package_specs("large") do
+    for index <- 1..30 do
+      id = large_package_id(index)
+      status = Enum.at(["merged", "implementing", "ready_for_worker", "planning"], rem(index - 1, 4))
+      {id, "SYMPP-DEMO-WR-LARGE", index, "Execution graph package #{index}", status, @demo_repo}
+    end
+  end
+
+  defp scenario_dependency_specs("multi-repo") do
+    for suffix <- ~w(API WEB WORKER) do
+      {"SYMPP-DEMO-WR-MULTI", "SYMPP-DEMO-WP-MULTI-#{suffix}", "SYMPP-DEMO-WP-MULTI-CONTRACT"}
+    end
+  end
+
+  defp scenario_dependency_specs("superseded") do
+    [{"SYMPP-DEMO-WR-SUPERSEDED", "SYMPP-DEMO-WP-REPLACEMENT", "SYMPP-DEMO-WP-OLD", "recut_from"}]
+  end
+
+  defp scenario_dependency_specs("large") do
+    chain = for index <- 2..30, do: {"SYMPP-DEMO-WR-LARGE", large_package_id(index), large_package_id(index - 1)}
+    joins = for index <- 6..30//3, do: {"SYMPP-DEMO-WR-LARGE", large_package_id(index), large_package_id(index - 4)}
+    chain ++ joins
+  end
+
+  defp scenario_delivery_specs("superseded") do
+    [{"SYMPP-DEMO-WR-SUPERSEDED", "SYMPP-DEMO-WP-OLD", "SYMPP-DEMO-WP-REPLACEMENT"}]
+  end
+
+  defp scenario_delivery_specs(_scenario), do: []
+
+  defp create_scenario_work_request({id, title, repo}) do
+    create_scenario_work_request({id, title, repo, [repo]})
+  end
+
+  defp create_scenario_work_request({id, title, repo, repos}) do
+    id
+    |> work_request_attrs(title, "sliced", "feature", "architect_led_feature_branch")
+    |> Map.put(:repo, repo)
+    |> Map.put(:repo_scopes, Enum.map(repos, &%{repo: &1, base_branch: @demo_base_branch}))
+    |> then(&WorkRequestRepository.create(Repo, &1))
+  end
+
+  defp create_scenario_work_package({id, work_request_id, sequence, title, status, repo}) do
+    WorkPackageRepository.create(Repo, %{
+      id: id,
+      work_request_id: work_request_id,
+      sequence: sequence,
+      kind: "standard_pr",
+      title: title,
+      goal: "#{title}. Synthetic WorkPackage for demo ledger visual QA.",
+      repo: repo,
+      base_branch: @demo_base_branch,
+      branch_pattern: "feat/#{String.downcase(id)}/demo",
+      product_description: work_request_description(title),
+      engineering_scope: "Exercise scenario rendering with deterministic non-secret data.",
+      allowed_file_globs: ["demo/**"],
+      review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "fast"}},
+      acceptance_criteria: acceptance_criteria(title),
+      status: status,
+      dispatched_at: if(status in ["planned", "skipped"], do: nil, else: @demo_now),
+      owner_id: "local-demo-worker"
+    })
+  end
+
+  defp create_scenario_dependency({work_request_id, dependent_id, prerequisite_id}),
+    do: create_scenario_dependency({work_request_id, dependent_id, prerequisite_id, "depends_on"})
+
+  defp create_scenario_dependency({work_request_id, dependent_id, prerequisite_id, kind}) do
+    ProductTreeRepository.create_dependency_edge(Repo, %{
+      id: "SYMPP-DEMO-EDGE-#{dependent_id}-#{prerequisite_id}",
+      work_request_id: work_request_id,
+      source_kind: "work_package",
+      source_id: dependent_id,
+      target_kind: "work_package",
+      target_id: prerequisite_id,
+      kind: kind,
+      reason: "Synthetic #{kind} relationship for repeatable visual QA.",
+      created_by: "demo-operator",
+      created_at: @demo_now
+    })
+  end
+
+  defp create_scenario_delivery({work_request_id, work_package_id, successor_id}) do
+    WorkRequestRepository.record_work_package_delivery(Repo, work_request_id, work_package_id, %{
+      outcome: "superseded",
+      idempotency_key: "demo-superseded-delivery",
+      recorded_by: "demo-operator",
+      successor_work_package_id: successor_id,
+      superseded_reason: "Synthetic broad package was recut into a narrower successor."
+    })
+  end
+
+  defp large_package_id(index), do: "SYMPP-DEMO-WP-LARGE-#{String.pad_leading(to_string(index), 2, "0")}"
 
   defp seed_work_requests do
     [
@@ -747,7 +894,12 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       fn schema -> Repo.update_all(schema, set: [inserted_at: @demo_now, updated_at: @demo_now]) end
     )
 
-    Enum.each([PlanNode, ProgressEvent, Finding, Artifact], &normalize_ordered_timestamps/1)
+    Enum.each([PlanNode, ProgressEvent, Finding, Artifact, DependencyEdge], &normalize_ordered_timestamps/1)
+
+    Repo.update_all(
+      WorkPackageDelivery,
+      set: [recorded_at: @demo_now, inserted_at: @demo_now, updated_at: @demo_now]
+    )
 
     Repo.update_all(SoloSessionEntry, set: [created_at: @demo_now, updated_at: @demo_now])
 
