@@ -82,10 +82,20 @@ describe("focus board interactions", () => {
     await waitForCollapsed(page);
 
     await page.emulateMedia({ reducedMotion: "reduce" });
-    const startedAt = Date.now();
+    await board.evaluate((element) => {
+      const phases: string[] = [];
+      new MutationObserver(() => phases.push(element.getAttribute("data-focus-phase") ?? "collapsed"))
+        .observe(element, { attributeFilter: ["data-focus-phase"] });
+      Object.assign(element, { testFocusPhases: phases });
+    });
     await expand.click();
     await waitForPhase(page, "focused");
-    expect(Date.now() - startedAt).toBeLessThan(500);
+    const reducedMotionPhases = await board.evaluate((element) =>
+      (element as HTMLElement & { testFocusPhases: string[] }).testFocusPhases,
+    );
+    expect(reducedMotionPhases).not.toContain("spacing");
+    expect(reducedMotionPhases).not.toContain("grouping");
+    expect(reducedMotionPhases).not.toContain("expanding");
     await page.keyboard.press("Escape");
     await waitForCollapsed(page);
 
