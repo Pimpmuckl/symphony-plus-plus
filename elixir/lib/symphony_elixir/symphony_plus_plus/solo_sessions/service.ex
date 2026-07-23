@@ -70,17 +70,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service do
   @spec archive_stale(Repository.repo(), DateTime.t()) :: {:ok, non_neg_integer()} | {:error, error()}
   def archive_stale(repo, now), do: Repository.archive_stale(repo, now)
 
-  @spec archive_stale(Repository.repo(), DateTime.t(), pos_integer()) :: {:ok, non_neg_integer()} | {:error, error()}
-  def archive_stale(repo, now, stale_after_days), do: Repository.archive_stale(repo, now, stale_after_days)
-
   @spec delete_archived(Repository.repo()) :: {:ok, non_neg_integer()} | {:error, error()}
   def delete_archived(repo), do: Repository.delete_archived(repo)
 
   @spec delete_archived(Repository.repo(), DateTime.t()) :: {:ok, non_neg_integer()} | {:error, error()}
   def delete_archived(repo, now), do: Repository.delete_archived(repo, now)
 
-  @spec delete_archived(Repository.repo(), DateTime.t(), pos_integer()) :: {:ok, non_neg_integer()} | {:error, error()}
-  def delete_archived(repo, now, delete_after_days), do: Repository.delete_archived(repo, now, delete_after_days)
+  @spec retention_pass(Repository.repo(), DateTime.t()) ::
+          {:ok, %{archived: non_neg_integer(), deleted: non_neg_integer()}} | {:error, error()}
+  def retention_pass(repo, now) do
+    with {:ok, archived} <- archive_stale(repo, now),
+         {:ok, deleted} <- delete_archived(repo, now) do
+      {:ok, %{archived: archived, deleted: deleted}}
+    end
+  end
 
   @spec append_entry(Repository.repo(), String.t(), map()) :: {:ok, SoloSessionEntry.t()} | {:error, error()}
   def append_entry(repo, solo_session_id, attrs), do: Repository.append_entry(repo, solo_session_id, attrs)
