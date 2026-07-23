@@ -29,9 +29,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints do
   @docs_path_roots MapSet.new([
                      "doc",
                      "docs",
-                     "documentation",
-                     "implementation_docs",
-                     "implementation_docs_symphplusplus"
+                     "documentation"
                    ])
   @docs_extensions [".adoc", ".md", ".mdx", ".rst", ".txt"]
 

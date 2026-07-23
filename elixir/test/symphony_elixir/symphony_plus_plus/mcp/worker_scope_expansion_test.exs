@@ -5,13 +5,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerScopeExpansionTest do
 
   test "scope guard uses current-head changed-file paths from sync_pr when a later sync omits file paths", %{repo: repo} do
     changed_paths = [
-      "implementation_docs_symphplusplus/README.md",
-      "implementation_docs_symphplusplus/docs/01_IMPLEMENTATION_GUIDE.md",
-      "implementation_docs_symphplusplus/docs/02_SYSTEM_SPEC.md",
-      "implementation_docs_symphplusplus/docs/07_DASHBOARD_SPEC.md",
-      "implementation_docs_symphplusplus/docs/09_OPERATIONAL_RUNBOOK.md",
-      "implementation_docs_symphplusplus/docs/12_OPERATOR_TRAINING.md",
-      "implementation_docs_symphplusplus/docs/13_WORKREQUEST_CONTRACT.md"
+      "docs/README.md",
+      "docs/concepts.md",
+      "docs/operations.md",
+      "docs/architecture.md",
+      "docs/security.md",
+      "docs/development.md",
+      "docs/runtime.md"
     ]
 
     assert {:ok, package} =

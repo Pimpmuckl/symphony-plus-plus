@@ -247,7 +247,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       work_type: work_type,
       human_description: work_request_description(title),
       constraints: %{
-        "allowed_paths" => ["elixir/lib/**", "implementation_docs_symphplusplus/**"],
+        "allowed_paths" => ["elixir/lib/**", "docs/**"],
         "forbidden_paths" => [".env", "secrets/**"],
         "compatibility_stance" => "Clarify before assuming backward compatibility.",
         "synthetic_demo" => true
@@ -393,7 +393,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
 
   defp branch_pattern(id), do: "feat/#{String.downcase(id)}/demo"
 
-  defp allowed_file_globs(_id), do: ["elixir/lib/**", "implementation_docs_symphplusplus/**"]
+  defp allowed_file_globs(_id), do: ["elixir/lib/**", "docs/**"]
 
   defp acceptance_criteria(title), do: ["Cockpit displays #{title}.", "Evidence remains synthetic and redacted."]
 
@@ -537,7 +537,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
             }}
          ],
          findings: [{"API bridge path remains local-only", "info"}],
-         artifacts: [{"Planning note", "implementation_docs_symphplusplus/runbooks/LOCAL_OPERATOR_GOLDEN_PATH.md"}]
+         artifacts: [{"Planning note", "docs/operations.md"}]
        }},
       {"SYMPP-DEMO-WP-REVIEW",
        %{
@@ -556,13 +556,13 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
               "source_tool" => "submit_review_package",
               "summary" => "Synthetic demo review package.",
               "tests" => ["mix test test/mix/tasks/sympp_demo_ledger_test.exs"],
-              "artifacts" => ["implementation_docs_symphplusplus/runbooks/LOCAL_OPERATOR_GOLDEN_PATH.md"],
+              "artifacts" => ["docs/operations.md"],
               "head_sha" => "2222222222222222222222222222222222222222",
               "acceptance_criteria_met" => true
             }}
          ],
          findings: [{"Copy needs operator confirmation", "medium"}],
-         artifacts: [{"Review notes", "implementation_docs_symphplusplus/runbooks/LOCAL_OPERATOR_GOLDEN_PATH.md"}]
+         artifacts: [{"Review notes", "docs/operations.md"}]
        }},
       {"SYMPP-DEMO-WP-CI",
        %{
@@ -594,7 +594,7 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
          plan: [{"Required review complete", "done"}, {"Architect merge gate", "pending"}],
          progress: [{"Ready for architect merge", "ready_for_architect_merge", %{"review_complete" => true}}],
          findings: [{"Architect signoff is the remaining gate", "info"}],
-         artifacts: [{"Merge checklist", "implementation_docs_symphplusplus/templates/WORKFLOW.symfony_pp.md"}]
+         artifacts: [{"Merge checklist", "docs/runbooks/delivery-recovery.md"}]
        }},
       {"SYMPP-DEMO-WP-BLOCKED",
        %{

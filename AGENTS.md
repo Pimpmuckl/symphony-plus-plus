@@ -7,22 +7,20 @@
 - Use PR titles in the form `[SYMPP-...] <title>`.
 - Fill `.github/pull_request_template.md` concretely, including acceptance evidence, tests run, and any blocked validation.
 - Do not implement dependent packages or adjacent cleanup unless the architecture agent explicitly expands scope.
-- In the V3 product-tree cockpit, a WorkPackage is an execution/audit record,
-  not the product-facing logical unit. Product truth starts at the WorkRequest,
-  may include optional nested product plan nodes, and reaches workers through
-  planned slices.
+- A WorkRequest is the product-facing unit. Optional Groups organize larger
+  plans, while canonical WorkPackages carry bounded worker execution and audit
+  evidence from planning through delivery.
 
-## Planning Assets
+## Documentation And Planning Assets
 
-- Treat `implementation_docs_symphplusplus/` as the stable operator and
-  product-contract location.
-- Use the current WorkRequest/product-tree docs as product-facing planning
-  truth. Use the WorkPackage ledger, MCP resources, and package-specific
-  assignment text as the source of truth for worker execution scope,
-  acceptance criteria, test plans, and readiness evidence.
-- Keep `implementation_docs_symphplusplus/templates/WORKFLOW.symfony_pp.md` as
-  an explicit-copy workflow template for Symphony++ lanes. It is not a runtime
-  default; validate any copied workflow through the assigned package before use.
+- Treat `docs/` as the current human-facing product and operator guide.
+- Treat packaged `plugins/**/skills/**/SKILL.md` files as the authoritative
+  agent procedures. Link to them instead of copying their workflows into docs.
+- Use the WorkPackage ledger, MCP resources, and package-specific assignment
+  text as the source of truth for worker scope, acceptance, validation, and
+  readiness evidence.
+- Use Git history for completed designs, cutovers, and experiments. Do not keep
+  active archive or migration-diary documents.
 
 ## Worker Prompt Conventions
 

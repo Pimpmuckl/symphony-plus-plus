@@ -195,12 +195,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
                base_branch: "main",
                title: "Docs-only package",
                kind: "docs",
-               allowed_file_globs: ["README.md", "implementation_docs_symphplusplus/**"]
+               allowed_file_globs: ["README.md", "docs/**"]
              })
 
     assert request["kind"] == "docs"
     assert request["policy_template"] == "docs"
-    assert request["allowed_file_globs"] == ["README.md", "implementation_docs_symphplusplus/**"]
+    assert request["allowed_file_globs"] == ["README.md", "docs/**"]
 
     assert {:error, :non_documentation_allowed_file_globs} =
              CreateWork.parse_request(%{

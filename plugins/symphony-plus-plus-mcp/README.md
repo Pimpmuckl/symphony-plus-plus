@@ -34,7 +34,7 @@ This plugin intentionally bundles:
   marketplace installs do not require users to set `SYMPP_REPO_ROOT`.
 
 The installed-runtime contract lives in the source repository operator docs as
-`17_RUNTIME_ARTIFACT_CONTRACT.md`. It defines the verified artifact path,
+`docs/runtime.md`. It defines the verified artifact path,
 release-channel gate, manifest fields, static dashboard expectations,
 source-checkout fallback semantics, and diagnostics. Installed plugin cache
 copies of this README are self-contained and include the stable channel pointer

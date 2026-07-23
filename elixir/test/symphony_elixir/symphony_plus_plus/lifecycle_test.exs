@@ -108,26 +108,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert "scope_guard" in scope_guard_policy.required_gates
   end
 
-  test "quick work policy template defaults match product docs" do
-    docs =
-      File.read!(Path.expand("../../../../implementation_docs_symphplusplus/templates/quick_work_policy_templates.md", __DIR__))
-
-    for kind <- ["quick_fix", "hotfix", "docs", "investigation"] do
-      assert {:ok, policy} = Templates.expand(kind)
-
-      expected_row =
-        [
-          "| `#{kind}` ",
-          "`#{policy.constraints.planning_depth}`",
-          "`#{expiry_label(policy)}`",
-          "`#{policy.constraints.terminal_readiness_status}`",
-          "`#{Enum.join(policy.required_gates, ", ")}`"
-        ]
-
-      Enum.each(expected_row, &assert(docs =~ &1))
-    end
-  end
-
   test "policy can be computed from a persisted work package", %{repo: repo} do
     assert {:ok, package} = Repository.create(repo, WorkPackageFactory.attrs(kind: "phase_child", parent_id: "phase-1"))
 
@@ -447,12 +427,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
              AccessGrantRepository.claim(repo, work_key.secret, %{claimed_by: "architect-1"}, now)
 
     Map.from_struct(assignment)
-  end
-
-  defp expiry_label(%{constraints: %{expiry_seconds: expiry_seconds}}) do
-    case expiry_seconds do
-      nil -> "none"
-      seconds -> Integer.to_string(seconds)
-    end
   end
 end

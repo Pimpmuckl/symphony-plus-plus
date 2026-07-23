@@ -57,14 +57,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase do
                               )
       @wiring_path Path.join(@repo_root, ".codex/skills/symphony-work-package/references/mcp_wiring.md")
       @mcp_plugin_wiring_path Path.join(@repo_root, "plugins/symphony-plus-plus-mcp/skills/symphony-work-package/references/mcp_wiring.md")
-      @handoff_path Path.join(@repo_root, "implementation_docs_symphplusplus/docs/00_ARCHITECT_AGENT_HANDOFF.md")
-      @runbook_path Path.join(@repo_root, "implementation_docs_symphplusplus/docs/09_OPERATIONAL_RUNBOOK.md")
-      @mcp_skill_contract_path Path.join(@repo_root, "implementation_docs_symphplusplus/docs/04_MCP_AND_SKILL_CONTRACT.md")
-      @dashboard_spec_path Path.join(@repo_root, "implementation_docs_symphplusplus/docs/07_DASHBOARD_SPEC.md")
-      @closeout_runbook_path Path.join(@repo_root, "implementation_docs_symphplusplus/runbooks/WORK_REQUEST_DELIVERY_CLOSEOUT.md")
-      @template_skill_path Path.join(@repo_root, "implementation_docs_symphplusplus/templates/SKILL.md")
-      @template_prompt_path Path.join(@repo_root, "implementation_docs_symphplusplus/templates/worker_agent_prompt.md")
-      @template_references_dir Path.join(@repo_root, "implementation_docs_symphplusplus/templates/references")
       @contract_path Path.join(@repo_root, "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
 
       @worker_tools [
@@ -90,11 +82,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase do
         "complete_review",
         "mark_ready"
       ]
-
-      defp frontmatter(content) do
-        [_, metadata | _rest] = String.split(content, "---", parts: 3)
-        String.trim(metadata)
-      end
 
       defp same_path?(left, right) do
         Path.expand(left) |> String.downcase() == Path.expand(right) |> String.downcase()
