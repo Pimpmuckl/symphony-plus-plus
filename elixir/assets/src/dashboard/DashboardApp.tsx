@@ -36,6 +36,7 @@ function useDashboardController() {
   const [connectionIssue, setConnectionIssue] = useState<DashboardConnectionIssue | null>(null);
   const [dashboardSearchQuery, setDashboardSearchQuery] = useState("");
   const [surfaceRefreshVersion, setSurfaceRefreshVersion] = useState(0);
+  const [animationBaselineReady, setAnimationBaselineReady] = useState(false);
   const showUpdateSimulationControls = useMemo(() => shouldShowUpdateSimulationControls(), []);
   const [runtimeConfig, setRuntimeConfig] = useState<DashboardRuntimeConfig | undefined>(() => dashboardRuntimeConfig);
   const canMutateOperatorActions = canMutateDashboardOperatorActions(runtimeConfig);
@@ -54,6 +55,7 @@ function useDashboardController() {
     if (dashboardFingerprintRef.current === nextFingerprint) return;
     dashboardFingerprintRef.current = nextFingerprint;
     dashboardRef.current = nextDashboard;
+    setAnimationBaselineReady((ready) => ready || Boolean(nextDashboard && !nextDashboard.deferred?.dashboard_sections));
     dispatchApp({ type: "patch", state: { dashboard: nextDashboard } });
   }, []);
   const setLoading = useCallback((nextLoading: boolean) => dispatchApp({ type: "patch", state: { loading: nextLoading } }), []);
@@ -96,7 +98,6 @@ function useDashboardController() {
     },
     [setError],
   );
-
   useEffect(() => {
     let cancelled = false;
 
@@ -108,7 +109,6 @@ function useDashboardController() {
       cancelled = true;
     };
   }, []);
-
   const applyDashboardResponse = useCallback(
     async (response: Response, fallbackMessage: string, selectDashboard: DashboardResponseSelector = (payload) => payload as DashboardPayload, loadMutationVersion = mutationVersionRef.current, shouldApply: () => boolean = () => true, failureVersion = failureVersionRef.current) => {
       const payload = await readDashboardApiResponse(response, fallbackMessage);
@@ -505,7 +505,7 @@ function useDashboardController() {
     guidanceItems,
     packages,
     requestDetails,
-    ready: dashboard !== null,
+    ready: animationBaselineReady,
     soloSessions,
   });
   const reconnectDashboard = useCallback(() => loadDashboard("reconnect"), [loadDashboard]);
