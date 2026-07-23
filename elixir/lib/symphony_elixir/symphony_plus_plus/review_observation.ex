@@ -5,9 +5,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservation do
 
   @cache_table __MODULE__
   @ttl_ms 120_000
-  @timeout_ms 2_000
+  @timeout_ms 3_000
   @max_output_bytes 64_000
-  @terminal_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
+  @terminal_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
 
   @spec observe([WorkPackage.t()], keyword()) :: %{optional(String.t()) => map()}
   def observe(work_packages, opts \\ []) when is_list(work_packages) do
@@ -34,22 +34,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservation do
   defp observe_eligible(eligible, config) do
     %{table: table, now_ms: now_ms, ttl_ms: ttl_ms, runner: runner, find_executable: find_executable} = config
 
-    case cached(table, :review_suite_script, now_ms, ttl_ms, fn -> discover(runner, find_executable) end) do
-      {:ok, script} ->
-        eligible
-        |> Enum.group_by(&Path.expand(&1.worktree_path))
-        |> Task.async_stream(&observe_worktree(&1, script, config),
-          max_concurrency: 4,
-          ordered: false,
-          timeout: @timeout_ms + 250,
-          on_timeout: :kill_task
-        )
-        |> Enum.reduce(%{}, &collect_observation/2)
+    if :ets.insert_new(table, {:refreshing, self()}) do
+      try do
+        case cached(table, :review_suite_script, now_ms, ttl_ms, fn -> discover(runner, find_executable) end) do
+          {:ok, script} ->
+            eligible
+            |> Enum.group_by(&Path.expand(&1.worktree_path))
+            |> Task.async_stream(&observe_worktree(&1, script, config),
+              max_concurrency: 4,
+              ordered: false,
+              timeout: @timeout_ms + 250,
+              on_timeout: :kill_task
+            )
+            |> Enum.reduce(%{}, &collect_observation/2)
 
-      _missing_provider ->
-        %{}
+          _missing_provider ->
+            %{}
+        end
+      after
+        :ets.delete(table, :refreshing)
+      end
+    else
+      cached(eligible, table: table, now_ms: now_ms, ttl_ms: ttl_ms)
     end
   end
+
+  @doc false
+  @spec release_refresh(pid(), atom() | reference()) :: :ok
+  def release_refresh(owner, table \\ @cache_table) when is_pid(owner) do
+    case table_id(table) do
+      :undefined -> :ok
+      table_id -> :ets.delete_object(table_id, {:refreshing, owner})
+    end
+
+    :ok
+  end
+
+  defp table_id(table) when is_atom(table), do: :ets.whereis(table)
+  defp table_id(table) when is_reference(table), do: table
 
   defp observe_worktree({worktree, packages}, script, config) do
     %{table: table, now_ms: now_ms, ttl_ms: ttl_ms, runner: runner, find_executable: find_executable} = config
@@ -154,26 +176,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservation do
 
   defp run(executable, args, timeout_ms, max_output_bytes) do
     if String.downcase(Path.extname(executable)) in [".cmd", ".bat"] do
-      task = Task.async(fn -> System.cmd(executable, args, stderr_to_stdout: true) end)
-
-      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-        {:ok, {output, 0}} when byte_size(output) <= max_output_bytes -> {:ok, output}
-        _failure -> :error
-      end
+      cmd = System.find_executable("cmd") || raise "cmd.exe unavailable"
+      command = cmd_quote(cmd) <> " /d /s /c call " <> Enum.map_join([executable | args], " ", &cmd_quote/1)
+      run_shell(command, timeout_ms, max_output_bytes)
     else
-      port =
-        Port.open({:spawn_executable, executable}, [
-          :binary,
-          :exit_status,
-          :stderr_to_stdout,
-          :hide,
-          args: args
-        ])
-
-      collect(port, "", System.monotonic_time(:millisecond) + timeout_ms, max_output_bytes)
+      run_port(executable, args, timeout_ms, max_output_bytes)
     end
   rescue
     _error -> :error
+  end
+
+  defp cmd_quote(value), do: "\"" <> String.replace(value, "\"", "\"\"") <> "\""
+
+  defp run_port(executable, args, timeout_ms, max_output_bytes) do
+    port =
+      Port.open({:spawn_executable, executable}, [
+        :binary,
+        :exit_status,
+        :stderr_to_stdout,
+        :hide,
+        args: args
+      ])
+
+    collect(port, "", System.monotonic_time(:millisecond) + timeout_ms, max_output_bytes)
+  end
+
+  defp run_shell(command, timeout_ms, max_output_bytes) do
+    port = Port.open({:spawn, command}, [:binary, :exit_status, :stderr_to_stdout, :hide])
+    collect(port, "", System.monotonic_time(:millisecond) + timeout_ms, max_output_bytes)
   end
 
   defp collect(port, output, deadline_ms, max_output_bytes) do

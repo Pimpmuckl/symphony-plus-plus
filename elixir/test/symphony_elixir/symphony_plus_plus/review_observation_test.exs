@@ -58,9 +58,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservationTest do
 
     human = %{package | id: "human", review_requirement: %{"type" => "human"}}
     terminal = %{package | id: "terminal", status: "merged"}
+    skipped = %{package | id: "skipped", status: "skipped"}
     stale = %{package | id: "stale", worktree_path: Path.join(package.worktree_path, "missing")}
 
-    assert ReviewObservation.observe([human, terminal, stale], opts) == %{}
+    assert ReviewObservation.observe([human, terminal, skipped, stale], opts) == %{}
     assert Agent.get(calls, & &1) == 0
   end
 
@@ -124,6 +125,47 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservationTest do
     assert signal.evidence_id == "rvw_complete"
     assert signal.reviewed_head == "complete-head"
     refute Map.has_key?(signal, :current)
+  end
+
+  test "concurrent refreshes share one provider invocation", %{test: test} do
+    %{worktree: worktree, plugin: plugin, package: package} = fixture(test)
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    runner = fn _, args, _, _ ->
+      Agent.update(calls, &(&1 + 1))
+
+      case args do
+        ["plugin", "list", "--json"] ->
+          Process.sleep(50)
+          {:ok, plugin_json(plugin)}
+
+        [_script, "--status", "--json", "--cd", ^worktree] ->
+          {:ok, Jason.encode!(%{"review" => "rvw_shared", "status" => "reviewing"})}
+      end
+    end
+
+    table = :ets.new(:review_observation_test, [:set, :public])
+    opts = Keyword.put(test_opts(runner), :cache_table, table)
+    tasks = for _ <- 1..2, do: Task.async(fn -> ReviewObservation.observe([package], opts) end)
+    results = Enum.map(tasks, &Task.await/1)
+
+    assert Enum.any?(results, &(&1 != %{}))
+    assert Agent.get(calls, & &1) == 2
+  end
+
+  test "forced refresh cleanup removes only the killed owner lock" do
+    table = :ets.new(:review_observation_test, [:set, :public])
+    owner = spawn(fn -> Process.sleep(:infinity) end)
+    other = spawn(fn -> Process.sleep(:infinity) end)
+    true = :ets.insert(table, {:refreshing, owner})
+
+    assert ReviewObservation.release_refresh(other, table) == :ok
+    assert :ets.lookup(table, :refreshing) == [{:refreshing, owner}]
+    assert ReviewObservation.release_refresh(owner, table) == :ok
+    assert :ets.lookup(table, :refreshing) == []
+
+    Process.exit(owner, :kill)
+    Process.exit(other, :kill)
   end
 
   defp fixture(test) do
