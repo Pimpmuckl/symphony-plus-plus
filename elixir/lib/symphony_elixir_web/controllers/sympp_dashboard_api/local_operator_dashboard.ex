@@ -7,6 +7,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service, as: SoloSessionService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
@@ -16,6 +17,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   import Ecto.Query, only: [from: 2]
 
   @local_operator_actor "local-operator"
+  @review_observation_timeout_ms 3_500
   @local_operator_hideable_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
   @architect_handoff_anchor_id_like "SYMPP-WR-ARCH-%"
   @architect_handoff_anchor_kind "delegation"
@@ -332,7 +334,37 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       |> Enum.map(&Map.get(&1, :id))
       |> Enum.reject(&is_nil/1)
 
+    refresh_review_observations(repo, work_request_ids)
     Dashboard.work_request_board_details(repo, work_request_ids, repo_identity_catalog: repo_identity_catalog)
+  end
+
+  defp refresh_review_observations(_repo, []), do: :ok
+
+  defp refresh_review_observations(repo, work_request_ids) do
+    work_packages =
+      repo.all(
+        from(work_package in WorkPackage,
+          where: work_package.work_request_id in ^work_request_ids
+        )
+      )
+
+    task =
+      Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
+        ReviewObservation.observe(work_packages)
+      end)
+
+    case Task.yield(task, @review_observation_timeout_ms) do
+      nil ->
+        Task.shutdown(task, :brutal_kill)
+        ReviewObservation.release_refresh(task.pid)
+
+      _completed ->
+        :ok
+    end
+
+    :ok
+  rescue
+    _failure -> :ok
   end
 
   @spec work_request_attrs(map()) :: map()

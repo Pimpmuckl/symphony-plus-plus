@@ -116,28 +116,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   end
 
   @spec review(WorkPackage.t(), map()) :: map() | nil
-  def review(%WorkPackage{review_requirement: nil}, _metadata), do: nil
+  def review(work_package, metadata), do: review(work_package, metadata, nil)
 
-  def review(%WorkPackage{review_requirement: requirement}, metadata) when is_map(requirement) do
+  @spec review(WorkPackage.t(), map(), map() | nil) :: map() | nil
+  def review(%WorkPackage{review_requirement: nil}, _metadata, _observation), do: nil
+
+  def review(%WorkPackage{review_requirement: requirement}, metadata, observation) when is_map(requirement) do
     type = bounded_string(map_value(requirement, "type"))
     args = map_value(requirement, "args")
     review_package = map_value(metadata, "review_package")
     completion = map_value(metadata, "review_completion")
-    evidence = [completion, review_package, args]
+    observation = if is_map(completion), do: nil, else: observation
+    evidence = [completion, observation, review_package, args]
 
     %{
       type: type,
       args: if(is_map(args), do: Sanitizer.redacted_json(args)),
-      status: review_status(type, review_package, completion),
+      status: map_value(observation, "status") || review_status(type, review_package, completion),
       current: evidence |> signal_value(["current", "completed", "completed_count"]) |> integer_value(),
       total: evidence |> signal_value(["total", "total_count"]) |> integer_value(),
       step: evidence |> signal_value(["step", "stage"]) |> bounded_string(),
-      evidence_id: evidence |> signal_value(["evidence_id", "reference", "id"]) |> bounded_string()
+      evidence_id: evidence |> signal_value(["evidence_id", "reference", "id"]) |> bounded_string(),
+      reviewed_head: evidence |> signal_value(["head_sha", "reviewed_head"]) |> bounded_string()
     }
     |> reject_nil_values()
   end
 
-  def review(%WorkPackage{}, _metadata), do: %{status: "unavailable"}
+  def review(%WorkPackage{}, _metadata, _observation), do: %{status: "unavailable"}
 
   @spec dependency(WorkPackage.t(), map()) :: map() | nil
   def dependency(%WorkPackage{} = work_package, context) do
