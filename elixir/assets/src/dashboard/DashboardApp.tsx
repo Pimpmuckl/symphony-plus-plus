@@ -23,7 +23,7 @@ import { filterWorkstreamsBySearch } from "./dashboard-search";
 import { activeWorkRequestDetails, packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
 import { useDashboardUpdateAnimations } from "./update-animations";
 import { useDashboardSurfaceLoading } from "./dashboard-surface-loading";
-import { createDashboardEventRefresh } from "./dashboard-demand-loading";
+import { createDashboardEventRefresh, useBestEffortGithubSync } from "./dashboard-demand-loading";
 type DashboardLoadMode = "initial" | "refresh" | "silent" | "reconnect";
 function mergeDashboardLoadMode(pending: DashboardLoadMode, next: DashboardLoadMode) {
   return pending === "reconnect" || next === "reconnect" ? "reconnect" : next;
@@ -217,7 +217,7 @@ function useDashboardController() {
 
     await loadDashboard("refresh");
   }, [clearConnectionFailure, loadDashboard, setDashboard]);
-
+  useBestEffortGithubSync(canMutateOperatorActions && Boolean(dashboard && !dashboard.deferred?.dashboard_sections), refreshAfterMutation);
   const mutateWorkRequest = useCallback(
     async (workRequestId: string, action: "archive" | "delete" | "state", body: Record<string, unknown>, fallbackMessage: string, options: { archive?: boolean; remove?: boolean } = {}) => {
       const payload = (await withLocalOperatorReconnect(async () => {

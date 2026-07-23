@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createLatestTaskQueue, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, enqueueLatestTask, mergeDashboardPayload, mutationShouldRefreshDashboard, patchDashboardWorkRequest, removeDashboardWorkRequest } from "./runtime";
-import { createDashboardEventRefresh } from "./dashboard-demand-loading";
+import { createBestEffortGithubSync, createDashboardEventRefresh } from "./dashboard-demand-loading";
 import type { DashboardPayload, WorkRequestCard } from "@/types/dashboard";
 
 describe("dashboard runtime mutation helpers", () => {
@@ -109,6 +109,62 @@ describe("dashboard runtime mutation helpers", () => {
 
   it("refreshes from the operator-priority base endpoint", () => {
     expect(dashboardRefreshPath()).toBe("/dashboard");
+  });
+
+  it("starts best-effort GitHub sync when deferred dashboard data is ready", async () => {
+    const run = vi.fn().mockResolvedValue(undefined);
+    const sync = createBestEffortGithubSync(() => "visible");
+
+    await sync.ready(run);
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses GitHub sync during cooldown and retries when the tab becomes visible", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    let visibility: DocumentVisibilityState = "visible";
+    const run = vi.fn().mockResolvedValue(undefined);
+    const sync = createBestEffortGithubSync(() => visibility, 100);
+
+    await sync.ready(run);
+    await sync.ready(run);
+    expect(run).toHaveBeenCalledTimes(1);
+
+    visibility = "hidden";
+    vi.advanceTimersByTime(100);
+    await sync.visibilityChanged();
+    expect(run).toHaveBeenCalledTimes(1);
+
+    visibility = "visible";
+    await sync.visibilityChanged();
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets successful GitHub sync use the existing dashboard refresh path", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true, refresh: { dashboard: true } });
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    const sync = createBestEffortGithubSync(() => "visible");
+
+    await sync.ready(async () => {
+      const payload = await request();
+      if (mutationShouldRefreshDashboard(payload)) await refresh();
+    });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores GitHub sync failures and remains retryable", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const run = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
+    const sync = createBestEffortGithubSync(() => "visible", 100);
+
+    await expect(sync.ready(run)).resolves.toBeUndefined();
+    vi.advanceTimersByTime(100);
+    await expect(sync.visibilityChanged()).resolves.toBeUndefined();
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("patches completed WorkRequests in-place", () => {
