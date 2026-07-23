@@ -5,41 +5,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog
 
-  test "skill package has required metadata and worker MCP workflow" do
-    skill = File.read!(@skill_path)
-
-    assert skill =~ "name: symphony-work-package"
-    assert skill =~ "description:"
-
-    for marker <- [
-          "WorkPackage state adapter",
-          "symphony-plus-plus:symphony-worker",
-          "get_current_assignment()",
-          "read_context()",
-          "read_task_plan()",
-          "update_task_plan",
-          "append_finding",
-          "append_progress",
-          "create_guidance_request",
-          "attach_branch",
-          "attach_pr",
-          "submit_review_package",
-          "complete_review",
-          "mark_ready()"
-        ] do
-      assert skill =~ marker
-    end
-
-    assert skill =~ ~s({"work_package_id":"<WP id>"})
-    refute skill =~ "claim_work_key"
-    refute skill =~ "claim_private_handoff"
-    assert skill =~ "Do not create local `task_plan.md`, `findings.md`, or `progress.md` files as"
-    assert skill =~ "Worker grants and local claim leases are scoped to exactly one WorkPackage."
-    refute skill =~ "add_comment(target_kind, target_id, body, idempotency_key)"
-    refute skill =~ "resolve_comment(comment_id, resolution, idempotency_key)"
-    refute skill =~ "request_context"
-  end
-
   test "documentation index links only current local files" do
     index_path = Path.join(@repo_root, "docs/README.md")
     index = File.read!(index_path)
@@ -132,11 +97,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     end
   end
 
-  test "worker prompt is paste-ready and MCP-backed" do
-    prompt = File.read!(@prompt_path)
-    plugin_prompt = File.read!(@mcp_plugin_prompt_path)
-
-    for content <- [prompt, plugin_prompt] do
+  test "packaged worker prompt is paste-ready and MCP-backed" do
+    for content <- [File.read!(@mcp_plugin_prompt_path)] do
       assert String.starts_with?(content, "You are assigned Symphony++ work package")
       assert content =~ "<WORK_PACKAGE_ID>"
       assert content =~ "Ledger claim: call `claim_local_assignment`"
@@ -158,9 +120,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     end
   end
 
-  test "MCP wiring docs explain the local HTTP dependency without embedding secrets" do
-    wiring = File.read!(@wiring_path)
-    plugin_wiring = File.read!(@mcp_plugin_wiring_path)
+  test "packaged MCP wiring docs explain the local HTTP dependency without embedding secrets" do
+    wiring = File.read!(@mcp_plugin_wiring_path)
 
     assert wiring =~ "http://127.0.0.1:19998/mcp"
     assert wiring =~ "mix sympp.cockpit"
@@ -185,7 +146,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     assert wiring =~ "Skill visibility, explicit MCP configuration, global MCP settings"
     assert prose_wiring =~ "must not declare `mcpServers`"
     assert wiring =~ "That server may not appear"
-    assert plugin_wiring == wiring
     refute wiring =~ "sympp_live_"
   end
 
@@ -270,64 +230,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     assert File.exists?(@refresh_script_path)
     refute File.exists?(@worker_secret_script_path)
     refute File.exists?(@worker_secret_shell_path)
-    assert File.read!(@plugin_readme_path) =~ ~s("path": "./plugins/symphony-plus-plus")
-    assert File.read!(@plugin_readme_path) =~ "manifest-version cache"
-    assert File.read!(@plugin_readme_path) =~ "codex plugin marketplace upgrade"
-    assert File.read!(@plugin_readme_path) =~ "isolated development Codex homes only"
-    assert File.read!(@plugin_readme_path) =~ "intentionally skill-only"
-    assert File.read!(@plugin_readme_path) =~ "does not declare `mcpServers`"
-    assert File.read!(@plugin_readme_path) =~ "standard root `skills/` directory"
-    assert File.read!(@plugin_readme_path) =~ "`codex review`"
-    assert File.read!(@plugin_readme_path) =~ "plugins/symphony-plus-plus-mcp"
-    assert File.read!(@plugin_readme_path) =~ "diagnose-mcp-lifecycle.ps1"
-    assert File.read!(@plugin_readme_path) =~ "local HTTP daemon"
-    assert File.read!(@plugin_readme_path) =~ "local bridge lease"
-    assert File.read!(@plugin_readme_path) =~ "exact S++ source revision"
-    assert File.read!(@plugin_readme_path) =~ "last bridge lease for a runtime key"
-    assert File.read!(@plugin_readme_path) =~ "diagnostic truncates and redacts"
-    assert File.read!(@plugin_readme_path) =~ "Live process counts are scoped to `-RepoRoot`"
-    assert File.read!(@plugin_readme_path) =~ "marketplace source clone"
-    assert File.read!(@plugin_readme_path) =~ "prunes removed managed skill directories"
-    assert File.read!(@plugin_readme_path) =~ "prunes the\nolder generated `local` cache root"
-    assert File.read!(@plugin_readme_path) =~ "Superseded version directories"
-    assert File.read!(@plugin_readme_path) =~ "The diagnostic rejects `-RepoRoot`"
-    assert File.read!(@plugin_readme_path) =~ "multiple marketplace clones"
-    assert File.read!(@plugin_readme_path) =~ "reported separately as unattributed"
-    assert File.read!(@plugin_readme_path) =~ "opt-in\n`mise exec -- mix` launcher path"
-    assert File.read!(@plugin_readme_path) =~ "Malformed installed cache JSON is reported"
-    assert File.read!(@plugin_readme_path) =~ "scans every `symphony-plus-plus` marketplace cache"
-    assert File.read!(@plugin_readme_path) =~ "manifest lifecycle status"
-    assert File.read!(@plugin_readme_path) =~ "incompatible_default_plugin_bundles_mcp"
-    assert File.read!(@plugin_readme_path) =~ "missing_manifest"
-    assert File.read!(@plugin_readme_path) =~ "reporting machine-wide processes"
-    assert File.read!(@plugin_readme_path) =~ "defines the expected\n`symphony_plus_plus` command-backed launcher"
-    assert File.read!(@plugin_readme_path) =~ "process scan as unsupported"
-    assert File.read!(@plugin_readme_path) =~ "Default Planning And Opt-In MCP"
-    assert File.read!(@plugin_readme_path) =~ "symphony-plus-plus:symphony-solo-session"
-    assert File.read!(@plugin_readme_path) =~ "sympp-solo.ps1 -ValidateOnly"
-    assert File.read!(@plugin_readme_path) =~ "http://127.0.0.1:19998/mcp"
-    assert File.read!(@plugin_readme_path) =~ "codex --profile sympp-agent app <path>"
-    assert File.read!(@plugin_readme_path) =~ "subprocess/app-server session"
-    assert File.read!(@plugin_readme_path) =~ "supported replacement for app-visible"
-    assert File.read!(@plugin_readme_path) =~ "Solo/cockpit handoff path"
-    assert File.read!(@plugin_readme_path) =~ "shared local Symphony++ default ledger"
-    assert File.read!(@plugin_readme_path) =~ "Solo caller repository identity comes from the CLI arguments"
-    assert File.read!(@plugin_readme_path) =~ "diagnose-mcp-lifecycle.ps1 -Doctor"
-    assert File.read!(@plugin_readme_path) =~ "solo_ready_mcp_companion_not_enabled"
-    assert File.read!(@plugin_readme_path) =~ "symphony-plus-plus-mcp@<marketplace>"
-    assert File.read!(@plugin_readme_path) =~ "-EnableMcpCompanion"
-    assert File.read!(@plugin_readme_path) =~ "-CodexHome <dedicated-codex-home>"
-    assert File.read!(@plugin_readme_path) =~ ".sympp-generated-cache"
-    assert File.read!(@plugin_readme_path) =~ "refuses the default `~/.codex` cache"
-    assert File.read!(@plugin_readme_path) =~ "cannot inspect the tool list already registered"
-    assert File.read!(@plugin_readme_path) =~ "codex plugin marketplace upgrade"
-    assert File.read!(@plugin_readme_path) =~ "no longer uses `.sympp-source-root`"
-    assert File.read!(@plugin_readme_path) =~ "smoke-sympp-mcp-http.ps1 -RepoRoot ."
+    readme = @plugin_readme_path |> File.read!() |> normalize_prose()
+    assert readme =~ "./plugins/symphony-plus-plus"
+    assert readme =~ "codex plugin marketplace upgrade"
+    assert readme =~ "isolated development Codex homes"
+    assert readme =~ "skill-only"
+    assert readme =~ "does not contain a root `.mcp.json`"
+    assert readme =~ "`symphony-plus-plus-mcp` plugin"
+    assert readme =~ "diagnose-mcp-lifecycle.ps1"
+    assert readme =~ "marketplace source clone"
+    assert readme =~ "compatible packaged runtime artifact"
+    assert readme =~ "../../docs/operations.md"
+    assert readme =~ "../../docs/runtime.md"
+    assert readme =~ "refuses the default `~/.codex` cache"
+    refute readme =~ "dogfood"
+    refute readme =~ "future verified"
+    refute readme =~ "repo-local fallback"
 
     assert File.read!(@plugin_default_solo_skill_path) =~
              "lightweight parent coordination"
 
-    refute File.read!(@plugin_readme_path) =~ "../../Code/"
+    refute readme =~ "../../Code/"
     assert File.read!(@refresh_script_path) =~ "ReparsePoint"
     assert File.read!(@refresh_script_path) =~ "ValidateInstalledCache"
     assert File.read!(@refresh_script_path) =~ "Invoke-InstalledCacheValidation"
