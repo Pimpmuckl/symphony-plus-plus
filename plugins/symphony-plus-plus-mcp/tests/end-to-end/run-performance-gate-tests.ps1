@@ -6,10 +6,7 @@ function Assert-True($Condition, [string]$Message) {
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../.."))
 $gate = Join-Path $repoRoot "scripts/benchmarks/sympp-mcp/run-performance-gate.ps1"
-$docs = @(
-  Join-Path $repoRoot "implementation_docs_symphplusplus/docs/18_MCP_PERFORMANCE_GATES.md"
-  Join-Path $repoRoot "implementation_docs_symphplusplus/runbooks/SYMPP_MCP_HIGH_CONCURRENCY_CUTOVER.md"
-)
+$runtimeDocs = Join-Path $repoRoot "docs/runtime.md"
 
 $tokens = $null
 $errors = $null
@@ -40,10 +37,7 @@ $usageError = @(& (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -File $
 Assert-True ($LASTEXITCODE -eq 2) "invalid release client count must use exit code 2"
 Assert-True ($usageError -contains "error: -Clients must be 100 for the release gate") "usage error must be structured and actionable"
 
-foreach ($path in $docs) {
-  Assert-True (Test-Path -LiteralPath $path -PathType Leaf) "missing performance gate documentation: $path"
-}
-$runbook = Get-Content -LiteralPath $docs[1] -Raw
+$runbook = Get-Content -LiteralPath $runtimeDocs -Raw
 Assert-True ($runbook.Contains("codex plugin marketplace upgrade symphony-plus-plus")) "runbook must use marketplace upgrade"
 Assert-True ($runbook.Contains("marketplace source clone")) "runbook must anchor installed cutover to the marketplace source clone"
 Assert-True (-not $runbook.Contains("refresh-local-plugin.ps1")) "runbook must not refresh installed cache from a developer checkout"

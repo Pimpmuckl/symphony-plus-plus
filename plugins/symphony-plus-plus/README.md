@@ -107,7 +107,7 @@ alternate Codex home. Do not enable that opt-in MCP plugin in a generic/global
 config unless every session on that config should start S++ MCP.
 
 The target installed-runtime product contract for that opt-in companion lives in
-the source repository operator docs as `17_RUNTIME_ARTIFACT_CONTRACT.md`. It
+the source repository operator docs as `docs/runtime.md`. It
 defines the future verified release-artifact flow, release-channel gating,
 manifest fields, static dashboard asset expectations, source-checkout fallback
 semantics, and operator diagnostics. Installed plugin cache copies of this

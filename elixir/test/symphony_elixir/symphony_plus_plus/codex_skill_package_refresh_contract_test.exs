@@ -5,29 +5,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshContractTest d
 
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
-  test "template skill mirrors installable skill metadata" do
-    skill = File.read!(@skill_path)
-    template_skill = File.read!(@template_skill_path)
-
-    assert frontmatter(skill) == frontmatter(template_skill)
-
-    for file <- ["worker_prompt.md", "mcp_wiring.md", "handoff.md"] do
-      assert File.exists?(Path.join(@template_references_dir, file))
-    end
-  end
-
-  test "handoff docs include skill installation and MCP setup" do
-    handoff = File.read!(@handoff_path)
-    runbook = File.read!(@runbook_path)
-
-    for content <- [handoff, runbook] do
-      assert content =~ ".codex/skills/symphony-work-package/"
-      assert content =~ "plugins/symphony-plus-plus-mcp/"
-      assert content =~ "mcp_wiring.md"
-      assert content =~ "templates/worker_agent_prompt.md"
-    end
-  end
-
   test "MCP contract lists the current worker tools" do
     contract =
       @contract_path
@@ -66,7 +43,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshContractTest d
     assert get_in(contract, ["claim_policy", "reclaim_policy"]) =~ "Stale leases may be reclaimed"
     assert get_in(contract, ["claim_policy", "secret_policy"]) =~ "do not require raw grant secrets"
 
-    prompt = File.read!(@template_prompt_path)
+    prompt = File.read!(@mcp_plugin_prompt_path)
 
     for marker <- [
           "WorkPackage: <WORK_PACKAGE_ID>",

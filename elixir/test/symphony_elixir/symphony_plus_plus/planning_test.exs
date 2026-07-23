@@ -232,7 +232,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
     assert {:ok, _artifact} =
              Service.append_artifact(repo, %{
                work_package_id: work_package.id,
-               path: "implementation_docs_symphplusplus/docs/02_SYSTEM_SPEC.md",
+               path: "docs/architecture.md",
                title: "Package spec",
                kind: "spec"
              })

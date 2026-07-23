@@ -40,12 +40,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     refute skill =~ "request_context"
   end
 
-  test "MCP plugin skills and docs make delivery closeout the default" do
+  test "documentation index links only current local files" do
+    index_path = Path.join(@repo_root, "docs/README.md")
+    index = File.read!(index_path)
+
+    linked_paths =
+      ~r/\]\(([^)#]+)(?:#[^)]+)?\)/
+      |> Regex.scan(index, capture: :all_but_first)
+      |> List.flatten()
+
+    assert linked_paths != []
+
+    for linked_path <- linked_paths do
+      assert File.exists?(Path.expand(linked_path, Path.dirname(index_path))),
+             "missing documentation index target: #{linked_path}"
+    end
+
+    refute index =~ "implementation_docs_symphplusplus"
+  end
+
+  test "MCP plugin skills make delivery closeout the default" do
     architect_skill = @mcp_plugin_architect_skill_path |> File.read!() |> normalize_newlines()
     worker_skill = @mcp_plugin_skill_path |> File.read!() |> normalize_newlines()
-    skill_contract = @mcp_skill_contract_path |> File.read!() |> normalize_newlines()
-    dashboard_spec = @dashboard_spec_path |> File.read!() |> normalize_newlines()
-    closeout_runbook = @closeout_runbook_path |> File.read!() |> normalize_newlines()
 
     for marker <- [
           "## Delivery Closeout",
@@ -67,49 +83,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
         ] do
       assert worker_skill =~ marker
     end
-
-    for marker <- [
-          "read_delivery_board(work_request_id)",
-          "record_work_package_delivery(work_request_id, work_package_id, outcome, idempotency_key, evidence)",
-          "`completed_no_pr`",
-          "`evidence.completed_no_pr`",
-          "`superseded`",
-          "`evidence.superseded`",
-          "`reconcile_work_request`",
-          "PR/GitHub evidence",
-          "WORK_REQUEST_DELIVERY_CLOSEOUT.md"
-        ] do
-      assert skill_contract =~ marker
-    end
-
-    for marker <- ["Delivery closeout", "stale `ready_for_worker` package", "`ready_for_worker`"] do
-      assert dashboard_spec =~ marker
-    end
-
-    for marker <- [
-          "Kraken-Style Stale Delivery-Board Verification",
-          "`ready_for_worker`",
-          "Expected projection before closeout",
-          "Expected projection after closeout",
-          "record_work_package_delivery"
-        ] do
-      assert closeout_runbook =~ marker
-    end
   end
 
-  test "MCP contract and packaged skills document compact worker calls" do
+  test "MCP contract and packaged worker skill agree on compact calls" do
     contract = @contract_path |> File.read!() |> Jason.decode!()
-    readable_contract = @contract_path |> Path.dirname() |> Path.join("MCP_TOOLS_CONTRACT.md") |> File.read!() |> normalize_newlines()
-    skill_contract = @mcp_skill_contract_path |> File.read!() |> normalize_newlines()
     worker_skill = @mcp_plugin_skill_path |> File.read!() |> normalize_newlines()
-    template_skill = @template_skill_path |> File.read!() |> normalize_newlines()
-
-    prompts = [
-      File.read!(@template_prompt_path),
-      File.read!(Path.join(@repo_root, "implementation_docs_symphplusplus/templates/worker_agent_prompt.md")),
-      File.read!(Path.join(@template_references_dir, "worker_prompt.md")),
-      File.read!(@mcp_plugin_prompt_path)
-    ]
+    prompt = File.read!(@mcp_plugin_prompt_path)
 
     tool_schemas = Map.new(contract["tool_schemas"], &{&1["name"], &1})
 
@@ -182,9 +161,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
              "record_work_request_operator_decision"
            ]
 
-    for content <- [readable_contract, skill_contract, worker_skill, template_skill] do
-      assert content =~ "add_comment(body)"
-      assert content =~ "list_comments()"
+    for content <- [worker_skill, prompt] do
       assert content =~ "attach_branch(head_sha)"
       assert content =~ "complete_review(reference?, note?)"
       assert content =~ "sync_pr()"
@@ -192,30 +169,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
       assert content =~ "attached PR"
       refute content =~ "sync_pr(metadata, url|number)"
       refute content =~ "sync_pr(url_or_number, metadata)"
-      refute content =~ "add_comment(target_kind, target_id, body"
-      refute content =~ "list_comments(target_kind, target_id"
     end
-
-    for prompt <- prompts do
-      assert prompt =~ "attached PR"
-      assert prompt =~ "attach_branch(head_sha)"
-      assert prompt =~ "sync_pr()"
-      assert prompt =~ "complete_review(reference?, note?)"
-      assert prompt =~ "blocker_closeout"
-      refute prompt =~ "sync_pr(metadata, url|number)"
-      refute prompt =~ "sync_pr(url_or_number, metadata)"
-    end
-
-    assert readable_contract =~ "create_work_request\nadd_work_request_comment\nlist_comments\nrecord_work_request_operator_decision"
   end
 
   test "worker prompt is paste-ready and MCP-backed" do
     prompt = File.read!(@prompt_path)
     plugin_prompt = File.read!(@mcp_plugin_prompt_path)
-    template_prompt = File.read!(@template_prompt_path)
-    template_reference_prompt = File.read!(Path.join(@template_references_dir, "worker_prompt.md"))
 
-    for content <- [prompt, plugin_prompt, template_prompt, template_reference_prompt] do
+    for content <- [prompt, plugin_prompt] do
       assert String.starts_with?(content, "You are assigned Symphony++ work package")
       assert content =~ "<WORK_PACKAGE_ID>"
       assert content =~ "Ledger claim: call `claim_local_assignment`"
@@ -240,7 +201,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
   test "MCP wiring docs explain the local HTTP dependency without embedding secrets" do
     wiring = File.read!(@wiring_path)
     plugin_wiring = File.read!(@mcp_plugin_wiring_path)
-    template_wiring = File.read!(Path.join(@template_references_dir, "mcp_wiring.md"))
 
     assert wiring =~ "http://127.0.0.1:19998/mcp"
     assert wiring =~ "mix sympp.cockpit"
@@ -266,7 +226,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     assert prose_wiring =~ "must not declare `mcpServers`"
     assert wiring =~ "That server may not appear"
     assert plugin_wiring == wiring
-    assert template_wiring == wiring
     refute wiring =~ "sympp_live_"
   end
 

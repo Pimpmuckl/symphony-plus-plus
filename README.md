@@ -80,9 +80,8 @@ If the default ports are busy, the launcher records the actual URLs here:
 
 - Default plugin: `plugins/symphony-plus-plus/README.md`
 - MCP companion: `plugins/symphony-plus-plus-mcp/README.md`
-- Operator docs: `implementation_docs_symphplusplus/README.md`
-- Runtime artifact contract:
-  `implementation_docs_symphplusplus/docs/17_RUNTIME_ARTIFACT_CONTRACT.md`
+- Product and operator docs: `docs/README.md`
+- Installed runtime and MCP startup: `docs/runtime.md`
 
 ## License
 
