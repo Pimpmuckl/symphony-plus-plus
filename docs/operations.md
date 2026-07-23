@@ -42,6 +42,26 @@ output.
 Use [delivery recovery](runbooks/delivery-recovery.md) when GitHub and the
 ledger disagree after a merge or abandoned execution.
 
+## Demo Ledger Visual QA
+
+Create a disposable deterministic ledger with one of `simple`, `multi-repo`,
+`superseded`, or `large`:
+
+```powershell
+cd elixir
+mix sympp.demo_ledger --database .tmp/demo.sqlite3 --scenario large --force
+mix sympp.cockpit --database .tmp/demo.sqlite3
+```
+
+Then run the existing browser smoke against the printed cockpit URL:
+
+```powershell
+node assets/scripts/browser-smoke.mjs --url http://127.0.0.1:19998/sympp/board
+```
+
+The scenarios only seed synthetic local ledger data; production dashboard code
+does not select or depend on them.
+
 ## Runtime Problems
 
 Use [Runtime](runtime.md) for marketplace ownership, startup, cache identity,

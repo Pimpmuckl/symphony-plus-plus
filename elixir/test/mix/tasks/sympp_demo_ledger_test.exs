@@ -3,17 +3,22 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
 
   import Ecto.Query, only: [from: 2]
 
+  @demo_repo "nextide/demo-operator"
+
   alias Ecto.Adapters.SQL
   alias Mix.Tasks.Sympp.DemoLedger, as: DemoLedgerTask
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.DependencyEdge
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloSessionsRepository
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
 
@@ -65,6 +70,16 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
     assert_raise Mix.Error, ~r/durable local SQLite filesystem path/, fn ->
       DemoLedgerTask.run(["--database", ":memory:"])
     end
+  end
+
+  test "rejects unknown scenarios" do
+    database_path = WorkPackageFactory.database_path()
+
+    assert_raise Mix.Error, ~r/Scenarios: simple, multi-repo, superseded, large/, fn ->
+      DemoLedgerTask.run(["--database", database_path, "--scenario", "unknown"])
+    end
+
+    refute File.exists?(database_path)
   end
 
   test "creates deterministic synthetic cockpit data and prints operator JSON" do
@@ -255,6 +270,45 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
     end
   end
 
+  test "named scenarios have deterministic shapes and replace safely" do
+    expected = %{
+      "simple" => %{packages: 13, edges: 0, repos: [@demo_repo], deliveries: []},
+      "multi-repo" => %{
+        packages: 4,
+        edges: 3,
+        repos: ["nextide/demo-api", "nextide/demo-contracts", "nextide/demo-web", "nextide/demo-worker"],
+        repo_scopes: ["nextide/demo-api", "nextide/demo-contracts", "nextide/demo-web", "nextide/demo-worker"],
+        deliveries: []
+      },
+      "superseded" => %{
+        packages: 3,
+        edges: 1,
+        repos: [@demo_repo],
+        deliveries: [{"SYMPP-DEMO-WP-OLD", "superseded", "SYMPP-DEMO-WP-REPLACEMENT"}]
+      },
+      "large" => %{packages: 30, edges: 38, repos: [@demo_repo], deliveries: []}
+    }
+
+    for {scenario, expectation} <- expected do
+      database_path = WorkPackageFactory.database_path()
+
+      try do
+        DemoLedgerTask.run(["--database", database_path, "--scenario", scenario])
+        assert_received {:mix_shell, :info, [json]}
+        assert Jason.decode!(json)["scenario"] == scenario
+
+        first_shape = scenario_shape(database_path, scenario)
+        assert Map.take(first_shape, Map.keys(expectation)) == expectation
+
+        DemoLedgerTask.run(["--database", database_path, "--scenario", scenario, "--force"])
+        assert_received {:mix_shell, :info, [_json]}
+        assert scenario_shape(database_path, scenario) == first_shape
+      after
+        File.rm(database_path)
+      end
+    end
+  end
+
   test "does not seed obvious secret or token markers" do
     database_path = WorkPackageFactory.database_path()
 
@@ -347,6 +401,44 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
       )
     end)
   end
+
+  defp scenario_shape(database_path, scenario) do
+    with_repo(database_path, fn repo ->
+      packages =
+        WorkPackage
+        |> repo.all()
+        |> Enum.filter(&scenario_package?(&1.id, scenario))
+
+      %{
+        packages: length(packages),
+        package_states: Enum.map(packages, &{&1.id, &1.status}),
+        repos: packages |> Enum.map(& &1.repo) |> Enum.uniq() |> Enum.sort(),
+        repo_scopes: scenario_repo_scopes(repo, scenario),
+        edges:
+          repo.aggregate(
+            from(edge in DependencyEdge, where: like(edge.id, "SYMPP-DEMO-EDGE-%")),
+            :count
+          ),
+        deliveries:
+          WorkPackageDelivery
+          |> repo.all()
+          |> Enum.map(&{&1.work_package_id, &1.outcome, &1.successor_work_package_id})
+          |> Enum.sort()
+      }
+    end)
+  end
+
+  defp scenario_package?(id, "simple"), do: not String.contains?(id, ["-MULTI-", "-LARGE-", "-OLD", "-REPLACEMENT", "-DEFERRED-"])
+  defp scenario_package?(id, "multi-repo"), do: String.contains?(id, "-MULTI-")
+  defp scenario_package?(id, "superseded"), do: String.contains?(id, ["-OLD", "-REPLACEMENT", "-DEFERRED-"])
+  defp scenario_package?(id, "large"), do: String.contains?(id, "-LARGE-")
+
+  defp scenario_repo_scopes(repo, "multi-repo") do
+    {:ok, scopes} = WorkRequestRepository.list_repo_scopes(repo, "SYMPP-DEMO-WR-MULTI")
+    scopes |> Enum.map(& &1.repo) |> Enum.sort()
+  end
+
+  defp scenario_repo_scopes(_repo, _scenario), do: []
 
   defp with_repo(database_path, fun) do
     original_repo = Repo.get_dynamic_repo()
