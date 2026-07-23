@@ -49,36 +49,47 @@ export function useDashboardUpdateAnimations({
   );
 
   useLayoutEffect(() => {
+    const update = updateDashboardAnimationBaseline(previousSnapshotRef.current, {
+      blockerItems,
+      guidanceItems,
+      packages,
+      requestDetails,
+      soloSessions,
+    }, ready);
+    previousSnapshotRef.current = update.snapshot;
+
     if (!ready) {
-      previousSnapshotRef.current = null;
       dispatchMotions({ type: "clear" });
       return;
     }
 
-    const snapshot = dashboardAnimationSnapshot({ blockerItems, guidanceItems, packages, requestDetails, soloSessions });
-    const previousSnapshot = previousSnapshotRef.current;
-
-    if (!previousSnapshot) {
-      previousSnapshotRef.current = snapshot;
-      return;
-    }
-
-    const nextMotions: Record<string, UpdateMotion> = {};
-    snapshot.forEach((entity, key) => {
-      const motionKind = classifyUpdateMotion(previousSnapshot.get(key), entity);
-      if (!motionKind) return;
-
-      nextMotions[key] = { kind: motionKind, token: (tokenRef.current += 1) };
-    });
-
-    previousSnapshotRef.current = snapshot;
-
-    applyMotions(nextMotions);
+    applyMotions(Object.fromEntries(Object.entries(update.motions).map(([key, kind]) => [
+      key,
+      { kind, token: (tokenRef.current += 1) },
+    ])));
   }, [applyMotions, blockerItems, guidanceItems, packages, ready, requestDetails, soloSessions]);
 
   const motionFor = useCallback((key?: string | null) => (ready && key ? motions[key] : undefined), [motions, ready]);
 
   return useMemo(() => ({ motionFor }), [motionFor]);
+}
+
+export function updateDashboardAnimationBaseline(
+  previousSnapshot: Map<string, UpdateAnimationEntity> | null,
+  input: Parameters<typeof dashboardAnimationSnapshot>[0],
+  ready: boolean,
+) {
+  if (!ready) return { snapshot: null, motions: {} as Record<string, UpdateMotionKind> };
+
+  const snapshot = dashboardAnimationSnapshot(input);
+  if (!previousSnapshot) return { snapshot, motions: {} as Record<string, UpdateMotionKind> };
+
+  const motions: Record<string, UpdateMotionKind> = {};
+  snapshot.forEach((entity, key) => {
+    const motionKind = classifyUpdateMotion(previousSnapshot.get(key), entity);
+    if (motionKind) motions[key] = motionKind;
+  });
+  return { snapshot, motions };
 }
 
 function dashboardAnimationSnapshot({
