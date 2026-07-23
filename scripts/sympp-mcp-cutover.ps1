@@ -1060,7 +1060,7 @@ function Get-McpContractFingerprintFromArtifactManifest([string]$InstalledPlugin
 
 function Resolve-CutoverMcpContractFingerprint([string]$InstalledPluginRoot, [string]$MarketplaceSourceRoot) {
   if (-not [string]::IsNullOrWhiteSpace($MarketplaceSourceRoot)) {
-    $fingerprint = Get-McpContractFingerprintFromContractFile (Join-Path $MarketplaceSourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+    $fingerprint = Get-McpContractFingerprintFromContractFile (Join-Path $MarketplaceSourceRoot "elixir/priv/symphony_plus_plus/mcp_contract.json")
     if ($fingerprint) {
       return $fingerprint
     }

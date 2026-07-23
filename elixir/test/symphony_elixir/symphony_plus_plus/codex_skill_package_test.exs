@@ -85,26 +85,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     end
   end
 
-  test "MCP contract and packaged worker skill agree on compact calls" do
-    contract = @contract_path |> File.read!() |> Jason.decode!()
+  test "runtime schemas and packaged worker skill agree on compact calls" do
     worker_skill = @mcp_plugin_skill_path |> File.read!() |> normalize_newlines()
     prompt = File.read!(@mcp_plugin_prompt_path)
 
-    tool_schemas = Map.new(contract["tool_schemas"], &{&1["name"], &1})
-
-    assert "blocker_closeout" in get_in(tool_schemas, ["set_status", "optional_arguments"])
-    assert get_in(tool_schemas, ["mark_ready", "optional_arguments"]) == ["blocker_closeout"]
-    assert get_in(tool_schemas, ["complete_review", "optional_arguments"]) == ["note", "reference", "work_package_id"]
-
-    assert get_in(tool_schemas, ["attach_branch", "worker_required_arguments_by_branch_pattern", "literal"]) == ["head_sha"]
-    assert get_in(tool_schemas, ["attach_branch", "worker_required_arguments_by_branch_pattern", "templated_or_absent"]) == ["branch", "head_sha"]
-
-    assert get_in(tool_schemas, ["add_comment", "worker_compact_policy"]) =~ "body-only"
-    assert get_in(tool_schemas, ["list_comments", "worker_compact_policy"]) =~ "empty argument object"
-    assert get_in(tool_schemas, ["sync_pr", "attached_pr_policy"]) =~ "already attached PR"
-    assert get_in(tool_schemas, ["sync_pr", "required_arguments"]) == []
-    assert get_in(tool_schemas, ["sync_pr", "required_argument_sets"]) == []
-    assert "recovery" in get_in(tool_schemas, ["sync_pr", "optional_arguments"])
+    assert Map.has_key?(ToolCatalog.worker_tool_input_schema("set_status")["properties"], "blocker_closeout")
+    assert Map.keys(ToolCatalog.worker_tool_input_schema("mark_ready")["properties"]) == ["blocker_closeout"]
+    assert Map.keys(ToolCatalog.worker_tool_input_schema("complete_review")["properties"]) |> Enum.sort() == ["note", "reference"]
+    assert ToolCatalog.worker_tool_input_schema("add_comment")["required"] == ["body"]
+    assert ToolCatalog.worker_tool_input_schema("list_comments")["required"] == []
+    assert ToolCatalog.worker_tool_input_schema("sync_pr")["required"] == []
+    assert Map.has_key?(ToolCatalog.worker_tool_input_schema("sync_pr")["properties"], "recovery")
 
     for tool <- [
           "update_task_plan",
@@ -129,37 +120,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
 
       refute "work_package_id" in Map.keys(worker_schema["properties"])
     end
-
-    assert get_in(tool_schemas, ["add_comment", "required_arguments"]) == ["body", "target_id", "target_kind"]
-    assert get_in(tool_schemas, ["list_comments", "required_arguments"]) == ["target_id", "target_kind"]
-
-    for tool <- ["resolve_blocker", "add_comment", "list_comments", "resolve_comment", "read_guidance_request"] do
-      assert "work_package_id" in get_in(tool_schemas, [tool, "optional_arguments"])
-    end
-
-    for tool <- [
-          "update_task_plan",
-          "append_finding",
-          "append_progress",
-          "set_status",
-          "report_blocker",
-          "create_guidance_request",
-          "request_scope_expansion",
-          "attach_branch",
-          "attach_pr",
-          "sync_pr",
-          "submit_review_package",
-          "complete_review"
-        ] do
-      assert "work_package_id" in get_in(tool_schemas, [tool, "optional_arguments"])
-    end
-
-    assert get_in(contract, ["discovery_policy", "trusted_local_http_extra_tools"]) == [
-             "create_work_request",
-             "add_work_request_comment",
-             "list_comments",
-             "record_work_request_operator_decision"
-           ]
 
     for content <- [worker_skill, prompt] do
       assert content =~ "attach_branch(head_sha)"

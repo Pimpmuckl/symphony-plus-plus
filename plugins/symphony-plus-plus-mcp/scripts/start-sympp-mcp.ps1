@@ -502,14 +502,14 @@ function Get-McpContractFingerprintFromMarketplaceSource([string]$PluginRoot) {
     return $null
   }
 
-  return Get-McpContractFingerprintFromContractFile (Join-Path $marketplaceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+  return Get-McpContractFingerprintFromContractFile (Join-Path $marketplaceRoot "elixir/priv/symphony_plus_plus/mcp_contract.json")
 }
 
 function Resolve-LocalMcpContractFingerprint([string]$PluginRoot) {
   Write-SymppLauncherTrace "contract_fingerprint_resolution"
   $sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $PluginRoot "../.."))
   if (Test-SymphonySourceRoot $sourceRoot) {
-    $fingerprint = Get-McpContractFingerprintFromContractFile (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+    $fingerprint = Get-McpContractFingerprintFromContractFile (Join-Path $sourceRoot "elixir/priv/symphony_plus_plus/mcp_contract.json")
     if ($fingerprint) { return $fingerprint }
   }
 
@@ -523,7 +523,7 @@ function Resolve-ExpectedMcpContractFingerprint([string]$PluginRoot) {
       throw "SYMPP_REPO_ROOT does not look like a Symphony++ checkout: $explicitRepoRoot"
     }
 
-    $contractPath = Join-Path $explicitRepoRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json"
+    $contractPath = Join-Path $explicitRepoRoot "elixir/priv/symphony_plus_plus/mcp_contract.json"
     $fingerprint = Get-McpContractFingerprintFromContractFile $contractPath
     if ($fingerprint) {
       return $fingerprint

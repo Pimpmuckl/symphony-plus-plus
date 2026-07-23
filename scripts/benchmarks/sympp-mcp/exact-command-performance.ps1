@@ -281,7 +281,7 @@ try {
       $pluginRoot, (Join-Path $marketplaceRoot "elixir"),
       (Join-Path $marketplaceRoot "plugins/symphony-plus-plus/.codex-plugin"),
       (Join-Path $marketplaceRoot "plugins/symphony-plus-plus-mcp"),
-      (Join-Path $marketplaceRoot "implementation_docs_symphplusplus/mcp"),
+      (Join-Path $marketplaceRoot "elixir/priv/symphony_plus_plus"),
       (Split-Path -Parent $runtimeFile), $traceDir, $gitLogDir, (Join-Path $tempRoot "shim"),
       (Join-Path $tempRoot "profile"), (Join-Path $tempRoot "logs")
     )) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
@@ -289,7 +289,7 @@ try {
   Copy-SourcePlugin (Join-Path $marketplaceRoot "plugins/symphony-plus-plus-mcp")
   Copy-Item -LiteralPath (Join-Path $repoRoot "plugins/symphony-plus-plus/.codex-plugin/plugin.json") -Destination (Join-Path $marketplaceRoot "plugins/symphony-plus-plus/.codex-plugin/plugin.json") -Force
   Copy-Item -LiteralPath (Join-Path $repoRoot "elixir/mix.exs") -Destination (Join-Path $marketplaceRoot "elixir/mix.exs") -Force
-  Copy-Item -LiteralPath (Join-Path $repoRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json") -Destination (Join-Path $marketplaceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json") -Force
+  Copy-Item -LiteralPath (Join-Path $repoRoot "elixir/priv/symphony_plus_plus/mcp_contract.json") -Destination (Join-Path $marketplaceRoot "elixir/priv/symphony_plus_plus/mcp_contract.json") -Force
   Set-Content -LiteralPath (Join-Path $pluginRoot ".sympp-source-revision") -Value $revision -Encoding utf8NoBOM
   @{ source_type = "git"; source = "benchmark"; ref_name = "main"; sparse_paths = @(); revision = $revision } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $marketplaceRoot ".codex-marketplace-install.json") -Encoding utf8NoBOM
 

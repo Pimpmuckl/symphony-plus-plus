@@ -14,14 +14,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Resolve-SmokeRepoRoot {
-  if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
-    return [System.IO.Path]::GetFullPath($RepoRoot)
-  }
-
-  return [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-}
-
 function Get-ContractStringList($Value) {
   @($Value | ForEach-Object {
       if ($null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_)) {
@@ -30,31 +22,21 @@ function Get-ContractStringList($Value) {
     })
 }
 
-function Read-McpToolsContract {
-  $contractPath = Join-Path (Resolve-SmokeRepoRoot) "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json"
-  if (-not (Test-Path -LiteralPath $contractPath -PathType Leaf)) {
-    throw "MCP tools contract JSON is missing: $contractPath"
-  }
-
-  Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json
-}
-
-$McpToolsContract = Read-McpToolsContract
-$DiscoveryPolicy = $McpToolsContract.discovery_policy
-$UnboundContractTools = Get-ContractStringList $DiscoveryPolicy.unbound_tools
-$SoloTools = @($UnboundContractTools | Where-Object { $_ -like "solo_*" })
-$ExpectedGenericUnboundTools = @($UnboundContractTools | Where-Object { $_ -notlike "claim_local_*" })
-$ExpectedHttpUnboundTools = Get-ContractStringList $DiscoveryPolicy.trusted_local_http_extra_tools
-$ExpectedBoundWorkerTools = Get-ContractStringList $DiscoveryPolicy.bound_worker_tools
-$ArchitectTools = Get-ContractStringList $DiscoveryPolicy.unbound_schema_sets.architect_tools
-
-$ArchitectOnlyTools = @($ArchitectTools | Where-Object { $ExpectedBoundWorkerTools -notcontains $_ })
-$ExpectedUnboundTools = @($UnboundContractTools + $ExpectedHttpUnboundTools + $ExpectedBoundWorkerTools + $ArchitectTools | Sort-Object -Unique)
-$AllowedUnboundTools = $ExpectedUnboundTools
-$UnboundOnlyTools = @($AllowedUnboundTools | Where-Object { $ExpectedBoundWorkerTools -notcontains $_ })
+$contractRoot = if ([string]::IsNullOrWhiteSpace($RepoRoot)) { Join-Path $PSScriptRoot ".." } else { $RepoRoot }
+$contractPath = Join-Path ([System.IO.Path]::GetFullPath($contractRoot)) "elixir/priv/symphony_plus_plus/mcp_contract.json"
+$ToolSets = (Get-Content -LiteralPath $contractPath -Raw | ConvertFrom-Json).tool_sets
+$UnboundContractTools = Get-ContractStringList $ToolSets.unbound_tools
+$ExpectedHttpUnboundTools = Get-ContractStringList $ToolSets.trusted_local_http_extra_tools
+$WorkerTools = Get-ContractStringList $ToolSets.worker_tools
+$ArchitectTools = Get-ContractStringList $ToolSets.architect_tools
+$SharedWorkerArchitectTools = Get-ContractStringList $ToolSets.shared_worker_architect_tools
+$ExpectedBoundWorkerTools = @("sympp.health", "release_current_assignment") + $WorkerTools
+$ExpectedUnboundTools = @($UnboundContractTools + $ExpectedHttpUnboundTools + $WorkerTools + $ArchitectTools | Sort-Object -Unique)
+$ArchitectOnlyTools = @($ArchitectTools | Where-Object { $SharedWorkerArchitectTools -notcontains $_ })
+$UnboundOnlyTools = @($ExpectedUnboundTools | Where-Object { $ExpectedBoundWorkerTools -notcontains $_ })
 $ForbiddenUnboundTools = @()
 $ForbiddenBoundWorkerTools =
-  @($SoloTools + $ArchitectOnlyTools + $UnboundOnlyTools |
+  @($ArchitectOnlyTools + $UnboundOnlyTools |
     Where-Object { $_ -ne "sympp.health" } |
     Sort-Object -Unique)
 

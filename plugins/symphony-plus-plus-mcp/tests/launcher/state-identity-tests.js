@@ -71,10 +71,10 @@ try {
   const sourcePluginRoot = path.join(sourceRoot, "plugins", "symphony-plus-plus-mcp");
   fs.mkdirSync(installedRoot, { recursive: true });
   fs.mkdirSync(sourcePluginRoot, { recursive: true });
-  fs.mkdirSync(path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp"), { recursive: true });
+  fs.mkdirSync(path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus"), { recursive: true });
   fs.writeFileSync(path.join(sourceRoot, ".codex-marketplace-install.json"), JSON.stringify({ revision }));
   fs.writeFileSync(
-    path.join(sourceRoot, "implementation_docs_symphplusplus", "mcp", "mcp_tools_contract.json"),
+    path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus", "mcp_contract.json"),
     JSON.stringify({ mcp_contract_fingerprint: contract }),
   );
   const first = generationKey(installedRoot, sourcePluginRoot, sourceRoot);

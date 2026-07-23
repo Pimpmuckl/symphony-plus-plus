@@ -6,7 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RuntimeArtifactManifestScriptsTest do
   @build_sh Path.join(@repo_root, "scripts/build-sympp-runtime-artifact.sh")
   @publish_ps1 Path.join(@repo_root, "scripts/publish-sympp-runtime-artifact.ps1")
   @publish_sh Path.join(@repo_root, "scripts/publish-sympp-runtime-artifact.sh")
-  @contract_path Path.join(@repo_root, "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json")
+  @contract_path Path.join(@repo_root, "elixir/priv/symphony_plus_plus/mcp_contract.json")
 
   test "PowerShell and shell artifact builds share the stale-output cleanup" do
     package =

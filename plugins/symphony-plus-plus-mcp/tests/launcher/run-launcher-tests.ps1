@@ -138,13 +138,13 @@ try {
   $installedRoot = Join-Path $generationRoot "installed"
   $sourceRoot = Join-Path $generationRoot "source"
   $sourcePluginRoot = Join-Path $sourceRoot "plugin"
-  foreach ($directory in @($installedRoot, $sourcePluginRoot, (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp"))) {
+  foreach ($directory in @($installedRoot, $sourcePluginRoot, (Join-Path $sourceRoot "elixir/priv/symphony_plus_plus"))) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
   }
   Set-Content -LiteralPath (Join-Path $installedRoot "payload.txt") -Value "first" -NoNewline
   Set-Content -LiteralPath (Join-Path $sourcePluginRoot "payload.txt") -Value "first" -NoNewline
   Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json") -Value (@{ revision = "a" * 40 } | ConvertTo-Json -Compress) -NoNewline
-  Set-Content -LiteralPath (Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp/mcp_tools_contract.json") -Value (@{ mcp_contract_fingerprint = "c" * 64 } | ConvertTo-Json -Compress) -NoNewline
+  Set-Content -LiteralPath (Join-Path $sourceRoot "elixir/priv/symphony_plus_plus/mcp_contract.json") -Value (@{ mcp_contract_fingerprint = "c" * 64 } | ConvertTo-Json -Compress) -NoNewline
   $beforeGeneration = Get-SymppPluginGenerationKey $installedRoot $sourcePluginRoot $sourceRoot
   Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json") -Value (@{ revision = "b" * 40 } | ConvertTo-Json -Compress) -NoNewline
   $afterGeneration = Get-SymppPluginGenerationKey $installedRoot $sourcePluginRoot $sourceRoot
@@ -160,7 +160,7 @@ try {
   $sourceRoot = Join-Path $codexHome ".tmp/marketplaces/test-market"
   $sourcePluginRoot = Join-Path $sourceRoot "plugins/symphony-plus-plus-mcp"
   $installedRoot = Join-Path $codexHome "plugins/cache/test-market/symphony-plus-plus-mcp/0.1.9"
-  $contractRoot = Join-Path $sourceRoot "implementation_docs_symphplusplus/mcp"
+  $contractRoot = Join-Path $sourceRoot "elixir/priv/symphony_plus_plus"
   foreach ($directory in @($sourcePluginRoot, $installedRoot, $contractRoot, (Join-Path $sourceRoot "elixir"))) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
   }
@@ -168,7 +168,7 @@ try {
   $fingerprint = "c" * 64
   Set-Content -LiteralPath (Join-Path $sourceRoot "elixir/mix.exs") -Value "[]" -NoNewline
   Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json") -Value (@{ revision = $revision } | ConvertTo-Json -Compress) -NoNewline
-  Set-Content -LiteralPath (Join-Path $contractRoot "mcp_tools_contract.json") -Value (@{ mcp_contract_fingerprint = $fingerprint } | ConvertTo-Json -Compress) -NoNewline
+  Set-Content -LiteralPath (Join-Path $contractRoot "mcp_contract.json") -Value (@{ mcp_contract_fingerprint = $fingerprint } | ConvertTo-Json -Compress) -NoNewline
   Set-Content -LiteralPath (Join-Path $sourcePluginRoot "payload.txt") -Value "matching" -NoNewline
   Set-Content -LiteralPath (Join-Path $installedRoot "payload.txt") -Value "matching" -NoNewline
   $env:SYMPP_HOME = Join-Path $marketplaceRoot "sympp"
