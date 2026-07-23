@@ -5866,8 +5866,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  "solo_session_delete_after_days" => 1
                })
 
-      stale_at = DateTime.add(DateTime.utc_now(:microsecond), -2 * 24 * 60 * 60, :second)
-      fresh_at = DateTime.utc_now(:microsecond)
+      stale_at = DateTime.add(DateTime.utc_now(:microsecond), -8 * 24 * 60 * 60, :second)
+      expired_at = DateTime.add(DateTime.utc_now(:microsecond), -15 * 24 * 60 * 60, :second)
+      retained_at = DateTime.add(DateTime.utc_now(:microsecond), -13 * 24 * 60 * 60, :second)
 
       stale_active =
         repo
@@ -5881,13 +5882,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       old_archived =
         old_archived
         |> archive_solo_session!(repo)
-        |> set_solo_session_archived_at!(repo, stale_at)
+        |> set_solo_session_last_activity!(repo, expired_at)
 
       recent_archived =
         repo
         |> create_solo_session!("solo-retention-recent-archived")
         |> archive_solo_session!(repo)
-        |> set_solo_session_archived_at!(repo, fresh_at)
+        |> set_solo_session_last_activity!(repo, retained_at)
 
       payload = local_operator_dashboard_payload()
 
@@ -6022,7 +6023,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                    "solo_session_delete_after_days" => 1
                  })
 
-        stale_at = DateTime.add(DateTime.utc_now(:microsecond), -2 * 24 * 60 * 60, :second)
+        stale_at = DateTime.add(DateTime.utc_now(:microsecond), -8 * 24 * 60 * 60, :second)
 
         first_request = create_completed_skipped_work_request!(repo, "WR-LOCAL-THROTTLE-FIRST", stale_at)
 
@@ -7430,12 +7431,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   defp set_solo_session_last_activity!(%SoloSession{} = session, repo, %DateTime{} = timestamp) do
     session
     |> Ecto.Changeset.change(last_activity_at: timestamp, updated_at: timestamp)
-    |> repo.update!()
-  end
-
-  defp set_solo_session_archived_at!(%SoloSession{} = session, repo, %DateTime{} = timestamp) do
-    session
-    |> Ecto.Changeset.change(archived_at: timestamp, updated_at: timestamp)
     |> repo.update!()
   end
 

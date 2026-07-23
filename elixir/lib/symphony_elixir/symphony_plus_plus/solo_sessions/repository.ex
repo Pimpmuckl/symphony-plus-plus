@@ -11,6 +11,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository do
 
   @default_current_session_retry_attempts 50
   @default_entry_append_retry_attempts 200
+  @archive_after_days 7
+  @delete_after_days 14
+  @archivable_statuses ["active", "paused", "completed"]
   @solo_session_migrations [
     {20_260_515_150_000, SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CreateSymppSoloSessions, "20260515150000_create_sympp_solo_sessions.exs"},
     {20_260_515_153_000, SymphonyElixir.SymphonyPlusPlus.Repo.Migrations.CreateSymppSoloSessionEntries, "20260515153000_create_sympp_solo_session_entries.exs"}
@@ -23,8 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository do
           | :id_already_exists
           | :idempotency_key_conflict
           | :invalid_entry_idempotency_key
-          | :invalid_delete_after_days
-          | :invalid_stale_after_days
           | :invalid_status
           | :invalid_transition
           | :invalid_workspace_path
@@ -96,24 +97,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository do
 
   @spec archive_stale(repo()) :: {:ok, non_neg_integer()} | {:error, error()}
   def archive_stale(repo) when is_atom(repo) do
-    archive_stale(repo, DateTime.utc_now(:microsecond), 30)
+    archive_stale(repo, DateTime.utc_now(:microsecond))
   end
 
   @spec archive_stale(repo(), DateTime.t()) :: {:ok, non_neg_integer()} | {:error, error()}
   def archive_stale(repo, %DateTime{} = now) when is_atom(repo) do
-    archive_stale(repo, now, 30)
-  end
-
-  @spec archive_stale(repo(), DateTime.t(), pos_integer()) :: {:ok, non_neg_integer()} | {:error, error()}
-  def archive_stale(repo, %DateTime{} = now, stale_after_days)
-      when is_atom(repo) and is_integer(stale_after_days) and stale_after_days > 0 do
-    cutoff = DateTime.add(now, -stale_after_days * 24 * 60 * 60, :second)
+    cutoff = DateTime.add(now, -@archive_after_days * 24 * 60 * 60, :second)
 
     {count, _rows} =
       repo.update_all(
         from(session in SoloSession,
-          where: session.status in ^SoloSession.current_statuses(),
-          where: session.last_activity_at < ^cutoff
+          where: session.status in ^@archivable_statuses,
+          where: session.last_activity_at <= ^cutoff
         ),
         set: [status: "archived", archived_at: now, updated_at: now]
       )
@@ -123,30 +118,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  def archive_stale(repo, %DateTime{}, _stale_after_days) when is_atom(repo), do: {:error, :invalid_stale_after_days}
-
   @spec delete_archived(repo()) :: {:ok, non_neg_integer()} | {:error, error()}
   def delete_archived(repo) when is_atom(repo) do
-    delete_archived(repo, DateTime.utc_now(:microsecond), 30)
+    delete_archived(repo, DateTime.utc_now(:microsecond))
   end
 
   @spec delete_archived(repo(), DateTime.t()) :: {:ok, non_neg_integer()} | {:error, error()}
   def delete_archived(repo, %DateTime{} = now) when is_atom(repo) do
-    delete_archived(repo, now, 30)
-  end
-
-  @spec delete_archived(repo(), DateTime.t(), pos_integer()) :: {:ok, non_neg_integer()} | {:error, error()}
-  def delete_archived(repo, %DateTime{} = now, delete_after_days)
-      when is_atom(repo) and is_integer(delete_after_days) and delete_after_days > 0 do
-    cutoff = DateTime.add(now, -delete_after_days * 24 * 60 * 60, :second)
+    cutoff = DateTime.add(now, -@delete_after_days * 24 * 60 * 60, :second)
 
     repo.transaction(fn ->
       archived_ids =
         repo.all(
           from(session in SoloSession,
             where: session.status == "archived",
-            where: not is_nil(session.archived_at),
-            where: session.archived_at < ^cutoff,
+            where: session.last_activity_at <= ^cutoff,
             select: session.id
           )
         )
@@ -173,8 +159,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository do
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
-
-  def delete_archived(repo, %DateTime{}, _delete_after_days) when is_atom(repo), do: {:error, :invalid_delete_after_days}
 
   @spec append_entry(repo(), String.t(), map()) :: {:ok, SoloSessionEntry.t()} | {:error, error()}
   def append_entry(repo, solo_session_id, attrs) when is_atom(repo) and is_binary(solo_session_id) and is_map(attrs) do

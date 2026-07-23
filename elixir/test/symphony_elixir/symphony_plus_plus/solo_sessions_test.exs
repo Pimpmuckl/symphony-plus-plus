@@ -246,79 +246,71 @@ defmodule SymphonyElixir.SymphonyPlusPlus.SoloSessionsTest do
     assert paused_after_noop.archived_at == paused.archived_at
   end
 
-  test "archive_stale archives only active or paused sessions strictly older than threshold", %{repo: repo} do
+  test "retention archives active, paused, and completed sessions at seven inactive days", %{repo: repo} do
     now = ~U[2026-05-15 12:00:00.000000Z]
-    cutoff = DateTime.add(now, -30 * 24 * 60 * 60, :second)
-    older = DateTime.add(cutoff, -1, :second)
+    cutoff = DateTime.add(now, -7 * 24 * 60 * 60, :second)
     fresh = DateTime.add(cutoff, 1, :second)
 
     assert {:ok, old_active} = Service.create_or_attach_current(repo, session_attrs(caller_id: "old-active"))
-    old_active = set_last_activity!(repo, old_active, older)
+    old_active = set_last_activity!(repo, old_active, cutoff)
 
     assert {:ok, old_paused} = Service.create_or_attach_current(repo, session_attrs(caller_id: "old-paused"))
     assert {:ok, old_paused} = Service.pause(repo, old_paused.id, "active")
-    old_paused = set_last_activity!(repo, old_paused, older)
-
-    assert {:ok, boundary} = Service.create_or_attach_current(repo, session_attrs(caller_id: "boundary"))
-    boundary = set_last_activity!(repo, boundary, cutoff)
+    old_paused = set_last_activity!(repo, old_paused, cutoff)
 
     assert {:ok, fresh_session} = Service.create_or_attach_current(repo, session_attrs(caller_id: "fresh"))
     fresh_session = set_last_activity!(repo, fresh_session, fresh)
 
     assert {:ok, completed} = Service.create_or_attach_current(repo, session_attrs(caller_id: "completed-old"))
     assert {:ok, completed} = Service.complete(repo, completed.id, "active")
-    completed = set_last_activity!(repo, completed, older)
+    completed = set_last_activity!(repo, completed, cutoff)
 
-    assert {:ok, 2} = Service.archive_stale(repo, now, 30)
-    assert {:error, :invalid_stale_after_days} = Service.archive_stale(repo, now, 0)
+    assert {:ok, %{archived: 3, deleted: 0}} = Service.retention_pass(repo, now)
 
     assert {:ok, old_active} = Service.get(repo, old_active.id)
     assert {:ok, old_paused} = Service.get(repo, old_paused.id)
-    assert {:ok, boundary} = Service.get(repo, boundary.id)
     assert {:ok, fresh_session} = Service.get(repo, fresh_session.id)
     assert {:ok, completed} = Service.get(repo, completed.id)
 
     assert old_active.status == "archived"
-    assert old_active.last_activity_at == older
+    assert old_active.last_activity_at == cutoff
     assert old_active.archived_at == now
     assert old_paused.status == "archived"
     assert old_paused.archived_at == now
-    assert boundary.status == "active"
     assert fresh_session.status == "active"
-    assert completed.status == "completed"
+    assert completed.status == "archived"
   end
 
-  test "delete_archived deletes only archived sessions strictly older than threshold", %{repo: repo} do
+  test "retention deletes at fourteen inactive days, including late archives, and cascades entries", %{repo: repo} do
     now = ~U[2026-05-15 12:00:00.000000Z]
-    cutoff = DateTime.add(now, -30 * 24 * 60 * 60, :second)
-    older = DateTime.add(cutoff, -1, :second)
+    cutoff = DateTime.add(now, -14 * 24 * 60 * 60, :second)
     fresh = DateTime.add(cutoff, 1, :second)
 
-    assert {:ok, stale} = Service.create_or_attach_current(repo, session_attrs(caller_id: "stale-archived"))
-    assert {:ok, entry} = Service.append_progress(repo, stale.id, %{summary: "Old note"})
-    assert {:ok, stale} = Service.archive(repo, stale.id, "active")
-    stale = set_archived_at!(repo, stale, older)
+    assert {:ok, late} = Service.create_or_attach_current(repo, session_attrs(caller_id: "late-completed"))
+    assert {:ok, late_entry} = Service.append_progress(repo, late.id, %{summary: "Late note"})
+    assert {:ok, late} = Service.complete(repo, late.id, "active")
+    late = set_last_activity!(repo, late, cutoff)
 
-    assert {:ok, boundary} = Service.create_or_attach_current(repo, session_attrs(caller_id: "boundary-archived"))
-    assert {:ok, boundary} = Service.archive(repo, boundary.id, "active")
-    boundary = set_archived_at!(repo, boundary, cutoff)
+    assert {:ok, archived} = Service.create_or_attach_current(repo, session_attrs(caller_id: "boundary-archived"))
+    assert {:ok, archived_entry} = Service.append_progress(repo, archived.id, %{summary: "Old note"})
+    assert {:ok, archived} = Service.archive(repo, archived.id, "active")
+    archived = set_last_activity!(repo, archived, cutoff)
+    archived = set_archived_at!(repo, archived, now)
 
     assert {:ok, recent} = Service.create_or_attach_current(repo, session_attrs(caller_id: "recent-archived"))
     assert {:ok, recent} = Service.archive(repo, recent.id, "active")
-    recent = set_archived_at!(repo, recent, fresh)
+    recent = set_last_activity!(repo, recent, fresh)
+    recent = set_archived_at!(repo, recent, DateTime.add(now, -30 * 24 * 60 * 60, :second))
 
-    assert {:ok, active_old} = Service.create_or_attach_current(repo, session_attrs(caller_id: "active-old"))
-    active_old = set_last_activity!(repo, active_old, older)
+    assert {:ok, %{archived: 1, deleted: 2}} = Service.retention_pass(repo, now)
 
-    assert {:ok, 1} = Service.delete_archived(repo, now, 30)
-    assert {:error, :invalid_delete_after_days} = Service.delete_archived(repo, now, 0)
+    assert late.last_activity_at == cutoff
+    assert archived.last_activity_at == cutoff
+    assert {:error, :not_found} = Service.get(repo, late.id)
+    assert {:error, :not_found} = Service.get(repo, archived.id)
+    refute Enum.any?(repo.all(SoloSessionEntry), &(&1.id in [late_entry.id, archived_entry.id]))
 
-    assert {:error, :not_found} = Service.get(repo, stale.id)
-    refute Enum.any?(repo.all(SoloSessionEntry), &(&1.id == entry.id))
-
-    assert {:ok, ^boundary} = Service.get(repo, boundary.id)
     assert {:ok, ^recent} = Service.get(repo, recent.id)
-    assert {:ok, ^active_old} = Service.get(repo, active_old.id)
   end
 
   test "read and list do not advance activity", %{repo: repo} do

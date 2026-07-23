@@ -438,10 +438,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
              archive_after_days: settings.work_request_archive_after_days,
              delete_after_days: settings.solo_session_delete_after_days
            ),
-         {:ok, _solo_archived_count} <-
-           SoloSessionService.archive_stale(Repo, now, settings.work_request_archive_after_days),
-         {:ok, _solo_deleted_count} <-
-           SoloSessionService.delete_archived(Repo, now, settings.solo_session_delete_after_days) do
+         {:ok, _solo_summary} <- SoloSessionService.retention_pass(Repo, now) do
       :ok
     end
   end

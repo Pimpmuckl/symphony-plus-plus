@@ -184,7 +184,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     WorkPackage
     |> expired_terminal_work_package_query(cutoff)
     |> repo.all()
-    |> MapSet.new(& &1.id)
+    |> MapSet.new()
     |> MapSet.difference(work_request_work_package_ids)
     |> then(&{:ok, &1})
   rescue
@@ -201,7 +201,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       where: is_nil(work_package.work_request_id),
       where: is_nil(child_work_package.id),
       where: work_package.updated_at <= ^cutoff,
-      order_by: [asc: work_package.updated_at, asc: work_package.id]
+      select: work_package.id
     )
   end
 
@@ -397,10 +397,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
              archive_after_days: settings.work_request_archive_after_days,
              delete_after_days: settings.solo_session_delete_after_days
            ),
-         {:ok, _solo_archived_count} <-
-           SoloSessionService.archive_stale(repo, now, settings.work_request_archive_after_days),
-         {:ok, _solo_deleted_count} <-
-           SoloSessionService.delete_archived(repo, now, settings.solo_session_delete_after_days) do
+         {:ok, _solo_summary} <- SoloSessionService.retention_pass(repo, now) do
       :ok
     end
   end
