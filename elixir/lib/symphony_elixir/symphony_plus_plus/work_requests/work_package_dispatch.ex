@@ -13,9 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @mcp_worker_skill "symphony-plus-plus-mcp:symphony-worker"
-  @default_worker_skill "symphony-plus-plus:symphony-worker"
   @mcp_work_package_skill "symphony-plus-plus-mcp:symphony-work-package"
-  @repo_work_package_skill "symphony-work-package"
   @preferred_worker_skill_set [@mcp_worker_skill, @mcp_work_package_skill]
 
   @type dispatch_result :: %{
@@ -149,10 +147,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
       },
       required_skills: @preferred_worker_skill_set,
       preferred_skill_set: @preferred_worker_skill_set,
-      supported_skill_sets: [
-        @preferred_worker_skill_set,
-        [@default_worker_skill, @repo_work_package_skill]
-      ],
+      supported_skill_sets: [@preferred_worker_skill_set],
       launch_prompt: worker_launch_prompt(work_request, work_package, claim_arguments)
     }
     |> Map.reject(fn {_key, value} -> is_nil(value) end)
@@ -165,7 +160,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
     WorkPackage #{prompt_data(work_package.id)}: #{prompt_data(work_package.title)}
     Parent WorkRequest: #{prompt_data(work_request.id)}.
 
-    Skills: `#{@mcp_worker_skill}` + `#{@mcp_work_package_skill}`; fallback `#{@default_worker_skill}` + `#{@repo_work_package_skill}`.
+    Skills: `#{@mcp_worker_skill}` + `#{@mcp_work_package_skill}`.
     Start: call `claim_local_assignment` with #{claim_arguments}; stop on paused, owned, or scope failure.
     Then call `get_current_assignment()`, read package resources, and update the task plan before coding.
     Track progress, findings, blockers, validation, and review evidence. Stay inside this WorkPackage and never request or expose raw secrets.

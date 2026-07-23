@@ -148,8 +148,6 @@ Worker prompts must include:
 
 - Preferred packaged setup: `symphony-plus-plus-mcp:symphony-worker` plus
   `symphony-plus-plus-mcp:symphony-work-package`.
-- Repo-local fallback: `symphony-plus-plus:symphony-worker` plus copied
-  `symphony-work-package`.
 - WorkPackage id, branch/base, scope, acceptance, validation, optional review requirement,
   line/PR-size budget, and stop conditions.
 - The ledger claim payload or clear recovery/legacy bootstrap label. The normal

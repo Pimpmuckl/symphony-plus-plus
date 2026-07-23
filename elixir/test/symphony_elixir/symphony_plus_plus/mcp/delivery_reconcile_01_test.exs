@@ -230,8 +230,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     assert payload["worker_bootstrap"]["required_skills"] == payload["worker_bootstrap"]["preferred_skill_set"]
 
     assert payload["worker_bootstrap"]["supported_skill_sets"] == [
-             ["symphony-plus-plus-mcp:symphony-worker", "symphony-plus-plus-mcp:symphony-work-package"],
-             ["symphony-plus-plus:symphony-worker", "symphony-work-package"]
+             ["symphony-plus-plus-mcp:symphony-worker", "symphony-plus-plus-mcp:symphony-work-package"]
            ]
 
     refute Map.has_key?(payload["worker_bootstrap"], "launch_prompt")

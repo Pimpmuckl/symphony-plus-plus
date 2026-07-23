@@ -13,7 +13,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase do
       alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
 
       @repo_root Path.expand("../../../../", __DIR__)
-      @skill_path Path.join(@repo_root, ".codex/skills/symphony-work-package/SKILL.md")
       @plugin_manifest_path Path.join(@repo_root, "plugins/symphony-plus-plus/.codex-plugin/plugin.json")
       @plugin_version @plugin_manifest_path |> File.read!() |> Jason.decode!() |> Map.fetch!("version")
       @plugin_mcp_path Path.join(@repo_root, "plugins/symphony-plus-plus/.mcp.json")
@@ -50,12 +49,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase do
       @smoke_script_path Path.join(@repo_root, "scripts/smoke-sympp-mcp-http.ps1")
       @worker_secret_script_path Path.join(@repo_root, "scripts/sympp-worker-secret.ps1")
       @worker_secret_shell_path Path.join(@repo_root, "scripts/sympp-worker-secret.sh")
-      @prompt_path Path.join(@repo_root, ".codex/skills/symphony-work-package/references/worker_prompt.md")
       @mcp_plugin_prompt_path Path.join(
                                 @repo_root,
                                 "plugins/symphony-plus-plus-mcp/skills/symphony-work-package/references/worker_prompt.md"
                               )
-      @wiring_path Path.join(@repo_root, ".codex/skills/symphony-work-package/references/mcp_wiring.md")
       @mcp_plugin_wiring_path Path.join(@repo_root, "plugins/symphony-plus-plus-mcp/skills/symphony-work-package/references/mcp_wiring.md")
       @contract_path Path.join(@repo_root, "elixir/priv/symphony_plus_plus/mcp_contract.json")
 
