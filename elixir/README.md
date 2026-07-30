@@ -323,11 +323,10 @@ make ci-static
 make ci-test
 make ci-dialyzer
 make ci-coverage
-make ci-hygiene
 ```
 
-Use `make ci-full` before release-style handoff when you need coverage,
-Dialyzer, and hygiene ratchets in one local command.
+Use `make ci-full` before release-style handoff when you need coverage and
+Dialyzer in one local command.
 
 Run the real external end-to-end test only when you want Symphony to create disposable Linear
 resources and launch a real `codex app-server` session:

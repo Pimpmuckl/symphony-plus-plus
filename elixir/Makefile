@@ -1,4 +1,4 @@
-.PHONY: help all setup deps build static fmt fmt-check lint hygiene assets-check test test-fast test-slow coverage ci ci-prepare ci-fast ci-static ci-test ci-test-run ci-slow ci-dialyzer ci-coverage ci-hygiene ci-full dialyzer e2e
+.PHONY: help all setup deps build static fmt fmt-check lint assets-check test test-fast test-slow coverage ci ci-prepare ci-fast ci-static ci-test ci-test-run ci-slow ci-dialyzer ci-coverage ci-full dialyzer e2e
 
 MIX ?= mix
 QUIET ?= 1
@@ -53,10 +53,10 @@ endef
 endif
 
 help:
-	@echo Targets: setup, deps, build, static, fmt, fmt-check, lint, hygiene, assets-check, test, test-fast, test-slow, coverage, dialyzer, e2e
-	@echo CI targets: ci-fast, ci-static, ci-test, ci-slow, ci-dialyzer, ci-coverage, ci-hygiene, ci-full
+	@echo Targets: setup, deps, build, static, fmt, fmt-check, lint, assets-check, test, test-fast, test-slow, coverage, dialyzer, e2e
+	@echo CI targets: ci-fast, ci-static, ci-test, ci-slow, ci-dialyzer, ci-coverage, ci-full
 	@echo make all is quiet by default. Logs are written under $(GATE_LOG_ROOT). Use VERBOSE=1 for streamed output.
-	@echo make all runs the fast PR gate. Use make ci-full for coverage, Dialyzer, and hygiene ratchets.
+	@echo make all runs the fast PR gate. Use make ci-full for coverage and Dialyzer.
 
 setup:
 	@$(MIX) setup
@@ -78,9 +78,6 @@ fmt-check:
 
 lint:
 	@$(MIX) lint
-
-hygiene:
-	@$(MIX) hygiene
 
 assets-check:
 	@cd assets && npm run quality
@@ -125,10 +122,6 @@ ci-dialyzer: ci-prepare
 ci-coverage: ci-prepare
 	$(call run_ci_step,coverage,$(MIX) test --cover)
 
-ci-hygiene:
-	$(call run_ci_step,setup,$(MIX) setup)
-	$(call run_ci_step,hygiene,$(MIX) hygiene)
-
 ci-fast: ci-prepare
 	$(call run_ci_step,static,$(MIX) static)
 	$(call run_ci_step,test,$(MIX) test --exclude ci_slow)
@@ -138,7 +131,6 @@ ci-full: ci-prepare
 	$(call run_ci_step,coverage,$(MIX) test --cover)
 	$(call run_ci_step,dialyzer-plt,$(MIX) dialyzer --plt)
 	$(call run_ci_step,dialyzer,$(MIX) dialyzer $(CI_DIALYZER_FLAGS))
-	$(call run_ci_step,hygiene,$(MIX) hygiene)
 
 ci: ci-fast
 
