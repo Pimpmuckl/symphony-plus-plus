@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { canArchiveWorkRequest } from "./request-detail";
+import { canArchiveWorkRequest, RequestDetailContent } from "./request-detail";
 import { RecentDecisionsDisclosure } from "./detail-extras";
 import type { WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
+import { Dialog } from "@/components/ui/dialog";
 
 describe("request detail actions", () => {
   it("allows archive for derived delivered requests before completion is persisted", () => {
@@ -53,5 +54,33 @@ describe("request detail actions", () => {
     } satisfies WorkRequestDetail;
 
     expect(renderToStaticMarkup(createElement(RecentDecisionsDisclosure, { detail }))).toContain("5 recorded");
+  });
+
+  it("keeps status actions behind the summary-bar glyph", () => {
+    const detail = {
+      work_request: { id: "wr-actions", title: "Actionable request", status: "sliced" },
+      work_packages: [],
+    } satisfies WorkRequestDetail;
+    const html = renderToStaticMarkup(createElement(
+      Dialog,
+      { open: true },
+      createElement(RequestDetailContent, {
+        detail,
+        onSelectGuidance: () => undefined,
+        onCopyArchitectHandoff: async () => ({ handoff: { prompt: "" }, copied: false }),
+        onArchiveWorkRequest: async () => undefined,
+        onChangeWorkRequestState: async () => undefined,
+        onDeleteWorkRequest: async () => undefined,
+        canMutateOperatorActions: true,
+        onSubmitComment: async () => ({ id: "comment-1", body: "" }),
+        onResolveComment: async () => ({ id: "comment-1", body: "" }),
+        canMutateComments: false,
+      }),
+    ));
+
+    expect(html).toContain("WorkPackages");
+    expect(html).toContain('aria-label="Show WorkRequest status actions"');
+    expect(html).toContain("Mark Delivered");
+    expect(html.indexOf("WorkPackages")).toBeLessThan(html.indexOf("Mark Delivered"));
   });
 });

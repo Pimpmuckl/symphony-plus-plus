@@ -8,7 +8,7 @@ import { clarificationGuidanceItem } from "./dashboard-data";
 import { finishedRequestChildrenStorageKey, sortWorkRequestPackages, sortWorkRequestDetails } from "./workstream-data";
 import { activeBlockerEntityCounts, productTreeCounts, requestProgress } from "./workstream-progress";
 import { requestBoardState, sliceBlockerCount, sliceGuidanceCount, type BoardRowStateKind } from "./workstream-row-state";
-import { RequestIdentityCopyButton, RequestInfoButton, RequestProgressBar, RowBadgeSlot } from "./workstream-row-ui";
+import { RequestAttentionBadge, RequestIdentityCopyButton, RequestInfoButton, RequestProgressBar } from "./workstream-row-ui";
 import { requestUpdateKey } from "./update-animations";
 import { dashboardPrefersReducedMotion, updateMotionAttributes } from "@/components/dashboard/motion-utils";
 import { useAutoCollapseWhenDone } from "./workstream-auto-collapse";
@@ -57,7 +57,6 @@ export function WorkstreamBoard({
   const blockerCounts = useMemo(() => activeBlockerEntityCounts(activeBlockingEdges, repoDetails), [activeBlockingEdges, repoDetails]);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const contextSignature = useMemo(() => workstreamContextSignature(sortedActiveDetails), [sortedActiveDetails]);
-
   return (
     <div className="workstream-board-shell">
       {showContextBar ? <WorkstreamContextBar boardRef={boardRef} repoLabel={repoLabel} signature={contextSignature} /> : null}
@@ -66,13 +65,13 @@ export function WorkstreamBoard({
           const stateKey = finishedRequestChildrenStorageKey(finishedRequestScopeKey, detail.work_request.id);
           const expanded = expandedFinishedRequests[stateKey] === true;
           const exiting = exitingRequestIds.has(detail.work_request.id);
-
           return (
             <ProductRequestRow
               key={exiting ? `${detail.work_request.id}:exiting` : detail.work_request.id}
               detail={detail}
               now={now}
               exiting={exiting}
+              activeBlockingEdges={activeBlockingEdges}
               packageById={packageById}
               activeBlockerCount={blockerCounts.requests.get(detail.work_request.id) ?? 0}
               activeBlockerCountBySliceId={blockerCounts.slices}
@@ -97,12 +96,10 @@ function useExitingRequestDetails(currentDetails: WorkRequestDetail[]) {
   const previousDetailsRef = useRef(currentDetails);
   const timersRef = useRef<number[]>([]);
   const [exitingDetails, setExitingDetails] = useState<WorkRequestDetail[]>([]);
-
   useLayoutEffect(() => {
     const currentIds = new Set(currentDetails.map(requestDetailId));
     const removedDetails = previousDetailsRef.current.filter((detail) => !currentIds.has(requestDetailId(detail)));
     previousDetailsRef.current = currentDetails;
-
     if (removedDetails.length === 0 || dashboardPrefersReducedMotion()) return;
 
     const removedIds = new Set(removedDetails.map(requestDetailId));
@@ -160,6 +157,7 @@ export function ProductRequestRow({
   detail,
   now,
   exiting = false,
+  activeBlockingEdges,
   packageById,
   activeBlockerCount,
   activeBlockerCountBySliceId,
@@ -180,6 +178,7 @@ export function ProductRequestRow({
   detail: WorkRequestDetail;
   now?: string;
   exiting?: boolean;
+  activeBlockingEdges: ActiveBlockingEdge[];
   packageById: Map<string, WorkPackageCard>;
   activeBlockerCount: number;
   activeBlockerCountBySliceId: Map<string, number>;
@@ -248,7 +247,15 @@ export function ProductRequestRow({
             <RequestIdentityCopyButton detail={detail} />
           </div>
           <div className="v3-request-heading">
-            <RowBadgeSlot active={requestState.kind === "active"} label={badgeLabel} variant={requestState.badgeVariant} />
+            <RequestAttentionBadge
+              activeBlockingEdges={activeBlockingEdges}
+              detail={detail}
+              label={badgeLabel}
+              onSelectCard={onSelectCard}
+              onSelectGuidance={onSelectGuidance}
+              packageById={packageById}
+              state={requestState}
+            />
             <button type="button" className="v3-request-main" aria-expanded={expanded} onClick={() => onSetOpen(!expanded)}>
               <RequestIdentity detail={detail} branch={branch} />
             </button>

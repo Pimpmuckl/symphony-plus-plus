@@ -120,6 +120,7 @@ describe("focus board", () => {
     }));
 
     expect(html).toContain('aria-labelledby="focus-board-attention"');
+    expect(html).toContain('aria-label="Open attention details for Blocked by edge"');
     expect(html).toContain('title="slice-edge"');
   });
 

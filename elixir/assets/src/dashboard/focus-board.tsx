@@ -303,6 +303,7 @@ export function FocusBoard({
       key={item.id}
       detail={item.detail}
       now={now}
+      activeBlockingEdges={activeBlockingEdges}
       packageById={packageById}
       activeBlockerCount={blockerCounts.requests.get(item.id) ?? 0}
       activeBlockerCountBySliceId={blockerCounts.slices}

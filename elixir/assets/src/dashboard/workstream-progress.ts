@@ -75,6 +75,12 @@ export function activeBlockerEntityCounts(edges: ActiveBlockingEdge[], requestDe
   };
 }
 
+export function activeBlockerEdgesForRequest(edges: ActiveBlockingEdge[], detail: WorkRequestDetail) {
+  const requestId = detail.work_request.id;
+  const requestIndex = blockerRequestIndex([detail]);
+  return edges.filter((edge) => activeBlockerRequestIds(edge, requestIndex).has(requestId));
+}
+
 type ActiveBlockerEntityKeySets = {
   requests: Map<string, Set<string>>;
   slices: Map<string, Set<string>>;

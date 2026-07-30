@@ -133,8 +133,8 @@ export function DetailDisclosure({
 export function DetailFacts({ facts }: { facts: Array<[string, string | null | undefined]> }) {
   return (
     <dl className="detail-facts">
-      {facts.map(([label, value]) => (
-        <div key={label}>
+      {facts.map(([label, value], index) => (
+        <div key={`${label}:${index}`}>
           <dt>{label}</dt>
           <dd>{value || "Not recorded"}</dd>
         </div>

@@ -1,4 +1,4 @@
-import type { WorkRequestDetail } from "@/types/dashboard";
+import type { ActiveBlockingEdge, GuidanceItem, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import { Info } from "lucide-react";
 import type { ComponentProps } from "react";
 
@@ -7,6 +7,8 @@ import { DetailCopyButton } from "@/components/dashboard/detail-copy-button";
 import { Button } from "@/components/ui/button";
 import type { CardDetailSelect } from "./runtime";
 import { requestIdentityCopyText } from "./workstream-utils";
+import type { BoardRowState } from "./workstream-row-state";
+import { requestAttentionTarget } from "./workstream-attention";
 
 export function RequestInfoButton({ detail, onSelectCard }: { detail: WorkRequestDetail; onSelectCard: CardDetailSelect }) {
   return (
@@ -35,18 +37,61 @@ export function RequestIdentityCopyButton({ detail }: { detail: WorkRequestDetai
   );
 }
 
+export function RequestAttentionBadge({
+  activeBlockingEdges,
+  detail,
+  label,
+  onSelectCard,
+  onSelectGuidance,
+  packageById,
+  state,
+}: {
+  activeBlockingEdges: ActiveBlockingEdge[];
+  detail: WorkRequestDetail;
+  label: string;
+  onSelectCard: CardDetailSelect;
+  onSelectGuidance: (item: GuidanceItem) => void;
+  packageById: Map<string, WorkPackageCard>;
+  state: BoardRowState;
+}) {
+  const target = requestAttentionTarget(detail, packageById, activeBlockingEdges, state.kind);
+  const openAttention = target
+    ? () => target.kind === "guidance" ? onSelectGuidance(target.item) : onSelectCard(target.selection)
+    : undefined;
+
+  return (
+    <RowBadgeSlot
+      active={state.kind === "active"}
+      actionLabel={openAttention ? `Open attention details for ${detail.work_request.title || detail.work_request.id}` : undefined}
+      label={label}
+      onClick={openAttention}
+      variant={state.badgeVariant}
+    />
+  );
+}
+
 export function RowBadgeSlot({
   active = false,
+  actionLabel,
   label,
+  onClick,
   variant,
 }: {
   active?: boolean;
+  actionLabel?: string;
   label: string;
+  onClick?: () => void;
   variant?: ComponentProps<typeof AnimatedBadge>["variant"];
 }) {
   return (
-    <span className="v3-row-badge-slot">
-      <AnimatedBadge active={active} label={label} variant={variant} className="v3-row-status-badge" />
+    <span className="v3-row-badge-slot" data-interactive={onClick ? "true" : undefined}>
+      {onClick ? (
+        <button type="button" className="v3-row-badge-button" aria-label={actionLabel} onClick={onClick}>
+          <AnimatedBadge active={active} label={label} variant={variant} className="v3-row-status-badge" />
+        </button>
+      ) : (
+        <AnimatedBadge active={active} label={label} variant={variant} className="v3-row-status-badge" />
+      )}
     </span>
   );
 }
