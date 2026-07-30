@@ -34,6 +34,11 @@ jobs:
           $stdout = Join-Path $outputDirectory "stdout.toon"
           $stderr = Join-Path $outputDirectory "stderr.log"
 
+          $env:SYMPP_REAL_MIX = (& mise -C elixir which mix).Trim()
+          if (-not [IO.Path]::GetExtension($env:SYMPP_REAL_MIX)) { $env:SYMPP_REAL_MIX += '.bat' }
+          $mixWrapper = Join-Path $env:RUNNER_TEMP 'sympp-mix.ps1'
+          Set-Content -LiteralPath $mixWrapper -Value '& $env:SYMPP_REAL_MIX @args; if ($LASTEXITCODE) { exit $LASTEXITCODE }'
+          $env:SYMPP_MIX = $mixWrapper
           & pwsh -NoProfile -File scripts/benchmarks/sympp-mcp/run-performance-gate.ps1 1> $stdout 2> $stderr
           $gateExitCode = $LASTEXITCODE
 
