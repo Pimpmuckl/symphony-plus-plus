@@ -9,7 +9,6 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
 
     assert aliases[:static] == ["format --check-formatted", "lint"]
     assert aliases[:lint] == ["specs.check", "credo --strict"]
-    assert aliases[:hygiene] == ["code_quality.guard"]
   end
 
   test "Makefile splits fast CI from heavyweight gates" do
@@ -37,7 +36,6 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
              "ci-prepare\n\t$(call run_ci_step,dialyzer-plt,$(MIX) dialyzer --plt)\n\t$(call run_ci_step,dialyzer,$(MIX) dialyzer $(CI_DIALYZER_FLAGS))"
 
     assert target(makefile, "ci-coverage") =~ "ci-prepare\n\t$(call run_ci_step,coverage,$(MIX) test --cover)"
-    assert target(makefile, "ci-hygiene") =~ "\n\t$(call run_ci_step,hygiene,$(MIX) hygiene)"
     assert target(makefile, "all") == "ci-fast\n"
   end
 

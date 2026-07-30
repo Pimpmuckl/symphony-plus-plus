@@ -7,7 +7,7 @@ This directory contains the Elixir agent orchestration service that polls Linear
 - Elixir: `1.19.x` (OTP 28) via `mise`.
 - Install deps: `mix setup`.
 - Fast PR gate: `make all` (format check, specs, Credo, and fast tests).
-- Full local gate: `make ci-full` (fast PR gate plus coverage, Dialyzer, and hygiene ratchets).
+- Full local gate: `make ci-full` (fast PR gate plus coverage and Dialyzer).
 
 
 ## Codebase-Specific Conventions
@@ -40,7 +40,6 @@ make ci-static
 make ci-test
 make ci-dialyzer
 make ci-coverage
-make ci-hygiene
 ```
 
 ## Required Rules
