@@ -26,9 +26,9 @@ try {
 
 const summary = summarize(results);
 console.log(JSON.stringify(summary, null, 2));
-const breaches = limits.filter(({ metric, limit }) => metricValue(summary, metric) > limit);
+const breaches = limits.filter(({ metric, limit }) => limitValue(summary, results, metric) > limit);
 for (const { metric, limit } of breaches) {
-  console.error(`budget exceeded: metric=${metric} measured=${metricValue(summary, metric)} limit=${limit}`);
+  console.error(`budget exceeded: metric=${metric} measured=${limitValue(summary, results, metric)} limit=${limit}`);
 }
 if (breaches.length > 0) process.exitCode = 1;
 
@@ -199,7 +199,11 @@ function options(name) {
   const key = `--${name}`;
   const prefix = `${key}=`;
   return process.argv.flatMap((argument, index) => {
-    if (argument === key) return process.argv[index + 1] ? [process.argv[index + 1]] : [];
+    if (argument === key) {
+      const value = process.argv[index + 1];
+      if (!value || value.startsWith("--")) throw new Error(`${key} requires a value`);
+      return [value];
+    }
     return argument.startsWith(prefix) ? [argument.slice(prefix.length)] : [];
   });
 }
@@ -221,4 +225,10 @@ function parseLimit(raw) {
 
 function metricValue(summary, metric) {
   return metric.split(".").reduce((value, key) => value[key], summary);
+}
+
+function limitValue(summary, results, metric) {
+  if (!metric.endsWith(".request_count")) return metricValue(summary, metric);
+  const mode = metric.split(".")[0];
+  return Math.max(...results.map((result) => result[mode].request_count));
 }
