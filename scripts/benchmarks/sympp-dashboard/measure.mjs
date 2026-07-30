@@ -11,6 +11,7 @@ const { chromium } = require("playwright");
 const url = option("url") || "http://127.0.0.1:20051/sympp/board";
 const samples = Number(option("samples") || 10);
 const details = process.argv.includes("--details");
+const limits = options("limit").map(parseLimit);
 
 if (!Number.isInteger(samples) || samples < 1) throw new Error("--samples must be a positive integer");
 
@@ -23,7 +24,13 @@ try {
   await browser.close();
 }
 
-console.log(JSON.stringify(summarize(results), null, 2));
+const summary = summarize(results);
+console.log(JSON.stringify(summary, null, 2));
+const breaches = limits.filter(({ metric, limit }) => metricValue(summary, metric) > limit);
+for (const { metric, limit } of breaches) {
+  console.error(`budget exceeded: metric=${metric} measured=${metricValue(summary, metric)} limit=${limit}`);
+}
+if (breaches.length > 0) process.exitCode = 1;
 
 async function measureSample(browser) {
   const context = await browser.newContext({ reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
@@ -39,12 +46,13 @@ async function measureSample(browser) {
   const requestStarts = new WeakMap();
 
   page.on("request", (request) => requestStarts.set(request, performance.now()));
-  page.on("response", (response) => {
+  const recordDashboardResponse = (response) => {
     if (!dashboardSnapshotPath(response.url())) return;
     const request = response.request();
     const startedAt = requestStarts.get(request) ?? performance.now();
     requests.push(recordResponse(response, startedAt));
-  });
+  };
+  page.on("response", recordDashboardResponse);
 
   const coldStartedAt = performance.now();
   const deferredResponsePromise = page.waitForResponse((response) => dashboardSnapshotPath(response.url()) === "/dashboard/deferred");
@@ -86,6 +94,7 @@ async function measureSample(browser) {
   );
   await paint(page);
   const refreshUsableMs = performance.now() - refreshStartedAt;
+  page.off("response", recordDashboardResponse);
   const allRequests = await settledRequests(requests);
   const refreshRequests = allRequests.slice(coldRequests.length);
 
@@ -183,9 +192,33 @@ async function paint(page) {
 }
 
 function option(name) {
+  return options(name)[0];
+}
+
+function options(name) {
   const key = `--${name}`;
-  const index = process.argv.indexOf(key);
-  if (index !== -1) return process.argv[index + 1];
   const prefix = `${key}=`;
-  return process.argv.find((argument) => argument.startsWith(prefix))?.slice(prefix.length);
+  return process.argv.flatMap((argument, index) => {
+    if (argument === key) return process.argv[index + 1] ? [process.argv[index + 1]] : [];
+    return argument.startsWith(prefix) ? [argument.slice(prefix.length)] : [];
+  });
+}
+
+function parseLimit(raw) {
+  const separator = raw.indexOf("=");
+  if (separator === -1) throw new Error(`--limit must be metric=non-negative-number: ${raw}`);
+  const metric = raw.slice(0, separator);
+  const rawLimit = raw.slice(separator + 1);
+  const limit = Number(rawLimit);
+  if (!/^(cold|refresh)\.(api_ms_p50|browser_usable_ms_p50|bytes_p50|request_count)$/.test(metric)) {
+    throw new Error(`unsupported --limit metric: ${metric}`);
+  }
+  if (!rawLimit || !Number.isFinite(limit) || limit < 0) {
+    throw new Error(`--limit must be metric=non-negative-number: ${raw}`);
+  }
+  return { metric, limit };
+}
+
+function metricValue(summary, metric) {
+  return metric.split(".").reduce((value, key) => value[key], summary);
 }
