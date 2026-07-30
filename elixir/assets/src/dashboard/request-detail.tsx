@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, CheckCircle2, Copy, Loader2, MessageSquareText, Trash2 } from "lucide-react";
+import { AlertTriangle, Archive, CheckCircle2, Copy, ListChecks, Loader2, MessageSquareText, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { CopyArchitectHandoff, GuidanceItem, WorkRequestDetail } from "@/types/dashboard";
@@ -8,7 +8,7 @@ import { MarkdownBlock } from "@/components/dashboard/markdown-block";
 import { architectHandoffEligibleRequest, isFinishedBoardStatus, operationalBadgeVariant, operationalLabel } from "@/lib/operational-state";
 import { cn } from "@/lib/utils";
 import { formatStatus, statusLabel } from "@/lib/status-labels";
-import { useCallback, useReducer, useRef } from "react";
+import { useCallback, useReducer, useRef, useState } from "react";
 import { CommentsPanel, useSyncedComments } from "./comments-panel";
 import { RecentDecisionsDisclosure } from "./detail-extras";
 import { commentStatLabel, commentStats, detailDate, requestCommentStats, requestOpenQuestions, requestProgressText, requestSliceCounts } from "./detail-utils";
@@ -164,7 +164,21 @@ export function RequestDetailContent({
             {handoffError ? <p className="text-xs text-destructive">{handoffError}</p> : null}
           </div>
         ) : null}
-        <DetailSummaryBar items={requestDetailSummary(detail, openQuestions.length, sliceCounts.total, currentCommentStats)} />
+        <RequestStatusControl
+          items={requestDetailSummary(detail, openQuestions.length, sliceCounts.total, currentCommentStats)}
+          canArchive={canManualArchive}
+          canDelete={canDelete}
+          canMarkDelivered={canMarkDelivered}
+          archiveError={archiveError}
+          archivePending={archivePending}
+          deleteError={deleteError}
+          deletePending={deletePending}
+          stateError={stateError}
+          statePending={statePending}
+          onArchive={() => void archiveRequest()}
+          onDelete={() => void deleteRequest()}
+          onMarkDelivered={() => setDeliverConfirmOpen(true)}
+        />
         <DetailSection title="Product Intent">
           <MarkdownBlock value={request.human_description} empty="No operator-facing description has been recorded yet." />
         </DetailSection>
@@ -225,20 +239,6 @@ export function RequestDetailContent({
           <DetailList title="Execution WorkPackages" items={(detail.work_packages || []).map((slice) => slice.title || slice.id)} empty="No WorkPackages recorded." />
           <JsonDetail label="Constraints" value={request.constraints} />
         </DetailDisclosure>
-        <RequestDangerActions
-          canArchive={canManualArchive}
-          canDelete={canDelete}
-          canMarkDelivered={canMarkDelivered}
-          archiveError={archiveError}
-          archivePending={archivePending}
-          deleteError={deleteError}
-          deletePending={deletePending}
-          stateError={stateError}
-          statePending={statePending}
-          onArchive={() => void archiveRequest()}
-          onDelete={() => void deleteRequest()}
-          onMarkDelivered={() => setDeliverConfirmOpen(true)}
-        />
       </div>
       <DangerousStateConfirmationDialog
         open={deliverConfirmOpen}
@@ -250,6 +250,42 @@ export function RequestDetailContent({
         onConfirm={() => void markDelivered()}
       />
     </>
+  );
+}
+
+function RequestStatusControl({
+  items,
+  ...actions
+}: {
+  items: Array<{ label: string; value: string }>;
+} & Parameters<typeof RequestDangerActions>[0]) {
+  const [open, setOpen] = useState(false);
+  const hasActions = actions.canMarkDelivered || actions.canArchive || actions.canDelete;
+
+  if (!hasActions) return <DetailSummaryBar items={items} />;
+
+  return (
+    <div className="request-status-control" data-open={open ? "true" : "false"}>
+      <div className="request-status-bar">
+        <DetailSummaryBar items={items} />
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="request-status-actions-toggle"
+          aria-expanded={open}
+          aria-label={`${open ? "Hide" : "Show"} WorkRequest status actions`}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <ListChecks className="size-4" />
+        </Button>
+      </div>
+      <div className="request-status-actions-reveal" aria-hidden={!open} inert={!open}>
+        <div>
+          <RequestDangerActions {...actions} />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -283,7 +319,7 @@ function RequestDangerActions({
   if (!canMarkDelivered && !canArchive && !canDelete) return null;
 
   return (
-    <div className="flex flex-col items-start gap-2 border-t border-destructive/20 pt-4">
+    <div className="request-status-actions-row">
       <div className="flex flex-wrap gap-2">
         {canMarkDelivered ? (
           <Button type="button" size="sm" variant="destructive" onClick={onMarkDelivered} disabled={statePending}>

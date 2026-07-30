@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { activeBlockerEntityCounts, productTreeCounts, requestProgress, sliceProgressPercent } from "./workstream-progress";
+import { activeBlockerEdgesForRequest, activeBlockerEntityCounts, productTreeCounts, requestProgress, sliceProgressPercent } from "./workstream-progress";
 import type { ActiveBlockingEdge, WorkRequestPackage, WorkRequestDetail, WorkPackageCard } from "@/types/dashboard";
 
 describe("workstream progress", () => {
@@ -178,6 +178,22 @@ describe("workstream progress", () => {
     expect(counts.packages.get("pkg-source")).toBeUndefined();
     expect(counts.slices.get("slice-blocked")).toBe(1);
     expect(counts.packages.get("pkg-blocked")).toBe(1);
+  });
+
+  it("finds blocker edges that target a request through its package", () => {
+    const detail = workRequestDetail([plannedSlice("slice-blocked", "blocked", "pkg-blocked")]);
+    const matching = blockingEdge(
+      "matching-edge",
+      { kind: "work_package", id: "pkg-source" },
+      { kind: "work_package", id: "pkg-blocked" },
+    );
+    const unrelated = blockingEdge(
+      "unrelated-edge",
+      { kind: "work_package", id: "pkg-source" },
+      { kind: "work_package", id: "pkg-other" },
+    );
+
+    expect(activeBlockerEdgesForRequest([unrelated, matching], detail)).toEqual([matching]);
   });
 });
 
