@@ -7,6 +7,7 @@ param(
   [string]$Cohorts = "1,10,100",
   [ValidateRange(1, 10)][int]$Repeats = 1,
   [ValidateRange(30, 900)][int]$StartupTimeoutSec = 300,
+  [ValidateRange(60, 1800)][int]$ArtifactPreparationTimeoutSec = 600,
   [ValidateSet("NodePresent", "NodeMissing")][string]$LauncherMode = "NodePresent",
   [switch]$SkipMutationCheck,
   [switch]$Help
@@ -142,7 +143,7 @@ function Prepare-ExactArtifact([hashtable]$Environment) {
   $process = [System.Diagnostics.Process]::new(); $process.StartInfo = $info
   if (-not $process.Start()) { throw "Exact-command runtime artifact preparation failed to start." }
   $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
-  if (-not $process.WaitForExit(1800000)) {
+  if (-not $process.WaitForExit($ArtifactPreparationTimeoutSec * 1000)) {
     try { $process.Kill($true) } catch { }
     [void]$process.WaitForExit(15000)
     $process.Dispose()
