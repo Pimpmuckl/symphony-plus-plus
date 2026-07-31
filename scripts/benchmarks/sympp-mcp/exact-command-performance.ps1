@@ -628,6 +628,16 @@ exit /b %ERRORLEVEL%
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     while ((Get-ListenerPids $backendPort).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
     $remainingListeners = @(Get-ListenerPids $backendPort)
+    if ($probeFailure -and $remainingListeners.Count -gt 0) {
+      foreach ($listenerPid in $remainingListeners) {
+        if ($listenerPid -in @(Get-ListenerPids $backendPort)) {
+          Stop-Process -Id ([int]$listenerPid) -Force -ErrorAction SilentlyContinue
+        }
+      }
+      $deadline = [DateTime]::UtcNow.AddSeconds(10)
+      while ((Get-ListenerPids $backendPort).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+      $remainingListeners = @(Get-ListenerPids $backendPort)
+    }
     if ($remainingListeners.Count -gt 0) {
       $cleanupFailure = "Benchmark cleanup left port $backendPort occupied; owners=$($remainingListeners -join ',')."
       if ($probeFailure) { Write-BenchmarkProgress "Exact cleanup failed after probe failure: $cleanupFailure" } else { throw $cleanupFailure }
