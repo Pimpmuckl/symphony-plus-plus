@@ -7,6 +7,7 @@ param(
   [string]$Cohorts = "1,10,100",
   [ValidateRange(1, 10)][int]$Repeats = 1,
   [ValidateRange(30, 900)][int]$StartupTimeoutSec = 300,
+  [ValidateRange(60, 1800)][int]$ArtifactPreparationTimeoutSec = 600,
   [ValidateSet("NodePresent", "NodeMissing")][string]$LauncherMode = "NodePresent",
   [switch]$SkipMutationCheck,
   [switch]$Help
@@ -30,7 +31,9 @@ $clients = [System.Collections.Generic.List[object]]::new()
 $runtimeState = $null
 $backendStartTicks = 0L
 $backendPort = 0
+$probeStartedAt = [DateTime]::UtcNow
 $result = $null
+$probeFailure = $null
 $startupBurst = 10
 $cohortValues = @($Cohorts -split "," | ForEach-Object { [int]$_.Trim() })
 if ($cohortValues.Count -eq 0 -or @($cohortValues | Where-Object { $_ -notin @(1, 10, 100) }).Count -gt 0) {
@@ -51,6 +54,16 @@ function Get-ListenerPids([int]$Port) {
 
 function Get-LeaseCount {
   return @(Get-ChildItem -LiteralPath (Join-Path (Split-Path -Parent $runtimeFile) "codex-plugin-leases") -Filter "bridge-*.json" -File -ErrorAction SilentlyContinue).Count
+}
+
+function Write-BenchmarkProgress([string]$Message) {
+  [Console]::Error.WriteLine($Message)
+  if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_PERFORMANCE_PROGRESS_FILE)) {
+    [System.IO.File]::AppendAllText(
+      $env:SYMPP_PERFORMANCE_PROGRESS_FILE,
+      "$([DateTime]::UtcNow.ToString('O')) $Message$([Environment]::NewLine)"
+    )
+  }
 }
 
 function Get-TraceCounts {
@@ -105,6 +118,45 @@ function Set-SanitizedEnvironment($Info, [hashtable]$Environment) {
     }
   }
   foreach ($entry in $Environment.GetEnumerator()) { $Info.Environment[$entry.Key] = [string]$entry.Value }
+}
+
+function Prepare-ExactArtifact([hashtable]$Environment) {
+  $preparationEnvironment = @{} + $Environment
+  $preparationEnvironment.SYMPP_LAUNCHER_TRACE_DIR = Join-Path $tempRoot "preparation-trace"
+  $preparationEnvironment.SYMPP_BENCH_GIT_LOG_DIR = Join-Path $tempRoot "preparation-git-invocations"
+  foreach ($path in @($preparationEnvironment.SYMPP_LAUNCHER_TRACE_DIR, $preparationEnvironment.SYMPP_BENCH_GIT_LOG_DIR)) {
+    New-Item -ItemType Directory -Path $path -Force | Out-Null
+  }
+
+  $info = [System.Diagnostics.ProcessStartInfo]::new()
+  $info.FileName = Join-Path $PSHOME "pwsh.exe"
+  foreach ($arg in @("-NoProfile", "-File", (Join-Path $pluginRoot "scripts/start-sympp-mcp.ps1"), "-ValidateOnly")) { [void]$info.ArgumentList.Add($arg) }
+  $info.WorkingDirectory = $pluginRoot
+  $info.UseShellExecute = $false
+  $info.CreateNoWindow = $true
+  $info.RedirectStandardOutput = $true
+  $info.RedirectStandardError = $true
+  Set-SanitizedEnvironment $info $preparationEnvironment
+
+  Write-BenchmarkProgress "Pre-acquiring verified exact-command runtime artifact..."
+  $watch = [System.Diagnostics.Stopwatch]::StartNew()
+  $process = [System.Diagnostics.Process]::new(); $process.StartInfo = $info
+  if (-not $process.Start()) { throw "Exact-command runtime artifact preparation failed to start." }
+  $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
+  if (-not $process.WaitForExit($ArtifactPreparationTimeoutSec * 1000)) {
+    try { $process.Kill($true) } catch { }
+    [void]$process.WaitForExit(15000)
+    $process.Dispose()
+    throw "Exact-command runtime artifact preparation timed out."
+  }
+  $watch.Stop()
+  $stdout = $stdoutTask.GetAwaiter().GetResult(); $stderr = $stderrTask.GetAwaiter().GetResult(); $exitCode = $process.ExitCode
+  $process.Dispose()
+  if ($exitCode -ne 0) { throw "Exact-command runtime artifact preparation failed: $($stdout.Trim()) $($stderr.Trim())" }
+  $validationCache = [System.IO.Path]::GetFullPath((Join-Path $Environment.SYMPP_HOME "runtime/launcher-validation"))
+  if (-not $validationCache.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Exact-command preparation cache escaped its isolated root." }
+  Remove-Item -LiteralPath $validationCache -Recurse -Force -ErrorAction SilentlyContinue
+  Write-BenchmarkProgress "Verified exact-command runtime artifact acquired in $([Math]::Round($watch.Elapsed.TotalMilliseconds, 2)) ms."
 }
 
 function Start-ExactClient([hashtable]$Environment) {
@@ -163,15 +215,36 @@ function Wait-ClientsReady([object[]]$Cohort, [int]$TimeoutSec) {
   }
 }
 
-function Stop-ExactClient($Client) {
-  if ($null -eq $Client -or $null -eq $Client.process) { return }
-  try { $Client.process.StandardInput.Close() } catch { }
-  if (-not $Client.process.WaitForExit(60000)) {
-    $Client.process.Kill($true)
-    [void]$Client.process.WaitForExit(15000)
+function Stop-ExactClients([object[]]$Clients) {
+  $active = @($Clients | Where-Object { $null -ne $_ -and $null -ne $_.process })
+  if ($script:probeFailure) {
+    foreach ($client in @($active | Where-Object { -not $_.process.HasExited })) {
+      try { $client.process.Kill($true) } catch { }
+    }
   }
-  $Client.process.Dispose()
-  $Client.process = $null
+  $exitDeadline = [DateTime]::UtcNow.AddSeconds(60)
+  foreach ($client in $active) {
+    try { $client.process.StandardInput.Close() } catch { }
+    $remainingMs = [Math]::Max(0, [int][Math]::Ceiling(($exitDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+    if ($remainingMs -eq 0 -or -not $client.process.WaitForExit($remainingMs)) { break }
+  }
+  foreach ($client in @($active | Where-Object { -not $_.process.HasExited })) {
+    try { $client.process.Kill($true) } catch [System.InvalidOperationException] { }
+  }
+
+  $killDeadline = [DateTime]::UtcNow.AddSeconds(15)
+  foreach ($client in $active) {
+    if (-not $client.process.HasExited) {
+      $remainingMs = [Math]::Max(0, [int][Math]::Ceiling(($killDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+      [void]$client.process.WaitForExit($remainingMs)
+    }
+    $client.process.Dispose()
+    $client.process = $null
+  }
+}
+
+function Stop-ExactClient($Client) {
+  Stop-ExactClients @($Client)
 }
 
 function Get-ProcessTreeMetrics([object[]]$Cohort, [int]$ExcludedPid) {
@@ -237,7 +310,7 @@ function Invoke-Cohort([int]$Count, [hashtable]$Environment, [int]$BackendPid) {
        [int]$traceDelta["generation_attach_full_validation"] -ne $Count)) {
     throw "Node warm cohort did not validate identity and release generation watchers before attachment."
   }
-  foreach ($client in $cohort) { Stop-ExactClient $client }
+  Stop-ExactClients @($cohort)
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
   while ((Get-LeaseCount) -gt 1 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
   return [pscustomobject]@{
@@ -256,6 +329,55 @@ function Invoke-Cohort([int]$Count, [hashtable]$Environment, [int]$BackendPid) {
 
 function Test-Dashboard([string]$Url) {
   try { return (Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 10).StatusCode -eq 200 } catch { return $false }
+}
+
+function Limit-DiagnosticText([string]$Text, [int]$MaximumLength) {
+  if ($null -eq $Text) { return "" }
+  $normalized = ($Text -replace '\r?\n', ' ').Trim()
+  if ($normalized.Length -le $MaximumLength) { return $normalized }
+  return $normalized.Substring($normalized.Length - $MaximumLength)
+}
+
+function Write-PreCleanupBackendDiagnostics {
+  $url = "http://127.0.0.1:$backendPort/mcp/readiness"
+  try {
+    $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5 -SkipHttpErrorCheck
+    Write-BenchmarkProgress "Exact backend HTTP before cleanup: status=$([int]$response.StatusCode) body=$(Limit-DiagnosticText ([string]$response.Content) 2000)"
+  } catch {
+    Write-BenchmarkProgress "Exact backend HTTP before cleanup: error=$(Limit-DiagnosticText ([string]$_.Exception.Message) 1000)"
+  }
+
+  try {
+    $listenerPids = @(Get-ListenerPids $backendPort | Select-Object -First 4)
+    $seen = [System.Collections.Generic.HashSet[int]]::new()
+    $processRows = [System.Collections.Generic.List[string]]::new()
+    foreach ($listenerPid in $listenerPids) {
+      $currentPid = [int]$listenerPid
+      foreach ($depth in 0..7) {
+        if (-not $currentPid -or -not $seen.Add($currentPid)) { break }
+        $row = @(Get-CimInstance Win32_Process -Filter "ProcessId = $currentPid" -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($row.Count -ne 1) { $processRows.Add("pid=$currentPid unavailable"); break }
+        $processRows.Add("pid=$($row[0].ProcessId) parent=$($row[0].ParentProcessId) name=$($row[0].Name)")
+        $currentPid = [int]$row[0].ParentProcessId
+      }
+    }
+    $tree = if ($processRows.Count) { Limit-DiagnosticText ($processRows -join ' | ') 6000 } else { "none" }
+    Write-BenchmarkProgress "Exact backend process tree before cleanup: listeners=$($listenerPids -join ',') tree=$tree"
+  } catch {
+    Write-BenchmarkProgress "Exact backend process tree before cleanup: error=$(Limit-DiagnosticText ([string]$_.Exception.Message) 1000)"
+  }
+
+  try {
+    $logRows = [System.Collections.Generic.List[string]]::new()
+    foreach ($log in @(Get-ChildItem -LiteralPath (Join-Path $tempRoot "logs") -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -Last 20)) {
+      $tail = Limit-DiagnosticText ((Get-Content -LiteralPath $log.FullName -Tail 40 -ErrorAction SilentlyContinue) -join [Environment]::NewLine) 1500
+      $logRows.Add("path=$([System.IO.Path]::GetRelativePath($tempRoot, $log.FullName)) bytes=$($log.Length) tail=$tail")
+    }
+    $inventory = if ($logRows.Count) { Limit-DiagnosticText ($logRows -join ' | ') 8000 } else { "none" }
+    Write-BenchmarkProgress "Exact backend logs before cleanup: $inventory"
+  } catch {
+    Write-BenchmarkProgress "Exact backend logs before cleanup: error=$(Limit-DiagnosticText ([string]$_.Exception.Message) 1000)"
+  }
 }
 
 function Copy-SourcePlugin([string]$Destination) {
@@ -306,10 +428,12 @@ exit /b %ERRORLEVEL%
   if ((Get-ListenerPids $backendPort).Count -ne 0) { throw "Selected benchmark port was not empty." }
   $effectivePath = $env:PATH
   if ($LauncherMode -eq "NodeMissing") {
-    $node = Get-Command node.exe -ErrorAction Stop | Select-Object -First 1
-    $nodeDirectory = [System.IO.Path]::GetFullPath((Split-Path -Parent $node.Source)).TrimEnd("\")
+    $nodeDirectories = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($node in @(Get-Command node.exe -All -ErrorAction Stop)) {
+      [void]$nodeDirectories.Add([System.IO.Path]::GetFullPath((Split-Path -Parent $node.Source)).TrimEnd("\"))
+    }
     $effectivePath = (@($env:PATH -split ";" | Where-Object {
-          $_ -and -not [System.IO.Path]::GetFullPath($_).TrimEnd("\").Equals($nodeDirectory, [System.StringComparison]::OrdinalIgnoreCase)
+          $_ -and -not $nodeDirectories.Contains([System.IO.Path]::GetFullPath($_).TrimEnd("\"))
         }) -join ";")
   }
   $environment = @{
@@ -331,7 +455,8 @@ exit /b %ERRORLEVEL%
     PATH = (Join-Path $tempRoot "shim") + ";" + $effectivePath
   }
 
-  [Console]::Error.WriteLine("Starting exact-command artifact cold client on port $backendPort...")
+  Prepare-ExactArtifact $environment
+  Write-BenchmarkProgress "Starting exact-command artifact cold client on port $backendPort..."
   $cold = Start-ExactClient $environment
   Wait-ClientsReady @($cold) $StartupTimeoutSec
   $runtimeState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json
@@ -354,7 +479,7 @@ exit /b %ERRORLEVEL%
   $warmResults = [System.Collections.Generic.List[object]]::new()
   foreach ($repeat in 1..$Repeats) {
     foreach ($count in $cohortValues) {
-      [Console]::Error.WriteLine("Measuring exact-command warm cohort repeat=$repeat clients=$count...")
+      Write-BenchmarkProgress "Measuring exact-command warm cohort repeat=$repeat clients=$count..."
       $cohort = Invoke-Cohort $count $environment $backend.Id
       if ($cohort.leases_peak -ne ($count + 1) -or $cohort.leases_after -ne 1) { throw "Warm cohort lease lifecycle mismatch." }
       $currentOwners = @(Get-ListenerPids $backendPort)
@@ -368,6 +493,7 @@ exit /b %ERRORLEVEL%
   $lockRecovery = [pscustomobject]@{ checked = $false; reclaimed = $null }
   $lifecycleRace = [pscustomobject]@{ checked = $false; healthy = $null; backend_reused = $null }
   if ($LauncherMode -eq "NodePresent") {
+    Write-BenchmarkProgress "Checking exact-command cache release..."
     $cacheRelease.checked = $true
     $cacheProbe = Start-ExactClient $environment
     Wait-ClientsReady @($cacheProbe) $StartupTimeoutSec
@@ -398,6 +524,7 @@ exit /b %ERRORLEVEL%
     $backendStartTicks = $backend.StartTime.ToUniversalTime().Ticks
 
     $lockRecovery.checked = $true
+    Write-BenchmarkProgress "Checking exact-command abandoned-lock recovery..."
     $identityDir = Join-Path $environment.SYMPP_HOME "runtime/launcher-validation"
     $generationMarker = @(Get-ChildItem -LiteralPath $identityDir -Filter "*.generation" -File -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($generationMarker.Count -ne 1) { throw "Exact Node launcher did not publish a generation marker." }
@@ -419,7 +546,7 @@ exit /b %ERRORLEVEL%
     if (-not $lockRecovery.reclaimed) { throw "Exact Node launcher did not reclaim abandoned validation locks." }
 
     $lifecycleRace.checked = $true
-    [Console]::Error.WriteLine("Racing a fresh attach against last-detach cleanup...")
+    Write-BenchmarkProgress "Racing a fresh attach against last-detach cleanup..."
     $previousBackendPid = $backend.Id
     $cold.process.StandardInput.Close()
     $raceClient = Start-ExactClient $environment
@@ -444,7 +571,7 @@ exit /b %ERRORLEVEL%
     $backendStartTicks = $backend.StartTime.ToUniversalTime().Ticks
   }
 
-  [Console]::Error.WriteLine("Killing the artifact backend and measuring automatic recovery...")
+  Write-BenchmarkProgress "Killing the artifact backend and measuring automatic recovery..."
   Stop-Process -Id $backend.Id -Force -ErrorAction Stop
   [void]$backend.WaitForExit(30000)
   $recovery = Start-ExactClient $environment
@@ -464,6 +591,7 @@ exit /b %ERRORLEVEL%
 
   $mutation = [pscustomobject]@{ checked = $false; shortcut_rejected = $null; scan_race_detected = $null; attach_race_rejected = $null; unsafe_cleanup_skipped = $null }
   if (-not $SkipMutationCheck) {
+    Write-BenchmarkProgress "Checking exact-command mutation rejection..."
     $mutation.checked = $true
     $mutationFile = Join-Path $pluginRoot "scripts/start-sympp-mcp.ps1"
     if ($LauncherMode -eq "NodePresent") {
@@ -490,13 +618,27 @@ exit /b %ERRORLEVEL%
     }
     $attachRejectionBefore = [int](Get-TraceCounts)["warm_miss_generation"]
     $attachTraceOffsets = Get-TraceFileOffsets
-    $mutated = Start-ExactClient $environment
-    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    $mutationStream = $null
     if ($LauncherMode -eq "NodePresent") {
-      while (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved") -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
-      if (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved")) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
+      $mutationStream = [System.IO.File]::Open($mutationFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::Read)
     }
-    Set-Content -LiteralPath $mutationFile -Value 'Set-Content -LiteralPath $env:SYMPP_INTEGRITY_MARKER -Value invoked' -Encoding utf8NoBOM
+    try {
+      $mutated = Start-ExactClient $environment
+      $deadline = [DateTime]::UtcNow.AddSeconds(60)
+      if ($LauncherMode -eq "NodePresent") {
+        while (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved") -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+        if (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved")) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
+        $mutationBytes = [System.Text.UTF8Encoding]::new($false).GetBytes('Set-Content -LiteralPath $env:SYMPP_INTEGRITY_MARKER -Value invoked')
+        $mutationStream.Position = 0
+        $mutationStream.SetLength(0)
+        $mutationStream.Write($mutationBytes, 0, $mutationBytes.Length)
+        $mutationStream.Flush($true)
+      } else {
+        Set-Content -LiteralPath $mutationFile -Value 'Set-Content -LiteralPath $env:SYMPP_INTEGRITY_MARKER -Value invoked' -Encoding utf8NoBOM
+      }
+    } finally {
+      if ($null -ne $mutationStream) { $mutationStream.Dispose() }
+    }
     while (-not $mutated.process.HasExited -and -not $mutated.line_task.IsCompleted -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
     $mutation.shortcut_rejected = $mutated.process.HasExited -and
       $mutated.line_task.IsCompleted -and
@@ -522,38 +664,119 @@ exit /b %ERRORLEVEL%
     recovery = $recoveryMetrics
     mutation = $mutation
   }
+  Write-BenchmarkProgress "Exact-command probe completed."
 } catch {
-  $diagnostics = [System.Collections.Generic.List[string]]::new()
-  foreach ($log in @(Get-ChildItem -LiteralPath $tempRoot -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.(err|out)\.log$' })) {
-    $rawContent = Get-Content -LiteralPath $log.FullName -Raw -ErrorAction SilentlyContinue
-    $content = if ($null -eq $rawContent) { "" } else { $rawContent.Trim() }
-    if ($content) { $diagnostics.Add("$($log.Name): $content") }
-  }
-  if ($diagnostics.Count) { [Console]::Error.WriteLine(($diagnostics -join "`n")) }
+  $caught = $_
+  $probeFailure = $caught
+  $errorDetail = @(
+    [string]$caught.Exception.Message
+    [string]$caught.ScriptStackTrace
+    [string]$caught.InvocationInfo.PositionMessage
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  Write-BenchmarkProgress "Exact-command probe failed: $(($errorDetail -join ' | ') -replace '\r?\n', ' ')"
+  Write-PreCleanupBackendDiagnostics
   [Console]::Error.WriteLine("trace: $((Get-TraceCounts | ConvertTo-Json -Compress)) git_invocations=$(Get-GitInvocationCount)")
   throw
 } finally {
-  foreach ($client in @($clients)) { if ($client.process) { Stop-ExactClient $client } }
-  if ((-not $runtimeState -or -not $runtimeState.backend) -and (Test-Path -LiteralPath $runtimeFile -PathType Leaf)) {
-    try { $runtimeState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json } catch { $runtimeState = $null }
-    if ($runtimeState -and $runtimeState.backend) {
-      $process = Get-Process -Id ([int]$runtimeState.backend.pid) -ErrorAction SilentlyContinue
-      if ($process) { $backendStartTicks = $process.StartTime.ToUniversalTime().Ticks }
+  Stop-ExactClients @($clients | Where-Object { $_.process })
+  if ($probeFailure) {
+    $clientDiagnostics = @($clients | ForEach-Object {
+      if ($_.stderr_task -and $_.stderr_task.IsCompleted) {
+        try { [string]$_.stderr_task.GetAwaiter().GetResult() } catch { [string]$_.Exception.Message }
+      }
+    } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($clientDiagnostics.Count) {
+      Write-BenchmarkProgress "Exact client stderr after cleanup: $((($clientDiagnostics -join ' | ') -replace '\r?\n', ' ').Trim())"
     }
+    $logDiagnostics = @(Get-ChildItem -LiteralPath $tempRoot -Recurse -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match '\.(err|out)\.log$' } |
+      ForEach-Object {
+        $content = [string](Get-Content -LiteralPath $_.FullName -Raw -ErrorAction SilentlyContinue)
+        if ($content.Length -gt 2000) { $content = $content.Substring($content.Length - 2000) }
+        if (-not [string]::IsNullOrWhiteSpace($content)) {
+          $role = if ($_.Name -match '^(.+?)-\d{8}-') { $Matches[1] } else { $_.BaseName }
+          "path=$([System.IO.Path]::GetRelativePath($tempRoot, $_.FullName)) role=$role tail=$content"
+        }
+      })
+    if ($logDiagnostics.Count) {
+      Write-BenchmarkProgress "Exact launcher logs after cleanup: $((($logDiagnostics -join ' | ') -replace '\r?\n', ' ').Trim())"
+    }
+    $failureRuntime = $null
+    if (Test-Path -LiteralPath $runtimeFile -PathType Leaf) {
+      $runtimeContent = [string](Get-Content -LiteralPath $runtimeFile -Raw -ErrorAction SilentlyContinue)
+      if (-not [string]::IsNullOrWhiteSpace($runtimeContent)) {
+        $runtimeTail = if ($runtimeContent.Length -gt 4000) { $runtimeContent.Substring($runtimeContent.Length - 4000) } else { $runtimeContent }
+        Write-BenchmarkProgress "Exact runtime before backend cleanup: $((($runtimeTail -replace '\r?\n', ' ').Trim()))"
+        try { $failureRuntime = $runtimeContent | ConvertFrom-Json } catch { }
+        if ($failureRuntime -and $failureRuntime.backend) {
+          $failureBackendPid = [int]$failureRuntime.backend.pid
+          $failureBackend = Get-Process -Id $failureBackendPid -ErrorAction SilentlyContinue
+          try { $failureBackendStartTime = if ($failureBackend) { $failureBackend.StartTime.ToUniversalTime() } else { $null } } catch { $failureBackendStartTime = $null }
+          try { $runtimeGeneratedAt = ([DateTimeOffset]::Parse([string]$failureRuntime.generated_at)).UtcDateTime } catch { $runtimeGeneratedAt = $null }
+          if ([int]$failureRuntime.backend.port -eq $backendPort -and
+              $failureBackendPid -in @(Get-ListenerPids $backendPort) -and
+              $failureBackendStartTime -and $runtimeGeneratedAt -and
+              $failureBackendStartTime -ge $probeStartedAt -and $failureBackendStartTime -le $runtimeGeneratedAt) {
+            $runtimeState = $failureRuntime
+            $backendStartTicks = $failureBackendStartTime.Ticks
+            Write-BenchmarkProgress "Exact recovered backend cleanup identity: pid=$failureBackendPid"
+          }
+        }
+      }
+    }
+    $failureListenerPids = if ($backendPort) { @(Get-ListenerPids $backendPort) } else { @() }
+    $failureListeners = @($failureListenerPids | ForEach-Object {
+      $listenerProcess = Get-Process -Id ([int]$_) -ErrorAction SilentlyContinue
+      if ($listenerProcess) { "pid=$($listenerProcess.Id) name=$($listenerProcess.ProcessName)" } else { "pid=$_" }
+    })
+    $failureHealth = if ($failureRuntime -and $failureRuntime.frontend -and $failureRuntime.frontend.url) {
+      Test-Dashboard ([string]$failureRuntime.frontend.url)
+    } else { $false }
+    Write-BenchmarkProgress "Exact listener before backend cleanup: port=$backendPort owners=$($failureListeners -join ',') dashboard_healthy=$failureHealth"
+    Write-BenchmarkProgress "Exact-command post-cleanup trace: $((Get-TraceCounts | ConvertTo-Json -Compress)) git_invocations=$(Get-GitInvocationCount)"
   }
   if ($runtimeState -and $runtimeState.backend -and $backendStartTicks) {
     $process = Get-Process -Id ([int]$runtimeState.backend.pid) -ErrorAction SilentlyContinue
-    if ($process -and $process.StartTime.ToUniversalTime().Ticks -eq $backendStartTicks) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
-  }
-  if ($backendPort) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(30)
-    while ((Get-ListenerPids $backendPort).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
-    if ((Get-ListenerPids $backendPort).Count -gt 0) { throw "Benchmark cleanup left port $backendPort occupied." }
+    if ($process) {
+      $processStartTime = $process.StartTime
+      if ($processStartTime -and $processStartTime.ToUniversalTime().Ticks -eq $backendStartTicks) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+    }
   }
   $resolvedTemp = [System.IO.Path]::GetFullPath($tempRoot)
   if (-not $resolvedTemp.StartsWith($ownedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Benchmark cleanup root escaped its owned prefix." }
-  Remove-Item -LiteralPath $resolvedTemp -Recurse -Force -ErrorAction SilentlyContinue
-  if (Test-Path -LiteralPath $resolvedTemp) { throw "Benchmark cleanup did not remove its isolated root." }
+  $remainingListeners = @()
+  if ($backendPort) {
+    if ($probeFailure) {
+      foreach ($listenerPid in @(Get-ListenerPids $backendPort)) {
+        $listenerProcess = Get-Process -Id ([int]$listenerPid) -ErrorAction SilentlyContinue
+        $listenerDetails = Get-CimInstance Win32_Process -Filter "ProcessId = $listenerPid" -ErrorAction SilentlyContinue
+        try { $listenerStartedAt = if ($listenerProcess) { $listenerProcess.StartTime.ToUniversalTime() } else { $null } } catch { $listenerStartedAt = $null }
+        if ($listenerStartedAt -and
+            $listenerStartedAt -ge $probeStartedAt -and
+            -not [string]::IsNullOrWhiteSpace([string]$listenerDetails.CommandLine) -and
+            ([string]$listenerDetails.CommandLine).IndexOf($resolvedTemp, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+          Write-BenchmarkProgress "Stopping verified exact backend listener after probe failure: pid=$listenerPid"
+          Stop-Process -Id ([int]$listenerPid) -Force -ErrorAction SilentlyContinue
+        }
+      }
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    while ((Get-ListenerPids $backendPort).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    $remainingListeners = @(Get-ListenerPids $backendPort)
+    if ($remainingListeners.Count -gt 0) {
+      $cleanupFailure = "Benchmark cleanup left port $backendPort occupied; owners=$($remainingListeners -join ',')."
+      if ($probeFailure) { Write-BenchmarkProgress "Exact cleanup failed after probe failure: $cleanupFailure" } else { throw $cleanupFailure }
+    }
+  }
+  if ($remainingListeners.Count -eq 0) {
+    Remove-Item -LiteralPath $resolvedTemp -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $resolvedTemp) {
+      $cleanupFailure = "Benchmark cleanup did not remove its isolated root."
+      if ($probeFailure) { Write-BenchmarkProgress "Exact cleanup failed after probe failure: $cleanupFailure" } else { throw $cleanupFailure }
+    }
+  } else {
+    Write-BenchmarkProgress "Preserving exact benchmark root because backend ownership could not be verified: $resolvedTemp"
+  }
 }
 
 $result | ConvertTo-Json -Depth 12
