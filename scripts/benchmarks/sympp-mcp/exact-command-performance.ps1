@@ -331,6 +331,55 @@ function Test-Dashboard([string]$Url) {
   try { return (Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 10).StatusCode -eq 200 } catch { return $false }
 }
 
+function Limit-DiagnosticText([string]$Text, [int]$MaximumLength) {
+  if ($null -eq $Text) { return "" }
+  $normalized = ($Text -replace '\r?\n', ' ').Trim()
+  if ($normalized.Length -le $MaximumLength) { return $normalized }
+  return $normalized.Substring($normalized.Length - $MaximumLength)
+}
+
+function Write-PreCleanupBackendDiagnostics {
+  $url = "http://127.0.0.1:$backendPort/"
+  try {
+    $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5 -SkipHttpErrorCheck
+    Write-BenchmarkProgress "Exact backend HTTP before cleanup: status=$([int]$response.StatusCode) body=$(Limit-DiagnosticText ([string]$response.Content) 2000)"
+  } catch {
+    Write-BenchmarkProgress "Exact backend HTTP before cleanup: error=$(Limit-DiagnosticText ([string]$_.Exception.Message) 1000)"
+  }
+
+  try {
+    $listenerPids = @(Get-ListenerPids $backendPort | Select-Object -First 4)
+    $seen = [System.Collections.Generic.HashSet[int]]::new()
+    $processRows = [System.Collections.Generic.List[string]]::new()
+    foreach ($listenerPid in $listenerPids) {
+      $currentPid = [int]$listenerPid
+      foreach ($depth in 0..7) {
+        if (-not $currentPid -or -not $seen.Add($currentPid)) { break }
+        $row = @(Get-CimInstance Win32_Process -Filter "ProcessId = $currentPid" -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($row.Count -ne 1) { $processRows.Add("pid=$currentPid unavailable"); break }
+        $processRows.Add("pid=$($row[0].ProcessId) parent=$($row[0].ParentProcessId) name=$($row[0].Name) command=$(Limit-DiagnosticText ([string]$row[0].CommandLine) 1000)")
+        $currentPid = [int]$row[0].ParentProcessId
+      }
+    }
+    $tree = if ($processRows.Count) { Limit-DiagnosticText ($processRows -join ' | ') 6000 } else { "none" }
+    Write-BenchmarkProgress "Exact backend process tree before cleanup: listeners=$($listenerPids -join ',') tree=$tree"
+  } catch {
+    Write-BenchmarkProgress "Exact backend process tree before cleanup: error=$(Limit-DiagnosticText ([string]$_.Exception.Message) 1000)"
+  }
+
+  try {
+    $logRows = [System.Collections.Generic.List[string]]::new()
+    foreach ($log in @(Get-ChildItem -LiteralPath (Join-Path $tempRoot "logs") -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -Last 20)) {
+      $tail = Limit-DiagnosticText ((Get-Content -LiteralPath $log.FullName -Tail 40 -ErrorAction SilentlyContinue) -join [Environment]::NewLine) 1500
+      $logRows.Add("path=$([System.IO.Path]::GetRelativePath($tempRoot, $log.FullName)) bytes=$($log.Length) tail=$tail")
+    }
+    $inventory = if ($logRows.Count) { Limit-DiagnosticText ($logRows -join ' | ') 8000 } else { "none" }
+    Write-BenchmarkProgress "Exact backend logs before cleanup: $inventory"
+  } catch {
+    Write-BenchmarkProgress "Exact backend logs before cleanup: error=$(Limit-DiagnosticText ([string]$_.Exception.Message) 1000)"
+  }
+}
+
 function Copy-SourcePlugin([string]$Destination) {
   $prefix = "plugins/symphony-plus-plus-mcp/"
   $files = @(& git -C $repoRoot ls-files --cached -- $prefix)
@@ -611,13 +660,7 @@ exit /b %ERRORLEVEL%
     [string]$caught.InvocationInfo.PositionMessage
   ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
   Write-BenchmarkProgress "Exact-command probe failed: $(($errorDetail -join ' | ') -replace '\r?\n', ' ')"
-  $diagnostics = [System.Collections.Generic.List[string]]::new()
-  foreach ($log in @(Get-ChildItem -LiteralPath $tempRoot -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.(err|out)\.log$' })) {
-    $rawContent = Get-Content -LiteralPath $log.FullName -Raw -ErrorAction SilentlyContinue
-    $content = if ($null -eq $rawContent) { "" } else { $rawContent.Trim() }
-    if ($content) { $diagnostics.Add("$($log.Name): $content") }
-  }
-  if ($diagnostics.Count) { [Console]::Error.WriteLine(($diagnostics -join "`n")) }
+  Write-PreCleanupBackendDiagnostics
   [Console]::Error.WriteLine("trace: $((Get-TraceCounts | ConvertTo-Json -Compress)) git_invocations=$(Get-GitInvocationCount)")
   throw
 } finally {
