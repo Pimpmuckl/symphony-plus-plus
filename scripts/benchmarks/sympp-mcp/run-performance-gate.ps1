@@ -283,10 +283,10 @@ function Invoke-CapturedProcess($Info, [int]$TimeoutMs, [string]$Label) {
   return $result
 }
 
-function Invoke-ExactCommandProbe([string]$Mode, [string]$Cohorts, [switch]$CheckMutation) {
+function Invoke-ExactCommandProbe([string]$Mode, [string]$Cohorts, [int]$StartupTimeoutSec, [switch]$CheckMutation) {
   $info = [System.Diagnostics.ProcessStartInfo]::new()
   $info.FileName = (Get-Command pwsh -ErrorAction Stop).Source
-  foreach ($arg in @("-NoProfile", "-File", $exactProbe, "-LauncherMode", $Mode, "-Cohorts", $Cohorts, "-Repeats", "1")) { [void]$info.ArgumentList.Add($arg) }
+  foreach ($arg in @("-NoProfile", "-File", $exactProbe, "-LauncherMode", $Mode, "-Cohorts", $Cohorts, "-Repeats", "1", "-StartupTimeoutSec", [string]$StartupTimeoutSec)) { [void]$info.ArgumentList.Add($arg) }
   if (-not $CheckMutation) { [void]$info.ArgumentList.Add("-SkipMutationCheck") }
   $info.WorkingDirectory = $repoRoot
   $run = Invoke-CapturedProcess $info 900000 "exact shipped command ($Mode)"
@@ -479,10 +479,11 @@ try {
   if ($directRun.exit_code -ne 0) { throw "direct HTTP probe failed: $(([string]$directRun.stdout).Trim()) $(([string]$directRun.stderr).Trim())" }
   $direct = ConvertFrom-DirectProbe @($directRun.stdout -split "`r?`n") $directWatch.Elapsed.TotalMilliseconds
   [Console]::Error.WriteLine("Measuring the shipped command with Node present and missing...")
+  $exactStartupTimeoutSec = [Math]::Max(30, [Math]::Min(600, [int][Math]::Ceiling($MaxColdMs / 1000.0)))
   [Console]::Error.WriteLine("Measuring shipped command with Node missing...")
-  $exactFallback = Invoke-ExactCommandProbe "NodeMissing" "1,10"
+  $exactFallback = Invoke-ExactCommandProbe "NodeMissing" "1,10" $exactStartupTimeoutSec
   [Console]::Error.WriteLine("Measuring shipped command with Node present...")
-  $exactNode = Invoke-ExactCommandProbe "NodePresent" "1,10,100" -CheckMutation
+  $exactNode = Invoke-ExactCommandProbe "NodePresent" "1,10,100" $exactStartupTimeoutSec -CheckMutation
   [Console]::Error.WriteLine("Measuring MCP profiles and representative payloads...")
   $payloadOutput = Invoke-IsolatedMix @("run", "--no-start", $payloadProbe) $environment
   $payloadJson = @($payloadOutput -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1)
@@ -509,32 +510,45 @@ try {
   $failure = $failure -join [Environment]::NewLine
   $backendLog = @(Get-ChildItem (Join-Path $tempRoot "logs") -Filter "backend-*.err.log" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -Last 1); if ($backendLog) { $detail = ([string](Get-Content $backendLog.FullName -Raw)).Trim(); if ($detail.Length -gt 2000) { $detail = $detail.Substring($detail.Length - 2000) }; $failure += "`nbackend stderr: $detail" }
 } finally {
-  if ($launcherProcess) {
-    try { $launcherProcess.StandardInput.Close() } catch { }
-    if (-not $launcherProcess.WaitForExit(60000)) { $launcherProcess.Kill($true); [void]$launcherProcess.WaitForExit(15000) }
-    $launcherProcess.Dispose()
-  }
-  if ($tempRoot) {
-    $leaseDir = Join-Path $tempRoot "state/codex-plugin-leases"
-    $leaseDeadline = [DateTime]::UtcNow.AddSeconds(10)
-    do {
-      $cleanup.cold_leases_after_close = @(Get-ChildItem $leaseDir -Filter "bridge-*.json" -File -ErrorAction SilentlyContinue).Count
-      if ($cleanup.cold_leases_after_close -eq 0) { break }
-      Start-Sleep -Milliseconds 100
-    } while ([DateTime]::UtcNow -lt $leaseDeadline)
-  }
-  if ($runtime -and $backendStartTicks) {
-    $backend = Get-Process -Id ([int]$runtime.backend.pid) -ErrorAction SilentlyContinue
-    if ($backend) {
-      if ($backend.StartTime.ToUniversalTime().Ticks -ne $backendStartTicks -or [int]$runtime.backend.port -ne $backendPort) { $failure = "cleanup refused changed backend identity" }
-      else { Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue }
+  try {
+    if ($launcherProcess) {
+      try { $launcherProcess.StandardInput.Close() } catch { }
+      if (-not $launcherProcess.WaitForExit(60000)) { $launcherProcess.Kill($true); [void]$launcherProcess.WaitForExit(15000) }
+      $launcherProcess.Dispose()
     }
+    if ($tempRoot) {
+      $leaseDir = Join-Path $tempRoot "state/codex-plugin-leases"
+      $leaseDeadline = [DateTime]::UtcNow.AddSeconds(10)
+      do {
+        $cleanup.cold_leases_after_close = @(Get-ChildItem $leaseDir -Filter "bridge-*.json" -File -ErrorAction SilentlyContinue).Count
+        if ($cleanup.cold_leases_after_close -eq 0) { break }
+        Start-Sleep -Milliseconds 100
+      } while ([DateTime]::UtcNow -lt $leaseDeadline)
+    }
+    if ($runtime -and $backendStartTicks) {
+      $backend = Get-Process -Id ([int]$runtime.backend.pid) -ErrorAction SilentlyContinue
+      if ($backend) {
+        $currentStartTime = $backend.StartTime
+        if (-not $currentStartTime) { $backend = $null }
+        elseif ($currentStartTime.ToUniversalTime().Ticks -ne $backendStartTicks -or [int]$runtime.backend.port -ne $backendPort) { $failure = "cleanup refused changed backend identity" }
+        else { Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue }
+      }
+    }
+    $ownedRoot = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\') + '\'
+    if ([System.IO.Path]::GetFullPath($tempRoot).StartsWith($ownedRoot, [System.StringComparison]::OrdinalIgnoreCase)) { Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($backendPort) { $cleanup.backend_port_free = @(Get-ListenerPids $backendPort).Count -eq 0 }
+    if ($dashboardPort) { $cleanup.dashboard_port_free = @(Get-ListenerPids $dashboardPort).Count -eq 0 }
+    $cleanup.isolated_root_removed = -not (Test-Path $tempRoot)
+  } catch {
+    $cleanupCaught = $_
+    $cleanupDetail = @(
+      [string]$cleanupCaught.Exception.Message
+      [string]$cleanupCaught.ScriptStackTrace
+      [string]$cleanupCaught.InvocationInfo.PositionMessage
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $failure = (@($failure, "cleanup failure: $($cleanupDetail -join [Environment]::NewLine)") |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [Environment]::NewLine
   }
-  $ownedRoot = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\') + '\'
-  if ([System.IO.Path]::GetFullPath($tempRoot).StartsWith($ownedRoot, [System.StringComparison]::OrdinalIgnoreCase)) { Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue }
-  if ($backendPort) { $cleanup.backend_port_free = @(Get-ListenerPids $backendPort).Count -eq 0 }
-  if ($dashboardPort) { $cleanup.dashboard_port_free = @(Get-ListenerPids $dashboardPort).Count -eq 0 }
-  $cleanup.isolated_root_removed = -not (Test-Path $tempRoot)
 }
 
 if ($failure) {

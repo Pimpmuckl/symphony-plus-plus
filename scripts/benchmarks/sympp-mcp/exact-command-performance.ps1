@@ -31,6 +31,7 @@ $runtimeState = $null
 $backendStartTicks = 0L
 $backendPort = 0
 $result = $null
+$probeFailure = $null
 $startupBurst = 10
 $cohortValues = @($Cohorts -split "," | ForEach-Object { [int]$_.Trim() })
 if ($cohortValues.Count -eq 0 -or @($cohortValues | Where-Object { $_ -notin @(1, 10, 100) }).Count -gt 0) {
@@ -554,6 +555,7 @@ exit /b %ERRORLEVEL%
   Write-BenchmarkProgress "Exact-command probe completed."
 } catch {
   $caught = $_
+  $probeFailure = $caught
   $errorDetail = @(
     [string]$caught.Exception.Message
     [string]$caught.ScriptStackTrace
@@ -571,16 +573,33 @@ exit /b %ERRORLEVEL%
   throw
 } finally {
   Stop-ExactClients @($clients | Where-Object { $_.process })
+  if ($probeFailure) {
+    $clientDiagnostics = @($clients | ForEach-Object {
+      if ($_.stderr_task -and $_.stderr_task.IsCompleted) {
+        try { [string]$_.stderr_task.GetAwaiter().GetResult() } catch { [string]$_.Exception.Message }
+      }
+    } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($clientDiagnostics.Count) {
+      Write-BenchmarkProgress "Exact client stderr after cleanup: $((($clientDiagnostics -join ' | ') -replace '\r?\n', ' ').Trim())"
+    }
+    Write-BenchmarkProgress "Exact-command post-cleanup trace: $((Get-TraceCounts | ConvertTo-Json -Compress)) git_invocations=$(Get-GitInvocationCount)"
+  }
   if ((-not $runtimeState -or -not $runtimeState.backend) -and (Test-Path -LiteralPath $runtimeFile -PathType Leaf)) {
     try { $runtimeState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json } catch { $runtimeState = $null }
     if ($runtimeState -and $runtimeState.backend) {
       $process = Get-Process -Id ([int]$runtimeState.backend.pid) -ErrorAction SilentlyContinue
-      if ($process) { $backendStartTicks = $process.StartTime.ToUniversalTime().Ticks }
+      if ($process) {
+        $processStartTime = $process.StartTime
+        if ($processStartTime) { $backendStartTicks = $processStartTime.ToUniversalTime().Ticks }
+      }
     }
   }
   if ($runtimeState -and $runtimeState.backend -and $backendStartTicks) {
     $process = Get-Process -Id ([int]$runtimeState.backend.pid) -ErrorAction SilentlyContinue
-    if ($process -and $process.StartTime.ToUniversalTime().Ticks -eq $backendStartTicks) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+    if ($process) {
+      $processStartTime = $process.StartTime
+      if ($processStartTime -and $processStartTime.ToUniversalTime().Ticks -eq $backendStartTicks) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+    }
   }
   if ($backendPort) {
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
