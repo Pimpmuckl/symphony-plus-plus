@@ -53,6 +53,16 @@ function Get-LeaseCount {
   return @(Get-ChildItem -LiteralPath (Join-Path (Split-Path -Parent $runtimeFile) "codex-plugin-leases") -Filter "bridge-*.json" -File -ErrorAction SilentlyContinue).Count
 }
 
+function Write-BenchmarkProgress([string]$Message) {
+  [Console]::Error.WriteLine($Message)
+  if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_PERFORMANCE_PROGRESS_FILE)) {
+    [System.IO.File]::AppendAllText(
+      $env:SYMPP_PERFORMANCE_PROGRESS_FILE,
+      "$([DateTime]::UtcNow.ToString('O')) $Message$([Environment]::NewLine)"
+    )
+  }
+}
+
 function Get-TraceCounts {
   $counts = @{}
   foreach ($line in @(Get-ChildItem -LiteralPath $traceDir -Filter "*.log" -File -ErrorAction SilentlyContinue | ForEach-Object { Get-Content -LiteralPath $_.FullName })) {
@@ -347,7 +357,7 @@ exit /b %ERRORLEVEL%
     PATH = (Join-Path $tempRoot "shim") + ";" + $effectivePath
   }
 
-  [Console]::Error.WriteLine("Starting exact-command artifact cold client on port $backendPort...")
+  Write-BenchmarkProgress "Starting exact-command artifact cold client on port $backendPort..."
   $cold = Start-ExactClient $environment
   Wait-ClientsReady @($cold) $StartupTimeoutSec
   $runtimeState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json
@@ -370,7 +380,7 @@ exit /b %ERRORLEVEL%
   $warmResults = [System.Collections.Generic.List[object]]::new()
   foreach ($repeat in 1..$Repeats) {
     foreach ($count in $cohortValues) {
-      [Console]::Error.WriteLine("Measuring exact-command warm cohort repeat=$repeat clients=$count...")
+      Write-BenchmarkProgress "Measuring exact-command warm cohort repeat=$repeat clients=$count..."
       $cohort = Invoke-Cohort $count $environment $backend.Id
       if ($cohort.leases_peak -ne ($count + 1) -or $cohort.leases_after -ne 1) { throw "Warm cohort lease lifecycle mismatch." }
       $currentOwners = @(Get-ListenerPids $backendPort)
@@ -384,6 +394,7 @@ exit /b %ERRORLEVEL%
   $lockRecovery = [pscustomobject]@{ checked = $false; reclaimed = $null }
   $lifecycleRace = [pscustomobject]@{ checked = $false; healthy = $null; backend_reused = $null }
   if ($LauncherMode -eq "NodePresent") {
+    Write-BenchmarkProgress "Checking exact-command cache release..."
     $cacheRelease.checked = $true
     $cacheProbe = Start-ExactClient $environment
     Wait-ClientsReady @($cacheProbe) $StartupTimeoutSec
@@ -414,6 +425,7 @@ exit /b %ERRORLEVEL%
     $backendStartTicks = $backend.StartTime.ToUniversalTime().Ticks
 
     $lockRecovery.checked = $true
+    Write-BenchmarkProgress "Checking exact-command abandoned-lock recovery..."
     $identityDir = Join-Path $environment.SYMPP_HOME "runtime/launcher-validation"
     $generationMarker = @(Get-ChildItem -LiteralPath $identityDir -Filter "*.generation" -File -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($generationMarker.Count -ne 1) { throw "Exact Node launcher did not publish a generation marker." }
@@ -435,7 +447,7 @@ exit /b %ERRORLEVEL%
     if (-not $lockRecovery.reclaimed) { throw "Exact Node launcher did not reclaim abandoned validation locks." }
 
     $lifecycleRace.checked = $true
-    [Console]::Error.WriteLine("Racing a fresh attach against last-detach cleanup...")
+    Write-BenchmarkProgress "Racing a fresh attach against last-detach cleanup..."
     $previousBackendPid = $backend.Id
     $cold.process.StandardInput.Close()
     $raceClient = Start-ExactClient $environment
@@ -460,7 +472,7 @@ exit /b %ERRORLEVEL%
     $backendStartTicks = $backend.StartTime.ToUniversalTime().Ticks
   }
 
-  [Console]::Error.WriteLine("Killing the artifact backend and measuring automatic recovery...")
+  Write-BenchmarkProgress "Killing the artifact backend and measuring automatic recovery..."
   Stop-Process -Id $backend.Id -Force -ErrorAction Stop
   [void]$backend.WaitForExit(30000)
   $recovery = Start-ExactClient $environment
@@ -480,6 +492,7 @@ exit /b %ERRORLEVEL%
 
   $mutation = [pscustomobject]@{ checked = $false; shortcut_rejected = $null; scan_race_detected = $null; attach_race_rejected = $null; unsafe_cleanup_skipped = $null }
   if (-not $SkipMutationCheck) {
+    Write-BenchmarkProgress "Checking exact-command mutation rejection..."
     $mutation.checked = $true
     $mutationFile = Join-Path $pluginRoot "scripts/start-sympp-mcp.ps1"
     if ($LauncherMode -eq "NodePresent") {
@@ -538,6 +551,7 @@ exit /b %ERRORLEVEL%
     recovery = $recoveryMetrics
     mutation = $mutation
   }
+  Write-BenchmarkProgress "Exact-command probe completed."
 } catch {
   $diagnostics = [System.Collections.Generic.List[string]]::new()
   foreach ($log in @(Get-ChildItem -LiteralPath $tempRoot -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.(err|out)\.log$' })) {

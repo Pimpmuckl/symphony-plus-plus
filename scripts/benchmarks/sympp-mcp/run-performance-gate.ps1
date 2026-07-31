@@ -220,13 +220,34 @@ function Start-IsolatedLauncher([hashtable]$Environment) {
   return $process
 }
 
+function Stop-CapturedProcessTree($Process, [string]$Label) {
+  $killInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $killInfo.FileName = (Get-Command taskkill.exe -ErrorAction Stop).Source
+  foreach ($arg in @("/PID", [string]$Process.Id, "/T", "/F")) { [void]$killInfo.ArgumentList.Add($arg) }
+  $killInfo.UseShellExecute = $false; $killInfo.CreateNoWindow = $true
+  $killer = [System.Diagnostics.Process]::new(); $killer.StartInfo = $killInfo
+  try {
+    if (-not $killer.Start()) { throw "$Label timeout cleanup failed to start" }
+    if (-not $killer.WaitForExit(15000)) {
+      try { $killer.Kill() } catch [System.InvalidOperationException] { }
+      [void]$killer.WaitForExit(5000)
+    }
+  } finally {
+    $killer.Dispose()
+  }
+  if (-not $Process.WaitForExit(15000)) { throw "$Label timed out and its process tree did not exit" }
+}
+
 function Invoke-CapturedProcess($Info, [int]$TimeoutMs, [string]$Label) {
   $Info.UseShellExecute = $false; $Info.CreateNoWindow = $true
   $Info.RedirectStandardOutput = $true; $Info.RedirectStandardError = $true
   $process = [System.Diagnostics.Process]::new(); $process.StartInfo = $Info
   if (-not $process.Start()) { throw "$Label failed to start" }
   $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
-  if (-not $process.WaitForExit($TimeoutMs)) { $process.Kill($true); throw "$Label timed out" }
+  if (-not $process.WaitForExit($TimeoutMs)) {
+    try { Stop-CapturedProcessTree $process $Label } finally { $process.Dispose() }
+    throw "$Label timed out"
+  }
   $stdout = $stdoutTask.GetAwaiter().GetResult(); $stderr = $stderrTask.GetAwaiter().GetResult()
   $result = [pscustomobject]@{ stdout = $stdout; stderr = $stderr; exit_code = $process.ExitCode }
   $process.Dispose()
@@ -429,7 +450,9 @@ try {
   if ($directRun.exit_code -ne 0) { throw "direct HTTP probe failed: $(([string]$directRun.stdout).Trim()) $(([string]$directRun.stderr).Trim())" }
   $direct = ConvertFrom-DirectProbe @($directRun.stdout -split "`r?`n") $directWatch.Elapsed.TotalMilliseconds
   [Console]::Error.WriteLine("Measuring the shipped command with Node present and missing...")
+  [Console]::Error.WriteLine("Measuring shipped command with Node missing...")
   $exactFallback = Invoke-ExactCommandProbe "NodeMissing" "1,10"
+  [Console]::Error.WriteLine("Measuring shipped command with Node present...")
   $exactNode = Invoke-ExactCommandProbe "NodePresent" "1,10,100" -CheckMutation
   [Console]::Error.WriteLine("Measuring MCP profiles and representative payloads...")
   $payloadOutput = Invoke-IsolatedMix @("run", "--no-start", $payloadProbe) $environment
