@@ -119,6 +119,45 @@ function Set-SanitizedEnvironment($Info, [hashtable]$Environment) {
   foreach ($entry in $Environment.GetEnumerator()) { $Info.Environment[$entry.Key] = [string]$entry.Value }
 }
 
+function Prepare-ExactArtifact([hashtable]$Environment) {
+  $preparationEnvironment = @{} + $Environment
+  $preparationEnvironment.SYMPP_LAUNCHER_TRACE_DIR = Join-Path $tempRoot "preparation-trace"
+  $preparationEnvironment.SYMPP_BENCH_GIT_LOG_DIR = Join-Path $tempRoot "preparation-git-invocations"
+  foreach ($path in @($preparationEnvironment.SYMPP_LAUNCHER_TRACE_DIR, $preparationEnvironment.SYMPP_BENCH_GIT_LOG_DIR)) {
+    New-Item -ItemType Directory -Path $path -Force | Out-Null
+  }
+
+  $info = [System.Diagnostics.ProcessStartInfo]::new()
+  $info.FileName = Join-Path $PSHOME "pwsh.exe"
+  foreach ($arg in @("-NoProfile", "-File", (Join-Path $pluginRoot "scripts/start-sympp-mcp.ps1"), "-ValidateOnly")) { [void]$info.ArgumentList.Add($arg) }
+  $info.WorkingDirectory = $pluginRoot
+  $info.UseShellExecute = $false
+  $info.CreateNoWindow = $true
+  $info.RedirectStandardOutput = $true
+  $info.RedirectStandardError = $true
+  Set-SanitizedEnvironment $info $preparationEnvironment
+
+  Write-BenchmarkProgress "Pre-acquiring verified exact-command runtime artifact..."
+  $watch = [System.Diagnostics.Stopwatch]::StartNew()
+  $process = [System.Diagnostics.Process]::new(); $process.StartInfo = $info
+  if (-not $process.Start()) { throw "Exact-command runtime artifact preparation failed to start." }
+  $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
+  if (-not $process.WaitForExit(1800000)) {
+    try { $process.Kill($true) } catch { }
+    [void]$process.WaitForExit(15000)
+    $process.Dispose()
+    throw "Exact-command runtime artifact preparation timed out."
+  }
+  $watch.Stop()
+  $stdout = $stdoutTask.GetAwaiter().GetResult(); $stderr = $stderrTask.GetAwaiter().GetResult(); $exitCode = $process.ExitCode
+  $process.Dispose()
+  if ($exitCode -ne 0) { throw "Exact-command runtime artifact preparation failed: $($stdout.Trim()) $($stderr.Trim())" }
+  $validationCache = [System.IO.Path]::GetFullPath((Join-Path $Environment.SYMPP_HOME "runtime/launcher-validation"))
+  if (-not $validationCache.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Exact-command preparation cache escaped its isolated root." }
+  Remove-Item -LiteralPath $validationCache -Recurse -Force -ErrorAction SilentlyContinue
+  Write-BenchmarkProgress "Verified exact-command runtime artifact acquired in $([Math]::Round($watch.Elapsed.TotalMilliseconds, 2)) ms."
+}
+
 function Start-ExactClient([hashtable]$Environment) {
   $config = Get-Content -LiteralPath (Join-Path $pluginRoot ".mcp.json") -Raw | ConvertFrom-Json
   $server = $config.symphony_plus_plus
@@ -366,6 +405,7 @@ exit /b %ERRORLEVEL%
     PATH = (Join-Path $tempRoot "shim") + ";" + $effectivePath
   }
 
+  Prepare-ExactArtifact $environment
   Write-BenchmarkProgress "Starting exact-command artifact cold client on port $backendPort..."
   $cold = Start-ExactClient $environment
   Wait-ClientsReady @($cold) $StartupTimeoutSec
