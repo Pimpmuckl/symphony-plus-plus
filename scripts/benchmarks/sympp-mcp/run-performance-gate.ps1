@@ -238,13 +238,17 @@ function Stop-CapturedProcessTree($Process, [string]$Label) {
   if (-not $Process.WaitForExit(15000)) { throw "$Label timed out and its process tree did not exit" }
 }
 
-function Read-AvailableProcessLines([object[]]$Streams) {
+function Read-AvailableProcessOutput([object[]]$Streams) {
   foreach ($stream in $Streams) {
-    $linesRead = 0
-    while ($linesRead -lt 1024 -and $null -ne $stream.task -and $stream.task.IsCompleted) {
-      $line = $stream.task.GetAwaiter().GetResult()
-      if ($null -eq $line) { $stream.task = $null }
-      else { $stream.lines.Add($line); $stream.task = $stream.reader.ReadLineAsync(); $linesRead++ }
+    $chunksRead = 0
+    while ($chunksRead -lt 1024 -and $null -ne $stream.task -and $stream.task.IsCompleted) {
+      $count = $stream.task.GetAwaiter().GetResult()
+      if ($count -eq 0) { $stream.task = $null }
+      else {
+        [void]$stream.output.Append($stream.buffer, 0, $count)
+        $stream.task = $stream.reader.ReadAsync($stream.buffer, 0, $stream.buffer.Length)
+        $chunksRead++
+      }
     }
   }
 }
@@ -254,13 +258,14 @@ function Invoke-CapturedProcess($Info, [int]$TimeoutMs, [string]$Label) {
   $Info.RedirectStandardOutput = $true; $Info.RedirectStandardError = $true
   $process = [System.Diagnostics.Process]::new(); $process.StartInfo = $Info
   if (-not $process.Start()) { throw "$Label failed to start" }
+  $stdoutBuffer = [char[]]::new(4096); $stderrBuffer = [char[]]::new(4096)
   $streams = @(
-    [pscustomobject]@{ reader = $process.StandardOutput; task = $process.StandardOutput.ReadLineAsync(); lines = [System.Collections.Generic.List[string]]::new() }
-    [pscustomobject]@{ reader = $process.StandardError; task = $process.StandardError.ReadLineAsync(); lines = [System.Collections.Generic.List[string]]::new() }
+    [pscustomobject]@{ reader = $process.StandardOutput; buffer = $stdoutBuffer; task = $process.StandardOutput.ReadAsync($stdoutBuffer, 0, $stdoutBuffer.Length); output = [System.Text.StringBuilder]::new() }
+    [pscustomobject]@{ reader = $process.StandardError; buffer = $stderrBuffer; task = $process.StandardError.ReadAsync($stderrBuffer, 0, $stderrBuffer.Length); output = [System.Text.StringBuilder]::new() }
   )
   $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
   while (-not $process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
-    Read-AvailableProcessLines $streams
+    Read-AvailableProcessOutput $streams
     Start-Sleep -Milliseconds 10
   }
   $timedOut = -not $process.HasExited
@@ -269,14 +274,14 @@ function Invoke-CapturedProcess($Info, [int]$TimeoutMs, [string]$Label) {
   }
   $drainDeadline = [DateTime]::UtcNow.AddSeconds(2)
   do {
-    Read-AvailableProcessLines $streams
+    Read-AvailableProcessOutput $streams
     if (@($streams | Where-Object { $null -ne $_.task }).Count -eq 0) { break }
     Start-Sleep -Milliseconds 10
   } while ([DateTime]::UtcNow -lt $drainDeadline)
   if ($timedOut) { $process.Dispose(); throw "$Label timed out" }
   $result = [pscustomobject]@{
-    stdout = [string]::Join([Environment]::NewLine, $streams[0].lines)
-    stderr = [string]::Join([Environment]::NewLine, $streams[1].lines)
+    stdout = $streams[0].output.ToString()
+    stderr = $streams[1].output.ToString()
     exit_code = $process.ExitCode
   }
   $process.Dispose()
@@ -289,7 +294,9 @@ function Invoke-ExactCommandProbe([string]$Mode, [string]$Cohorts, [int]$Startup
   foreach ($arg in @("-NoProfile", "-File", $exactProbe, "-LauncherMode", $Mode, "-Cohorts", $Cohorts, "-Repeats", "1", "-StartupTimeoutSec", [string]$StartupTimeoutSec)) { [void]$info.ArgumentList.Add($arg) }
   if (-not $CheckMutation) { [void]$info.ArgumentList.Add("-SkipMutationCheck") }
   $info.WorkingDirectory = $repoRoot
-  $probeTimeoutMs = 900000 + ([Math]::Max(0, $StartupTimeoutSec - 300) * 1000)
+  $startupStageCount = 2 + @($Cohorts -split ",").Count
+  if ($Mode -eq "NodePresent") { $startupStageCount += 4 + [int][bool]$CheckMutation }
+  $probeTimeoutMs = 900000 + ($startupStageCount * [Math]::Max(0, $StartupTimeoutSec - 300) * 1000)
   $run = Invoke-CapturedProcess $info $probeTimeoutMs "exact shipped command ($Mode)"
   if ($run.exit_code -ne 0) { throw "exact shipped command ($Mode) failed: $(([string]$run.stderr).Trim()) $(([string]$run.stdout).Trim())" }
   return $run.stdout | ConvertFrom-Json
