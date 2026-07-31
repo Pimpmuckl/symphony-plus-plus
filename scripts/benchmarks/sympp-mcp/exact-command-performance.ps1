@@ -553,6 +553,13 @@ exit /b %ERRORLEVEL%
   }
   Write-BenchmarkProgress "Exact-command probe completed."
 } catch {
+  $caught = $_
+  $errorDetail = @(
+    [string]$caught.Exception.Message
+    [string]$caught.ScriptStackTrace
+    [string]$caught.InvocationInfo.PositionMessage
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  Write-BenchmarkProgress "Exact-command probe failed: $(($errorDetail -join ' | ') -replace '\r?\n', ' ')"
   $diagnostics = [System.Collections.Generic.List[string]]::new()
   foreach ($log in @(Get-ChildItem -LiteralPath $tempRoot -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.(err|out)\.log$' })) {
     $rawContent = Get-Content -LiteralPath $log.FullName -Raw -ErrorAction SilentlyContinue

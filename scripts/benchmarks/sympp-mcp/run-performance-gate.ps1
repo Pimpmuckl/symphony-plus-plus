@@ -500,7 +500,13 @@ try {
   $responseList = $responseListJson[0] | ConvertFrom-Json
   $revision = [string](& git -C $repoRoot rev-parse HEAD); $metrics = [pscustomobject]@{ revision = $revision.Trim(); cold = $cold; warm = $warm; direct = $direct; exact = [pscustomobject]@{ node = $exactNode; fallback = $exactFallback }; profiles = $payloads.profiles; results = $payloads.results; state_hot_path = $stateHotPath; response_list = $responseList }
 } catch {
-  $failure = $_.Exception.Message
+  $caught = $_
+  $failure = @(
+    [string]$caught.Exception.Message
+    [string]$caught.ScriptStackTrace
+    [string]$caught.InvocationInfo.PositionMessage
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  $failure = $failure -join [Environment]::NewLine
   $backendLog = @(Get-ChildItem (Join-Path $tempRoot "logs") -Filter "backend-*.err.log" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -Last 1); if ($backendLog) { $detail = ([string](Get-Content $backendLog.FullName -Raw)).Trim(); if ($detail.Length -gt 2000) { $detail = $detail.Substring($detail.Length - 2000) }; $failure += "`nbackend stderr: $detail" }
 } finally {
   if ($launcherProcess) {
