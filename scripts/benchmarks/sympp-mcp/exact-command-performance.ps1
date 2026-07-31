@@ -163,15 +163,31 @@ function Wait-ClientsReady([object[]]$Cohort, [int]$TimeoutSec) {
   }
 }
 
-function Stop-ExactClient($Client) {
-  if ($null -eq $Client -or $null -eq $Client.process) { return }
-  try { $Client.process.StandardInput.Close() } catch { }
-  if (-not $Client.process.WaitForExit(60000)) {
-    $Client.process.Kill($true)
-    [void]$Client.process.WaitForExit(15000)
+function Stop-ExactClients([object[]]$Clients) {
+  $active = @($Clients | Where-Object { $null -ne $_ -and $null -ne $_.process })
+  $exitDeadline = [DateTime]::UtcNow.AddSeconds(60)
+  foreach ($client in $active) {
+    try { $client.process.StandardInput.Close() } catch { }
+    $remainingMs = [Math]::Max(0, [int][Math]::Ceiling(($exitDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+    if ($remainingMs -eq 0 -or -not $client.process.WaitForExit($remainingMs)) { break }
   }
-  $Client.process.Dispose()
-  $Client.process = $null
+  foreach ($client in @($active | Where-Object { -not $_.process.HasExited })) {
+    try { $client.process.Kill($true) } catch [System.InvalidOperationException] { }
+  }
+
+  $killDeadline = [DateTime]::UtcNow.AddSeconds(15)
+  foreach ($client in $active) {
+    if (-not $client.process.HasExited) {
+      $remainingMs = [Math]::Max(0, [int][Math]::Ceiling(($killDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+      [void]$client.process.WaitForExit($remainingMs)
+    }
+    $client.process.Dispose()
+    $client.process = $null
+  }
+}
+
+function Stop-ExactClient($Client) {
+  Stop-ExactClients @($Client)
 }
 
 function Get-ProcessTreeMetrics([object[]]$Cohort, [int]$ExcludedPid) {
@@ -237,7 +253,7 @@ function Invoke-Cohort([int]$Count, [hashtable]$Environment, [int]$BackendPid) {
        [int]$traceDelta["generation_attach_full_validation"] -ne $Count)) {
     throw "Node warm cohort did not validate identity and release generation watchers before attachment."
   }
-  foreach ($client in $cohort) { Stop-ExactClient $client }
+  Stop-ExactClients @($cohort)
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
   while ((Get-LeaseCount) -gt 1 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
   return [pscustomobject]@{
@@ -533,7 +549,7 @@ exit /b %ERRORLEVEL%
   [Console]::Error.WriteLine("trace: $((Get-TraceCounts | ConvertTo-Json -Compress)) git_invocations=$(Get-GitInvocationCount)")
   throw
 } finally {
-  foreach ($client in @($clients)) { if ($client.process) { Stop-ExactClient $client } }
+  Stop-ExactClients @($clients | Where-Object { $_.process })
   if ((-not $runtimeState -or -not $runtimeState.backend) -and (Test-Path -LiteralPath $runtimeFile -PathType Leaf)) {
     try { $runtimeState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json } catch { $runtimeState = $null }
     if ($runtimeState -and $runtimeState.backend) {
