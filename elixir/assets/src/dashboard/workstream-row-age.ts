@@ -13,12 +13,13 @@ export function elapsedLabel(activeSince: string | null | undefined, now?: strin
   if (!activeSince || now == null) return undefined;
   const elapsed = new Date(now).getTime() - Date.parse(activeSince);
   if (!Number.isFinite(elapsed) || elapsed < 0) return undefined;
-  const minutes = Math.floor(elapsed / 60_000);
-  if (minutes < 1) return "<1m";
+  const seconds = Math.floor(elapsed / 1_000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m`;
-  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
 function linkedPackage(slice: WorkRequestPackage, packageById: Map<string, WorkPackageCard>) {

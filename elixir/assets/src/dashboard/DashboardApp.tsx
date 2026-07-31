@@ -7,14 +7,7 @@ import { DashboardShell } from "./dashboard-shell";
 import { DashboardDebugTools } from "./dashboard-debug-tools";
 import { SoloSessions } from "./solo-sessions";
 import { WorkstreamsPane } from "./workspace-tabs";
-import {
-  activeBlockerItems,
-  allGuidanceItems,
-  allPackages,
-  dashboardContentFingerprint,
-  guidanceAnswerUrl,
-  repoSummaries,
-} from "./dashboard-data";
+import { activeBlockerItems, allGuidanceItems, allPackages, dashboardContentFingerprint, guidanceAnswerUrl, repoSummaries } from "./dashboard-data";
 import { appDialogReducer, appStateReducer, createInitialAppState, initialAppDialogState } from "./dashboard-state";
 import { applyDashboardTheme, repoWorkstreamHasWorkItems, shouldShowUpdateSimulationControls, writeDashboardUiStateValue, writeStoredTheme } from "./dashboard-persistence";
 import { canMutateDashboardComments, canMutateDashboardOperatorActions } from "./detail-utils";
@@ -24,6 +17,7 @@ import { activeWorkRequestDetails, packageSelectionIndex, requestDetailsByRepoKe
 import { useDashboardUpdateAnimations } from "./update-animations";
 import { useDashboardSurfaceLoading } from "./dashboard-surface-loading";
 import { createDashboardEventRefresh, useBestEffortGithubSync } from "./dashboard-demand-loading";
+import { attentionTargetForGuidance, dashboardAttentionItems, type AttentionJumpDestination, type AttentionJumpTarget, type AttentionTarget } from "./workstream-attention";
 type DashboardLoadMode = "initial" | "refresh" | "silent" | "reconnect";
 function mergeDashboardLoadMode(pending: DashboardLoadMode, next: DashboardLoadMode) {
   return pending === "reconnect" || next === "reconnect" ? "reconnect" : next;
@@ -35,6 +29,7 @@ function useDashboardController() {
   const [dialogState, dispatchDialog] = useReducer(appDialogReducer, initialAppDialogState);
   const [connectionIssue, setConnectionIssue] = useState<DashboardConnectionIssue | null>(null);
   const [dashboardSearchQuery, setDashboardSearchQuery] = useState("");
+  const [attentionJumpTarget, setAttentionJumpTarget] = useState<AttentionJumpTarget | null>(null);
   const [surfaceRefreshVersion, setSurfaceRefreshVersion] = useState(0);
   const [animationBaselineReady, setAnimationBaselineReady] = useState(false);
   const showUpdateSimulationControls = useMemo(() => shouldShowUpdateSimulationControls(), []);
@@ -50,6 +45,7 @@ function useDashboardController() {
   const deferredLoadSequenceRef = useRef(0);
   const refreshingSequenceRef = useRef(0);
   const mutationVersionRef = useRef(0);
+  const attentionJumpSequenceRef = useRef(0);
   const setDashboard = useCallback((nextDashboard: DashboardPayload | null) => {
     const nextFingerprint = dashboardContentFingerprint(nextDashboard);
     if (dashboardFingerprintRef.current === nextFingerprint) return;
@@ -70,9 +66,16 @@ function useDashboardController() {
   const setHideEmptyWorkstreams = useCallback((nextHideEmptyWorkstreams: boolean) => dispatchApp({ type: "patch", state: { hideEmptyWorkstreams: nextHideEmptyWorkstreams } }), []);
   const setShowWorkstreamContextBar = useCallback((nextShowWorkstreamContextBar: boolean) => dispatchApp({ type: "patch", state: { showWorkstreamContextBar: nextShowWorkstreamContextBar } }), []);
   const setShowWelcomeToast = useCallback((nextShowWelcomeToast: boolean) => dispatchApp({ type: "patch", state: { showWelcomeToast: nextShowWelcomeToast } }), []);
-  const setSelectedGuidance = useCallback((selectedGuidance: GuidanceItem | null) => dispatchDialog({ type: "guidance", selectedGuidance }), []);
+  const setSelectedAttention = useCallback((selectedAttention: AttentionTarget | null) => dispatchDialog({ type: "attention", selectedAttention }), []);
+  const openGuidanceAttention = useCallback((item: GuidanceItem) => setSelectedAttention(attentionTargetForGuidance(item)), [setSelectedAttention]);
   const setSelectedCardDetail = useCallback((selectedCardDetail: CardDetailSelection | null) => dispatchDialog({ type: "cardDetail", selectedCardDetail }), []);
   const setNewRequestOpen = useCallback((open: boolean) => dispatchDialog({ type: "newRequest", open }), []);
+  const jumpToAttention = useCallback((destination: AttentionJumpDestination) => {
+    attentionJumpSequenceRef.current += 1;
+    setSelectedAttention(null); setSelectedCardDetail(null);
+    setDashboardSearchQuery(""); setWorkspaceTab("workstreams");
+    setAttentionJumpTarget({ ...destination, token: attentionJumpSequenceRef.current });
+  }, [setSelectedAttention, setSelectedCardDetail, setWorkspaceTab]);
   useEffect(() => {
     connectionIssueRef.current = connectionIssue;
   }, [connectionIssue]);
@@ -100,11 +103,9 @@ function useDashboardController() {
   );
   useEffect(() => {
     let cancelled = false;
-
     void ensureDashboardRuntimeConfig().then((config) => {
       if (!cancelled) setRuntimeConfig(config);
     });
-
     return () => {
       cancelled = true;
     };
@@ -124,12 +125,10 @@ function useDashboardController() {
     },
     [clearConnectionFailure, setDashboard],
   );
-
   const recordDashboardLoadFailure = useCallback((loadSequence: number, caught: unknown, mode: DashboardLoadMode) => {
     if (loadSequence !== loadSequenceRef.current) return;
     recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard API unavailable"), mode === "initial" || mode === "reconnect", isReconnectableLocalOperatorError(caught));
   }, [recordConnectionFailure]);
-
   const runDashboardLoad = useCallback(async (mode: DashboardLoadMode) => {
     const failureVersion = failureVersionRef.current;
     const loadMutationVersion = mutationVersionRef.current;
@@ -142,7 +141,6 @@ function useDashboardController() {
       refreshingSequenceRef.current = loadSequence;
       setRefreshing(true);
     }
-
     try {
       await withLocalOperatorReconnect(async () => {
         const config = mode === "reconnect" ? await reconnectLocalOperatorSession() : await ensureDashboardRuntimeConfig();
@@ -164,20 +162,17 @@ function useDashboardController() {
       }
     }
   }, [applyDashboardResponse, recordDashboardLoadFailure, setLoading, setRefreshing]);
-
   const loadDashboard = useCallback(
     (mode: DashboardLoadMode = "refresh") =>
       enqueueLatestTask(refreshQueueRef.current, mode, runDashboardLoad, mergeDashboardLoadMode),
     [runDashboardLoad],
-  );
-
+    );
   const loadDashboardDeferred = useCallback(async () => {
     const baseDashboard = dashboardRef.current;
     if (!baseDashboard?.deferred?.dashboard_sections) return;
     const failureVersion = failureVersionRef.current;
     const loadSequence = deferredLoadSequenceRef.current + 1;
     deferredLoadSequenceRef.current = loadSequence;
-
     try {
       await withLocalOperatorReconnect(async () => {
         const response = await operatorFetch(operatorApiUrl("/dashboard/deferred"), { headers: jsonHeaders() });
@@ -192,7 +187,6 @@ function useDashboardController() {
       recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard details unavailable"), false, isReconnectableLocalOperatorError(caught));
     }
   }, [clearConnectionFailure, recordConnectionFailure, setDashboard]);
-
   const { archivedLoading, loadArchived, soloLoading } = useDashboardSurfaceLoading({
     dashboardRef,
     clearFailure: clearConnectionFailure,
@@ -202,19 +196,16 @@ function useDashboardController() {
     setDashboard,
     soloOpen: dashboard !== null && workspaceTab === "solo",
   });
-
   const refreshAfterMutation = useCallback(async (payload?: DashboardMutationPayload) => {
     if (payload?.dashboard) {
       setDashboard(payload.dashboard);
       clearConnectionFailure();
       return;
     }
-
     if (!mutationShouldRefreshDashboard(payload)) {
       clearConnectionFailure();
       return;
     }
-
     await loadDashboard("refresh");
   }, [clearConnectionFailure, loadDashboard, setDashboard]);
   useBestEffortGithubSync(canMutateOperatorActions && Boolean(dashboard && !dashboard.deferred?.dashboard_sections), refreshAfterMutation);
@@ -228,7 +219,6 @@ function useDashboardController() {
         });
         return readDashboardApiResponse(response, fallbackMessage);
       })) as DashboardMutationPayload;
-
       const workRequest = dashboardMutationWorkRequest(payload);
       mutationVersionRef.current += 1;
       if (options.remove) setDashboard(removeDashboardWorkRequest(dashboardRef.current, workRequestId));
@@ -249,9 +239,8 @@ function useDashboardController() {
       const payload = (await readDashboardApiResponse(response, "Answer was not recorded")) as DashboardMutationPayload;
       await refreshAfterMutation(payload);
     });
-    setSelectedGuidance(null);
-  }, [refreshAfterMutation, setSelectedGuidance]);
-
+    setSelectedAttention(null);
+  }, [refreshAfterMutation, setSelectedAttention]);
   const createWorkRequest = useCallback(async (form: NewRequestForm) => {
     const payload = (await withLocalOperatorReconnect(async () => {
       const response = await operatorFetch(operatorApiUrl("/work-requests"), {
@@ -383,8 +372,9 @@ function useDashboardController() {
       const payload = (await readDashboardApiResponse(response, "WorkPackage state was not changed")) as DashboardMutationPayload;
       await refreshAfterMutation(payload);
     });
+    setSelectedAttention(null);
     setSelectedCardDetail(null);
-  }, [refreshAfterMutation, setSelectedCardDetail]);
+  }, [refreshAfterMutation, setSelectedAttention, setSelectedCardDetail]);
 
   const archiveWorkPackage = useCallback<WorkPackageArchiveMutation>(async (workPackageId) => {
     await withLocalOperatorReconnect(async () => {
@@ -396,8 +386,9 @@ function useDashboardController() {
       const payload = (await readDashboardApiResponse(response, "WorkPackage was not archived")) as DashboardMutationPayload;
       await refreshAfterMutation(payload);
     });
+    setSelectedAttention(null);
     setSelectedCardDetail(null);
-  }, [refreshAfterMutation, setSelectedCardDetail]);
+  }, [refreshAfterMutation, setSelectedAttention, setSelectedCardDetail]);
 
   const clearWorkPackageBlocker = useCallback<WorkPackageBlockerClearMutation>(async (workPackageId, blockerId) => {
     await withLocalOperatorReconnect(async () => {
@@ -409,8 +400,9 @@ function useDashboardController() {
       const payload = (await readDashboardApiResponse(response, "Blocker was not cleared")) as DashboardMutationPayload;
       await refreshAfterMutation(payload);
     });
+    setSelectedAttention(null);
     setSelectedCardDetail(null);
-  }, [refreshAfterMutation, setSelectedCardDetail]);
+  }, [refreshAfterMutation, setSelectedAttention, setSelectedCardDetail]);
 
   useEffect(() => {
     let cancelled = false;
@@ -469,7 +461,6 @@ function useDashboardController() {
     writeStoredTheme(nextTheme);
     dispatchApp({ type: "patch", state: { theme: nextTheme } });
   }, [theme]);
-
   const packages = useMemo(() => allPackages(dashboard), [dashboard]);
   const requests = useMemo(() => dashboard?.work_requests?.work_requests ?? [], [dashboard]);
   const archivedRequests = useMemo(() => dashboard?.archived_work_requests?.work_requests ?? [], [dashboard]);
@@ -483,6 +474,8 @@ function useDashboardController() {
   });
   const guidanceItems = useMemo(() => allGuidanceItems(dashboard), [dashboard]);
   const blockerItems = useMemo(() => activeBlockerItems(packages, packageSelections, dashboard?.active_blocking_edges ?? []), [dashboard?.active_blocking_edges, packages, packageSelections]);
+  const packageById = useMemo(() => new Map(packages.map((pkg) => [pkg.id, pkg])), [packages]);
+  const attentionItems = useMemo(() => dashboardAttentionItems(requestDetails, packageById, dashboard?.active_blocking_edges ?? [], guidanceItems, blockerItems), [blockerItems, dashboard?.active_blocking_edges, guidanceItems, packageById, requestDetails]);
   const soloSessions = useMemo(() => dashboard?.solo_sessions?.solo_sessions ?? [], [dashboard]);
   const repos = useMemo(() => repoSummaries(packages, requests, guidanceItems, soloSessions, requestDetails), [
     packages,
@@ -519,7 +512,10 @@ function useDashboardController() {
           requestDetailsByRepo={searchedWorkstreams.requestDetailsByRepo}
           now={dashboard?.generated_at}
           activeBlockingEdges={dashboard?.active_blocking_edges ?? []}
-          onSelectGuidance={setSelectedGuidance}
+          guidanceItems={guidanceItems}
+          jumpTarget={attentionJumpTarget}
+          onSelectAttention={setSelectedAttention}
+          onSelectGuidance={openGuidanceAttention}
           onSelectCard={setSelectedCardDetail}
           showWorkstreamContextBar={showWorkstreamContextBar}
           updateAnimations={updateAnimations}
@@ -530,22 +526,24 @@ function useDashboardController() {
     [
       dashboard?.active_blocking_edges,
       dashboard?.generated_at,
+      attentionJumpTarget,
+      guidanceItems,
       hiddenWorkstreamCount,
       searchedWorkstreams,
       setSelectedCardDetail,
-      setSelectedGuidance,
+      setSelectedAttention,
+      openGuidanceAttention,
       showWorkstreamContextBar,
       soloSessions,
       soloLoading,
       updateAnimations,
     ],
   );
-
   return {
     archiveAfterDays,
     archivedRequestsLoading: archivedLoading,
     archivedRequests,
-    blockerItems,
+    attentionItems,
     canMutateComments: canMutateDashboardComments(runtimeConfig),
     canMutateOperatorActions,
     changeWorkPackageState,
@@ -569,13 +567,14 @@ function useDashboardController() {
     onDeleteWorkRequest: deleteWorkRequest,
     onDashboardSearchQueryChange: updateDashboardSearchQuery,
     onHideEmptyWorkstreamsChange: setHideEmptyWorkstreams,
+    onJumpToAttention: jumpToAttention,
     onOpenDashboardOnBootChange: updateOpenDashboardOnBoot,
     onReconnectDashboard: reconnectDashboard,
     onRefreshDashboard: loadDashboard,
     onRestoreWorkRequest: restoreWorkRequest,
     onResolveComment: resolveComment,
+    onSelectAttention: setSelectedAttention,
     onSelectCard: setSelectedCardDetail,
-    onSelectGuidance: setSelectedGuidance,
     onSetNewRequestOpen: setNewRequestOpen,
     onShowWorkstreamContextBarChange: setShowWorkstreamContextBar,
     onShowWelcomeToastChange: setShowWelcomeToast,
@@ -585,6 +584,7 @@ function useDashboardController() {
     onUpdateSoloSessionDeleteAfterDays: updateSoloSessionDeleteAfterDays,
     onWorkspaceTabChange: setWorkspaceTab,
     refreshing,
+    requestDetails,
     repos,
     showUpdateSimulationControls,
     openDashboardOnBoot,

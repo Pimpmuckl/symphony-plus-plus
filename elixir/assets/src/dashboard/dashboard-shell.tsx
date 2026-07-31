@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { architectHandoffEligibleRequest } from "@/lib/operational-state";
 import { cn } from "@/lib/utils";
-import { AppDialogState, BlockerItem } from "./dashboard-state";
+import { AppDialogState } from "./dashboard-state";
 import { ArchivedRequestsDialog, DashboardSettingsDialog, ThemeToggle } from "./dashboard-settings";
 import { CardDetailSelection, DASHBOARD_LOGO_URL, DashboardConnectionIssue, DashboardTheme, DashboardUpdateAnimations, LOCAL_OPERATOR_AUTH_REQUIRED_MESSAGE, ResolveContextComment, SubmitContextComment, TopPanelKey, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, isLocalOperatorAuthRequiredMessage } from "./runtime";
 import { DashboardDeferredDialogs } from "./dashboard-deferred-dialogs";
@@ -23,6 +23,7 @@ import { StatusRail } from "./status-rail";
 import { UpdateSimulationControls } from "./update-simulation-controls";
 import { WorkspaceTabCarousel } from "./workspace-tabs";
 import { readStoredTopPanel, writeDashboardUiStateValue } from "./dashboard-persistence";
+import type { AttentionItem, AttentionJumpDestination, AttentionTarget } from "./workstream-attention";
 
 type DashboardDisplayPreferences = {
   hideEmptyWorkstreams: boolean;
@@ -33,7 +34,7 @@ export function DashboardShell({
   archiveAfterDays,
   archivedRequestsLoading,
   archivedRequests,
-  blockerItems,
+  attentionItems,
   canMutateComments,
   changeWorkPackageState,
   changeWorkRequestState,
@@ -45,7 +46,6 @@ export function DashboardShell({
   displayPreferences,
   dashboardSearchQuery,
   error,
-  guidanceItems,
   hiddenWorkstreamCount,
   linkedWorkPackageIds,
   loading,
@@ -57,13 +57,14 @@ export function DashboardShell({
   onDeleteWorkRequest,
   onDashboardSearchQueryChange,
   onHideEmptyWorkstreamsChange,
+  onJumpToAttention,
   onOpenDashboardOnBootChange,
   onReconnectDashboard,
   onRefreshDashboard,
   onResolveComment,
   onRestoreWorkRequest,
+  onSelectAttention,
   onSelectCard,
-  onSelectGuidance,
   onSetNewRequestOpen,
   onShowWorkstreamContextBarChange,
   onShowWelcomeToastChange,
@@ -73,6 +74,7 @@ export function DashboardShell({
   onUpdateSoloSessionDeleteAfterDays,
   onWorkspaceTabChange,
   refreshing,
+  requestDetails,
   repos,
   showUpdateSimulationControls,
   openDashboardOnBoot,
@@ -88,7 +90,7 @@ export function DashboardShell({
   archiveAfterDays: number;
   archivedRequestsLoading: boolean;
   archivedRequests: WorkRequestCard[];
-  blockerItems: BlockerItem[];
+  attentionItems: AttentionItem[];
   canMutateComments: boolean;
   changeWorkPackageState: WorkPackageStateMutation;
   changeWorkRequestState: WorkRequestStateMutation;
@@ -100,7 +102,6 @@ export function DashboardShell({
   displayPreferences: DashboardDisplayPreferences;
   dashboardSearchQuery: string;
   error: string | null;
-  guidanceItems: GuidanceItem[];
   hiddenWorkstreamCount: number;
   linkedWorkPackageIds: Set<string>;
   loading: boolean;
@@ -112,13 +113,14 @@ export function DashboardShell({
   onDeleteWorkRequest: WorkRequestMutation;
   onDashboardSearchQueryChange: (query: string) => void;
   onHideEmptyWorkstreamsChange: (hide: boolean) => void;
+  onJumpToAttention: (destination: AttentionJumpDestination) => void;
   onOpenDashboardOnBootChange: (open: boolean) => Promise<void>;
   onReconnectDashboard: () => Promise<void>;
   onRefreshDashboard: () => Promise<void>;
   onResolveComment: ResolveContextComment;
   onRestoreWorkRequest: WorkRequestMutation;
+  onSelectAttention: (target: AttentionTarget | null) => void;
   onSelectCard: (selection: CardDetailSelection | null) => void;
-  onSelectGuidance: (item: GuidanceItem | null) => void;
   onSetNewRequestOpen: (open: boolean) => void;
   onShowWorkstreamContextBarChange: (show: boolean) => void;
   onShowWelcomeToastChange: (show: boolean) => void;
@@ -128,6 +130,7 @@ export function DashboardShell({
   onUpdateSoloSessionDeleteAfterDays: (deleteAfterDays: number) => Promise<void>;
   onWorkspaceTabChange: (tab: WorkspaceTab) => void;
   refreshing: boolean;
+  requestDetails: WorkRequestDetail[];
   repos: RepoSummary[];
   showUpdateSimulationControls: boolean;
   openDashboardOnBoot: boolean;
@@ -143,8 +146,14 @@ export function DashboardShell({
   const { hideEmptyWorkstreams, showWorkstreamContextBar } = displayPreferences;
   const localOperatorReconnectIssue = isLocalOperatorAuthRequiredMessage(error) || connectionIssue?.reconnectableLocalSession === true;
   const dashboardAlertMessage = error || (localOperatorReconnectIssue ? connectionIssue?.message || LOCAL_OPERATOR_AUTH_REQUIRED_MESSAGE : null);
-  const [visibleTopPanel, setOpenTopPanel] = useAutoClosingTopPanel(guidanceItems.length, blockerItems.length, dashboard !== null);
+  const guidanceCount = attentionItems.filter((item) => item.tone === "guidance").length;
+  const blockerCount = attentionItems.filter((item) => item.tone === "blocked").length;
+  const [visibleTopPanel, setOpenTopPanel] = useAutoClosingTopPanel(guidanceCount, blockerCount, dashboard !== null);
   const headerRef = useRef<HTMLElement | null>(null);
+  const jumpToAttention = useCallback((destination: AttentionJumpDestination) => {
+    setOpenTopPanel(null);
+    onJumpToAttention(destination);
+  }, [onJumpToAttention, setOpenTopPanel]);
 
   useDashboardScrollbarOffset(headerRef, loading);
 
@@ -179,8 +188,7 @@ export function DashboardShell({
               <LiveLedgerBadge error={error} connectionIssue={connectionIssue} databasePath={dashboard?.ledger?.database} />
               <DashboardSearchControl value={dashboardSearchQuery} onValueChange={onDashboardSearchQueryChange} />
               <AttentionBarControls
-                guidanceItems={guidanceItems}
-                blockerItems={blockerItems}
+                attentionItems={attentionItems}
                 openPanel={visibleTopPanel}
                 onToggle={setOpenTopPanel}
               />
@@ -228,10 +236,11 @@ export function DashboardShell({
           <div className="dashboard-top-panel-shell mx-auto max-w-[1500px] px-4 sm:px-6 lg:px-8">
             <StatusRail
               openPanel={visibleTopPanel}
-              guidanceItems={guidanceItems}
-              blockerItems={blockerItems}
-              onSelectGuidance={onSelectGuidance}
-              onSelectCard={onSelectCard}
+              attentionItems={attentionItems}
+              requestDetails={requestDetails}
+              now={dashboardGeneratedAt(dashboard)}
+              onJumpToAttention={jumpToAttention}
+              onSelectAttention={onSelectAttention}
               updateAnimations={updateAnimations}
             />
           </div>
@@ -289,6 +298,7 @@ export function DashboardShell({
         </div>
 
         <DashboardDeferredDialogs
+          activeBlockingEdges={dashboardActiveBlockingEdges(dashboard)}
           canMutateComments={canMutateComments}
           canMutateOperatorActions={canMutateOperatorActions}
           changeWorkPackageState={changeWorkPackageState}
@@ -296,13 +306,15 @@ export function DashboardShell({
           copyArchitectHandoff={copyArchitectHandoff}
           dialogState={dialogState}
           linkedWorkPackageIds={linkedWorkPackageIds}
+          requestDetails={requestDetails}
+          onJumpToAttention={jumpToAttention}
           onArchiveWorkPackage={onArchiveWorkPackage}
           onArchiveWorkRequest={onArchiveWorkRequest}
           onClearWorkPackageBlocker={onClearWorkPackageBlocker}
           onDeleteWorkRequest={onDeleteWorkRequest}
           onResolveComment={onResolveComment}
+          onSelectAttention={onSelectAttention}
           onSelectCard={onSelectCard}
-          onSelectGuidance={onSelectGuidance}
           onSubmitComment={onSubmitComment}
           onSubmitGuidanceAnswer={onSubmitGuidanceAnswer}
         />
@@ -354,6 +366,14 @@ function useAutoClosingTopPanel(guidanceCount: number, blockerCount: number, rea
 
 function sameTopPanelCounts(left: TopPanelCounts, right: TopPanelCounts) {
   return left.blockers === right.blockers && left.guidance === right.guidance && left.ready === right.ready;
+}
+
+function dashboardGeneratedAt(dashboard: DashboardPayload | null) {
+  return dashboard?.generated_at;
+}
+
+function dashboardActiveBlockingEdges(dashboard: DashboardPayload | null) {
+  return dashboard?.active_blocking_edges ?? [];
 }
 
 function useDashboardScrollbarOffset(headerRef: React.RefObject<HTMLElement | null>, loading: boolean) {

@@ -19,6 +19,7 @@ import { repoWorkstreamStateKey, workspaceTabDirection } from "./dashboard-persi
 import { statusBadgeWidthForRequestDetails } from "./workstream-row-state";
 import { workstreamCategoryCounts } from "./workstream-data";
 import { FocusBoard } from "./focus-board";
+import type { AttentionJumpTarget, AttentionSelect } from "./workstream-attention";
 
 const ALL_REPOSITORIES_REVEAL_MS = 240;
 
@@ -29,6 +30,9 @@ export function WorkstreamsPane({
   requestDetailsByRepo,
   now,
   activeBlockingEdges,
+  guidanceItems,
+  jumpTarget,
+  onSelectAttention,
   onSelectGuidance,
   onSelectCard,
   showWorkstreamContextBar,
@@ -40,6 +44,9 @@ export function WorkstreamsPane({
   requestDetailsByRepo: Map<string, WorkRequestDetail[]>;
   now?: string;
   activeBlockingEdges: ActiveBlockingEdge[];
+  guidanceItems: GuidanceItem[];
+  jumpTarget?: AttentionJumpTarget | null;
+  onSelectAttention: AttentionSelect;
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
   showWorkstreamContextBar: boolean;
@@ -127,6 +134,9 @@ export function WorkstreamsPane({
         now={now}
         packages={repos.flatMap((repo) => repo.packages)}
         activeBlockingEdges={activeBlockingEdges}
+        guidanceItems={guidanceItems}
+        jumpTarget={jumpTarget}
+        onSelectAttention={onSelectAttention}
         onSelectGuidance={onSelectGuidance}
         onSelectCard={onSelectCard}
         primaryBranchByRepo={primaryBranchByRepo}
@@ -147,6 +157,8 @@ export function WorkstreamsPane({
                 requestDetailsByRepo={requestDetailsByRepo}
                 now={now}
                 activeBlockingEdges={activeBlockingEdges}
+                guidanceItems={guidanceItems}
+                onSelectAttention={onSelectAttention}
                 onSelectGuidance={onSelectGuidance}
                 onSelectCard={onSelectCard}
                 primaryBranch={primaryBranchByRepo.get(repo.repoKey)}

@@ -4,19 +4,21 @@ import type { TopPanelContentProps } from "./status-rail-types";
 
 export function StatusRail({
   openPanel,
-  guidanceItems,
-  blockerItems,
-  onSelectGuidance,
-  onSelectCard,
+  attentionItems,
+  requestDetails,
+  now,
+  onJumpToAttention,
+  onSelectAttention,
   updateAnimations,
 }: Omit<TopPanelContentProps, "panel" | "interactive"> & {
   openPanel: TopPanelKey | null;
 }) {
   const panelContentProps = {
-    blockerItems,
-    guidanceItems,
-    onSelectCard,
-    onSelectGuidance,
+    attentionItems,
+    requestDetails,
+    now,
+    onJumpToAttention,
+    onSelectAttention,
     updateAnimations,
   };
 

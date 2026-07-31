@@ -17,6 +17,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { guidanceCopyText } from "@/dashboard/detail-copy";
+import { AttentionLocationBar } from "@/dashboard/attention-location";
+import type { AttentionJumpDestination, AttentionLocation } from "@/dashboard/workstream-attention";
 import type {
   DecisionOption,
   DecisionPrompt,
@@ -87,11 +89,15 @@ function initialGuidanceDialogStateWithChoice(selectedChoice: string): GuidanceD
 export function GuidanceDialog({
   canSubmitAnswer,
   item,
+  location,
+  onJumpToAttention,
   onOpenChange,
   onSubmitAnswer,
 }: {
   canSubmitAnswer: boolean;
   item: GuidanceItem | null;
+  location?: AttentionLocation;
+  onJumpToAttention?: (destination: AttentionJumpDestination) => void;
   onOpenChange: (open: boolean) => void;
   onSubmitAnswer: (item: GuidanceItem, submission: GuidanceAnswerSubmission) => Promise<void>;
 }) {
@@ -103,6 +109,8 @@ export function GuidanceDialog({
             key={guidanceDialogStateKey(item)}
             canSubmitAnswer={canSubmitAnswer}
             item={item}
+            location={location}
+            onJumpToAttention={onJumpToAttention}
             onOpenChange={onOpenChange}
             onSubmitAnswer={onSubmitAnswer}
           />
@@ -115,11 +123,15 @@ export function GuidanceDialog({
 export function GuidanceDialogBody({
   canSubmitAnswer,
   item,
+  location,
+  onJumpToAttention,
   onOpenChange,
   onSubmitAnswer,
 }: {
   canSubmitAnswer: boolean;
   item: GuidanceItem;
+  location?: AttentionLocation;
+  onJumpToAttention?: (destination: AttentionJumpDestination) => void;
   onOpenChange: (open: boolean) => void;
   onSubmitAnswer: (item: GuidanceItem, submission: GuidanceAnswerSubmission) => Promise<void>;
 }) {
@@ -177,6 +189,7 @@ export function GuidanceDialogBody({
           </div>
         </div>
       </DialogHeader>
+      {location ? <AttentionLocationBar location={location} onJump={onJumpToAttention} /> : null}
       <div className="grid gap-4">
         <section className="rounded-lg border bg-muted/40 p-4" data-guidance-section style={{ animationDelay: "70ms" }}>
           <p className="text-sm font-medium">TL;DR</p>

@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { Dialog } from "@/components/ui/dialog";
-import { BlockerDetailContent, blockerDetailWorkPackageId, linkedPackageStateActions, scopedBlockerDetailPayload } from "./package-detail";
+import { BlockerDetailContent, SliceDetailContent, blockerDetailWorkPackageId, linkedPackageStateActions, scopedBlockerDetailPayload } from "./package-detail";
 import type { CardDetailSelection } from "./runtime";
-import type { WorkPackageDetailPayload } from "@/types/dashboard";
+import type { WorkPackageDetailPayload, WorkRequestDetail, WorkRequestPackage } from "@/types/dashboard";
+import type { AttentionTarget } from "./workstream-attention";
 
 describe("package detail blocker modal", () => {
   it("does not hydrate blocker detail from a different package with the same blocker id", () => {
@@ -76,6 +77,53 @@ describe("package detail blocker modal", () => {
 
     expect(readOnlyMarkup).not.toContain(">Clear<");
     expect(operatorMarkup).toContain(">Clear<");
+  });
+});
+
+describe("linked WorkPackage blocker summary", () => {
+  it("opens status-only blocked packages without inventing an active blocker record", () => {
+    const slice: WorkRequestPackage = {
+      id: "slice-status-blocked",
+      work_request_id: "wr-status-blocked",
+      work_package_id: "wp-status-blocked",
+      status: "blocked",
+      title: "Status-only blocker",
+    };
+    const detail: WorkRequestDetail = {
+      work_request: { id: "wr-status-blocked", title: "Blocked request" },
+      work_packages: [slice],
+    };
+    const pkg = { id: "wp-status-blocked", status: "blocked", active_blocker_count: 0 };
+    const attentionTarget: AttentionTarget = {
+      items: [{
+        kind: "status",
+        key: "status:blocked:wp-status-blocked",
+        label: "Blocked",
+        tone: "blocked",
+        title: "Status-only blocker",
+        detail: "Raw lifecycle status is blocked.",
+        selection: { kind: "slice", detail, slice, pkg },
+      }],
+    };
+
+    const markup = renderToStaticMarkup(
+      <Dialog open>
+        <SliceDetailContent
+          detail={detail}
+          slice={slice}
+          pkg={pkg}
+          attentionTarget={attentionTarget}
+          onSelectAttention={() => undefined}
+          onSubmitComment={async () => ({ id: "comment" })}
+          onResolveComment={async () => ({ id: "comment" })}
+          canMutateComments={false}
+        />
+      </Dialog>,
+    );
+
+    expect(markup).toContain("<button");
+    expect(markup).toContain("Package is marked blocked without a separate blocker record.");
+    expect(markup).not.toContain("1 active blocker");
   });
 });
 

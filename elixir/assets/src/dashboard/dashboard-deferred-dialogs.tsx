@@ -1,7 +1,7 @@
 import type { ComponentProps } from "react";
 import { lazy, Suspense, useEffect, useRef } from "react";
 
-import type { CopyArchitectHandoff, GuidanceAnswerSubmission, GuidanceItem } from "@/types/dashboard";
+import type { ActiveBlockingEdge, CopyArchitectHandoff, GuidanceAnswerSubmission, GuidanceItem, WorkRequestDetail } from "@/types/dashboard";
 import type { AppDialogState } from "./dashboard-state";
 import type {
   CardDetailSelection,
@@ -13,12 +13,14 @@ import type {
   WorkRequestMutation,
   WorkRequestStateMutation,
 } from "./runtime";
+import { attentionTargetForGuidance, attentionLocationForSelection, type AttentionJumpDestination, type AttentionTarget } from "./workstream-attention";
 
-const GuidanceDialog = lazy(() => import("@/components/dashboard/guidance-dialog").then((module) => ({ default: module.GuidanceDialog })));
+const AttentionDialog = lazy(() => import("./attention-dialog").then((module) => ({ default: module.AttentionDialog })));
 const loadCardDetailDialog = () => import("./card-detail-dialog").then((module) => ({ default: module.CardDetailDialog }));
 const CardDetailDialog = lazy(loadCardDetailDialog);
 
 export function DashboardDeferredDialogs({
+  activeBlockingEdges,
   canMutateComments,
   canMutateOperatorActions,
   changeWorkPackageState,
@@ -26,16 +28,19 @@ export function DashboardDeferredDialogs({
   copyArchitectHandoff,
   dialogState,
   linkedWorkPackageIds,
+  requestDetails,
+  onJumpToAttention,
   onArchiveWorkPackage,
   onArchiveWorkRequest,
   onClearWorkPackageBlocker,
   onDeleteWorkRequest,
   onResolveComment,
+  onSelectAttention,
   onSelectCard,
-  onSelectGuidance,
   onSubmitComment,
   onSubmitGuidanceAnswer,
 }: {
+  activeBlockingEdges: ActiveBlockingEdge[];
   canMutateComments: boolean;
   canMutateOperatorActions: boolean;
   changeWorkPackageState: WorkPackageStateMutation;
@@ -43,13 +48,15 @@ export function DashboardDeferredDialogs({
   copyArchitectHandoff: CopyArchitectHandoff;
   dialogState: AppDialogState;
   linkedWorkPackageIds: Set<string>;
+  requestDetails: WorkRequestDetail[];
+  onJumpToAttention: (destination: AttentionJumpDestination) => void;
   onArchiveWorkPackage: WorkPackageArchiveMutation;
   onArchiveWorkRequest: WorkRequestMutation;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
   onDeleteWorkRequest: WorkRequestMutation;
   onResolveComment: ResolveContextComment;
+  onSelectAttention: (target: AttentionTarget | null) => void;
   onSelectCard: (selection: CardDetailSelection | null) => void;
-  onSelectGuidance: (item: GuidanceItem | null) => void;
   onSubmitComment: SubmitContextComment;
   onSubmitGuidanceAnswer: (item: GuidanceItem, submission: GuidanceAnswerSubmission) => Promise<void>;
 }) {
@@ -59,25 +66,31 @@ export function DashboardDeferredDialogs({
 
   return (
     <>
-      {dialogState.selectedGuidance ? (
-        <Suspense fallback={null}>
-          <GuidanceDialog
-            canSubmitAnswer={canMutateOperatorActions}
-            item={dialogState.selectedGuidance}
-            onOpenChange={(open) => {
-              if (!open) onSelectGuidance(null);
-            }}
-            onSubmitAnswer={onSubmitGuidanceAnswer}
-          />
-        </Suspense>
+      {dialogState.selectedAttention ? (
+        <AttentionDialogWithFocusReturn
+          canMutateOperatorActions={canMutateOperatorActions}
+          onChangeWorkPackageState={changeWorkPackageState}
+          onClearWorkPackageBlocker={onClearWorkPackageBlocker}
+          onJumpToAttention={onJumpToAttention}
+          onOpenChange={(open) => {
+            if (!open) onSelectAttention(null);
+          }}
+          onSubmitGuidanceAnswer={onSubmitGuidanceAnswer}
+          requestDetails={requestDetails}
+          target={dialogState.selectedAttention}
+        />
       ) : null}
       {dialogState.selectedCardDetail ? (
         <CardDetailDialogWithFocusReturn
           selection={dialogState.selectedCardDetail}
+          activeBlockingEdges={activeBlockingEdges}
+          attentionLocation={dialogState.selectedCardDetail.kind === "blocker" ? attentionLocationForSelection(dialogState.selectedCardDetail, requestDetails) : undefined}
+          onJumpToAttention={onJumpToAttention}
           onOpenChange={(open) => {
             if (!open) onSelectCard(null);
           }}
-          onSelectGuidance={onSelectGuidance}
+          onSelectGuidance={(item) => onSelectAttention(attentionTargetForGuidance(item))}
+          onSelectAttention={onSelectAttention}
           onCopyArchitectHandoff={copyArchitectHandoff}
           onArchiveWorkRequest={onArchiveWorkRequest}
           onChangeWorkRequestState={changeWorkRequestState}
@@ -93,6 +106,19 @@ export function DashboardDeferredDialogs({
         />
       ) : null}
     </>
+  );
+}
+
+function AttentionDialogWithFocusReturn(props: ComponentProps<typeof AttentionDialog>) {
+  const triggerRef = useRef(activeHTMLElement());
+
+  return (
+    <Suspense fallback={null}>
+      <AttentionDialog
+        {...props}
+        onCloseAutoFocus={(event) => restoreCardDetailTriggerFocus(event, triggerRef.current)}
+      />
+    </Suspense>
   );
 }
 

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { CardDetailSelect } from "./runtime";
 import { requestIdentityCopyText } from "./workstream-utils";
 import type { BoardRowState } from "./workstream-row-state";
-import { requestAttentionTarget } from "./workstream-attention";
+import { requestAttentionTarget, type AttentionSelect } from "./workstream-attention";
 
 export function RequestInfoButton({ detail, onSelectCard }: { detail: WorkRequestDetail; onSelectCard: CardDetailSelect }) {
   return (
@@ -40,24 +40,22 @@ export function RequestIdentityCopyButton({ detail }: { detail: WorkRequestDetai
 export function RequestAttentionBadge({
   activeBlockingEdges,
   detail,
+  guidanceItems,
   label,
-  onSelectCard,
-  onSelectGuidance,
+  onSelectAttention,
   packageById,
   state,
 }: {
   activeBlockingEdges: ActiveBlockingEdge[];
   detail: WorkRequestDetail;
+  guidanceItems: GuidanceItem[];
   label: string;
-  onSelectCard: CardDetailSelect;
-  onSelectGuidance: (item: GuidanceItem) => void;
+  onSelectAttention: AttentionSelect;
   packageById: Map<string, WorkPackageCard>;
   state: BoardRowState;
 }) {
-  const target = requestAttentionTarget(detail, packageById, activeBlockingEdges, state.kind);
-  const openAttention = target
-    ? () => target.kind === "guidance" ? onSelectGuidance(target.item) : onSelectCard(target.selection)
-    : undefined;
+  const target = requestAttentionTarget(detail, packageById, activeBlockingEdges, state.kind, guidanceItems);
+  const openAttention = target ? () => onSelectAttention(target) : undefined;
 
   return (
     <RowBadgeSlot

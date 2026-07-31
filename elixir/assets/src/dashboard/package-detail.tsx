@@ -16,6 +16,8 @@ import { initialPackageDetailUiState, packageDetailUiReducer } from "./dashboard
 import { repoDisplayName } from "./dashboard-persistence";
 import { PackageDetailBody, PackageDetailDialogs, type PackageDetailComments, type PackageDetailControls, type PackageDetailDialogControls, type PackageDetailPackage, type PackageDetailStatus } from "./package-detail-presentation";
 import { activePackageBlockers, packageBlockerEdge } from "./blocker-selection";
+import { AttentionLocationBar } from "./attention-location";
+import type { AttentionJumpDestination, AttentionLocation, AttentionTarget } from "./workstream-attention";
 
 export function SliceDetailContent({
   detail,
@@ -25,6 +27,8 @@ export function SliceDetailContent({
   onResolveComment,
   canMutateComments,
   detailError,
+  attentionTarget,
+  onSelectAttention,
 }: {
   detail: WorkRequestDetail;
   slice: WorkRequestPackage;
@@ -33,11 +37,14 @@ export function SliceDetailContent({
   onResolveComment: ResolveContextComment;
   canMutateComments: boolean;
   detailError?: string | null;
+  attentionTarget?: AttentionTarget;
+  onSelectAttention: (target: AttentionTarget) => void;
 }) {
   const [sliceComments, setSliceComments] = useSyncedComments(slice.comments || []);
   const status = slice.work_package_status || slice.status;
   const operational = sliceOperationalState(slice, pkg);
-  const blockerCount = Math.max(pkg?.active_blocker_count || 0, pkg?.status === "blocked" || operational?.key === "blocked" ? 1 : 0);
+  const blockerCount = pkg?.active_blocker_count || 0;
+  const blocked = blockerCount > 0 || pkg?.status === "blocked" || operational?.key === "blocked";
   const reviewLabel = [slice.review?.type, slice.review?.args?.mode].filter(Boolean).join(" / ");
   const attentionItems = operational?.attention_items || [];
   const currentCommentStats = targetCommentStats(slice, slice.comments || [], sliceComments);
@@ -84,8 +91,16 @@ export function SliceDetailContent({
           </DetailDisclosure>
         ) : null}
         <DetailSection title="Blocked By">
-          {blockerCount > 0 ? (
-            <p>{blockerCount} active blocker{blockerCount === 1 ? "" : "s"} on the linked work package.</p>
+          {blocked && attentionTarget ? (
+            <button
+              type="button"
+              className="detail-list-item w-full cursor-pointer text-left transition-colors hover:border-primary/40 hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => onSelectAttention(attentionTarget)}
+            >
+              {blockerCount > 0
+                ? `${blockerCount} active blocker${blockerCount === 1 ? "" : "s"} on the linked work package.`
+                : "Package is marked blocked without a separate blocker record."}
+            </button>
           ) : (
             <p>No blocker surfaced for this package.</p>
           )}
@@ -126,6 +141,8 @@ export function BlockerDetailContent({
   detailPayload,
   loading,
   error,
+  location,
+  onJumpToAttention,
   onClearWorkPackageBlocker,
   canMutateOperatorActions,
 }: {
@@ -133,6 +150,8 @@ export function BlockerDetailContent({
   detailPayload: WorkPackageDetailPayload | null;
   loading: boolean;
   error: string | null;
+  location?: AttentionLocation;
+  onJumpToAttention?: (destination: AttentionJumpDestination) => void;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
   canMutateOperatorActions: boolean;
 }) {
@@ -171,6 +190,7 @@ export function BlockerDetailContent({
         eyebrow={`${pkg ? repoDisplayName(pkg) : detail ? repoDisplayName(detail.work_request) : "Work package"} / active blocker`}
         badge={<Badge variant="danger">Blocked</Badge>}
       />
+      {location ? <AttentionLocationBar location={location} onJump={onJumpToAttention} /> : null}
       <div className="detail-modal-reveal-body grid gap-4">
         <DetailStatGrid
           stats={[
@@ -178,7 +198,7 @@ export function BlockerDetailContent({
             { label: "Package", value: workPackageId || "Not linked" },
             { label: "Request", value: detail?.work_request.id || blocker.work_request_id || "Not linked" },
             { label: "WorkPackage", value: slice?.id || blocker.work_package_id || "Not linked" },
-            { label: "Updated", value: detailDate(blocker.updated_at) },
+            { label: "Blocked Since", value: detailDate(blocker.updated_at) },
           ]}
         />
         <DetailSection title="Blocker">
