@@ -17,7 +17,6 @@ export type WirePath = {
   intentCount: number;
   bundle?: boolean;
 };
-
 export type WireGate = {
   key: string;
   targetKey: string;
@@ -27,7 +26,6 @@ export type WireGate = {
   required: number;
   label: Point & { anchor: "start" | "middle" | "end" };
 };
-
 type Point = { x: number; y: number };
 type SourcePort = Point & { index: number; count: number; roofIndex?: number; roofCount?: number };
 type AxisPoint = { primary: number; cross: number };
@@ -52,7 +50,6 @@ const BRANCH_STUB = 16;
 const GATE_OFFSET = 22;
 const LANE_PITCH = 8;
 const WIRE_CLEARANCE = 6;
-
 export function graphWireRoutes(model: ExecutionGraphLayoutModel, orientation: GraphOrientation) {
   const rects = new Map(model.rects.map((rect) => [rect.key, rect]));
   const starts = sourcePorts(model.dependencies, rects, orientation);
@@ -73,17 +70,15 @@ export function graphWireRoutes(model: ExecutionGraphLayoutModel, orientation: G
       targetRoot,
       start,
       end,
-      kind: routeKind(sourceRoot, targetRoot, orientation),
+      kind: source.parent_group_id && source.parent_group_id === target.parent_group_id ? "direct" : routeKind(sourceRoot, targetRoot, orientation),
     } satisfies RouteCandidate];
   });
-
   const paths = orientation === "mobile"
     ? mobilePaths(candidates)
     : desktopPaths(candidates, model);
 
   return { paths, gates };
 }
-
 function desktopPaths(candidates: RouteCandidate[], model: ExecutionGraphLayoutModel): WirePath[] {
   const planned = new Map<string, RouteOption>();
   const reserved: Segment[] = [];
@@ -118,7 +113,6 @@ function desktopPaths(candidates: RouteCandidate[], model: ExecutionGraphLayoutM
 
   return candidates.map((candidate) => wirePath(candidate, (planned.get(candidate.dependency.key) as RouteOption).path));
 }
-
 function bestRoute(options: RouteOption[], reserved: Segment[], obstacles: GraphEntityRect[]) {
   let best = options[0];
   let score = routeScore(best, reserved, obstacles);
@@ -154,7 +148,8 @@ function mobilePaths(candidates: RouteCandidate[]) {
 
 function routeOptions(candidate: RouteCandidate, model: ExecutionGraphLayoutModel) {
   const routing = model.routing;
-  if (candidate.kind === "direct") return directOptions(candidate, routing);
+  if (candidate.kind === "direct" && candidate.sourceRoot.key === candidate.targetRoot.key && candidate.target.x < candidate.source.x) return [wrappedInternalRoute(candidate)];
+  if (candidate.kind === "direct") return directOptions(candidate, candidate.sourceRoot.key === candidate.targetRoot.key ? undefined : routing);
   if (!routing) return [routeFromPoints([candidate.start, candidate.end])];
 
   const sourceXs = sourceLaneOptions(candidate, routing);
@@ -168,6 +163,11 @@ function routeOptions(candidate: RouteCandidate, model: ExecutionGraphLayoutMode
   const crossBand = candidate.sourceRoot.row !== candidate.targetRoot.row;
   if (!crossBand) return sameBandOptions(candidate, sourceXs, targetYs, targetXs);
   return crossBandOptions(candidate, model, sourceXs, targetYs, targetXs);
+}
+
+function wrappedInternalRoute(candidate: RouteCandidate) {
+  const corridorY = (candidate.source.y + candidate.source.height + candidate.target.y) / 2;
+  return routeFromPoints([candidate.start, { x: candidate.sourceRoot.x + candidate.sourceRoot.width - 4, y: candidate.start.y }, { x: candidate.sourceRoot.x + candidate.sourceRoot.width - 4, y: corridorY }, { x: candidate.target.x - 8, y: corridorY }, { x: candidate.target.x - 8, y: candidate.end.y }, candidate.end]);
 }
 
 function sameBandOptions(candidate: RouteCandidate, sourceXs: number[], targetYs: number[], targetXs: number[]) {

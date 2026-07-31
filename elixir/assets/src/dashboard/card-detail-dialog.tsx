@@ -1,4 +1,4 @@
-import type { CopyArchitectHandoff, GuidanceItem, SoloSessionDetailPayload, WorkPackageDetailPayload, WorkRequestDetail } from "@/types/dashboard";
+import type { ActiveBlockingEdge, CopyArchitectHandoff, GuidanceItem, SoloSessionDetailPayload, WorkPackageDetailPayload, WorkRequestDetail } from "@/types/dashboard";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import type * as React from "react";
 import { dashboardPrefersReducedMotion } from "@/components/dashboard/motion-utils";
@@ -9,6 +9,7 @@ import { BlockerDetailContent, PackageDetailContent, SliceDetailContent } from "
 import { RequestDetailContent } from "./request-detail";
 import { SoloSessionDetailContent } from "./solo-detail";
 import { cardDetailContentReady, cardDetailPackageId, cardDetailRequestResourceKey, matchingPackageResource, matchingRequestResource, mergeRequestDetail, type CardDetailDialogState, type DetailResourceState } from "./card-detail-state";
+import { workPackageDirectAttention, type AttentionJumpDestination, type AttentionLocation, type AttentionTarget } from "./workstream-attention";
 
 export type CardDetailDialogAction =
   | { type: "resetPackage" }
@@ -91,9 +92,13 @@ async function loadOperatorPayload<T>(path: string, signal: AbortSignal, fallbac
 
 export function CardDetailDialog({
   selection,
+  activeBlockingEdges,
+  attentionLocation,
+  onJumpToAttention,
   onOpenChange,
   onCloseAutoFocus,
   onSelectGuidance,
+  onSelectAttention,
   onCopyArchitectHandoff,
   onArchiveWorkRequest,
   onChangeWorkRequestState,
@@ -108,9 +113,13 @@ export function CardDetailDialog({
   canMutateComments,
 }: {
   selection: CardDetailSelection | null;
+  activeBlockingEdges: ActiveBlockingEdge[];
+  attentionLocation?: AttentionLocation;
+  onJumpToAttention?: (destination: AttentionJumpDestination) => void;
   onOpenChange: (open: boolean) => void;
   onCloseAutoFocus?: React.ComponentProps<typeof DialogContent>["onCloseAutoFocus"];
   onSelectGuidance: (item: GuidanceItem) => void;
+  onSelectAttention: (target: AttentionTarget) => void;
   onCopyArchitectHandoff: CopyArchitectHandoff;
   onArchiveWorkRequest: WorkRequestMutation;
   onChangeWorkRequestState: WorkRequestStateMutation;
@@ -284,7 +293,11 @@ export function CardDetailDialog({
             <CardDetailReadyContent
               selection={selection}
               state={state}
+              activeBlockingEdges={activeBlockingEdges}
+              attentionLocation={attentionLocation}
+              onJumpToAttention={onJumpToAttention}
               onSelectGuidance={onSelectGuidance}
+              onSelectAttention={onSelectAttention}
               onCopyArchitectHandoff={onCopyArchitectHandoff}
               onArchiveWorkRequest={onArchiveWorkRequest}
               onChangeWorkRequestState={onChangeWorkRequestState}
@@ -308,7 +321,11 @@ export function CardDetailDialog({
 function CardDetailReadyContent({
   selection,
   state,
+  activeBlockingEdges,
+  attentionLocation,
+  onJumpToAttention,
   onSelectGuidance,
+  onSelectAttention,
   onCopyArchitectHandoff,
   onArchiveWorkRequest,
   onChangeWorkRequestState,
@@ -324,7 +341,11 @@ function CardDetailReadyContent({
 }: {
   selection: CardDetailSelection | null;
   state: CardDetailDialogState;
+  activeBlockingEdges: ActiveBlockingEdge[];
+  attentionLocation?: AttentionLocation;
+  onJumpToAttention?: (destination: AttentionJumpDestination) => void;
   onSelectGuidance: (item: GuidanceItem) => void;
+  onSelectAttention: (target: AttentionTarget) => void;
   onCopyArchitectHandoff: CopyArchitectHandoff;
   onArchiveWorkRequest: WorkRequestMutation;
   onChangeWorkRequestState: WorkRequestStateMutation;
@@ -355,6 +376,8 @@ function CardDetailReadyContent({
       });
     case "slice":
       return renderSliceDetailContent(selection, state, {
+        activeBlockingEdges,
+        onSelectAttention,
         onSubmitComment,
         onResolveComment,
         canMutateComments,
@@ -382,7 +405,7 @@ function CardDetailReadyContent({
     case "blocker":
       {
         const packageResource = matchingPackageResource(selection, state);
-        return <BlockerDetailContent selection={selection} detailPayload={packageResource.payload} loading={!packageResource.payload && !packageResource.error} error={packageResource.error} onClearWorkPackageBlocker={onClearWorkPackageBlocker} canMutateOperatorActions={canMutateOperatorActions} />;
+        return <BlockerDetailContent selection={selection} detailPayload={packageResource.payload} loading={!packageResource.payload && !packageResource.error} error={packageResource.error} location={attentionLocation} onJumpToAttention={onJumpToAttention} onClearWorkPackageBlocker={onClearWorkPackageBlocker} canMutateOperatorActions={canMutateOperatorActions} />;
       }
     case "solo":
       return <SoloSessionDetailContent session={selection.session} detailPayload={state.solo.payload} loading={!state.solo.payload && !state.solo.error ? true : state.solo.loading} error={state.solo.error} />;
@@ -413,6 +436,8 @@ function renderSliceDetailContent(
   selection: Extract<CardDetailSelection, { kind: "slice" }>,
   state: CardDetailDialogState,
   props: {
+    activeBlockingEdges: ActiveBlockingEdge[];
+    onSelectAttention: (target: AttentionTarget) => void;
     onSubmitComment: SubmitContextComment;
     onResolveComment: ResolveContextComment;
     canMutateComments: boolean;
@@ -421,8 +446,21 @@ function renderSliceDetailContent(
   const requestResource = matchingRequestResource(selection, state);
   const detail = matchingRequestDetail(selection, requestResource.payload);
   const slice = detail.work_packages?.find((candidate) => candidate.id === selection.slice.id) || selection.slice;
+  const attentionTarget = workPackageDirectAttention(detail, slice, selection.pkg, props.activeBlockingEdges, [])?.target;
 
-  return <SliceDetailContent detail={detail} slice={slice} pkg={selection.pkg} detailError={requestResource.error} {...props} />;
+  return (
+    <SliceDetailContent
+      detail={detail}
+      slice={slice}
+      pkg={selection.pkg}
+      detailError={requestResource.error}
+      attentionTarget={attentionTarget ?? undefined}
+      onSelectAttention={props.onSelectAttention}
+      onSubmitComment={props.onSubmitComment}
+      onResolveComment={props.onResolveComment}
+      canMutateComments={props.canMutateComments}
+    />
+  );
 }
 
 function matchingRequestDetail(selection: Extract<CardDetailSelection, { kind: "request" | "slice" }>, payload: WorkRequestDetail | null) {

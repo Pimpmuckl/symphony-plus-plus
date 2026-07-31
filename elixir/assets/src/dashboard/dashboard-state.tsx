@@ -1,8 +1,9 @@
-import type { ArchitectHandoff, ArchitectHandoffCopyResult, DashboardPayload, GuidanceItem, WorkRequestDetail } from "@/types/dashboard";
+import type { ArchitectHandoff, ArchitectHandoffCopyResult, DashboardPayload, WorkRequestDetail } from "@/types/dashboard";
 import type { UpdateMotion } from "@/components/dashboard/motion";
 import { useCallback, useRef, useState } from "react";
 import { CardDetailSelection, DashboardTheme, PackageDetailUiAction, PackageDetailUiState, RequestDetailUiAction, RequestDetailUiState, ScopedHandoffCopy, UpdateMotionsAction, WorkspaceTab } from "./runtime";
 import { readStoredHideEmptyWorkstreams, readStoredShowWelcomeToast, readStoredShowWorkstreamContextBar, readStoredTheme, readStoredWorkspaceTab } from "./dashboard-persistence";
+import type { AttentionTarget } from "./workstream-attention";
 
 export function useScopedHandoffCopy(identity: string) {
   const [copy, setCopy] = useState<ScopedHandoffCopy>({ error: null, identity, state: "idle" });
@@ -38,6 +39,7 @@ export type BlockerItem = {
   id: string;
   title: string;
   repo: string;
+  since?: string | null;
   status?: string | null;
   blockerCount: number;
   detail: string;
@@ -102,28 +104,28 @@ export function appStateReducer(state: AppState, action: AppStateAction): AppSta
 }
 
 export type AppDialogState = {
-  selectedGuidance: GuidanceItem | null;
+  selectedAttention: AttentionTarget | null;
   selectedCardDetail: CardDetailSelection | null;
   newRequestOpen: boolean;
 };
 
 export type AppDialogAction =
-  | { type: "guidance"; selectedGuidance: GuidanceItem | null }
+  | { type: "attention"; selectedAttention: AttentionTarget | null }
   | { type: "cardDetail"; selectedCardDetail: CardDetailSelection | null }
   | { type: "newRequest"; open: boolean };
 
 export const initialAppDialogState: AppDialogState = {
-  selectedGuidance: null,
+  selectedAttention: null,
   selectedCardDetail: null,
   newRequestOpen: false,
 };
 
 export function appDialogReducer(state: AppDialogState, action: AppDialogAction): AppDialogState {
   switch (action.type) {
-    case "guidance":
-      return { ...state, selectedGuidance: action.selectedGuidance };
+    case "attention":
+      return { ...state, selectedAttention: action.selectedAttention, selectedCardDetail: action.selectedAttention ? null : state.selectedCardDetail };
     case "cardDetail":
-      return { ...state, selectedCardDetail: action.selectedCardDetail };
+      return { ...state, selectedAttention: action.selectedCardDetail ? null : state.selectedAttention, selectedCardDetail: action.selectedCardDetail };
     case "newRequest":
       return { ...state, newRequestOpen: action.open };
   }

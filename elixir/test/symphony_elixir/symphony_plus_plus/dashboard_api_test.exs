@@ -6363,6 +6363,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
+  test "local operator can clear a status-only blocked WorkPackage", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      assert {:ok, work_package} =
+               WorkPackageRepository.create(
+                 repo,
+                 WorkPackageFactory.attrs(id: "WP-LOCAL-UNBLOCK", status: "blocked")
+               )
+
+      local_operator_csrf_conn()
+      |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/state", %{"status" => "unblock"})
+      |> json_response(200)
+
+      assert {:ok, unblocked} = WorkPackageRepository.get(repo, work_package.id)
+      assert unblocked.status == "ready_for_worker"
+
+      retry_payload =
+        local_operator_csrf_conn()
+        |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/state", %{"status" => "unblock"})
+        |> json_response(409)
+
+      assert get_in(retry_payload, ["error", "code"]) == "stale_status"
+    end)
+  end
+
   test "local operator dashboard recovers malformed hidden package ids before clearing blockers and archiving", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-LOCAL-CLEAR-BLOCKER-STALE-DASHBOARD", status: "ready_for_slicing")
@@ -6664,6 +6688,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, open_question} =
                WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-LOCAL-COMPLETE-STATE"))
 
+      guidance_grant = create_claimed_worker_grant(repo, work_package.id, "worker-local-complete")
+
+      assert {:ok, guidance_request} =
+               GuidanceRequestRepository.create(repo, %{
+                 work_package_id: work_package.id,
+                 requester_grant_id: guidance_grant.id,
+                 requested_by: "worker-local-complete",
+                 idempotency_key: "guidance-local-complete",
+                 summary: "Needs a terminal decision",
+                 question: "Should this unfinished package continue?",
+                 context: "Force completion must clear attached attention.",
+                 status: "human_info_needed"
+               })
+
+      assert {:ok, _blocker} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: work_package.id,
+                 summary: "Unfinished work",
+                 body: "The package is waiting for operator action.",
+                 status: "blocked",
+                 idempotency_key: "blocker-local-complete",
+                 payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "blocker-local-complete", active: true}
+               })
+
       payload =
         local_operator_csrf_conn()
         |> post("/api/v1/sympp/operator/work-requests/#{work_request.id}/state", %{"state" => "completed"})
@@ -6698,7 +6746,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert {:ok, [persisted_question]} = WorkRequestRepository.list_questions(repo, work_request.id)
       assert persisted_question.id == open_question.id
-      assert persisted_question.status == "open"
+      assert persisted_question.status == "closed"
+
+      assert {:ok, persisted_guidance} = GuidanceRequestRepository.get(repo, guidance_request.id)
+      assert persisted_guidance.status == "answered"
+      assert persisted_guidance.answered_by == "work-request-completion"
+
+      assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
+      refute Enum.any?(BlockerProjection.blockers(progress_events), & &1.active)
 
       assert {:ok, refreshed_request} = WorkRequestService.refresh_completion(repo, work_request.id)
       assert refreshed_request.completed_at == persisted_request.completed_at
@@ -6728,7 +6783,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-DELETE-DIRECT"))
 
       assert {:ok, work_package} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
-      assert {:ok, _open_question} = WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-LOCAL-DELETE-DIRECT"))
+      assert {:ok, open_question} = WorkRequestRepository.ask_question(repo, work_request.id, question_attrs(id: "WRQ-LOCAL-DELETE-DIRECT"))
 
       linked_package =
         create_matching_work_package!(repo, work_request, work_package,
@@ -6737,6 +6792,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         )
 
       assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, work_package.id, "approved", linked_package.id)
+
+      guidance_grant = create_claimed_worker_grant(repo, linked_package.id, "worker-local-delete")
+
+      assert {:ok, guidance_request} =
+               GuidanceRequestRepository.create(repo, %{
+                 work_package_id: linked_package.id,
+                 requester_grant_id: guidance_grant.id,
+                 requested_by: "worker-local-delete",
+                 idempotency_key: "guidance-local-delete",
+                 summary: "Delete attached guidance",
+                 question: "Should this request be deleted?",
+                 context: "Deletion must remove attached attention.",
+                 status: "human_info_needed"
+               })
+
+      assert {:ok, blocker_event} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: linked_package.id,
+                 summary: "Delete attached blocker",
+                 body: "This blocker belongs only to the deleted WorkRequest.",
+                 status: "blocked",
+                 idempotency_key: "blocker-local-delete",
+                 payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "blocker-local-delete", active: true}
+               })
 
       assert {:ok, request_comment} =
                CommentService.create(repo, %{
@@ -6757,6 +6836,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert get_in(payload, ["refresh", "work_request_id"]) == work_request.id
       assert {:error, :not_found} = WorkRequestService.get(repo, work_request.id)
       assert {:error, :not_found} = CommentService.get(repo, request_comment.id)
+      assert {:error, :not_found} = WorkPackageRepository.get(repo, linked_package.id)
+      assert {:error, :not_found} = GuidanceRequestRepository.get(repo, guidance_request.id)
+      assert repo.get(ProgressEvent, blocker_event.id) == nil
+      assert repo.get(ClarificationQuestion, open_question.id) == nil
       assert {:ok, settings} = OperatorSettingsRepository.get(repo)
       assert linked_package.id in settings.hidden_work_package_ids
 

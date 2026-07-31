@@ -1,4 +1,5 @@
 import { isFinishedBoardStatus } from "@/lib/operational-state";
+import { layoutGroupChildren } from "./group-layout";
 import { entityRect, layoutRootEntities, orderWithinRanks } from "./layout";
 
 export type DependencyPathState = "satisfied" | "active" | "waiting" | "blocked";
@@ -157,8 +158,8 @@ export type ExecutionGraphLayoutModel = {
   height: number;
 };
 const metrics = {
-  desktop: { cardWidth: 268, childCardWidth: 244, cardHeight: 62, scopedCardHeight: 76, groupWidth: 268, xGap: 92, yGap: 20, x: 36, y: 34, groupHeader: 62, groupPadding: 12, childGap: 8 },
-  mobile: { cardWidth: 256, childCardWidth: 232, cardHeight: 62, scopedCardHeight: 76, groupWidth: 256, xGap: 0, yGap: 44, x: 16, y: 24, groupHeader: 62, groupPadding: 12, childGap: 8 },
+  desktop: { cardWidth: 268, childCardWidth: 244, cardHeight: 62, scopedCardHeight: 76, groupWidth: 268, xGap: 92, yGap: 20, x: 28, y: 28, groupHeader: 62, groupPadding: 12, childGap: 8, childXGap: 52, childBandGap: 52 },
+  mobile: { cardWidth: 256, childCardWidth: 232, cardHeight: 62, scopedCardHeight: 76, groupWidth: 256, xGap: 0, yGap: 44, x: 16, y: 16, groupHeader: 62, groupPadding: 12, childGap: 8, childXGap: 52, childBandGap: 52 },
 } as const;
 export function graphCardSize(orientation: GraphOrientation) {
   const value = metrics[orientation];
@@ -193,7 +194,7 @@ export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel,
   const incoming = groupBy(dependencies, (dependency) => dependency.target_key);
   const edge = Math.max(0, ...visibleRects.map((rect) => rect.x + rect.width));
   const bottom = Math.max(0, ...visibleRects.map((rect) => rect.y + rect.height));
-
+  const outerMargin = orientation === "mobile" ? 16 : 28;
   return {
     groups: context.groups,
     refs: context.refs,
@@ -208,9 +209,9 @@ export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel,
     incoming,
     routing: rootLayout.routing,
     width: Math.ceil(rootLayout.routing
-      ? rootLayout.routing.contentRight + Math.max(84, dependencies.length * 8 + 36)
-      : edge + (orientation === "mobile" ? 16 : 28)),
-    height: Math.ceil(bottom + 28),
+      ? rootLayout.routing.contentRight + (dependencies.length ? Math.max(84, dependencies.length * 8 + 36) : outerMargin)
+      : edge + outerMargin),
+    height: Math.ceil(bottom + outerMargin),
   };
 }
 export function dependencyProgress(model: ExecutionGraphLayoutModel, targetKey: string) {
@@ -225,6 +226,7 @@ function graphContext(graph: WorkRequestExecutionGraphModel) {
   const groups = new Map((graph.groups ?? []).map((group) => [group.id, group]));
   const refs = new Map(graph.work_packages.map((item) => [item.id, item]));
   const signals = new Map(graph.work_packages.map((item) => [item.id, item]));
+  const childDependencies = graphDependencies(graph).map(({ prerequisite, dependent }) => ({ source: endpointKey(prerequisite), target: endpointKey(dependent) }));
   const childGroups = groupBy([...groups.values()].filter((group) => group.parent_group_id), (group) => group.parent_group_id as string);
   const directPackages = groupBy(graph.work_packages.filter((item) => item.group_id), (item) => item.group_id as string);
   const groupMembers = new Map<string, string[]>();
@@ -253,7 +255,7 @@ function graphContext(graph: WorkRequestExecutionGraphModel) {
       .filter((entry): entry is readonly [string, ExecutionGraphRepoScope] => Boolean(entry[1])),
   );
 
-  return { groups, refs, signals, childGroups, directPackages, groupMembers, groupStates, groupScopes, packageScopes };
+  return { groups, refs, signals, childGroups, directPackages, groupMembers, groupStates, groupScopes, packageScopes, childDependencies };
 }
 
 type GraphContext = ReturnType<typeof graphContext>;
@@ -440,14 +442,12 @@ function entitySize(
   }
   const groupId = key.slice("group:".length);
   if (!expandedGroupIds.has(groupId) || seen.has(groupId)) return { width: value.cardWidth, height: value.cardHeight };
+  return expandedGroupLayout(groupId, orientation, expandedGroupIds, context, seen);
+}
+
+function expandedGroupLayout(groupId: string, orientation: GraphOrientation, expandedGroupIds: Set<string>, context: GraphContext, seen = new Set<string>()) {
   const nextSeen = new Set(seen).add(groupId);
-  const children = directChildKeys(groupId, context);
-  const childSizes = children.map((child) => entitySize(child, orientation, expandedGroupIds, context, nextSeen));
-  const childHeight = childSizes.reduce((sum, child) => sum + child.height, 0) + Math.max(0, childSizes.length - 1) * value.childGap;
-  return {
-    width: Math.max(value.groupWidth, ...childSizes.map((child) => child.width + value.groupPadding * 2)),
-    height: value.groupHeader + value.groupPadding * 2 + childHeight,
-  };
+  return layoutGroupChildren(directChildKeys(groupId, context), (child) => entitySize(child, orientation, expandedGroupIds, context, nextSeen), context.childDependencies, orientation, metrics[orientation]);
 }
 
 function layoutExpandedChildren(
@@ -458,15 +458,14 @@ function layoutExpandedChildren(
   expandedGroupIds = renderedGroupIds,
 ): GraphEntityRect[] {
   if (parent.kind !== "group" || !renderedGroupIds.has(parent.id)) return [];
-  const value = metrics[orientation];
-  let y = parent.y + value.groupHeader + value.groupPadding;
-  return directChildKeys(parent.id, context).flatMap((key, index) => {
-    const size = entitySize(key, orientation, expandedGroupIds, context);
+  const layout = expandedGroupLayout(parent.id, orientation, expandedGroupIds, context);
+  return layout.items.flatMap((item, index) => {
+    const key = item.key;
     const rect = entityRect(
       key,
-      parent.x + value.groupPadding,
-      y,
-      size,
+      parent.x + item.x,
+      parent.y + item.y,
+      { width: item.width, height: item.height },
       parent.depth,
       index,
       parent.row,
@@ -474,7 +473,6 @@ function layoutExpandedChildren(
       parent.id,
       key.startsWith("group:") && expandedGroupIds.has(key.slice("group:".length)),
     );
-    y += size.height + value.childGap;
     return [rect, ...layoutExpandedChildren(rect, orientation, renderedGroupIds, context, expandedGroupIds)];
   });
 }

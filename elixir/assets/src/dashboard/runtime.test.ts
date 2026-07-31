@@ -204,13 +204,37 @@ describe("dashboard runtime mutation helpers", () => {
     const patched = removeDashboardWorkRequest(
       {
         ...dashboard,
+        active_blocking_edges: [
+          {
+            id: "edge-1",
+            blocker_id: "blocker-1",
+            from: { kind: "work_package", id: "wp-1" },
+            to: { kind: "work_package", id: "wp-1" },
+            work_request_id: "wr-1",
+            work_package_id: "wp-1",
+          },
+        ],
         archived_work_requests: { work_requests: [{ id: "wr-1", title: "Archived copy" }], total_count: 1 },
+        guidance_requests: {
+          guidance_requests: [{ id: "guidance-1", work_package_id: "wp-1" }],
+          total_count: 1,
+        },
+        linked_work_package_ids: ["wp-1"],
+        work_packages: [{ id: "wp-1" }],
+        work_request_details: [{
+          work_request: { id: "wr-1", title: "Delete me" },
+          work_packages: [{ id: "slice-1", work_request_id: "wr-1", work_package_id: "wp-1" }],
+        }],
       },
       "wr-1",
     );
 
+    expect(patched?.active_blocking_edges).toEqual([]);
     expect(patched?.work_requests?.work_requests).toEqual([]);
     expect(patched?.archived_work_requests?.work_requests).toEqual([]);
+    expect(patched?.guidance_requests).toEqual({ guidance_requests: [], total_count: 0 });
+    expect(patched?.linked_work_package_ids).toEqual([]);
+    expect(patched?.work_packages).toEqual([]);
     expect(patched?.work_request_details).toEqual([]);
   });
 

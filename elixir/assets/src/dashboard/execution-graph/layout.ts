@@ -11,8 +11,6 @@ type LayoutMetrics = {
 };
 
 const RANKS_PER_BAND = 3;
-const DESKTOP_X = 72;
-const DESKTOP_Y = 76;
 const BAND_GAP = 112;
 
 export function layoutRootEntities(
@@ -29,7 +27,7 @@ export function layoutRootEntities(
   const maxRank = Math.max(...ranks.keys());
   const bandCount = Math.floor(maxRank / RANKS_PER_BAND) + 1;
   const columnWidths = columnWidthsFor(ranks, sizes, metrics);
-  const columnX = positions(RANKS_PER_BAND, DESKTOP_X, (column) => (
+  const columnX = positions(RANKS_PER_BAND, metrics.x, (column) => (
     (columnWidths.get(column) ?? metrics.cardWidth) + metrics.xGap
   ));
   const bandHeights = new Map<number, number>();
@@ -41,7 +39,7 @@ export function layoutRootEntities(
     bandHeights.set(band, Math.max(metrics.cardHeight, ...heights));
   }
 
-  const bandY = positions(bandCount, DESKTOP_Y, (band) => (
+  const bandY = positions(bandCount, metrics.y, (band) => (
     (bandHeights.get(band) ?? metrics.cardHeight) + BAND_GAP
   ));
   const rects: GraphEntityRect[] = [];
@@ -50,10 +48,10 @@ export function layoutRootEntities(
   for (let rank = 0; rank <= maxRank; rank += 1) {
     const band = Math.floor(rank / RANKS_PER_BAND);
     const column = rank % RANKS_PER_BAND;
-    let y = bandY.get(band) ?? DESKTOP_Y;
+    let y = bandY.get(band) ?? metrics.y;
     for (const key of ranks.get(rank) ?? []) {
       const size = sizes.get(key) ?? { width: metrics.cardWidth, height: metrics.cardHeight };
-      rects.push(entityRect(key, columnX.get(column) ?? DESKTOP_X, y, size, rank, placed, band, column));
+      rects.push(entityRect(key, columnX.get(column) ?? metrics.x, y, size, rank, placed, band, column));
       y += size.height + metrics.yGap;
       placed += 1;
     }

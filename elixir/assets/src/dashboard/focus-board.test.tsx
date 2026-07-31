@@ -113,6 +113,7 @@ describe("focus board", () => {
         work_request_id: "wr-edge",
         work_package_id: "wp-edge",
       }],
+      onSelectAttention: () => undefined,
       onSelectGuidance: () => undefined,
       onSelectCard: () => undefined,
       primaryBranchByRepo: new Map(),
@@ -129,7 +130,8 @@ describe("focus board", () => {
       details: [
         request("wr-human", "Needs a decision", [slice("human", "ready_for_clarification")], { openQuestions: 1, status: "clarifying" }),
         request("wr-active", "Shipping", [slice("active", "implementing")]),
-        request("wr-next", "Ready work", [slice("ready", "approved")]),
+        request("wr-next", "Ready work", [slice("ready", "approved")], { repo: "fixture/secondary" }),
+        request("wr-next-primary", "Second ready work", [slice("second-ready", "approved")]),
         request("wr-waiting", "Dependency wait", [slice("waiting", "blocked", {
           dependency: { satisfied: 1, required: 2, active: 0, blocked: 1, unmet_work_package_ids: ["upstream"], inputs: [] },
         })]),
@@ -138,6 +140,7 @@ describe("focus board", () => {
       now: "2026-07-21T10:00:00Z",
       packages: [],
       activeBlockingEdges: [],
+      onSelectAttention: () => undefined,
       onSelectGuidance: () => undefined,
       onSelectCard: () => undefined,
       primaryBranchByRepo: new Map(),
@@ -163,6 +166,11 @@ describe("focus board", () => {
     expect(laneHtml("attention", "active")).toContain(frontierTitle("human"));
     expect(laneHtml("active", "next")).toContain(frontierTitle("active"));
     expect(laneHtml("next", "recent")).toContain(frontierTitle("ready"));
+    expect(laneHtml("next", "recent")).toContain(frontierTitle("second-ready"));
+    expect(laneHtml("next", "recent")).toContain('data-focus-repo-key="fixture/repo"');
+    expect(laneHtml("next", "recent")).toContain('data-focus-repo-key="fixture/secondary"');
+    expect(laneHtml("next", "recent")).toContain("fixture/secondary");
+    expect(laneHtml("next", "recent")).not.toContain("1 request");
     expect(laneHtml("recent", "waiting")).toContain(frontierTitle("merged"));
     expect(laneHtml("waiting")).toContain(frontierTitle("waiting"));
     expect(laneHtml("waiting")).toContain("Waiting 1/2");
@@ -176,6 +184,7 @@ describe("focus board", () => {
       ])],
       packages: [],
       activeBlockingEdges: [],
+      onSelectAttention: () => undefined,
       onSelectGuidance: () => undefined,
       onSelectCard: () => undefined,
       primaryBranchByRepo: new Map(),
@@ -198,14 +207,14 @@ function request(
   id: string,
   title: string,
   workPackages: WorkRequestPackage[],
-  options: { completedAt?: string; openQuestions?: number; status?: string } = {},
+  options: { completedAt?: string; openQuestions?: number; repo?: string; status?: string } = {},
 ): WorkRequestDetail {
   const groupIds = [...new Set(workPackages.map((item) => item.product_tree_node_id).filter((value): value is string => Boolean(value)))];
   return {
     work_request: {
       id,
       title,
-      repo: "fixture/repo",
+      repo: options.repo ?? "fixture/repo",
       status: options.status ?? "sliced",
       completed_at: options.completedAt,
       open_question_count: options.openQuestions,

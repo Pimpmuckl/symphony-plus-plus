@@ -86,6 +86,15 @@ describe("WorkRequestExecutionGraph", () => {
     expect(route.path).toMatch(/^M [\d.]+ [\d.]+ V [\d.]+ H [\d.]+ V [\d.]+$/);
   });
 
+  it("sizes a dependency-free desktop board with one consistent outer margin", () => {
+    const model = buildExecutionGraphLayout({ work_packages: [{ id: "only", title: "Only package" }] }, "desktop");
+    const only = rect(model, "work_package:only");
+
+    expect(only).toMatchObject({ x: 28, y: 28 });
+    expect(model.width).toBe(only.x + only.width + 28);
+    expect(model.height).toBe(only.y + only.height + 28);
+  });
+
   it("expands every non-complete Group by default and keeps only finished Groups compact", () => {
     expect([...defaultExpandedGroupIds(graphFixture)]).toEqual(["workers", "output"]);
     const model = buildExecutionGraphLayout(graphFixture, "desktop");
@@ -150,6 +159,48 @@ describe("WorkRequestExecutionGraph", () => {
     expect(rect(model, "work_package:join").parent_group_id).toBe("output");
   });
 
+  it("widens Groups around horizontal intra-Group dependency flows on desktop", () => {
+    const desktop = buildExecutionGraphLayout(graphFixture, "desktop");
+    const output = rect(desktop, "group:output");
+    const join = rect(desktop, "work_package:join");
+    const publish = rect(desktop, "work_package:publish");
+    const route = graphWireRoutes(desktop, "desktop").paths.find((path) => path.edge === "work_package:join:work_package:publish");
+    const mobile = buildExecutionGraphLayout(graphFixture, "mobile");
+    const chainIds = ["one", "two", "three", "four"];
+    const chainFixture: WorkRequestExecutionGraphModel = {
+      groups: [{ id: "chain", title: "Chain", work_package_ids: chainIds }],
+      work_packages: chainIds.map((id) => ({ id, group_id: "chain", title: id, status: "planned" })),
+      dependency_intents: chainIds.slice(1).map((id, index) => ({
+        id: `${chainIds[index]}-${id}`,
+        prerequisite: { kind: "work_package", id: chainIds[index] },
+        dependent: { kind: "work_package", id },
+      })),
+    };
+    const chain = buildExecutionGraphLayout(chainFixture, "desktop");
+    const chainGroup = rect(chain, "group:chain");
+    const third = rect(chain, "work_package:three");
+    const fourth = rect(chain, "work_package:four");
+    const wrappedRoute = graphWireRoutes(chain, "desktop").paths.find((path) => path.edge === "work_package:three:work_package:four");
+
+    expect(output.width).toBeGreaterThan(268);
+    expect(join.y).toBe(publish.y);
+    expect(join.x).toBeLessThan(publish.x);
+    expect(route?.path).toBe(`M ${join.x + join.width} ${join.y + join.height / 2} H ${publish.x}`);
+    expect(rect(desktop, "work_package:parse").x).toBe(rect(desktop, "work_package:index").x);
+    expect(rect(mobile, "work_package:join").x).toBe(rect(mobile, "work_package:publish").x);
+    expect(rect(mobile, "work_package:join").y).toBeLessThan(rect(mobile, "work_package:publish").y);
+    expect(chainGroup.width).toBe(860);
+    expect(third.x).toBeGreaterThan(fourth.x);
+    expect(chainGroup.height).toBeGreaterThan(output.height);
+    expect(routeSegments(wrappedRoute?.path ?? "")).toHaveLength(5);
+    expect(routeSegments(wrappedRoute?.path ?? "").every((segment) => (
+      Math.min(segment.x1, segment.x2) >= chainGroup.x
+      && Math.max(segment.x1, segment.x2) <= chainGroup.x + chainGroup.width
+      && Math.min(segment.y1, segment.y2) >= chainGroup.y
+      && Math.max(segment.y1, segment.y2) <= chainGroup.y + chainGroup.height
+    ))).toBe(true);
+  });
+
   it("renders one static N/M gate for fan-in and leaves only active paths dashed by state", () => {
     const html = render();
 
@@ -164,8 +215,6 @@ describe("WorkRequestExecutionGraph", () => {
   it("orders fan-out lanes toward their destinations and routes mixed fan-in around the target", () => {
     const fanoutModel = buildExecutionGraphLayout(graphFixture, "desktop");
     const fanout = graphWireRoutes(fanoutModel, "desktop").paths;
-    const output = rect(fanoutModel, "group:output");
-    const publishPath = fanout.find((route) => route.edge === "work_package:join:work_package:publish")?.path;
     const sourcePaths = fanoutModel.dependencies
       .filter((dependency) => dependency.source_key === "group:source")
       .sort((left, right) => rect(fanoutModel, left.target_key).y - rect(fanoutModel, right.target_key).y)
@@ -177,7 +226,6 @@ describe("WorkRequestExecutionGraph", () => {
     expect(sourceTracks.slice(1).every((track, index) => sourceTracks[index] - track >= 6)).toBe(true);
     expect(sourcePaths.every((path) => routeSegments(path.path).length <= 3)).toBe(true);
     expect(routeConflicts(sourcePaths)).toEqual([]);
-    expect(routeSegments(publishPath ?? "").some((segment) => segment.y1 === segment.y2 && segment.y1 > output.y + output.height)).toBe(true);
 
     const recovery = buildExecutionGraphLayout(recoveryGraphFixture, "desktop");
     const routes = graphWireRoutes(recovery, "desktop");
@@ -192,7 +240,12 @@ describe("WorkRequestExecutionGraph", () => {
     expect(historyPath).toMatch(new RegExp(`H ${gateX}$`));
     expect(successorPath).toMatch(new RegExp(`^M ${successor.x + successor.width} `));
     expect(firstHorizontalTrack(successorPath)).toBeGreaterThan(successor.x + successor.width);
-    expect(routeSegments(successorPath ?? "").some((segment) => segment.y1 === segment.y2 && segment.y1 > retry.y + retry.height)).toBe(true);
+    expect(routeSegments(successorPath ?? "").every((segment) => (
+      Math.min(segment.x1, segment.x2) >= retry.x
+      && Math.max(segment.x1, segment.x2) <= retry.x + retry.width
+      && Math.min(segment.y1, segment.y2) >= retry.y
+      && Math.max(segment.y1, segment.y2) <= retry.y + retry.height
+    ))).toBe(true);
     expect(routeSegments(historyPath ?? "").at(-1)?.y2).toBeLessThan(routeSegments(successorPath ?? "").at(-1)?.y2 ?? 0);
     expect(successorPath).not.toMatch(/ V -/);
     expect(routes.paths.find((route) => route.edge === "work_package:successor:work_package:validate")?.state).toBe("waiting");
@@ -286,6 +339,19 @@ describe("WorkRequestExecutionGraph", () => {
     expect(firstCard(html, "playtest")).toContain('data-state="ready"');
     expect(rect(model, "work_package:playtest").width).toBe(rect(model, "group:workers").width);
     expect(rect(model, "work_package:parse").width).toBeLessThan(rect(model, "group:workers").width);
+  });
+
+  it("renders Group and WorkPackage attention badges as direct actions", () => {
+    const attention = new Map([
+      ["group:workers", { label: "Guidance Needed", tone: "guidance" as const }],
+      ["work_package:parse", { label: "Blocked", tone: "blocked" as const }],
+    ]);
+    const html = renderToStaticMarkup(<WorkRequestExecutionGraph model={graphFixture} attentionByEntity={attention} onSelectAttention={() => {}} />);
+
+    expect(html).toContain('aria-label="Open attention for Group Parallel workers"');
+    expect(html).toContain('aria-label="Open attention for WorkPackage Parse records"');
+    expect(html).toContain('data-group-id="workers" data-state="guidance"');
+    expect(firstCard(html, "parse")).toContain('data-state="blocked"');
   });
 
   it("shows compact clickable PR badges and only exceptional repo context", () => {

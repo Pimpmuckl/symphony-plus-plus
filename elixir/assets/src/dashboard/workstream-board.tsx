@@ -7,7 +7,7 @@ import { copyTextToClipboard, CardDetailSelect, DashboardUpdateAnimations } from
 import { clarificationGuidanceItem } from "./dashboard-data";
 import { finishedRequestChildrenStorageKey, sortWorkRequestPackages, sortWorkRequestDetails } from "./workstream-data";
 import { activeBlockerEntityCounts, productTreeCounts, requestProgress } from "./workstream-progress";
-import { requestBoardState, sliceBlockerCount, sliceGuidanceCount, type BoardRowStateKind } from "./workstream-row-state";
+import { requestBoardState, sliceBlockerCount, sliceGuidanceCount, statusBadgeWidthForLabels, type BoardRowStateKind } from "./workstream-row-state";
 import { RequestAttentionBadge, RequestIdentityCopyButton, RequestInfoButton, RequestProgressBar } from "./workstream-row-ui";
 import { requestUpdateKey } from "./update-animations";
 import { dashboardPrefersReducedMotion, updateMotionAttributes } from "@/components/dashboard/motion-utils";
@@ -18,6 +18,7 @@ import { isFinishedBoardStatus, operationalLabel, operationalStatusIsRunning, sl
 import { PullRequestBadge } from "./execution-graph/pull-request-badge";
 import { requestBadgeLabel } from "./workstream-row-age";
 import { architectStartPrompt, mergeRequestDetailsWithExiting, visibleRequestBranch } from "./workstream-utils";
+import type { AttentionSelect } from "./workstream-attention";
 const REQUEST_EXIT_MOTION_MS = 320;
 const WorkRequestExecutionGraph = lazy(() => import("./work-request-execution-graph-loading"));
 export type RequestFrontierMode = "attention" | "active" | "next" | "recent" | "waiting";
@@ -26,7 +27,8 @@ export function WorkstreamBoard({
   repoDetails,
   now,
   packages,
-  activeBlockingEdges,
+  activeBlockingEdges, guidanceItems = [],
+  onSelectAttention,
   onSelectGuidance,
   onSelectCard,
   primaryBranch,
@@ -40,7 +42,8 @@ export function WorkstreamBoard({
   repoDetails: WorkRequestDetail[];
   now?: string;
   packages: WorkPackageCard[];
-  activeBlockingEdges: ActiveBlockingEdge[];
+  activeBlockingEdges: ActiveBlockingEdge[]; guidanceItems?: GuidanceItem[];
+  onSelectAttention: AttentionSelect;
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
   primaryBranch?: string;
@@ -72,6 +75,7 @@ export function WorkstreamBoard({
               now={now}
               exiting={exiting}
               activeBlockingEdges={activeBlockingEdges}
+              guidanceItems={guidanceItems}
               packageById={packageById}
               activeBlockerCount={blockerCounts.requests.get(detail.work_request.id) ?? 0}
               activeBlockerCountBySliceId={blockerCounts.slices}
@@ -80,6 +84,7 @@ export function WorkstreamBoard({
               focusSelected={false}
               index={index}
               onSetOpen={(open) => onSetFinishedRequestChildrenOpen(detail.work_request.id, open)}
+              onSelectAttention={onSelectAttention}
               onSelectGuidance={onSelectGuidance}
               onSelectCard={onSelectCard}
               primaryBranch={primaryBranch}
@@ -91,7 +96,6 @@ export function WorkstreamBoard({
     </div>
   );
 }
-
 function useExitingRequestDetails(currentDetails: WorkRequestDetail[]) {
   const previousDetailsRef = useRef(currentDetails);
   const timersRef = useRef<number[]>([]);
@@ -101,17 +105,13 @@ function useExitingRequestDetails(currentDetails: WorkRequestDetail[]) {
     const removedDetails = previousDetailsRef.current.filter((detail) => !currentIds.has(requestDetailId(detail)));
     previousDetailsRef.current = currentDetails;
     if (removedDetails.length === 0 || dashboardPrefersReducedMotion()) return;
-
     const removedIds = new Set(removedDetails.map(requestDetailId));
     setExitingDetails((current) => mergeRequestDetailsWithExiting(current, removedDetails));
-
     const timer = window.setTimeout(() => {
       setExitingDetails((current) => current.filter((detail) => !removedIds.has(requestDetailId(detail))));
     }, REQUEST_EXIT_MOTION_MS);
-
     timersRef.current.push(timer);
   }, [currentDetails]);
-
   useEffect(
     () => () => {
       timersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -119,17 +119,14 @@ function useExitingRequestDetails(currentDetails: WorkRequestDetail[]) {
     },
     [],
   );
-
   const currentIds = useMemo(() => new Set(currentDetails.map(requestDetailId)), [currentDetails]);
   const renderDetails = useMemo(() => mergeRequestDetailsWithExiting(currentDetails, exitingDetails), [currentDetails, exitingDetails]);
   const exitingIds = useMemo(
     () => new Set(exitingDetails.map(requestDetailId).filter((id) => !currentIds.has(id))),
     [currentIds, exitingDetails],
   );
-
   return [renderDetails, exitingIds] as const;
 }
-
 function requestDetailId(detail: WorkRequestDetail) {
   return detail.work_request.id;
 }
@@ -157,7 +154,7 @@ export function ProductRequestRow({
   detail,
   now,
   exiting = false,
-  activeBlockingEdges,
+  activeBlockingEdges, guidanceItems,
   packageById,
   activeBlockerCount,
   activeBlockerCountBySliceId,
@@ -168,6 +165,7 @@ export function ProductRequestRow({
   focusSelected,
   index,
   onSetOpen,
+  onSelectAttention,
   onSelectGuidance,
   onSelectCard,
   primaryBranch,
@@ -178,7 +176,7 @@ export function ProductRequestRow({
   detail: WorkRequestDetail;
   now?: string;
   exiting?: boolean;
-  activeBlockingEdges: ActiveBlockingEdge[];
+  activeBlockingEdges: ActiveBlockingEdge[]; guidanceItems: GuidanceItem[];
   packageById: Map<string, WorkPackageCard>;
   activeBlockerCount: number;
   activeBlockerCountBySliceId: Map<string, number>;
@@ -189,6 +187,7 @@ export function ProductRequestRow({
   focusSelected: boolean;
   index: number;
   onSetOpen: (open: boolean) => void;
+  onSelectAttention: AttentionSelect;
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
   primaryBranch?: string;
@@ -215,7 +214,7 @@ export function ProductRequestRow({
     if (slice) onSelectCard({ kind: "slice", detail, slice, pkg });
     else if (pkg) onSelectCard({ kind: "package", detail, pkg });
   };
-  const rowStyle = { animationDelay: `${index * 30}ms` } as CSSProperties;
+  const rowStyle = { "--v3-row-badge-width": statusBadgeWidthForLabels([badgeLabel]), animationDelay: `${index * 30}ms` } as CSSProperties;
   const rowHidden = requestRowIsHidden(exiting, focusEjected);
   const frontierHidden = requestFrontierIsHidden(focusSelected, expanded);
   const requestFinished = requestState.kind === "done";
@@ -223,7 +222,7 @@ export function ProductRequestRow({
   useAutoCollapseWhenDone(requestFinished, expanded, collapseRequest, requestFinished && autoCollapseWhenDone);
   const updateMotion = requestRowUpdateMotion(exiting, detail, updateAnimations);
   const [inlineExpandedBody, detachedBodyNode] = placeExpandedRequestBody(
-    <RequestExpandedBody detail={detail} now={now} packageById={packageById} openQuestion={openQuestion} onSelectGuidance={onSelectGuidance} onSelectCard={onSelectCard} requestPath={requestPath} />,
+    <RequestExpandedBody activeBlockingEdges={activeBlockingEdges} detail={detail} guidanceItems={guidanceItems} now={now} packageById={packageById} openQuestion={openQuestion} onSelectAttention={onSelectAttention} onSelectGuidance={onSelectGuidance} onSelectCard={onSelectCard} requestPath={requestPath} />,
     expandedBodyVisible, detachedExpandedBody, requestTitle,
   );
   return (
@@ -250,9 +249,9 @@ export function ProductRequestRow({
             <RequestAttentionBadge
               activeBlockingEdges={activeBlockingEdges}
               detail={detail}
+              guidanceItems={guidanceItems}
               label={badgeLabel}
-              onSelectCard={onSelectCard}
-              onSelectGuidance={onSelectGuidance}
+              onSelectAttention={onSelectAttention}
               packageById={packageById}
               state={requestState}
             />
@@ -291,18 +290,20 @@ function RequestIdentity({ detail, branch }: { detail: WorkRequestDetail; branch
 }
 
 function RequestExpandedBody({
-  detail,
+  activeBlockingEdges, detail, guidanceItems,
   now,
   packageById,
   openQuestion,
+  onSelectAttention,
   onSelectGuidance,
   onSelectCard,
   requestPath,
 }: {
-  detail: WorkRequestDetail;
+  activeBlockingEdges: ActiveBlockingEdge[]; detail: WorkRequestDetail; guidanceItems: GuidanceItem[];
   now?: string;
   packageById: Map<string, WorkPackageCard>;
   openQuestion?: NonNullable<WorkRequestDetail["clarification_questions"]>[number];
+  onSelectAttention: AttentionSelect;
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
   requestPath: ContextPathPart[];
@@ -311,7 +312,7 @@ function RequestExpandedBody({
     <div className="v3-request-body">
       {requestHasWork(detail) ? <>
         <RequestActions detail={detail} openQuestion={openQuestion} onSelectGuidance={onSelectGuidance} />
-        <ExecutionGraphBody detail={detail} now={now} packageById={packageById} onSelectCard={onSelectCard} requestPath={requestPath} />
+        <ExecutionGraphBody activeBlockingEdges={activeBlockingEdges} detail={detail} guidanceItems={guidanceItems} now={now} packageById={packageById} onSelectAttention={onSelectAttention} onSelectCard={onSelectCard} requestPath={requestPath} />
       </> : <EmptyWorkRequest workRequestId={detail.work_request.id} />}
     </div>
   );
@@ -324,12 +325,10 @@ function requestRowUpdateMotion(exiting: boolean, detail: WorkRequestDetail, upd
 
 type RequestFrontierItem = { activity?: string; id: string; pr?: WorkRequestPackage["pr_signal"]; title: string };
 type RequestFrontierGroup = { id: string; items: RequestFrontierItem[]; title?: string };
-
 type RequestFrontierSummary = { groups: RequestFrontierGroup[]; moreLabel?: string };
 
 function RequestFrontier({ summary, onSelectWorkPackage, hidden }: { summary: RequestFrontierSummary | null; onSelectWorkPackage: (id: string) => void; hidden: boolean }) {
   if (!summary) return <div className="v3-request-frontier" aria-hidden={hidden} inert={hidden} />;
-
   return (
     <div className="v3-request-frontier" aria-hidden={hidden} inert={hidden} data-only-ungrouped={summary.groups.every((group) => !group.title) ? "true" : undefined}>
       <div className="v3-request-frontier-content">
@@ -371,7 +370,6 @@ function requestFrontier(
 ): RequestFrontierSummary | null {
   const relevant = slices.filter((slice) => frontierSliceMatches(mode, slice, packageById.get(slice.work_package_id || slice.id), activeBlockerCountBySliceId));
   if (!relevant.length) return null;
-
   const visible = mode === "active" ? relevant : relevant.slice(0, 3);
   const groups = frontierGroups(detail, visible, packageById, overallLabel);
   const hiddenCount = relevant.length - visible.length;
@@ -546,7 +544,7 @@ function requestHasWork(detail: WorkRequestDetail) {
 function EmptyWorkRequest({ workRequestId }: { workRequestId: string }) {
   const prompt = architectStartPrompt(workRequestId);
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-3">
       <p className="text-sm text-muted-foreground">No work has been created yet. Copy a prompt to start this WorkRequest with an architect agent.</p>
       <Button type="button" variant="outline" size="sm" onClick={() => void copyTextToClipboard(prompt)}>
         <Copy className="size-4" />
@@ -578,22 +576,24 @@ function RequestActions({
 }
 
 function ExecutionGraphBody({
-  detail,
+  activeBlockingEdges, detail, guidanceItems,
   now,
   packageById,
+  onSelectAttention,
   onSelectCard,
   requestPath,
 }: {
-  detail: WorkRequestDetail;
+  activeBlockingEdges: ActiveBlockingEdge[]; detail: WorkRequestDetail; guidanceItems: GuidanceItem[];
   now?: string;
   packageById: Map<string, WorkPackageCard>;
+  onSelectAttention: AttentionSelect;
   onSelectCard: CardDetailSelect;
   requestPath: ContextPathPart[];
 }) {
   return (
     <div className="v3-execution-graph">
       <Suspense fallback={<div className="v3-execution-graph-loading" role="status" aria-label="Loading execution graph" />}>
-        <WorkRequestExecutionGraph detail={detail} now={now} packageById={packageById} onSelectCard={onSelectCard} requestPath={requestPath} />
+        <WorkRequestExecutionGraph activeBlockingEdges={activeBlockingEdges} detail={detail} guidanceItems={guidanceItems} now={now} packageById={packageById} onSelectAttention={onSelectAttention} onSelectCard={onSelectCard} requestPath={requestPath} />
       </Suspense>
     </div>
   );

@@ -681,6 +681,93 @@
     grid-template-columns: repeat(auto-fill, minmax(var(--top-tray-card-min), 1fr));
   }
 
+  .attention-location {
+    display: flex;
+    min-width: 0;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding-bottom: 0.65rem;
+    border-bottom: 1px solid hsl(var(--border) / 0.72);
+  }
+
+  .attention-location__path {
+    display: grid;
+    min-width: 0;
+    gap: 0.2rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.75rem;
+    line-height: 1.25;
+  }
+
+  .attention-location__repo {
+    overflow: hidden;
+    color: hsl(var(--foreground));
+    font-weight: 750;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .attention-location__work {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .attention-location__link {
+    position: relative;
+    z-index: 2;
+    max-width: 100%;
+    overflow: hidden;
+    padding: 0;
+    color: hsl(var(--foreground));
+    font-weight: 650;
+    text-align: left;
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color 150ms ease, text-decoration-color 150ms ease;
+  }
+
+  .attention-location__link:hover {
+    color: hsl(var(--primary));
+    text-decoration-color: currentColor;
+  }
+
+  .attention-location__link:focus-visible {
+    border-radius: 0.2rem;
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  .attention-location__jump {
+    position: relative;
+    z-index: 2;
+    height: 1.75rem;
+    flex: none;
+    padding-inline: 0.55rem;
+    font-size: 0.6875rem;
+  }
+
+  .attention-preview-card {
+    position: relative;
+  }
+
+  .attention-preview-card__open {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    border: 0;
+    border-radius: inherit;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .attention-preview-card__open:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
   .workspace-tab-viewport {
     --dashboard-motion-shadow-gutter: 1.25rem;
     position: relative;
@@ -1700,10 +1787,53 @@
     animation: none;
   }
 
-  .focus-board .focus-board__section-body > .v3-workstream-board {
+  .focus-board__repo-groups {
     --focus-card-gap: clamp(1.5rem, 2.5vw, 2.25rem);
+    display: grid;
+    width: 100%;
     max-width: 78.75rem;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+    gap: 2rem var(--focus-card-gap);
+  }
+
+  .focus-board__repo-group {
+    display: grid;
+    min-width: 0;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    row-gap: 0.75rem;
+  }
+
+  .focus-board__repo-heading {
+    display: flex;
+    width: fit-content;
+    max-width: 100%;
+    align-items: center;
+    gap: 0.5rem;
+    grid-column: 1 / -1;
+    margin: 0 0 0 0.25rem;
+    color: hsl(var(--foreground));
+    font-family: var(--font-geist-mono);
+    font-size: 0.875rem;
+    font-weight: 700;
+    line-height: 1.3;
+  }
+
+  .focus-board__repo-heading > svg {
+    flex: 0 0 auto;
+    color: hsl(var(--primary));
+  }
+
+  .focus-board__repo-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .focus-board .focus-board__repo-group > .v3-workstream-board {
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
     grid-auto-flow: row dense;
     align-items: start;
     gap: var(--focus-card-gap);
@@ -1714,7 +1844,7 @@
     container-type: inline-size;
   }
 
-  .focus-board .focus-board__section-body > .v3-workstream-board > .v3-request-row {
+  .focus-board .focus-board__repo-group > .v3-workstream-board > .v3-request-row {
     --v3-row-badge-width: min(10rem, 44%);
     width: 100%;
     max-width: 26rem;
@@ -1749,16 +1879,16 @@
     animation-delay: 0ms !important;
   }
 
-  .focus-board[data-focus-phase="spacing"] .focus-board__section[data-focus-ejected="true"] {
+  .focus-board[data-focus-phase="spacing"] :is(.focus-board__section, .focus-board__repo-group)[data-focus-ejected="true"] {
     animation: focus-board-section-make-space var(--focus-space-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
   }
 
-  .focus-board:is([data-focus-phase="grouping"], [data-focus-phase="expanse-ready"], [data-focus-phase="expanding"], [data-focus-phase="focused"], [data-focus-phase="unexpanding"], [data-focus-phase="ungrouping"]) .focus-board__section[data-focus-ejected="true"] {
+  .focus-board:is([data-focus-phase="grouping"], [data-focus-phase="expanse-ready"], [data-focus-phase="expanding"], [data-focus-phase="focused"], [data-focus-phase="unexpanding"], [data-focus-phase="ungrouping"]) :is(.focus-board__section, .focus-board__repo-group)[data-focus-ejected="true"] {
     transform: translate3d(0, var(--focus-section-eject-y, 0), 0);
     opacity: 0;
   }
 
-  .focus-board[data-focus-phase="returning"] .focus-board__section[data-focus-ejected="true"] {
+  .focus-board[data-focus-phase="returning"] :is(.focus-board__section, .focus-board__repo-group)[data-focus-ejected="true"] {
     animation: focus-board-section-return-space var(--focus-return-duration) cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
@@ -1984,7 +2114,7 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .focus-board[data-focus-phase] :is(.focus-board__section[data-focus-ejected="true"], .v3-request-row, .v3-request-frontier, .v3-request-frontier-content, .focus-board__expanded-slot, .focus-board__expanded-request) {
+    .focus-board[data-focus-phase] :is(.focus-board__section[data-focus-ejected="true"], .focus-board__repo-group[data-focus-ejected="true"], .v3-request-row, .v3-request-frontier, .v3-request-frontier-content, .focus-board__expanded-slot, .focus-board__expanded-request) {
       animation: none !important;
       transition: none !important;
     }
@@ -2602,7 +2732,7 @@
   }
 
   .v3-execution-graph-loading {
-    min-height: 12rem;
+    min-height: 7.5rem;
   }
 
   .v3-unlinked-execution-section {
@@ -4374,12 +4504,12 @@
 
   .execution-graph--empty {
     display: grid;
-    min-height: 8rem;
-    place-items: center;
+    justify-items: start;
     border: 1px dashed hsl(var(--border));
     border-radius: var(--radius);
     color: hsl(var(--muted-foreground));
     font-size: 0.8125rem;
+    padding: 0.75rem;
   }
 
   .execution-graph__viewport {
@@ -4558,7 +4688,7 @@
     left: 0;
     display: grid;
     height: 62px;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto;
     align-content: center;
     align-items: center;
@@ -4567,7 +4697,7 @@
     border: 0;
     border-radius: inherit;
     background: transparent;
-    padding: 0.625rem 0.75rem;
+    padding: 0.625rem 9.75rem 0.625rem 0.75rem;
     color: inherit;
     font: inherit;
     text-align: left;
@@ -4647,6 +4777,18 @@
     cursor: pointer;
   }
 
+  .execution-graph__card > .execution-graph__status {
+    position: relative;
+    z-index: 2;
+  }
+
+  .execution-graph__group-card > .execution-graph__status {
+    position: absolute;
+    z-index: 4;
+    top: 0.75rem;
+    right: 0.75rem;
+  }
+
   .execution-graph__card[data-state="active"],
   .execution-graph__group-card[data-state="active"] {
     border-color: hsl(199 89% 48% / 0.48);
@@ -4668,6 +4810,12 @@
   .execution-graph__group-card[data-state="blocked"] {
     border-color: hsl(348 77% 52% / 0.44);
     background: hsl(348 64% 98%);
+  }
+
+  .execution-graph__card[data-state="guidance"],
+  .execution-graph__group-card[data-state="guidance"] {
+    border-color: hsl(258 74% 62% / 0.42);
+    background: hsl(258 66% 98%);
   }
 
   .execution-graph__card[data-state="complete"],
@@ -4697,6 +4845,12 @@
     background: hsl(348 42% 14%);
   }
 
+  .dark .execution-graph__card[data-state="guidance"],
+  .dark .execution-graph__group-card[data-state="guidance"] {
+    border-color: hsl(258 74% 68% / 0.42);
+    background: hsl(258 36% 15%);
+  }
+
   .dark .execution-graph__card[data-state="complete"],
   .dark .execution-graph__group-card[data-state="complete"] {
     background: hsl(158 36% 13%);
@@ -4719,9 +4873,41 @@
     white-space: nowrap;
   }
 
+  .execution-graph__status--action {
+    cursor: pointer;
+    transition:
+      background-color 150ms ease,
+      border-color 150ms ease,
+      color 150ms ease,
+      box-shadow 150ms ease;
+  }
+
+  .execution-graph__status--action:hover {
+    background: hsl(var(--background));
+    box-shadow: 0 2px 5px hsl(224 27% 12% / 0.12);
+  }
+
+  .execution-graph__status--action:focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  [data-attention-jump="true"] {
+    animation: attention-target-pulse 1.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  @keyframes attention-target-pulse {
+    15%,
+    65% {
+      outline: 3px solid hsl(var(--ring) / 0.78);
+      outline-offset: 4px;
+      box-shadow: 0 0 0 8px hsl(var(--ring) / 0.13);
+    }
+  }
+
   :is(
     .execution-graph__card[data-state="active"] > .execution-graph__status,
-    .execution-graph__group-card[data-state="active"] > .execution-graph__group-header > .execution-graph__status
+    .execution-graph__group-card[data-state="active"] > .execution-graph__status
   ) {
     border-color: hsl(199 89% 48% / 0.32);
     color: hsl(199 72% 34%);
@@ -4734,7 +4920,7 @@
 
   :is(
     .execution-graph__card[data-state="waiting"] > .execution-graph__status,
-    .execution-graph__group-card[data-state="waiting"] > .execution-graph__group-header > .execution-graph__status
+    .execution-graph__group-card[data-state="waiting"] > .execution-graph__status
   ) {
     border-color: oklch(64% 0.12 274 / 0.38);
     color: oklch(45% 0.12 274);
@@ -4742,15 +4928,23 @@
 
   :is(
     .execution-graph__card[data-state="blocked"] > .execution-graph__status,
-    .execution-graph__group-card[data-state="blocked"] > .execution-graph__group-header > .execution-graph__status
+    .execution-graph__group-card[data-state="blocked"] > .execution-graph__status
   ) {
     border-color: hsl(348 77% 52% / 0.34);
     color: hsl(348 77% 40%);
   }
 
   :is(
+    .execution-graph__card[data-state="guidance"] > .execution-graph__status,
+    .execution-graph__group-card[data-state="guidance"] > .execution-graph__status
+  ) {
+    border-color: hsl(258 74% 62% / 0.34);
+    color: hsl(258 58% 43%);
+  }
+
+  :is(
     .execution-graph__card[data-state="complete"] > .execution-graph__status,
-    .execution-graph__group-card[data-state="complete"] > .execution-graph__group-header > .execution-graph__status
+    .execution-graph__group-card[data-state="complete"] > .execution-graph__status
   ) {
     border-color: hsl(158 64% 40% / 0.32);
     color: hsl(158 64% 30%);
@@ -4758,7 +4952,7 @@
 
   .dark :is(
     .execution-graph__card[data-state="active"] > .execution-graph__status,
-    .execution-graph__group-card[data-state="active"] > .execution-graph__group-header > .execution-graph__status
+    .execution-graph__group-card[data-state="active"] > .execution-graph__status
   ) {
     color: hsl(190 90% 72%);
   }
@@ -4769,21 +4963,28 @@
 
   .dark :is(
     .execution-graph__card[data-state="waiting"] > .execution-graph__status,
-    .execution-graph__group-card[data-state="waiting"] > .execution-graph__group-header > .execution-graph__status
+    .execution-graph__group-card[data-state="waiting"] > .execution-graph__status
   ) {
     color: oklch(80% 0.1 274);
   }
 
   .dark :is(
     .execution-graph__card[data-state="blocked"] > .execution-graph__status,
-    .execution-graph__group-card[data-state="blocked"] > .execution-graph__group-header > .execution-graph__status
+    .execution-graph__group-card[data-state="blocked"] > .execution-graph__status
   ) {
     color: hsl(350 82% 72%);
   }
 
   .dark :is(
+    .execution-graph__card[data-state="guidance"] > .execution-graph__status,
+    .execution-graph__group-card[data-state="guidance"] > .execution-graph__status
+  ) {
+    color: hsl(258 82% 78%);
+  }
+
+  .dark :is(
     .execution-graph__card[data-state="complete"] > .execution-graph__status,
-    .execution-graph__group-card[data-state="complete"] > .execution-graph__group-header > .execution-graph__status
+    .execution-graph__group-card[data-state="complete"] > .execution-graph__status
   ) {
     color: hsl(158 64% 72%);
   }
@@ -4923,6 +5124,12 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
+    [data-attention-jump="true"] {
+      animation: none;
+      outline: 3px solid hsl(var(--ring) / 0.78);
+      outline-offset: 4px;
+    }
+
     .execution-graph__wire-layer[data-motion="leaving"],
     .execution-graph__wire-layer[data-motion="morphing"] {
       display: none;
