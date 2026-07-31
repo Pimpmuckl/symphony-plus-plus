@@ -152,11 +152,22 @@ function Start-ExactClient([hashtable]$Environment) {
   return $client
 }
 
-function Save-BackendCleanupIdentity([object[]]$Cohort) {
-  if ($script:cleanupBackendPid -or -not $script:backendPort -or [DateTime]::UtcNow -lt $script:nextCleanupIdentityProbe) { return }
-  $script:nextCleanupIdentityProbe = [DateTime]::UtcNow.AddMilliseconds(250)
+function Save-BackendCleanupIdentity([object[]]$Cohort, [switch]$Force) {
+  if (-not $script:backendPort -or (-not $Force -and [DateTime]::UtcNow -lt $script:nextCleanupIdentityProbe)) { return }
   $owners = @(Get-ListenerPids $script:backendPort)
-  if ($owners.Count -ne 1) { return }
+  if ($owners.Count -ne 1) {
+    $script:nextCleanupIdentityProbe = [DateTime]::UtcNow.AddMilliseconds(250)
+    return
+  }
+  $script:nextCleanupIdentityProbe = [DateTime]::UtcNow.AddMilliseconds(250)
+  $ownerPid = [int]$owners[0]
+  if ($ownerPid -eq $script:cleanupBackendPid) {
+    $recordedProcess = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+    if ($recordedProcess) {
+      try { $recordedStartTime = $recordedProcess.StartTime } catch { $recordedStartTime = $null }
+      if ($recordedStartTime -and $recordedStartTime.ToUniversalTime().Ticks -eq $script:cleanupBackendStartTicks) { return }
+    }
+  }
 
   $roots = [System.Collections.Generic.HashSet[int]]::new()
   foreach ($client in $Cohort) {
@@ -166,7 +177,6 @@ function Save-BackendCleanupIdentity([object[]]$Cohort) {
   foreach ($row in @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)) {
     $parents[[int]$row.ProcessId] = [int]$row.ParentProcessId
   }
-  $ownerPid = [int]$owners[0]
   $currentPid = $ownerPid
   $owned = $false
   foreach ($depth in 1..64) {
@@ -189,27 +199,32 @@ function Save-BackendCleanupIdentity([object[]]$Cohort) {
 
 function Wait-ClientsReady([object[]]$Cohort, [int]$TimeoutSec) {
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
-  while (@($Cohort | Where-Object { -not $_.ready }).Count -gt 0) {
-    Save-BackendCleanupIdentity $Cohort
-    foreach ($client in @($Cohort | Where-Object { -not $_.ready })) {
-      if ($client.line_task.IsCompleted) {
-        $client.watch.Stop()
-        $line = $client.line_task.GetAwaiter().GetResult()
-        if ([string]::IsNullOrWhiteSpace($line)) {
-          $detail = if ($client.process.HasExited) { $client.stderr_task.GetAwaiter().GetResult().Trim() } else { "stdout closed before initialize" }
-          throw "Exact client failed initialize: $detail"
+  try {
+    while (@($Cohort | Where-Object { -not $_.ready }).Count -gt 0) {
+      try { Save-BackendCleanupIdentity $Cohort } catch { }
+      foreach ($client in @($Cohort | Where-Object { -not $_.ready })) {
+        if ($client.line_task.IsCompleted) {
+          $client.watch.Stop()
+          $line = $client.line_task.GetAwaiter().GetResult()
+          if ([string]::IsNullOrWhiteSpace($line)) {
+            $detail = if ($client.process.HasExited) { $client.stderr_task.GetAwaiter().GetResult().Trim() } else { "stdout closed before initialize" }
+            throw "Exact client failed initialize: $detail"
+          }
+          $response = $line | ConvertFrom-Json
+          if ($null -eq $response.result -or $response.error) { throw "Exact client returned an invalid initialize response: $line" }
+          $client.elapsed_ms = $client.watch.Elapsed.TotalMilliseconds
+          $client.ready = $true
+          $client.process.StandardInput.WriteLine('{"jsonrpc":"2.0","method":"notifications/initialized"}')
+        } elseif ($client.process.HasExited) {
+          throw "Exact client exited before initialize: $($client.stderr_task.GetAwaiter().GetResult().Trim())"
         }
-        $response = $line | ConvertFrom-Json
-        if ($null -eq $response.result -or $response.error) { throw "Exact client returned an invalid initialize response: $line" }
-        $client.elapsed_ms = $client.watch.Elapsed.TotalMilliseconds
-        $client.ready = $true
-        $client.process.StandardInput.WriteLine('{"jsonrpc":"2.0","method":"notifications/initialized"}')
-      } elseif ($client.process.HasExited) {
-        throw "Exact client exited before initialize: $($client.stderr_task.GetAwaiter().GetResult().Trim())"
       }
+      if ([DateTime]::UtcNow -ge $deadline) { throw "Timed out waiting for exact-command initialize." }
+      Start-Sleep -Milliseconds 5
     }
-    if ([DateTime]::UtcNow -ge $deadline) { throw "Timed out waiting for exact-command initialize." }
-    Start-Sleep -Milliseconds 5
+  } catch {
+    try { Save-BackendCleanupIdentity $Cohort -Force } catch { }
+    throw
   }
 }
 
