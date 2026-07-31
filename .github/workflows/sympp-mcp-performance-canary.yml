@@ -39,8 +39,23 @@ jobs:
           $mixWrapper = Join-Path $env:RUNNER_TEMP 'sympp-mix.ps1'
           Set-Content -LiteralPath $mixWrapper -Value '& $env:SYMPP_REAL_MIX @args; if ($LASTEXITCODE) { exit $LASTEXITCODE }'
           $env:SYMPP_MIX = $mixWrapper
-          & pwsh -NoProfile -File scripts/benchmarks/sympp-mcp/run-performance-gate.ps1 1> $stdout 2> $stderr
-          $gateExitCode = $LASTEXITCODE
+          $gateProcess = Start-Process `
+            -FilePath (Get-Command pwsh -ErrorAction Stop).Source `
+            -ArgumentList '-NoProfile', '-File', 'scripts/benchmarks/sympp-mcp/run-performance-gate.ps1' `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr `
+            -WindowStyle Hidden `
+            -PassThru
+
+          $timeoutMilliseconds = [int]([TimeSpan]::FromMinutes(120).TotalMilliseconds)
+          if ($gateProcess.WaitForExit($timeoutMilliseconds)) {
+            $gateExitCode = $gateProcess.ExitCode
+          } else {
+            $gateProcess.Kill($true)
+            $gateProcess.WaitForExit()
+            Add-Content -LiteralPath $stderr -Value 'Performance gate exceeded the 120-minute process timeout.'
+            $gateExitCode = 124
+          }
 
           [Console]::Out.Write((Get-Content -LiteralPath $stdout -Raw))
           [Console]::Error.Write((Get-Content -LiteralPath $stderr -Raw))
