@@ -606,9 +606,9 @@ exit /b %ERRORLEVEL%
     $failureRuntime = $null
     if (Test-Path -LiteralPath $runtimeFile -PathType Leaf) {
       $runtimeContent = [string](Get-Content -LiteralPath $runtimeFile -Raw -ErrorAction SilentlyContinue)
-      if ($runtimeContent.Length -gt 4000) { $runtimeContent = $runtimeContent.Substring($runtimeContent.Length - 4000) }
       if (-not [string]::IsNullOrWhiteSpace($runtimeContent)) {
-        Write-BenchmarkProgress "Exact runtime before backend cleanup: $((($runtimeContent -replace '\r?\n', ' ').Trim()))"
+        $runtimeTail = if ($runtimeContent.Length -gt 4000) { $runtimeContent.Substring($runtimeContent.Length - 4000) } else { $runtimeContent }
+        Write-BenchmarkProgress "Exact runtime before backend cleanup: $((($runtimeTail -replace '\r?\n', ' ').Trim()))"
         try { $failureRuntime = $runtimeContent | ConvertFrom-Json } catch { }
         if ($failureRuntime -and $failureRuntime.backend) {
           $failureBackendPid = [int]$failureRuntime.backend.pid
