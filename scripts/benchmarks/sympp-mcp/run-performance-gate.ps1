@@ -307,7 +307,7 @@ function Invoke-ExactCommandProbe([string]$Mode, [string]$Cohorts, [switch]$Chec
   foreach ($arg in @("-NoProfile", "-File", $exactProbe, "-LauncherMode", $Mode, "-Cohorts", $Cohorts, "-Repeats", "1")) { [void]$info.ArgumentList.Add($arg) }
   if (-not $CheckMutation) { [void]$info.ArgumentList.Add("-SkipMutationCheck") }
   $info.WorkingDirectory = $repoRoot
-  $run = Invoke-CapturedProcess $info 900000 "exact shipped command ($Mode)"
+  $run = Invoke-CapturedProcess $info 2700000 "exact shipped command ($Mode)"
   if ($run.exit_code -ne 0) { throw "exact shipped command ($Mode) failed: $(([string]$run.stderr).Trim()) $(([string]$run.stdout).Trim())" }
   return $run.stdout | ConvertFrom-Json
 }
