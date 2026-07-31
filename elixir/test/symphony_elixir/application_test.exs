@@ -1,20 +1,27 @@
 defmodule SymphonyElixir.ApplicationTest do
   use ExUnit.Case, async: false
 
+  alias SymphonyElixir.SymphonyPlusPlus.Repo
+
   @runtime_config Path.expand("../../config/runtime.exs", __DIR__)
 
   test "artifact runtime skips legacy workflow daemon children" do
     with_env("SYMPP_RUNTIME_ARTIFACT", " true ", fn ->
       children = SymphonyElixir.Application.children()
+      repo_child = {Repo, Repo.child_options()}
 
       refute SymphonyElixir.WorkflowStore in children
       refute SymphonyElixir.Orchestrator in children
+      assert repo_child in children
       assert SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore in children
       assert SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases in children
       assert SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener in children
       assert {SymphonyElixir.HttpServer, host: "127.0.0.1"} in children
       refute SymphonyElixir.HttpServer in children
       refute SymphonyElixir.StatusDashboard in children
+
+      assert Enum.find_index(children, &(&1 == repo_child)) <
+               Enum.find_index(children, &(&1 == SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore))
     end)
   end
 
@@ -81,6 +88,7 @@ defmodule SymphonyElixir.ApplicationTest do
       assert SymphonyElixir.WorkflowStore in children
       assert SymphonyElixir.Orchestrator in children
       assert SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener in children
+      refute Enum.any?(children, &match?({Repo, _opts}, &1))
     end)
   end
 

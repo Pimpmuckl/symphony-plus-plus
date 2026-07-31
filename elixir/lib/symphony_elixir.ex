@@ -19,6 +19,8 @@ defmodule SymphonyElixir.Application do
 
   use Application
 
+  alias SymphonyElixir.SymphonyPlusPlus.Repo
+
   @impl true
   def start(_type, _args) do
     :ok = SymphonyElixir.LogFile.configure()
@@ -56,6 +58,7 @@ defmodule SymphonyElixir.Application do
   defp mcp_runtime_children do
     if artifact_runtime?() do
       [
+        {Repo, Repo.child_options()},
         SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore,
         SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases,
         {SymphonyElixir.HttpServer, host: "127.0.0.1"}
