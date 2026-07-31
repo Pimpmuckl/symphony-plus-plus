@@ -132,11 +132,13 @@ describe("dashboard data helpers", () => {
       from: { kind: "work_package", id: "pkg-source" },
       to: { kind: "work_package", id: pkg.id },
       summary: "Edge blocker",
+      updated_at: "2026-07-30T09:15:00Z",
     };
 
     const items = activeBlockerItems([pkg], new Map(), [edge]);
 
     expect(items.map((item) => item.id)).toEqual(["edge-card", "active_blocking_edge:pkg-mixed:package-only"]);
+    expect(items[0]?.since).toBe("2026-07-30T09:15:00Z");
   });
 
   it("gives anonymous package blockers unique card ids without fake clear ids", () => {

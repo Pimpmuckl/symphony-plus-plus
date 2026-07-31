@@ -9,10 +9,11 @@ import { TopPanelContent } from "./top-panel-content";
 
 export function TopPanelCarousel({
   activePanel,
-  guidanceItems,
-  blockerItems,
-  onSelectGuidance,
-  onSelectCard,
+  attentionItems,
+  requestDetails,
+  now,
+  onJumpToAttention,
+  onSelectAttention,
   updateAnimations,
 }: Omit<TopPanelContentProps, "panel" | "interactive"> & {
   activePanel: TopPanelKey | null;
@@ -25,10 +26,11 @@ export function TopPanelCarousel({
   const timersRef = useRef<number[]>([]);
   const framesRef = useRef<number[]>([]);
   const contentProps = {
-    blockerItems,
-    guidanceItems,
-    onSelectCard,
-    onSelectGuidance,
+    attentionItems,
+    requestDetails,
+    now,
+    onJumpToAttention,
+    onSelectAttention,
     updateAnimations,
   };
 

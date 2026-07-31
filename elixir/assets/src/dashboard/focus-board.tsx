@@ -1,5 +1,5 @@
 import type { ActiveBlockingEdge, GuidanceItem, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
-import { Activity, ArrowRight, CheckCircle2, ChevronRight, CircleAlert, Clock3 } from "lucide-react";
+import { Activity, ArrowRight, CheckCircle2, ChevronRight, CircleAlert, Clock3, GitBranch } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
 
@@ -8,8 +8,9 @@ import type { CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
 import { ProductRequestRow } from "./workstream-board";
 import { activeBlockerEntityCounts } from "./workstream-progress";
 import { readStoredFocusBoardSectionOpen, repoIdentityKey, writeStoredFocusBoardSectionOpen } from "./dashboard-persistence";
-import { buildFocusBoardItems, preserveFocusedItem, type FocusBoardItem, type FocusBoardLane } from "./focus-board-data";
-import { focusAttachOffset, focusSectionOffset, focusSpaceOffsets, focusTravelScale, type FocusEjectOffset, type FocusEjectRect } from "./focus-board-motion";
+import { buildFocusBoardItems, groupFocusItemsByRepo, preserveFocusedItem, requestHasExecutionBoard, type FocusBoardItem, type FocusBoardLane } from "./focus-board-data";
+import { focusAttachOffset, focusCameraTop, focusSectionOffset, focusSpaceOffsets, focusTravelScale, type FocusEjectOffset, type FocusEjectRect } from "./focus-board-motion";
+import type { AttentionJumpTarget, AttentionSelect } from "./workstream-attention";
 const FOCUS_BOARD_COLUMNS = ["pr", "state"] as const;
 const FOCUS_BOARD_COLUMN_CAPS_REM = { pr: Number.POSITIVE_INFINITY, state: Number.POSITIVE_INFINITY };
 const FOCUS_SPACE_MS = 660;
@@ -20,9 +21,9 @@ const FOCUS_CAMERA_TOP = 88;
 
 type FocusPhase = "measuring" | "spacing" | "grouping" | "expanse-ready" | "expanding" | "focused" | "unexpanding" | "ungrouping" | "returning";
 type FocusState = { item: FocusBoardItem; phase: FocusPhase };
-type EjectedContent = { lanes: Set<FocusBoardLane>; requests: Set<string> };
+type EjectedContent = { lanes: Set<FocusBoardLane>; repoGroups: Set<string>; requests: Set<string> };
 const FOCUS_EJECTED_PHASES = new Set<FocusPhase>(["grouping", "expanse-ready", "expanding", "focused", "unexpanding", "ungrouping", "returning"]);
-const NO_EJECTED_CONTENT: EjectedContent = { lanes: new Set(), requests: new Set() };
+const NO_EJECTED_CONTENT: EjectedContent = { lanes: new Set(), repoGroups: new Set(), requests: new Set() };
 
 function visibleEjectedContent(phase: FocusPhase | undefined, content: EjectedContent) {
   return phase && FOCUS_EJECTED_PHASES.has(phase) ? content : NO_EJECTED_CONTENT;
@@ -70,6 +71,20 @@ function applyFollowingSectionOffsets(selectedGrid: HTMLElement, travelScale: nu
   return ejectedLanes;
 }
 
+function applyFollowingRepoGroupOffsets(selectedGrid: HTMLElement, travelScale: number) {
+  const ejectedRepoGroups = new Set<string>();
+  const selectedGroup = selectedGrid.closest<HTMLElement>(".focus-board__repo-group");
+  if (!selectedGroup) return ejectedRepoGroups;
+  for (let group = selectedGroup.nextElementSibling; group instanceof HTMLElement; group = group.nextElementSibling) {
+    const y = focusSectionOffset(group.getBoundingClientRect().top, window.innerHeight, travelScale);
+    if (y === 0) continue;
+    group.dataset.focusEjected = "true";
+    group.style.setProperty("--focus-section-eject-y", `${y}px`);
+    if (group.dataset.focusRepoKey) ejectedRepoGroups.add(group.dataset.focusRepoKey);
+  }
+  return ejectedRepoGroups;
+}
+
 function focusMotionScale() {
   if (!import.meta.env.DEV || typeof document === "undefined") return 1;
   const value = Number(document.documentElement.dataset.focusMotionScale);
@@ -81,6 +96,9 @@ export function FocusBoard({
   now,
   packages,
   activeBlockingEdges,
+  guidanceItems = [],
+  jumpTarget,
+  onSelectAttention,
   onSelectGuidance,
   onSelectCard,
   primaryBranchByRepo,
@@ -90,6 +108,9 @@ export function FocusBoard({
   now?: string;
   packages: WorkPackageCard[];
   activeBlockingEdges: ActiveBlockingEdge[];
+  guidanceItems?: GuidanceItem[];
+  jumpTarget?: AttentionJumpTarget | null;
+  onSelectAttention: AttentionSelect;
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
   primaryBranchByRepo: Map<string, string | undefined>;
@@ -99,13 +120,14 @@ export function FocusBoard({
   const blockerCounts = useMemo(() => activeBlockerEntityCounts(activeBlockingEdges, details), [activeBlockingEdges, details]);
   const classifiedItems = useMemo(() => buildFocusBoardItems(details, now, packageById, blockerCounts.requests), [blockerCounts.requests, details, now, packageById]);
   const [focus, setFocus] = useState<FocusState | null>(null);
+  const [inlineExpandedRequestId, setInlineExpandedRequestId] = useState<string>();
   const items = useMemo(() => preserveFocusedItem(classifiedItems, focus?.item), [classifiedItems, focus?.item]);
   const boardRef = useRef<HTMLElement | null>(null);
   const [ejectedContent, setEjectedContent] = useState<EjectedContent>(NO_EJECTED_CONTENT);
-  const initialScrollYRef = useRef(0);
   const cameraFrameRef = useRef<number | null>(null);
   const phaseFrameRef = useRef<number | null>(null);
   const timersRef = useRef<number[]>([]);
+  const handledJumpTokenRef = useRef(0);
 
   const clearTimers = useCallback(() => {
     for (const timer of timersRef.current) window.clearTimeout(timer);
@@ -134,9 +156,9 @@ export function FocusBoard({
       row.style.removeProperty("--focus-eject-y");
       row.style.removeProperty("--focus-space-opacity");
     }
-    for (const section of boardRef.current?.querySelectorAll<HTMLElement>(".focus-board__section[data-focus-ejected]") ?? []) {
-      delete section.dataset.focusEjected;
-      section.style.removeProperty("--focus-section-eject-y");
+    for (const group of boardRef.current?.querySelectorAll<HTMLElement>(".focus-board__section[data-focus-ejected], .focus-board__repo-group[data-focus-ejected]") ?? []) {
+      delete group.dataset.focusEjected;
+      group.style.removeProperty("--focus-section-eject-y");
     }
     setEjectedContent(NO_EJECTED_CONTENT);
   }, [requestRows]);
@@ -161,7 +183,7 @@ export function FocusBoard({
     if (focus) return;
     const item = items.find((candidate) => candidate.id === id)!;
     clearTimers();
-    initialScrollYRef.current = window.scrollY;
+    setInlineExpandedRequestId(undefined);
     setFocus({ item, phase: "measuring" });
   }, [clearTimers, focus, items]);
 
@@ -175,7 +197,8 @@ export function FocusBoard({
     const rects = measureFocusRows(rows);
     const frontierHeight = selectedRow.querySelector<HTMLElement>(".v3-request-frontier")?.getBoundingClientRect().height ?? 0;
     const groupedRects = rects.map((rect) => rect.id === id ? { ...rect, height: Math.max(0, rect.height - frontierHeight) } : rect);
-    boardRef.current?.style.setProperty("--focus-attach-offset", `${focusAttachOffset(groupedRects, id)}px`);
+    const attachOffset = focusAttachOffset(groupedRects, id);
+    boardRef.current?.style.setProperty("--focus-attach-offset", `${attachOffset}px`);
     const expandedHeight = selectedGrid.querySelector<HTMLElement>(".focus-board__expanded-request")?.getBoundingClientRect().height ?? 0;
     const travelScale = focusTravelScale(expandedHeight, window.innerHeight);
     const offsets = focusSpaceOffsets(
@@ -188,9 +211,12 @@ export function FocusBoard({
     applyFocusOffsets(rows, offsets);
     const nextEjectedContent = {
       requests: ejectedRequestIds(offsets),
+      repoGroups: applyFollowingRepoGroupOffsets(selectedGrid, travelScale),
       lanes: applyFollowingSectionOffsets(selectedGrid, travelScale),
     };
-    const cameraTop = Math.max(0, window.scrollY + selectedRow.getBoundingClientRect().top - FOCUS_CAMERA_TOP);
+    const selectedRect = selectedRow.getBoundingClientRect();
+    const focusedHeight = selectedRect.height - frontierHeight + expandedHeight - attachOffset;
+    const cameraTop = focusCameraTop(window.scrollY, selectedRect.top, focusedHeight, window.innerHeight, FOCUS_CAMERA_TOP);
 
     const motionScale = focusMotionScale();
     schedule(() => {
@@ -221,7 +247,6 @@ export function FocusBoard({
     if (dashboardPrefersReducedMotion()) {
       setFocus(null);
       clearEjectOffsets();
-      window.scrollTo({ top: initialScrollYRef.current, behavior: "auto" });
       return;
     }
     const motionScale = focusMotionScale();
@@ -230,14 +255,90 @@ export function FocusBoard({
       setFocus((current) => current ? { ...current, phase: "ungrouping" } : null);
       schedule(() => {
         setFocus((current) => current ? { ...current, phase: "returning" } : null);
-        animateCamera(initialScrollYRef.current, FOCUS_RETURN_MS * motionScale);
         schedule(() => {
           setFocus(null);
           clearEjectOffsets();
         }, FOCUS_RETURN_MS * motionScale);
       }, FOCUS_GROUP_MS * motionScale);
     }, FOCUS_EXPANSE_MS * motionScale);
-  }, [animateCamera, clearEjectOffsets, clearTimers, focus, schedule]);
+  }, [clearEjectOffsets, clearTimers, focus, schedule]);
+
+  useEffect(() => {
+    if (!jumpTarget || handledJumpTokenRef.current >= jumpTarget.token) return;
+    const jumpItem = items.find((item) => item.id === jumpTarget.requestId);
+    if (!jumpItem) return;
+
+    if (focus && focus.item.id !== jumpTarget.requestId) {
+      clearTimers();
+      schedule(() => {
+        setFocus(null);
+        clearEjectOffsets();
+      }, 0);
+      return;
+    }
+    if (!requestHasExecutionBoard(jumpItem.detail)) {
+      handledJumpTokenRef.current = jumpTarget.token;
+      schedule(() => {
+        setInlineExpandedRequestId(jumpTarget.requestId);
+        window.requestAnimationFrame(() => requestRows().find((row) => row.dataset.requestId === jumpTarget.requestId)?.scrollIntoView({
+          block: "center",
+          behavior: dashboardPrefersReducedMotion() ? "auto" : "smooth",
+        }));
+      }, 0);
+      return;
+    }
+    if (!focus) {
+      schedule(() => beginFocus(jumpTarget.requestId), 0);
+      return;
+    }
+    if (focus.phase !== "focused") return;
+
+    const root = boardRef.current;
+    if (!root) return;
+    let frame = 0;
+    const revealTarget = () => {
+      const row = requestRows().find((candidate) => candidate.dataset.requestId === jumpTarget.requestId);
+      if (!row) return;
+      let target: HTMLElement = row;
+      const viewport = visibleGraphViewport(row);
+
+      if (jumpTarget.groupIds.length || jumpTarget.workPackageId) {
+        if (!viewport) return;
+        for (const groupId of jumpTarget.groupIds) {
+          const group = elementWithData(viewport, "groupId", groupId);
+          if (!group) return;
+          const toggle = group.querySelector<HTMLButtonElement>(":scope > .execution-graph__group-header");
+          if (toggle?.getAttribute("aria-expanded") === "false") {
+            toggle.click();
+            return;
+          }
+          target = group;
+        }
+        if (jumpTarget.workPackageId) {
+          const workPackage = elementWithData(viewport, "workPackageId", jumpTarget.workPackageId);
+          if (!workPackage) return;
+          target = workPackage;
+        }
+      }
+
+      handledJumpTokenRef.current = jumpTarget.token;
+      target.dataset.attentionJump = "true";
+      target.scrollIntoView({
+        block: "center",
+        inline: "center",
+        behavior: dashboardPrefersReducedMotion() ? "auto" : "smooth",
+      });
+      window.setTimeout(() => delete target.dataset.attentionJump, 1_800);
+      observer.disconnect();
+    };
+    const observer = new MutationObserver(revealTarget);
+    observer.observe(root, { attributes: true, childList: true, subtree: true });
+    frame = window.requestAnimationFrame(revealTarget);
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(frame);
+    };
+  }, [beginFocus, clearEjectOffsets, clearTimers, focus, items, jumpTarget, requestRows, schedule]);
 
   const endFocusEvent = useEffectEvent(endFocus);
   useEffect(() => {
@@ -298,30 +399,42 @@ export function FocusBoard({
   const focusedId = focus?.item.id;
   const focusPhase = focus?.phase;
   const hiddenContent = visibleEjectedContent(focusPhase, ejectedContent);
-  const renderItem = (item: FocusBoardItem) => (
-    <ProductRequestRow
-      key={item.id}
-      detail={item.detail}
-      now={now}
-      activeBlockingEdges={activeBlockingEdges}
-      packageById={packageById}
-      activeBlockerCount={blockerCounts.requests.get(item.id) ?? 0}
-      activeBlockerCountBySliceId={blockerCounts.slices}
-      expanded={focusedId === item.id && ["grouping", "expanse-ready", "expanding", "focused", "unexpanding"].includes(focusPhase ?? "")}
-      expandedBodyVisible={focusedId === item.id && ["measuring", "spacing", "grouping", "expanse-ready", "expanding", "focused", "unexpanding"].includes(focusPhase ?? "")}
-      detachedExpandedBody
-      focusEjected={hiddenContent.requests.has(item.id)}
-      focusSelected={focusedId === item.id}
-      index={itemIndexById.get(item.id) ?? 0}
-      onSetOpen={() => focusedId === item.id ? endFocus() : beginFocus(item.id)}
-      onSelectGuidance={onSelectGuidance}
-      onSelectCard={onSelectCard}
-      primaryBranch={primaryBranchByRepo.get(repoIdentityKey(item.detail.work_request))}
-      frontierMode={item.lane}
-      autoCollapseWhenDone={false}
-      updateAnimations={updateAnimations}
-    />
-  );
+  const renderItem = (item: FocusBoardItem) => {
+    const inlineExpanded = inlineExpandedRequestId === item.id;
+    const focusExpanded = focusedId === item.id && ["grouping", "expanse-ready", "expanding", "focused", "unexpanding"].includes(focusPhase ?? "");
+    const focusBodyVisible = focusedId === item.id && ["measuring", "spacing", "grouping", "expanse-ready", "expanding", "focused", "unexpanding"].includes(focusPhase ?? "");
+    return (
+      <ProductRequestRow
+        key={item.id}
+        detail={item.detail}
+        now={now}
+        activeBlockingEdges={activeBlockingEdges}
+        guidanceItems={guidanceItems}
+        packageById={packageById}
+        activeBlockerCount={blockerCounts.requests.get(item.id) ?? 0}
+        activeBlockerCountBySliceId={blockerCounts.slices}
+        expanded={inlineExpanded || focusExpanded}
+        expandedBodyVisible={inlineExpanded || focusBodyVisible}
+        detachedExpandedBody={!inlineExpanded}
+        focusEjected={hiddenContent.requests.has(item.id)}
+        focusSelected={focusedId === item.id}
+        index={itemIndexById.get(item.id) ?? 0}
+        onSetOpen={() => {
+          if (focusedId === item.id) endFocus();
+          else if (inlineExpanded) setInlineExpandedRequestId(undefined);
+          else if (requestHasExecutionBoard(item.detail)) beginFocus(item.id);
+          else setInlineExpandedRequestId(item.id);
+        }}
+        onSelectAttention={onSelectAttention}
+        onSelectGuidance={onSelectGuidance}
+        onSelectCard={onSelectCard}
+        primaryBranch={primaryBranchByRepo.get(repoIdentityKey(item.detail.work_request))}
+        frontierMode={item.lane}
+        autoCollapseWhenDone={false}
+        updateAnimations={updateAnimations}
+      />
+    );
+  };
   const previewQuery = import.meta.env.DEV && typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("focus-card-preview")?.trim().toLowerCase()
     : undefined;
@@ -353,18 +466,28 @@ export function FocusBoard({
         <span className="text-xs font-semibold text-muted-foreground">– {openCount} open</span>
       </header>
       <div className="focus-board__lanes grid gap-12">
-        <FocusSection key="attention" lane="attention" label="Needs Attention" icon={<CircleAlert className="size-4" />} items={items} renderItem={renderItem} focusedRequestId={focusedId} focusEjected={hiddenContent.lanes.has("attention")} />
-        <FocusSection key="active" lane="active" label="In Progress" icon={<Activity className="size-4" />} items={items} renderItem={renderItem} focusedRequestId={focusedId} focusEjected={hiddenContent.lanes.has("active")} />
-        <FocusSection key="next" lane="next" label="Up Next" icon={<ArrowRight className="size-4" />} items={items} renderItem={renderItem} focusedRequestId={focusedId} focusEjected={hiddenContent.lanes.has("next")} />
+        <FocusSection key="attention" lane="attention" label="Needs Attention" icon={<CircleAlert className="size-4" />} items={items} renderItem={renderItem} focusedRequestId={focusedId} focusEjected={hiddenContent.lanes.has("attention")} focusEjectedRepos={hiddenContent.repoGroups} />
+        <FocusSection key="active" lane="active" label="In Progress" icon={<Activity className="size-4" />} items={items} renderItem={renderItem} focusedRequestId={focusedId} focusEjected={hiddenContent.lanes.has("active")} focusEjectedRepos={hiddenContent.repoGroups} />
+        <FocusSection key="next" lane="next" label="Up Next" icon={<ArrowRight className="size-4" />} items={items} renderItem={renderItem} focusedRequestId={focusedId} focusEjected={hiddenContent.lanes.has("next")} focusEjectedRepos={hiddenContent.repoGroups} />
         {items.some((item) => item.lane === "recent") ? (
-          <FocusSection key="recent" lane="recent" label="Recently Finished" icon={<CheckCircle2 className="size-4" />} items={items} renderItem={renderItem} focusedRequestId={focusedId} focusEjected={hiddenContent.lanes.has("recent")} />
+          <FocusSection key="recent" lane="recent" label="Recently Finished" icon={<CheckCircle2 className="size-4" />} items={items} renderItem={renderItem} focusedRequestId={focusedId} focusEjected={hiddenContent.lanes.has("recent")} focusEjectedRepos={hiddenContent.repoGroups} />
         ) : null}
         {waiting.length > 0 ? (
-          <FocusSection key="waiting" lane="waiting" label="Waiting" icon={<Clock3 className="size-4" />} items={items} renderItem={renderItem} focusedRequestId={focusedId} focusEjected={hiddenContent.lanes.has("waiting")} />
+          <FocusSection key="waiting" lane="waiting" label="Waiting" icon={<Clock3 className="size-4" />} items={items} renderItem={renderItem} focusedRequestId={focusedId} focusEjected={hiddenContent.lanes.has("waiting")} focusEjectedRepos={hiddenContent.repoGroups} />
         ) : null}
       </div>
     </section>
   );
+}
+
+function visibleGraphViewport(row: HTMLElement) {
+  return [...row.parentElement?.querySelectorAll<HTMLElement>(".execution-graph__viewport") ?? []]
+    .find((viewport) => viewport.getClientRects().length > 0);
+}
+
+function elementWithData(root: HTMLElement, key: "groupId" | "workPackageId", value: string) {
+  return [...root.querySelectorAll<HTMLElement>(`[data-${key === "groupId" ? "group-id" : "work-package-id"}]`)]
+    .find((element) => element.dataset[key] === value);
 }
 
 function FocusSection({
@@ -375,6 +498,7 @@ function FocusSection({
   renderItem,
   focusedRequestId,
   focusEjected,
+  focusEjectedRepos,
 }: {
   lane: FocusBoardLane;
   label: string;
@@ -383,8 +507,10 @@ function FocusSection({
   renderItem: (item: FocusBoardItem) => ReactNode;
   focusedRequestId?: string;
   focusEjected: boolean;
+  focusEjectedRepos: Set<string>;
 }) {
   const laneItems = items.filter((item) => item.lane === lane).toSorted(compareFocusItems);
+  const repoGroups = groupFocusItemsByRepo(laneItems);
   const focusSelected = laneItems.some((item) => item.id === focusedRequestId);
   const [manuallyOpen, setManuallyOpen] = useState(() => readStoredFocusBoardSectionOpen(lane, lane === "attention" || lane === "active"));
   const sectionOpen = focusSelected || manuallyOpen;
@@ -426,7 +552,32 @@ function FocusSection({
       >
         <div className="focus-board__section-reveal-inner">
           {laneItems.length > 0
-            ? <div className="focus-board__section-body workstream-board-shell"><div className="v3-workstream-board">{laneItems.map(renderItem)}</div></div>
+            ? (
+              <div className="focus-board__section-body workstream-board-shell">
+                <div className="focus-board__repo-groups">
+                  {repoGroups.map((group, index) => {
+                    const headingId = `focus-board-${lane}-repo-${index}`;
+                    const groupEjected = focusSelected && focusEjectedRepos.has(group.key);
+                    return (
+                      <section
+                        key={group.key}
+                        className="focus-board__repo-group"
+                        aria-labelledby={headingId}
+                        aria-hidden={groupEjected || undefined}
+                        inert={groupEjected}
+                        data-focus-repo-key={group.key}
+                      >
+                        <h4 id={headingId} className="focus-board__repo-heading">
+                          <GitBranch className="size-4" aria-hidden="true" />
+                          <span className="focus-board__repo-name">{group.label}</span>
+                        </h4>
+                        <div className="v3-workstream-board">{group.items.map(renderItem)}</div>
+                      </section>
+                    );
+                  })}
+                </div>
+              </div>
+            )
             : <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">Clear</p>}
         </div>
       </div>

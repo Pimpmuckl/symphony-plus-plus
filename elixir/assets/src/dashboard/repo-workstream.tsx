@@ -13,12 +13,15 @@ import { WorkstreamBoard } from "./workstream-board";
 import { defaultRepoWorkstreamOpen, readStoredFinishedRequestChildren, readStoredRepoWorkstreamOpen, repoWorkstreamStateKey, writeStoredFinishedRequestChildren, writeStoredRepoWorkstreamOpen } from "./dashboard-persistence";
 import { finishedRequestChildrenStorageKey, workstreamCategoryCounts } from "./workstream-data";
 import { repoSummaryMetrics, type RepoSummaryMetricKey } from "./repo-summary-state";
+import type { AttentionSelect } from "./workstream-attention";
 
 export function RepoWorkstream({
   repo,
   requestDetailsByRepo,
   now,
   activeBlockingEdges,
+  guidanceItems,
+  onSelectAttention,
   onSelectGuidance,
   onSelectCard,
   primaryBranch,
@@ -29,6 +32,8 @@ export function RepoWorkstream({
   requestDetailsByRepo: Map<string, WorkRequestDetail[]>;
   now?: string;
   activeBlockingEdges: ActiveBlockingEdge[];
+  guidanceItems: GuidanceItem[];
+  onSelectAttention: AttentionSelect;
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
   primaryBranch?: string;
@@ -131,6 +136,8 @@ export function RepoWorkstream({
               now={now}
               packages={repo.packages}
               activeBlockingEdges={activeBlockingEdges}
+              guidanceItems={guidanceItems}
+              onSelectAttention={onSelectAttention}
               onSelectGuidance={onSelectGuidance}
               onSelectCard={onSelectCard}
               primaryBranch={primaryBranch}

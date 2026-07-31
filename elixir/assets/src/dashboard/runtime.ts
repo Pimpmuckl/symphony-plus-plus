@@ -1,5 +1,6 @@
 import type { ActiveBlockingEdge, ContextComment, DashboardPayload, HandoffCopyState, WorkRequestPackage, SoloSession, WorkPackageCard, WorkRequestCard, WorkRequestDetail } from "@/types/dashboard";
 import type { UpdateMotion } from "@/components/dashboard/motion";
+export { removeDashboardWorkRequest } from "./dashboard-removal";
 
 declare global {
   interface Window {
@@ -151,7 +152,7 @@ export type WorkRequestMutation = (workRequestId: string) => Promise<void>;
 
 export type WorkRequestStateMutation = (workRequestId: string, nextState: "completed") => Promise<void>;
 
-export type WorkPackageStateAction = "merged" | "merged_and_archive" | "closed_and_archive" | "completed_no_pr";
+export type WorkPackageStateAction = "merged" | "merged_and_archive" | "closed_and_archive" | "completed_no_pr" | "unblock";
 
 export type WorkPackageStateMutation = (workPackageId: string, action: WorkPackageStateAction, options?: { noPrEvidence?: string }) => Promise<void>;
 
@@ -429,28 +430,6 @@ export function patchDashboardWorkRequest(
     work_request_details: nextDetails,
     work_requests: dashboard.work_requests ? { ...dashboard.work_requests, work_requests: nextCards, total_count: nextCards.length } : dashboard.work_requests,
   };
-}
-
-export function removeDashboardWorkRequest(dashboard: DashboardPayload | null, workRequestId: string): DashboardPayload | null {
-  if (!dashboard) return dashboard;
-
-  return {
-    ...dashboard,
-    archived_work_requests: removeWorkRequestSection(dashboard.archived_work_requests, workRequestId),
-    work_request_details: removeWorkRequestDetails(dashboard.work_request_details, workRequestId),
-    work_requests: removeWorkRequestSection(dashboard.work_requests, workRequestId),
-  };
-}
-
-function removeWorkRequestSection(section: DashboardPayload["work_requests"], workRequestId: string) {
-  if (!section) return section;
-
-  const workRequests = (section.work_requests ?? []).filter((card) => card.id !== workRequestId);
-  return { ...section, work_requests: workRequests, total_count: workRequests.length };
-}
-
-function removeWorkRequestDetails(details: WorkRequestDetail[] | undefined, workRequestId: string) {
-  return details?.filter((detail) => detail.work_request.id !== workRequestId) ?? details;
 }
 
 export function mergeDashboardPayload(dashboard: DashboardPayload | null, patch: DashboardPayload | null | undefined): DashboardPayload | null {

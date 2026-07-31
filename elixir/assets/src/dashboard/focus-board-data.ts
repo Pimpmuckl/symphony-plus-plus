@@ -2,6 +2,7 @@ import type { WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 
 import type { RequestFrontierMode } from "./workstream-board";
 import { isFinishedBoardStatus, sliceOperationalState } from "@/lib/operational-state";
+import { repoDisplayName, repoIdentityKey } from "./dashboard-persistence";
 import { productTreeCounts, requestProgress } from "./workstream-progress";
 import { requestBoardState, sliceActionableBlockerCount, type BoardRowStateKind } from "./workstream-row-state";
 
@@ -40,6 +41,26 @@ export function preserveFocusedItem(items: FocusBoardItem[], focused?: FocusBoar
   const current = items.find((item) => item.id === focused.id);
   const preserved = { ...(current ?? focused), lane: focused.lane };
   return current ? items.map((item) => item.id === focused.id ? preserved : item) : [...items, preserved];
+}
+
+export function requestHasExecutionBoard(detail: WorkRequestDetail) {
+  if (!detail.product_tree) return (detail.summary?.work_package_count ?? detail.work_request.work_package_count ?? 0) > 0;
+  const graph = detail.product_tree.execution_graph;
+  return graph?.available === true
+    && !graph.cycles?.length
+    && Boolean(detail.product_tree.nodes?.length || graph.work_package_ids?.length);
+}
+
+export function groupFocusItemsByRepo(items: FocusBoardItem[]) {
+  const groups = new Map<string, { key: string; label: string; items: FocusBoardItem[] }>();
+  for (const item of items) {
+    const request = item.detail.work_request;
+    const key = repoIdentityKey(request);
+    const group = groups.get(key) ?? { key, label: repoDisplayName(request), items: [] };
+    group.items.push(item);
+    groups.set(key, group);
+  }
+  return [...groups.values()].toSorted((left, right) => left.label.localeCompare(right.label) || left.key.localeCompare(right.key));
 }
 
 function requestLane(detail: WorkRequestDetail, kind: BoardRowStateKind, blockerCount: number, packageById: Map<string, WorkPackageCard>): Exclude<FocusBoardLane, "recent"> {

@@ -1,0 +1,82 @@
+name: Symphony++ dashboard performance canary
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - name: Set up mise tools
+        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
+        with:
+          install: true
+          cache: true
+          working_directory: elixir
+
+      - name: Install and build dashboard
+        working-directory: elixir
+        run: |
+          mix deps.get
+          MIX_ENV=dev mix compile
+          cd assets
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run build
+
+      - name: Export realistic fixture
+        working-directory: elixir
+        run: MIX_ENV=test mix run ../scripts/benchmarks/sympp-dashboard/fixture.exs ../scripts/benchmarks/sympp-dashboard/fixture.sqlite3
+
+      - name: Record runner and setup metadata
+        run: |
+          mkdir -p artifacts
+          {
+            echo "sha=$GITHUB_SHA"
+            echo "runner_os=$RUNNER_OS"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "runner_image=${ImageOS:-unknown}"
+            echo "runner_image_version=${ImageVersion:-unknown}"
+            echo "node=$(node --version)"
+            echo "elixir=$(cd elixir && mise exec -- elixir --version | tail -n 1)"
+            echo "samples=25"
+            echo "viewport=1440x1000"
+            echo "reduced_motion=reduce"
+            echo "port=20071"
+          } > artifacts/setup.txt
+
+      - name: Start isolated fixture server
+        working-directory: elixir
+        run: |
+          MIX_ENV=dev mix run --no-start ../scripts/benchmarks/sympp-dashboard/serve.exs ../scripts/benchmarks/sympp-dashboard/fixture.sqlite3 20071 > ../artifacts/server.log 2>&1 &
+          echo $! > ../artifacts/server.pid
+          for attempt in {1..60}; do
+            curl --fail --silent "http://127.0.0.1:20071/sympp/board?operator_bootstrap=fixture-benchmark" > /dev/null && exit 0
+            sleep 1
+          done
+          cat ../artifacts/server.log
+          exit 1
+
+      - name: Measure 25 detailed samples
+        run: node scripts/benchmarks/sympp-dashboard/measure.mjs --url "http://127.0.0.1:20071/sympp/board?operator_bootstrap=fixture-benchmark" --samples 25 --details > artifacts/result.json
+
+      - name: Stop fixture server
+        if: ${{ always() }}
+        run: test ! -f artifacts/server.pid || kill "$(cat artifacts/server.pid)" || true
+
+      - name: Upload raw result and metadata
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sympp-dashboard-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: error

@@ -1,7 +1,7 @@
-import type { GuidanceItem } from "@/types/dashboard";
+import type { WorkRequestDetail } from "@/types/dashboard";
 import type * as React from "react";
-import type { BlockerItem } from "./dashboard-state";
-import type { CardDetailSelect, DashboardUpdateAnimations, TopPanelDirection, TopPanelKey, TopPanelPhase } from "./runtime";
+import type { DashboardUpdateAnimations, TopPanelDirection, TopPanelKey, TopPanelPhase } from "./runtime";
+import type { AttentionItem, AttentionJumpDestination, AttentionSelect } from "./workstream-attention";
 
 export type AttentionButtonConfig = {
   icon: React.ReactNode;
@@ -14,10 +14,11 @@ export type AttentionButtonConfig = {
 export type TopPanelContentProps = {
   panel: TopPanelKey;
   interactive?: boolean;
-  guidanceItems: GuidanceItem[];
-  blockerItems: BlockerItem[];
-  onSelectGuidance: (item: GuidanceItem) => void;
-  onSelectCard: CardDetailSelect;
+  now?: string;
+  attentionItems: AttentionItem[];
+  requestDetails: WorkRequestDetail[];
+  onJumpToAttention: (destination: AttentionJumpDestination) => void;
+  onSelectAttention: AttentionSelect;
   updateAnimations: DashboardUpdateAnimations;
 };
 

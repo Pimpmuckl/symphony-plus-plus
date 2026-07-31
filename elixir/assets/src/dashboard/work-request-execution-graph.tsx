@@ -1,5 +1,5 @@
-import { memo, useMemo, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import { memo, useMemo, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import {
   buildExecutionGraphLayout,
@@ -21,18 +21,23 @@ import { GraphWires } from "@/dashboard/execution-graph/wires";
 import { contextPathValue, type ContextPathPart } from "./workstream-context-path";
 import { elapsedLabel } from "./workstream-row-age";
 import { prBadgeLabel, PullRequestBadge } from "./execution-graph/pull-request-badge";
+import type { DirectAttention } from "./workstream-attention";
 
 export type WorkRequestExecutionGraphProps = {
   model: WorkRequestExecutionGraphModel;
+  attentionByEntity?: ReadonlyMap<string, Pick<DirectAttention, "label" | "tone">>;
   now?: string | number | Date;
   ariaLabel?: string;
+  onSelectAttention?: (entityKey: string) => void;
   onSelectWorkPackage?: (workPackageId: string) => void;
   contextPath?: ContextPathPart[];
 };
 export const WorkRequestExecutionGraph = memo(function WorkRequestExecutionGraph({
   model: graph,
+  attentionByEntity = new Map(),
   now,
   ariaLabel = "WorkRequest execution graph",
+  onSelectAttention,
   onSelectWorkPackage,
   contextPath,
 }: WorkRequestExecutionGraphProps) {
@@ -67,15 +72,15 @@ export const WorkRequestExecutionGraph = memo(function WorkRequestExecutionGraph
 
   return (
     <section className="execution-graph" aria-label={ariaLabel}>
-      <GraphSurface model={desktop} orientation="desktop" now={now} onSelectWorkPackage={onSelectWorkPackage} onToggleGroup={toggleGroup} contextPath={contextPath} />
-      <GraphSurface model={mobile} orientation="mobile" now={now} onSelectWorkPackage={onSelectWorkPackage} onToggleGroup={toggleGroup} contextPath={contextPath} />
+      <GraphSurface attentionByEntity={attentionByEntity} model={desktop} orientation="desktop" now={now} onSelectAttention={onSelectAttention} onSelectWorkPackage={onSelectWorkPackage} onToggleGroup={toggleGroup} contextPath={contextPath} />
+      <GraphSurface attentionByEntity={attentionByEntity} model={mobile} orientation="mobile" now={now} onSelectAttention={onSelectAttention} onSelectWorkPackage={onSelectWorkPackage} onToggleGroup={toggleGroup} contextPath={contextPath} />
     </section>
   );
 });
 function GraphNotice({ ariaLabel, title, detail }: { ariaLabel: string; title: string; detail: string }) {
   return (
     <section className="execution-graph execution-graph--empty" aria-label={ariaLabel} role="status">
-      <div className="grid max-w-md gap-1 px-4 text-center">
+      <div className="grid max-w-md gap-1">
         <p className="font-semibold text-foreground">{title}</p>
         <p>{detail}</p>
       </div>
@@ -94,20 +99,25 @@ function executionGraphNotice(graph: WorkRequestExecutionGraphModel) {
   return undefined;
 }
 function GraphSurface({
+  attentionByEntity,
   model,
   orientation,
   now,
+  onSelectAttention,
   onSelectWorkPackage,
   onToggleGroup,
   contextPath,
 }: {
+  attentionByEntity: ReadonlyMap<string, Pick<DirectAttention, "label" | "tone">>;
   model: ExecutionGraphLayoutModel;
   orientation: GraphOrientation;
   now?: string | number | Date;
+  onSelectAttention?: (entityKey: string) => void;
   onSelectWorkPackage?: (workPackageId: string) => void;
   onToggleGroup: (groupId: string) => void;
   contextPath?: ContextPathPart[];
 }) {
+  const pan = useRef<{ left: number; pointerId: number; x: number } | null>(null);
   const children = new Map<string, GraphEntityRect[]>();
   model.rects.forEach((rect) => {
     if (!rect.parent_group_id) return;
@@ -117,14 +127,29 @@ function GraphSurface({
     const localRect = parent ? { ...rect, x: rect.x - parent.x, y: rect.y - parent.y - graphGroupHeaderSize(orientation) } : rect;
     if (rect.kind === "group") {
       return (
-        <GroupCard key={rect.key} rect={localRect} model={model} onToggle={onToggleGroup}>
+        <GroupCard attention={attentionByEntity.get(rect.key)} key={rect.key} rect={localRect} model={model} onSelectAttention={onSelectAttention ? () => onSelectAttention(rect.key) : undefined} onToggle={onToggleGroup}>
           {(children.get(rect.id) ?? []).map((child) => renderNode(child, rect))}
         </GroupCard>
       );
     }
-    return <WorkPackageCard key={rect.key} rect={localRect} model={model} now={now} onSelectWorkPackage={onSelectWorkPackage} contextPath={contextPath} />;
+    return <WorkPackageCard attention={attentionByEntity.get(rect.key)} key={rect.key} rect={localRect} model={model} now={now} onSelectAttention={onSelectAttention ? () => onSelectAttention(rect.key) : undefined} onSelectWorkPackage={onSelectWorkPackage} contextPath={contextPath} />;
   };
   const roots = model.rects.filter((rect) => !rect.parent_group_id);
+  const beginPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button, a")) return;
+    pan.current = { left: event.currentTarget.scrollLeft, pointerId: event.pointerId, x: event.clientX };
+    event.currentTarget.dataset.panning = "true";
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const movePan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (pan.current?.pointerId !== event.pointerId) return;
+    event.currentTarget.scrollLeft = pan.current.left + pan.current.x - event.clientX;
+  };
+  const endPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (pan.current?.pointerId !== event.pointerId) return;
+    pan.current = null;
+    delete event.currentTarget.dataset.panning;
+  };
 
   return (
     <div
@@ -133,6 +158,11 @@ function GraphSurface({
       role="region"
       tabIndex={0}
       aria-label={`${orientation === "desktop" ? (model.routing?.wrapped ? "Wrapped left-to-right" : "Left-to-right") : "Top-to-bottom"} execution order; scroll to inspect`}
+      onLostPointerCapture={endPan}
+      onPointerCancel={endPan}
+      onPointerDown={beginPan}
+      onPointerMove={movePan}
+      onPointerUp={endPan}
     >
       <div className="execution-graph__canvas" style={{ width: model.width, height: model.height } as CSSProperties}>
         {roots.map((rect) => renderNode(rect))}
@@ -141,29 +171,39 @@ function GraphSurface({
     </div>
   );
 }
-function GroupCard({ rect, model, onToggle, children }: { rect: GraphEntityRect; model: ExecutionGraphLayoutModel; onToggle: (id: string) => void; children?: ReactNode }) {
-  const group = model.groups.get(rect.id);
-  const state = model.groupStates.get(rect.id) ?? { label: "Planned", tone: "neutral", completed: 0, total: 0 };
-  const title = group?.title?.trim() || "Untitled group";
-  const status = state.total ? `${state.label} · ${state.completed}/${state.total}` : state.label;
+function GroupCard({
+  attention,
+  rect,
+  model,
+  onSelectAttention,
+  onToggle,
+  children,
+}: {
+  attention?: Pick<DirectAttention, "label" | "tone">;
+  rect: GraphEntityRect;
+  model: ExecutionGraphLayoutModel;
+  onSelectAttention?: () => void;
+  onToggle: (id: string) => void;
+  children?: ReactNode;
+}) {
+  const view = groupCardView(model, rect, attention);
   const style = { left: rect.x, top: rect.y, width: rect.width, height: rect.height } as CSSProperties;
-  const scope = scopeLabel(model.groupScopes.get(rect.id));
 
   return (
     <section
       className="execution-graph__group-card"
       style={style}
       data-group-id={rect.id}
-      data-state={state.tone}
+      data-state={view.tone}
       data-expanded={rect.expanded ? "true" : "false"}
       data-parent-group-id={rect.parent_group_id}
-      title={group?.description || undefined}
+      title={view.description}
     >
       <button className="execution-graph__group-header" type="button" aria-expanded={rect.expanded} onClick={() => onToggle(rect.id)}>
-        <span className="execution-graph__card-title" title={title}>{title}</span>
-        <span className="execution-graph__status">{status}</span>
-        {scope ? <span className="execution-graph__scope execution-graph__group-scope" title={scope}>{scope}</span> : null}
+        <span className="execution-graph__card-title" title={view.title}>{view.title}</span>
+        {view.scope ? <span className="execution-graph__scope execution-graph__group-scope" title={view.scope}>{view.scope}</span> : null}
       </button>
+      <GraphStatus label={view.status} actionLabel={`Open attention for Group ${view.title}`} onClick={attentionAction(attention, onSelectAttention)} />
       <div className="execution-graph__group-contents" aria-hidden={rect.expanded ? undefined : true} inert={rect.expanded ? undefined : true}>
         <div className="execution-graph__group-stack">{children}</div>
       </div>
@@ -171,31 +211,23 @@ function GroupCard({ rect, model, onToggle, children }: { rect: GraphEntityRect;
   );
 }
 function WorkPackageCard({
+  attention,
   rect,
   model,
   now,
+  onSelectAttention,
   onSelectWorkPackage,
   contextPath,
 }: {
+  attention?: Pick<DirectAttention, "label" | "tone">;
   rect: GraphEntityRect;
   model: ExecutionGraphLayoutModel;
   now?: string | number | Date;
+  onSelectAttention?: () => void;
   onSelectWorkPackage?: (workPackageId: string) => void;
   contextPath?: ContextPathPart[];
 }) {
-  const ref = model.refs.get(rect.id) ?? { id: rect.id };
-  const signal = model.signals.get(rect.id);
-  const state = cardState(ref, signal, now);
-  const title = ref.title?.trim() || ref.id;
-  const progress = dependencyProgress(model, rect.key);
-  const reason = firstText([(signal?.operational_state ?? ref.operational_state)?.reason]);
-  const dependencyLabel = accessibleDependencyLabel(model, rect.key, signal, progress.satisfied, progress.required);
-  const groupLabel = groupAncestryLabel(model, ref.group_id);
-  const cardContextPath = contextPath ? contextPathValue([...contextPath, ...groupAncestryPath(model, ref.group_id)]) : undefined;
-  const scope = scopeLabel(model.packageScopes.get(ref.id));
-  const pr = signal?.pr_signal;
-  const prLabel = prBadgeLabel(pr);
-  const accessibleLabel = sentenceLabel([title, groupLabel, scope, state.label, reason, prLabel, dependencyLabel]);
+  const view = workPackageCardView(model, rect, now, attention, contextPath);
 
   return (
     <article
@@ -205,22 +237,94 @@ function WorkPackageCard({
       data-depth={rect.depth}
       data-layout-row={rect.row}
       data-layout-order={rect.order}
-      data-state={state.tone}
+      data-state={view.state.tone}
       data-parent-group-id={rect.parent_group_id}
-      data-v3-context-path={cardContextPath}
+      data-v3-context-path={view.contextPath}
     >
       <span className="execution-graph__title-stack">
-        <h3 className="execution-graph__card-title" title={title}>{title}</h3>
-        {scope ? <span className="execution-graph__scope" title={scope}>{scope}</span> : null}
+        <h3 className="execution-graph__card-title" title={view.title}>{view.title}</h3>
+        {view.scope ? <span className="execution-graph__scope" title={view.scope}>{view.scope}</span> : null}
       </span>
-      <span className="execution-graph__status">{state.label}</span>
+      <GraphStatus label={view.state.label} actionLabel={`Open attention for WorkPackage ${view.title}`} onClick={attentionAction(attention, onSelectAttention)} />
       {onSelectWorkPackage ? (
-        <button className="execution-graph__card-action" type="button" aria-label={accessibleLabel} onClick={() => onSelectWorkPackage(rect.id)} />
+        <button className="execution-graph__card-action" type="button" aria-label={view.accessibleLabel} onClick={() => onSelectWorkPackage(rect.id)} />
       ) : null}
-      {prLabel ? <PullRequestBadge signal={pr} label={prLabel} /> : null}
-      <span className="sr-only">{groupLabel}</span>
-      <span className="sr-only">{dependencyLabel}</span>
+      {view.prLabel ? <PullRequestBadge signal={view.pr} label={view.prLabel} /> : null}
+      <span className="sr-only">{view.groupLabel}</span>
+      <span className="sr-only">{view.dependencyLabel}</span>
     </article>
+  );
+}
+
+function groupCardView(model: ExecutionGraphLayoutModel, rect: GraphEntityRect, attention?: Pick<DirectAttention, "label" | "tone">) {
+  const group = model.groups.get(rect.id);
+  const state = model.groupStates.get(rect.id) ?? { label: "Planned", tone: "neutral", completed: 0, total: 0 };
+  const statusLabel = attention?.label ?? state.label;
+  return {
+    description: group?.description || undefined,
+    scope: scopeLabel(model.groupScopes.get(rect.id)),
+    status: state.total ? `${statusLabel} \u00b7 ${state.completed}/${state.total}` : statusLabel,
+    title: group?.title?.trim() || "Untitled group",
+    tone: attention?.tone ?? state.tone,
+  };
+}
+
+function workPackageCardView(
+  model: ExecutionGraphLayoutModel,
+  rect: GraphEntityRect,
+  now: string | number | Date | undefined,
+  attention: Pick<DirectAttention, "label" | "tone"> | undefined,
+  contextPath: ContextPathPart[] | undefined,
+) {
+  const ref = model.refs.get(rect.id) ?? { id: rect.id };
+  const signal = model.signals.get(rect.id);
+  const state = attentionState(attention, cardState(ref, signal, now));
+  const title = workPackageTitle(ref);
+  const progress = dependencyProgress(model, rect.key);
+  const dependencyLabel = accessibleDependencyLabel(model, rect.key, signal, progress.satisfied, progress.required);
+  const groupLabel = groupAncestryLabel(model, ref.group_id);
+  const scope = scopeLabel(model.packageScopes.get(ref.id));
+  const pr = signal?.pr_signal;
+  const prLabel = prBadgeLabel(pr);
+  const reason = workPackageReason(ref, signal);
+  return {
+    accessibleLabel: sentenceLabel([title, groupLabel, scope, state.label, reason, prLabel, dependencyLabel]),
+    contextPath: workPackageContextPath(model, ref, contextPath),
+    dependencyLabel,
+    groupLabel,
+    pr,
+    prLabel,
+    scope,
+    state,
+    title,
+  };
+}
+
+function attentionAction(attention: Pick<DirectAttention, "label" | "tone"> | undefined, onClick?: () => void) {
+  return attention ? onClick : undefined;
+}
+
+function attentionState<T extends { label: string; tone: string }>(attention: Pick<DirectAttention, "label" | "tone"> | undefined, state: T) {
+  return attention ?? state;
+}
+
+function workPackageTitle(ref: ExecutionGraphWorkPackageRef) {
+  return ref.title?.trim() || ref.id;
+}
+
+function workPackageReason(ref: ExecutionGraphWorkPackageRef, signal?: ExecutionGraphWorkPackageSignals) {
+  return firstText([(signal?.operational_state ?? ref.operational_state)?.reason]);
+}
+
+function workPackageContextPath(model: ExecutionGraphLayoutModel, ref: ExecutionGraphWorkPackageRef, contextPath?: ContextPathPart[]) {
+  return contextPath ? contextPathValue([...contextPath, ...groupAncestryPath(model, ref.group_id)]) : undefined;
+}
+
+function GraphStatus({ label, actionLabel, onClick }: { label: string; actionLabel: string; onClick?: () => void }) {
+  return onClick ? (
+    <button type="button" className="execution-graph__status execution-graph__status--action" aria-label={actionLabel} onClick={onClick}>{label}</button>
+  ) : (
+    <span className="execution-graph__status">{label}</span>
   );
 }
 

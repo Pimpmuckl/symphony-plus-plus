@@ -10,7 +10,12 @@ export function focusAttachOffset(rects: FocusEjectRect[], selectedId: string) {
 }
 
 export function focusTravelScale(expandedHeight: number, viewportHeight: number) {
-  return Math.min(1, Math.max(0.35, expandedHeight / Math.max(1, viewportHeight * 0.8)));
+  return expandedHeight >= viewportHeight * 0.8 ? 1 : 0;
+}
+
+export function focusCameraTop(scrollTop: number, rowTop: number, focusedHeight: number, viewportHeight: number, viewportTop: number) {
+  const fits = rowTop >= viewportTop && rowTop + focusedHeight <= viewportHeight;
+  return fits ? scrollTop : Math.max(0, scrollTop + rowTop - viewportTop);
 }
 
 export function focusSectionOffset(sectionTop: number, viewportHeight: number, travelScale = 1) {
@@ -38,7 +43,7 @@ export function focusSpaceOffsets(rects: FocusEjectRect[], selectedId: string, v
       const y = Math.round(bottomY * travelScale);
       return [rect.id, { opacity: y > 0 ? 0 : 1, x: 0, y }];
     }
-    const horizontalExit = rect.left + rect.width / 2 < selectedCenter ? leftX : rightX;
-    return [rect.id, { opacity: 0, x: Math.round(horizontalExit * travelScale), y: 0 }];
+    const x = Math.round((rect.left + rect.width / 2 < selectedCenter ? leftX : rightX) * travelScale);
+    return [rect.id, { opacity: x === 0 ? 1 : 0, x, y: 0 }];
   }));
 }

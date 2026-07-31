@@ -29,6 +29,8 @@ if (-not $Release -and -not (Test-Path -LiteralPath $sourceEntrypoint)) {
 }
 $client = [System.Net.Http.HttpClient]::new()
 $client.Timeout = [TimeSpan]::FromSeconds(2)
+$initializeClient = [System.Net.Http.HttpClient]::new()
+$initializeClient.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
 
 function Get-FreePort {
   $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -54,7 +56,31 @@ function Invoke-Readiness([string]$Url) {
   return $watch.Elapsed.TotalMilliseconds
 }
 
+function Invoke-Initialize([string]$Url) {
+  $body = @{
+    jsonrpc = "2.0"
+    id = "sympp-startup-init"
+    method = "initialize"
+    params = @{
+      protocolVersion = "2025-03-26"
+      clientInfo = @{ name = "sympp-startup-benchmark"; version = "0.1.0" }
+      capabilities = @{}
+    }
+  } | ConvertTo-Json -Depth 4 -Compress
+  $content = [Net.Http.StringContent]::new($body, [Text.Encoding]::UTF8, "application/json")
+  try {
+    $response = $initializeClient.PostAsync($Url, $content).GetAwaiter().GetResult()
+    $payload = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json
+  } finally {
+    $content.Dispose()
+  }
+  if (-not $response.IsSuccessStatusCode -or $payload.result.serverInfo.name -ne "symphony-plus-plus") {
+    throw "MCP initialize did not return a valid Symphony++ response."
+  }
+}
+
 function Set-ReleaseEnvironment([Diagnostics.ProcessStartInfo]$StartInfo, [string]$RunRoot, [int]$Port) {
+  [void]$StartInfo.Environment.Remove("SYMPP_DATABASE")
   $StartInfo.Environment["SYMPP_RUNTIME_ARTIFACT"] = "1"
   $StartInfo.Environment["SYMPP_RUNTIME_ARTIFACT_ACKNOWLEDGED"] = "1"
   $StartInfo.Environment["SYMPP_LOGS_ROOT"] = Join-Path $RunRoot "logs"
@@ -123,6 +149,7 @@ try {
         }
       }
 
+      Invoke-Initialize "http://127.0.0.1:$port/mcp"
       foreach ($probe in 1..$WarmSamples) { $warm.Add((Invoke-Readiness $url)) }
     } finally {
       if (-not $process.HasExited) {
@@ -150,4 +177,5 @@ try {
   } | ConvertTo-Json -Depth 4
 } finally {
   $client.Dispose()
+  $initializeClient.Dispose()
 }

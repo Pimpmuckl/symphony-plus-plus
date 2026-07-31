@@ -6,7 +6,7 @@ import type { WorkPackageCard, WorkRequestDetail, WorkRequestPackage } from "@/t
 
 import { FocusBoard } from "./focus-board";
 import { buildFocusBoardItems } from "./focus-board-data";
-import { focusAttachOffset, focusSectionOffset, focusSpaceOffsets, focusTravelScale } from "./focus-board-motion";
+import { focusAttachOffset, focusCameraTop, focusSectionOffset, focusSpaceOffsets, focusTravelScale } from "./focus-board-motion";
 
 describe("focus board", () => {
   it("uses existing row slack before reserving expanded board space", () => {
@@ -39,19 +39,25 @@ describe("focus board", () => {
   });
 
   it("keeps small boards from over-ejecting surrounding requests", () => {
-    expect(focusTravelScale(120, 800)).toBe(0.35);
+    expect(focusTravelScale(120, 800)).toBe(0);
     expect(focusTravelScale(640, 800)).toBe(1);
 
     const offsets = focusSpaceOffsets([
       { id: "selected", left: 400, top: 300, width: 200, height: 100 },
       { id: "right", left: 700, top: 300, width: 200, height: 100 },
       { id: "offscreen", left: 400, top: 900, width: 200, height: 100 },
-    ], "selected", { width: 1200, height: 800 }, 40, 0.35);
+    ], "selected", { width: 1200, height: 800 }, 40, 0);
 
-    expect(offsets.get("right")?.x).toBe(192);
+    expect(offsets.get("right")).toEqual({ opacity: 1, x: 0, y: 0 });
     expect(offsets.get("offscreen")).toEqual({ opacity: 1, x: 0, y: 0 });
-    expect(focusSectionOffset(600, 800, 0.35)).toBe(87);
+    expect(focusSectionOffset(600, 800, 0)).toBe(0);
     expect(focusSectionOffset(900, 800)).toBe(0);
+  });
+
+  it("moves the camera only when the focused board does not fit in the viewport", () => {
+    expect(focusCameraTop(252, 626, 228, 1_300, 88)).toBe(252);
+    expect(focusCameraTop(252, 626, 800, 800, 88)).toBe(790);
+    expect(focusCameraTop(252, 40, 228, 800, 88)).toBe(204);
   });
 
   it("assigns each request to one operational category and keeps only recently finished work", () => {
@@ -113,6 +119,7 @@ describe("focus board", () => {
         work_request_id: "wr-edge",
         work_package_id: "wp-edge",
       }],
+      onSelectAttention: () => undefined,
       onSelectGuidance: () => undefined,
       onSelectCard: () => undefined,
       primaryBranchByRepo: new Map(),
@@ -129,7 +136,8 @@ describe("focus board", () => {
       details: [
         request("wr-human", "Needs a decision", [slice("human", "ready_for_clarification")], { openQuestions: 1, status: "clarifying" }),
         request("wr-active", "Shipping", [slice("active", "implementing")]),
-        request("wr-next", "Ready work", [slice("ready", "approved")]),
+        request("wr-next", "Ready work", [slice("ready", "approved")], { repo: "fixture/secondary" }),
+        request("wr-next-primary", "Second ready work", [slice("second-ready", "approved")]),
         request("wr-waiting", "Dependency wait", [slice("waiting", "blocked", {
           dependency: { satisfied: 1, required: 2, active: 0, blocked: 1, unmet_work_package_ids: ["upstream"], inputs: [] },
         })]),
@@ -138,6 +146,7 @@ describe("focus board", () => {
       now: "2026-07-21T10:00:00Z",
       packages: [],
       activeBlockingEdges: [],
+      onSelectAttention: () => undefined,
       onSelectGuidance: () => undefined,
       onSelectCard: () => undefined,
       primaryBranchByRepo: new Map(),
@@ -163,6 +172,11 @@ describe("focus board", () => {
     expect(laneHtml("attention", "active")).toContain(frontierTitle("human"));
     expect(laneHtml("active", "next")).toContain(frontierTitle("active"));
     expect(laneHtml("next", "recent")).toContain(frontierTitle("ready"));
+    expect(laneHtml("next", "recent")).toContain(frontierTitle("second-ready"));
+    expect(laneHtml("next", "recent")).toContain('data-focus-repo-key="fixture/repo"');
+    expect(laneHtml("next", "recent")).toContain('data-focus-repo-key="fixture/secondary"');
+    expect(laneHtml("next", "recent")).toContain("fixture/secondary");
+    expect(laneHtml("next", "recent")).not.toContain("1 request");
     expect(laneHtml("recent", "waiting")).toContain(frontierTitle("merged"));
     expect(laneHtml("waiting")).toContain(frontierTitle("waiting"));
     expect(laneHtml("waiting")).toContain("Waiting 1/2");
@@ -176,6 +190,7 @@ describe("focus board", () => {
       ])],
       packages: [],
       activeBlockingEdges: [],
+      onSelectAttention: () => undefined,
       onSelectGuidance: () => undefined,
       onSelectCard: () => undefined,
       primaryBranchByRepo: new Map(),
@@ -198,14 +213,14 @@ function request(
   id: string,
   title: string,
   workPackages: WorkRequestPackage[],
-  options: { completedAt?: string; openQuestions?: number; status?: string } = {},
+  options: { completedAt?: string; openQuestions?: number; repo?: string; status?: string } = {},
 ): WorkRequestDetail {
   const groupIds = [...new Set(workPackages.map((item) => item.product_tree_node_id).filter((value): value is string => Boolean(value)))];
   return {
     work_request: {
       id,
       title,
-      repo: "fixture/repo",
+      repo: options.repo ?? "fixture/repo",
       status: options.status ?? "sliced",
       completed_at: options.completedAt,
       open_question_count: options.openQuestions,

@@ -39,6 +39,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
       "merged_and_archive" -> {:ok, :merged_and_archive}
       "closed_and_archive" -> {:ok, :closed_and_archive}
       "completed_no_pr" -> {:ok, :completed_no_pr}
+      "unblock" -> {:ok, :unblock}
       _status -> {:error, :invalid_status}
     end
   end
@@ -82,6 +83,10 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
            }) do
       WorkPackageRepository.get(repo, work_package_id)
     end
+  end
+
+  def change_work_package_for_local_operator(repo, work_package_id, :unblock, _params) do
+    WorkPackageRepository.update_status(repo, work_package_id, "blocked", "ready_for_worker")
   end
 
   defp mark_work_package_merged_and_refresh_for_local_operator(repo, work_package_id) do

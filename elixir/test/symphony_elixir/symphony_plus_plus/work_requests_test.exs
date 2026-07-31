@@ -34,6 +34,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     def rollback(reason), do: Repo.rollback(reason)
     def transaction(fun), do: Repo.transaction(fun)
     def update(_changeset), do: raise(%Exqlite.Error{message: "database is locked"})
+    def update_all(query, updates), do: Repo.update_all(query, updates)
   end
 
   defmodule ReopeningArchiveRepo do
