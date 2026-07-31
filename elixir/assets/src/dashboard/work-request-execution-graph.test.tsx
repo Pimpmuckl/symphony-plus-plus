@@ -201,6 +201,36 @@ describe("WorkRequestExecutionGraph", () => {
     ))).toBe(true);
   });
 
+  it("routes cross-Group dependencies around horizontal sibling cards", () => {
+    const fixture: WorkRequestExecutionGraphModel = {
+      groups: [
+        { id: "source", title: "Source", work_package_ids: ["one", "two"] },
+        { id: "target", title: "Target", work_package_ids: ["three", "four"] },
+      ],
+      work_packages: [
+        { id: "one", group_id: "source", title: "One" },
+        { id: "two", group_id: "source", title: "Two" },
+        { id: "three", group_id: "target", title: "Three" },
+        { id: "four", group_id: "target", title: "Four" },
+      ],
+      dependency_intents: [
+        { id: "one-two", prerequisite: { kind: "work_package", id: "one" }, dependent: { kind: "work_package", id: "two" } },
+        { id: "three-four", prerequisite: { kind: "work_package", id: "three" }, dependent: { kind: "work_package", id: "four" } },
+        { id: "one-four", prerequisite: { kind: "work_package", id: "one" }, dependent: { kind: "work_package", id: "four" } },
+      ],
+    };
+    const model = buildExecutionGraphLayout(fixture, "desktop");
+    const route = graphWireRoutes(model, "desktop").paths.find((path) => path.edge === "work_package:one:work_package:four");
+    const source = rect(model, "group:source");
+    const siblings = [rect(model, "work_package:two"), rect(model, "work_package:three")];
+    const segments = routeSegments(route?.path ?? "");
+
+    expect(rect(model, "work_package:one").x).toBeLessThan(rect(model, "work_package:two").x);
+    expect(rect(model, "work_package:three").x).toBeLessThan(rect(model, "work_package:four").x);
+    expect(segments.some((segment) => siblings.some((item) => segmentIntersectsInterior(segment, item)))).toBe(false);
+    expect(segments.some((segment) => segment.y1 === segment.y2 && segment.x1 < source.x + source.width && segment.x2 > source.x + source.width)).toBe(true);
+  });
+
   it("renders one static N/M gate for fan-in and leaves only active paths dashed by state", () => {
     const html = render();
 
@@ -289,7 +319,7 @@ describe("WorkRequestExecutionGraph", () => {
     expect(routeConflicts(routes.paths)).toEqual([]);
   });
 
-  it("routes a deep expanded-child dependency below the current roots and into the target from the leading lane", () => {
+  it("routes a deep expanded-child dependency below the current roots through sibling-free gutters", () => {
     const model = buildExecutionGraphLayout(nestedCorridorFixture, "desktop", new Set(["source", "target"]));
     const child = rect(model, "work_package:bottom");
     const source = rect(model, "group:source");
@@ -300,10 +330,10 @@ describe("WorkRequestExecutionGraph", () => {
     const currentRootsBottom = Math.max(source.y + source.height, middle.y + middle.height);
     const targetApproach = segments.at(-2);
 
-    expect(route?.path).toMatch(new RegExp(`^M ${child.x + child.width} [\\d.]+ H [\\d.]+ V [\\d.]+ H [\\d.]+ V [\\d.]+ H ${target.x}$`));
+    expect(route?.path).toMatch(new RegExp(`^M ${child.x + child.width} [\\d.]+ H .* H ${target.x}$`));
     expect(route?.path).not.toContain(`M ${child.x + child.width / 2} ${child.y} V`);
     expect(segments.some((segment) => segment.y1 === segment.y2 && segment.y1 - currentRootsBottom >= 16)).toBe(true);
-    expect(targetApproach?.x1).toBe(middle.x + middle.width + 8);
+    expect(targetApproach?.x1).toBe(target.x - 8);
     expect(targetApproach?.x2).toBe(targetApproach?.x1);
     expect(unrelatedCardIntersections(route!, model)).toEqual([]);
   });

@@ -87,6 +87,17 @@ describe("focus board interactions", () => {
     const visibleMatchingGroup = board.locator('[data-focus-lane="attention"] [data-focus-repo-key="fixture/secondary"]');
     expect(await visibleMatchingGroup.getAttribute("aria-hidden")).toBeNull();
     expect(await visibleMatchingGroup.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+    const graphViewport = board.locator(".execution-graph__viewport--desktop");
+    await graphViewport.evaluate((element) => { element.style.width = "120px"; });
+    const graphBox = (await graphViewport.boundingBox())!;
+    expect(await graphViewport.evaluate((element) => getComputedStyle(element).cursor)).toBe("grab");
+    await page.mouse.move(graphBox.x + 8, graphBox.y + 8);
+    await page.mouse.down();
+    expect(await graphViewport.getAttribute("data-panning")).toBe("true");
+    await page.mouse.move(graphBox.x - 64, graphBox.y + 8);
+    await page.mouse.up();
+    expect(await graphViewport.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+    expect(await graphViewport.getAttribute("data-panning")).toBeNull();
     await board.getByRole("button", { name: "Collapse Interaction request" }).click();
     await waitForCollapsed(page);
 
