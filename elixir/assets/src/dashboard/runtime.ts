@@ -150,7 +150,7 @@ export type CommentStats = { comment_count: number; open_comment_count: number }
 
 export type WorkRequestMutation = (workRequestId: string) => Promise<void>;
 
-export type WorkRequestStateMutation = (workRequestId: string, nextState: "completed") => Promise<void>;
+export type WorkRequestStateMutation = (workRequestId: string, nextState: "completed" | "ready_for_slicing") => Promise<void>;
 
 export type WorkPackageStateAction = "merged" | "merged_and_archive" | "closed_and_archive" | "completed_no_pr" | "unblock";
 
@@ -213,6 +213,7 @@ export type ScopedHandoffCopy = {
 
 export type DashboardUiState = {
   workspaceTab?: WorkspaceTab;
+  useFocusBoard?: boolean;
   topPanel?: TopPanelKey | null;
   repoWorkstreams?: Record<string, boolean>;
   focusBoardSections?: Record<string, boolean>;

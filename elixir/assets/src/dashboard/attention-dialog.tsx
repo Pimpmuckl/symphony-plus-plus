@@ -12,7 +12,7 @@ import type { GuidanceAnswerSubmission, GuidanceItem, WorkRequestDetail } from "
 import { AttentionLocationBar } from "./attention-location";
 import { AttentionPreviewCard } from "./attention-preview-card";
 import { BlockerDetailContent } from "./package-detail";
-import type { WorkPackageBlockerClearMutation, WorkPackageStateMutation } from "./runtime";
+import type { WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestStateMutation } from "./runtime";
 import {
   attentionItemTitle,
   attentionLocationForItem,
@@ -24,6 +24,7 @@ import {
 export function AttentionDialog({
   canMutateOperatorActions,
   onChangeWorkPackageState,
+  onChangeWorkRequestState,
   onClearWorkPackageBlocker,
   onCloseAutoFocus,
   onJumpToAttention,
@@ -34,6 +35,7 @@ export function AttentionDialog({
 }: {
   canMutateOperatorActions: boolean;
   onChangeWorkPackageState: WorkPackageStateMutation;
+  onChangeWorkRequestState: WorkRequestStateMutation;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
   onCloseAutoFocus?: ComponentProps<typeof DialogContent>["onCloseAutoFocus"];
   onJumpToAttention: (destination: AttentionJumpDestination) => void;
@@ -50,6 +52,7 @@ export function AttentionDialog({
             key={target.items.map((item) => item.key).join("|")}
             canMutateOperatorActions={canMutateOperatorActions}
             onChangeWorkPackageState={onChangeWorkPackageState}
+            onChangeWorkRequestState={onChangeWorkRequestState}
             onClearWorkPackageBlocker={onClearWorkPackageBlocker}
             onJumpToAttention={onJumpToAttention}
             onOpenChange={onOpenChange}
@@ -66,6 +69,7 @@ export function AttentionDialog({
 function AttentionDialogBody({
   canMutateOperatorActions,
   onChangeWorkPackageState,
+  onChangeWorkRequestState,
   onClearWorkPackageBlocker,
   onJumpToAttention,
   onOpenChange,
@@ -75,6 +79,7 @@ function AttentionDialogBody({
 }: {
   canMutateOperatorActions: boolean;
   onChangeWorkPackageState: WorkPackageStateMutation;
+  onChangeWorkRequestState: WorkRequestStateMutation;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
   onJumpToAttention: (destination: AttentionJumpDestination) => void;
   onOpenChange: (open: boolean) => void;
@@ -120,6 +125,7 @@ function AttentionDialogBody({
         canMutateOperatorActions={canMutateOperatorActions}
         item={selected}
         onChangeWorkPackageState={onChangeWorkPackageState}
+        onChangeWorkRequestState={onChangeWorkRequestState}
         onClearWorkPackageBlocker={onClearWorkPackageBlocker}
         onJumpToAttention={onJumpToAttention}
         onOpenChange={onOpenChange}
@@ -134,6 +140,7 @@ function AttentionItemBody({
   canMutateOperatorActions,
   item,
   onChangeWorkPackageState,
+  onChangeWorkRequestState,
   onClearWorkPackageBlocker,
   onJumpToAttention,
   onOpenChange,
@@ -143,6 +150,7 @@ function AttentionItemBody({
   canMutateOperatorActions: boolean;
   item: AttentionItem;
   onChangeWorkPackageState: WorkPackageStateMutation;
+  onChangeWorkRequestState: WorkRequestStateMutation;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
   onJumpToAttention: (destination: AttentionJumpDestination) => void;
   onOpenChange: (open: boolean) => void;
@@ -185,6 +193,7 @@ function AttentionItemBody({
       item={item}
       location={location}
       onChangeWorkPackageState={onChangeWorkPackageState}
+      onChangeWorkRequestState={onChangeWorkRequestState}
       onJumpToAttention={onJumpToAttention}
     />
   );
@@ -195,25 +204,29 @@ function StatusAttentionBody({
   item,
   location,
   onChangeWorkPackageState,
+  onChangeWorkRequestState,
   onJumpToAttention,
 }: {
   canMutateOperatorActions: boolean;
   item: Extract<AttentionItem, { kind: "status" }>;
   location: ReturnType<typeof attentionLocationForItem>;
   onChangeWorkPackageState: WorkPackageStateMutation;
+  onChangeWorkRequestState: WorkRequestStateMutation;
   onJumpToAttention: (destination: AttentionJumpDestination) => void;
 }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const workPackageId = blockedPackageId(item);
+  const workRequestId = humanInfoWorkRequestId(item);
   const clear = async () => {
-    if (!workPackageId || pending) return;
+    if ((!workPackageId && !workRequestId) || pending) return;
     setPending(true);
     setError(null);
     try {
-      await onChangeWorkPackageState(workPackageId, "unblock");
+      if (workPackageId) await onChangeWorkPackageState(workPackageId, "unblock");
+      else if (workRequestId) await onChangeWorkRequestState(workRequestId, "ready_for_slicing");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Package was not unblocked");
+      setError(caught instanceof Error ? caught.message : "Attention state was not cleared");
       setPending(false);
     }
   };
@@ -233,11 +246,13 @@ function StatusAttentionBody({
         <p className="text-sm text-muted-foreground">
           {workPackageId
             ? "This package is blocked without a separate blocker record."
+            : workRequestId
+              ? "No question is attached. Clear this attention state to continue."
             : item.tone === "blocked"
               ? "No separate blocker record is attached, so there is nothing to clear from this view."
             : "No question is attached yet, so there is nothing to answer from this view."}
         </p>
-        {workPackageId && canMutateOperatorActions ? (
+        {(workPackageId || workRequestId) && canMutateOperatorActions ? (
           <Button type="button" variant="destructive" className="w-fit" disabled={pending} onClick={() => void clear()}>
             {pending ? <Loader2 className="size-4 animate-spin" /> : null}
             Clear
@@ -258,4 +273,10 @@ function blockedPackageId(item: Extract<AttentionItem, { kind: "status" }>) {
   return rawStatuses.includes("blocked")
     ? selection.pkg?.id || selection.slice.work_package_id || selection.slice.id
     : null;
+}
+
+function humanInfoWorkRequestId(item: Extract<AttentionItem, { kind: "status" }>) {
+  if (item.tone !== "guidance" || item.selection.kind !== "request") return null;
+  const request = item.selection.detail.work_request;
+  return (request.operational_state?.key || request.status) === "human_info_needed" ? request.id : null;
 }

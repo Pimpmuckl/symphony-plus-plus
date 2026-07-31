@@ -13,7 +13,7 @@ import { applyDashboardTheme, repoWorkstreamHasWorkItems, shouldShowUpdateSimula
 import { canMutateDashboardComments, canMutateDashboardOperatorActions } from "./detail-utils";
 import { useDashboardOperatorSettings } from "./dashboard-operator-settings";
 import { filterWorkstreamsBySearch } from "./dashboard-search";
-import { activeWorkRequestDetails, packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
+import { dashboardWorkRequestDetails, packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
 import { useDashboardUpdateAnimations } from "./update-animations";
 import { useDashboardSurfaceLoading } from "./dashboard-surface-loading";
 import { createDashboardEventRefresh, useBestEffortGithubSync } from "./dashboard-demand-loading";
@@ -464,7 +464,7 @@ function useDashboardController() {
   const packages = useMemo(() => allPackages(dashboard), [dashboard]);
   const requests = useMemo(() => dashboard?.work_requests?.work_requests ?? [], [dashboard]);
   const archivedRequests = useMemo(() => dashboard?.archived_work_requests?.work_requests ?? [], [dashboard]);
-  const requestDetails = useMemo(() => activeWorkRequestDetails(dashboard), [dashboard]);
+  const requestDetails = useMemo(() => dashboardWorkRequestDetails(dashboard), [dashboard]);
   const linkedWorkPackageIds = useMemo(() => new Set(dashboard?.linked_work_package_ids ?? []), [dashboard]);
   const requestDetailsByRepo = useMemo(() => requestDetailsByRepoKey(requestDetails), [requestDetails]);
   const packageSelections = useMemo(() => packageSelectionIndex(requestDetails, packages), [packages, requestDetails]);

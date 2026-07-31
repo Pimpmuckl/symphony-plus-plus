@@ -1,5 +1,8 @@
 import { uniqueNonEmpty } from "@/lib/collections";
+import { useSyncExternalStore } from "react";
 import { DASHBOARD_DEBUG_ANIMATIONS_KEY, DASHBOARD_THEME_KEY, DASHBOARD_UI_STATE_KEY, DashboardTheme, DashboardUiState, LOCAL_DATE_FORMATTER, TOP_PANEL_ORDER, TopPanelDirection, TopPanelKey, WorkspaceTab, isRecord } from "./runtime";
+
+const focusBoardSettingListeners = new Set<() => void>();
 
 type RepoActivitySummary = {
   requested: number;
@@ -87,6 +90,24 @@ export function readStoredShowWorkstreamContextBar() {
 export function readStoredShowWelcomeToast() {
   const storedValue = readDashboardUiState().showWelcomeToast;
   return typeof storedValue === "boolean" ? storedValue : true;
+}
+
+export function readStoredUseFocusBoard() {
+  return readDashboardUiState().useFocusBoard === true;
+}
+
+export function useStoredUseFocusBoard() {
+  return useSyncExternalStore(subscribeToFocusBoardSetting, readStoredUseFocusBoard, () => false);
+}
+
+export function writeStoredUseFocusBoard(useFocusBoard: boolean) {
+  updateDashboardUiState((state) => ({ ...state, useFocusBoard }));
+  focusBoardSettingListeners.forEach((listener) => listener());
+}
+
+function subscribeToFocusBoardSetting(listener: () => void) {
+  focusBoardSettingListeners.add(listener);
+  return () => focusBoardSettingListeners.delete(listener);
 }
 
 export function readStoredRepoWorkstreamOpen(stateKey: string, fallback: boolean) {

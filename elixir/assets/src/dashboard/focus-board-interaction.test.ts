@@ -5,6 +5,7 @@ import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type ViteDevServer } from "vite";
+import { DASHBOARD_UI_STATE_KEY } from "./runtime";
 
 let browser: Browser;
 let server: ViteDevServer;
@@ -28,6 +29,7 @@ afterAll(async () => {
 describe("focus board interactions", () => {
   it("hydrates priority and deferred data before exercising focus choreography", async () => {
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await enableFocusBoard(page);
     page.setDefaultTimeout(3_000);
     let releaseDeferred!: () => void;
     const deferredReady = new Promise<void>((resolve) => {
@@ -124,6 +126,7 @@ describe("focus board interactions", () => {
 
   it("expands note-only requests in place and pushes following content down", async () => {
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await enableFocusBoard(page);
     page.setDefaultTimeout(5_000);
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.route("**/api/v1/sympp/operator/config*", (route) =>
@@ -159,6 +162,7 @@ describe("focus board interactions", () => {
 
   it("closes the blocker overview and modal when jumping to its WorkPackage", async () => {
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await enableFocusBoard(page);
     page.setDefaultTimeout(5_000);
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.route("**/api/v1/sympp/operator/config*", (route) =>
@@ -210,6 +214,10 @@ describe("focus board interactions", () => {
     await page.close();
   }, 20_000);
 });
+
+async function enableFocusBoard(page: Awaited<ReturnType<Browser["newPage"]>>) {
+  await page.addInitScript((key) => localStorage.setItem(key, JSON.stringify({ useFocusBoard: true })), DASHBOARD_UI_STATE_KEY);
+}
 
 async function waitForPhase(page: Awaited<ReturnType<Browser["newPage"]>>, phase: string) {
   await page.waitForFunction(
