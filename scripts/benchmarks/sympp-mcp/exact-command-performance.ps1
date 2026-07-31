@@ -30,6 +30,7 @@ $clients = [System.Collections.Generic.List[object]]::new()
 $runtimeState = $null
 $backendStartTicks = 0L
 $backendPort = 0
+$probeStartedAt = [DateTime]::UtcNow
 $result = $null
 $probeFailure = $null
 $startupBurst = 10
@@ -609,6 +610,20 @@ exit /b %ERRORLEVEL%
       if (-not [string]::IsNullOrWhiteSpace($runtimeContent)) {
         Write-BenchmarkProgress "Exact runtime before backend cleanup: $((($runtimeContent -replace '\r?\n', ' ').Trim()))"
         try { $failureRuntime = $runtimeContent | ConvertFrom-Json } catch { }
+        if ($failureRuntime -and $failureRuntime.backend) {
+          $failureBackendPid = [int]$failureRuntime.backend.pid
+          $failureBackend = Get-Process -Id $failureBackendPid -ErrorAction SilentlyContinue
+          try { $failureBackendStartTime = if ($failureBackend) { $failureBackend.StartTime.ToUniversalTime() } else { $null } } catch { $failureBackendStartTime = $null }
+          try { $runtimeGeneratedAt = ([DateTimeOffset]::Parse([string]$failureRuntime.generated_at)).UtcDateTime } catch { $runtimeGeneratedAt = $null }
+          if ([int]$failureRuntime.backend.port -eq $backendPort -and
+              $failureBackendPid -in @(Get-ListenerPids $backendPort) -and
+              $failureBackendStartTime -and $runtimeGeneratedAt -and
+              $failureBackendStartTime -ge $probeStartedAt -and $failureBackendStartTime -le $runtimeGeneratedAt) {
+            $runtimeState = $failureRuntime
+            $backendStartTicks = $failureBackendStartTime.Ticks
+            Write-BenchmarkProgress "Exact recovered backend cleanup identity: pid=$failureBackendPid"
+          }
+        }
       }
     }
     $failureListenerPids = if ($backendPort) { @(Get-ListenerPids $backendPort) } else { @() }
