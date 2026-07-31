@@ -220,26 +220,100 @@ function Start-IsolatedLauncher([hashtable]$Environment) {
   return $process
 }
 
+function Stop-CapturedProcessTree($Process, [string]$Label) {
+  $killInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $killInfo.FileName = (Get-Command taskkill.exe -ErrorAction Stop).Source
+  foreach ($arg in @("/PID", [string]$Process.Id, "/T", "/F")) { [void]$killInfo.ArgumentList.Add($arg) }
+  $killInfo.UseShellExecute = $false; $killInfo.CreateNoWindow = $true
+  $killInfo.RedirectStandardOutput = $true; $killInfo.RedirectStandardError = $true
+  $killer = [System.Diagnostics.Process]::new(); $killer.StartInfo = $killInfo
+  $stdoutTask = $null; $stderrTask = $null
+  try {
+    if (-not $killer.Start()) { throw "$Label timeout cleanup failed to start" }
+    $stdoutTask = $killer.StandardOutput.ReadToEndAsync(); $stderrTask = $killer.StandardError.ReadToEndAsync()
+    if (-not $killer.WaitForExit(15000)) {
+      try { $killer.Kill() } catch [System.InvalidOperationException] { }
+      [void]$killer.WaitForExit(5000)
+    }
+  } finally {
+    if ($stdoutTask) { [void]$stdoutTask.GetAwaiter().GetResult() }
+    if ($stderrTask) { [void]$stderrTask.GetAwaiter().GetResult() }
+    $killer.Dispose()
+  }
+  if (-not $Process.WaitForExit(15000)) { throw "$Label timed out and its process tree did not exit" }
+}
+
+function Read-AvailableProcessOutput([object[]]$Streams) {
+  foreach ($stream in $Streams) {
+    $chunksRead = 0
+    while ($chunksRead -lt 1024 -and $null -ne $stream.task -and $stream.task.IsCompleted) {
+      $count = $stream.task.GetAwaiter().GetResult()
+      if ($count -eq 0) { $stream.task = $null }
+      else {
+        [void]$stream.output.Append($stream.buffer, 0, $count)
+        $stream.task = $stream.reader.ReadAsync($stream.buffer, 0, $stream.buffer.Length)
+        $chunksRead++
+      }
+    }
+  }
+}
+
 function Invoke-CapturedProcess($Info, [int]$TimeoutMs, [string]$Label) {
   $Info.UseShellExecute = $false; $Info.CreateNoWindow = $true
   $Info.RedirectStandardOutput = $true; $Info.RedirectStandardError = $true
   $process = [System.Diagnostics.Process]::new(); $process.StartInfo = $Info
   if (-not $process.Start()) { throw "$Label failed to start" }
-  $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
-  if (-not $process.WaitForExit($TimeoutMs)) { $process.Kill($true); throw "$Label timed out" }
-  $stdout = $stdoutTask.GetAwaiter().GetResult(); $stderr = $stderrTask.GetAwaiter().GetResult()
-  $result = [pscustomobject]@{ stdout = $stdout; stderr = $stderr; exit_code = $process.ExitCode }
+  $stdoutBuffer = [char[]]::new(4096); $stderrBuffer = [char[]]::new(4096)
+  $streams = @(
+    [pscustomobject]@{ reader = $process.StandardOutput; buffer = $stdoutBuffer; task = $process.StandardOutput.ReadAsync($stdoutBuffer, 0, $stdoutBuffer.Length); output = [System.Text.StringBuilder]::new() }
+    [pscustomobject]@{ reader = $process.StandardError; buffer = $stderrBuffer; task = $process.StandardError.ReadAsync($stderrBuffer, 0, $stderrBuffer.Length); output = [System.Text.StringBuilder]::new() }
+  )
+  $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+  while (-not $process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+    Read-AvailableProcessOutput $streams
+    Start-Sleep -Milliseconds 10
+  }
+  $timedOut = -not $process.HasExited
+  if ($timedOut) {
+    try { Stop-CapturedProcessTree $process $Label } catch { $process.Dispose(); throw }
+  }
+  $drainDeadline = [DateTime]::UtcNow.AddSeconds(2)
+  $maximumDrainDeadline = [DateTime]::UtcNow.AddSeconds(30)
+  do {
+    $capturedLength = $streams[0].output.Length + $streams[1].output.Length
+    Read-AvailableProcessOutput $streams
+    if (($streams[0].output.Length + $streams[1].output.Length) -gt $capturedLength) {
+      $extendedDeadline = [DateTime]::UtcNow.AddSeconds(2)
+      $drainDeadline = if ($extendedDeadline -lt $maximumDrainDeadline) { $extendedDeadline } else { $maximumDrainDeadline }
+    }
+    if (@($streams | Where-Object { $null -ne $_.task }).Count -eq 0) { break }
+    Start-Sleep -Milliseconds 10
+  } while ([DateTime]::UtcNow -lt $drainDeadline -and [DateTime]::UtcNow -lt $maximumDrainDeadline)
+  if ($timedOut) {
+    $timeoutStdout = $streams[0].output.ToString()
+    $timeoutStderr = $streams[1].output.ToString()
+    if ($timeoutStdout.Length -gt 2000) { $timeoutStdout = $timeoutStdout.Substring($timeoutStdout.Length - 2000) }
+    if ($timeoutStderr.Length -gt 2000) { $timeoutStderr = $timeoutStderr.Substring($timeoutStderr.Length - 2000) }
+    $process.Dispose()
+    throw "$Label timed out. stdout_tail=$timeoutStdout stderr_tail=$timeoutStderr"
+  }
+  $result = [pscustomobject]@{
+    stdout = $streams[0].output.ToString()
+    stderr = $streams[1].output.ToString()
+    exit_code = $process.ExitCode
+  }
   $process.Dispose()
   return $result
 }
 
 function Invoke-ExactCommandProbe([string]$Mode, [string]$Cohorts, [switch]$CheckMutation) {
+  $artifactPreparationTimeoutSec = 600
   $info = [System.Diagnostics.ProcessStartInfo]::new()
   $info.FileName = (Get-Command pwsh -ErrorAction Stop).Source
-  foreach ($arg in @("-NoProfile", "-File", $exactProbe, "-LauncherMode", $Mode, "-Cohorts", $Cohorts, "-Repeats", "1")) { [void]$info.ArgumentList.Add($arg) }
+  foreach ($arg in @("-NoProfile", "-File", $exactProbe, "-LauncherMode", $Mode, "-Cohorts", $Cohorts, "-Repeats", "1", "-ArtifactPreparationTimeoutSec", [string]$artifactPreparationTimeoutSec)) { [void]$info.ArgumentList.Add($arg) }
   if (-not $CheckMutation) { [void]$info.ArgumentList.Add("-SkipMutationCheck") }
   $info.WorkingDirectory = $repoRoot
-  $run = Invoke-CapturedProcess $info 900000 "exact shipped command ($Mode)"
+  $run = Invoke-CapturedProcess $info ((900 + $artifactPreparationTimeoutSec) * 1000) "exact shipped command ($Mode)"
   if ($run.exit_code -ne 0) { throw "exact shipped command ($Mode) failed: $(([string]$run.stderr).Trim()) $(([string]$run.stdout).Trim())" }
   return $run.stdout | ConvertFrom-Json
 }
@@ -429,7 +503,9 @@ try {
   if ($directRun.exit_code -ne 0) { throw "direct HTTP probe failed: $(([string]$directRun.stdout).Trim()) $(([string]$directRun.stderr).Trim())" }
   $direct = ConvertFrom-DirectProbe @($directRun.stdout -split "`r?`n") $directWatch.Elapsed.TotalMilliseconds
   [Console]::Error.WriteLine("Measuring the shipped command with Node present and missing...")
+  [Console]::Error.WriteLine("Measuring shipped command with Node missing...")
   $exactFallback = Invoke-ExactCommandProbe "NodeMissing" "1,10"
+  [Console]::Error.WriteLine("Measuring shipped command with Node present...")
   $exactNode = Invoke-ExactCommandProbe "NodePresent" "1,10,100" -CheckMutation
   [Console]::Error.WriteLine("Measuring MCP profiles and representative payloads...")
   $payloadOutput = Invoke-IsolatedMix @("run", "--no-start", $payloadProbe) $environment
@@ -448,42 +524,97 @@ try {
   $responseList = $responseListJson[0] | ConvertFrom-Json
   $revision = [string](& git -C $repoRoot rev-parse HEAD); $metrics = [pscustomobject]@{ revision = $revision.Trim(); cold = $cold; warm = $warm; direct = $direct; exact = [pscustomobject]@{ node = $exactNode; fallback = $exactFallback }; profiles = $payloads.profiles; results = $payloads.results; state_hot_path = $stateHotPath; response_list = $responseList }
 } catch {
-  $failure = $_.Exception.Message
-  $backendLog = @(Get-ChildItem (Join-Path $tempRoot "logs") -Filter "backend-*.err.log" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -Last 1); if ($backendLog) { $detail = ([string](Get-Content $backendLog.FullName -Raw)).Trim(); if ($detail.Length -gt 2000) { $detail = $detail.Substring($detail.Length - 2000) }; $failure += "`nbackend stderr: $detail" }
+  $caught = $_
+  $failure = @(
+    [string]$caught.Exception.Message
+    [string]$caught.ScriptStackTrace
+    [string]$caught.InvocationInfo.PositionMessage
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  $failure = $failure -join [Environment]::NewLine
+  if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_PERFORMANCE_PROGRESS_FILE)) {
+    [System.IO.File]::AppendAllText(
+      $env:SYMPP_PERFORMANCE_PROGRESS_FILE,
+      "$([DateTime]::UtcNow.ToString('O')) Performance gate captured failure: $(($failure -replace '\r?\n', ' ').Trim())$([Environment]::NewLine)"
+    )
+  }
+  $backendLog = @(Get-ChildItem (Join-Path $tempRoot "logs") -Filter "backend-*.err.log" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -Last 1); if ($backendLog) { $rawDetail = Get-Content $backendLog.FullName -Raw; $detail = if ($null -eq $rawDetail) { "" } else { ([string]$rawDetail).Trim() }; if ($detail.Length -gt 2000) { $detail = $detail.Substring($detail.Length - 2000) }; $failure += "`nbackend stderr: $detail" }
 } finally {
-  if ($launcherProcess) {
-    try { $launcherProcess.StandardInput.Close() } catch { }
-    if (-not $launcherProcess.WaitForExit(60000)) { $launcherProcess.Kill($true); [void]$launcherProcess.WaitForExit(15000) }
-    $launcherProcess.Dispose()
-  }
-  if ($tempRoot) {
-    $leaseDir = Join-Path $tempRoot "state/codex-plugin-leases"
-    $leaseDeadline = [DateTime]::UtcNow.AddSeconds(10)
-    do {
-      $cleanup.cold_leases_after_close = @(Get-ChildItem $leaseDir -Filter "bridge-*.json" -File -ErrorAction SilentlyContinue).Count
-      if ($cleanup.cold_leases_after_close -eq 0) { break }
-      Start-Sleep -Milliseconds 100
-    } while ([DateTime]::UtcNow -lt $leaseDeadline)
-  }
-  if ($runtime -and $backendStartTicks) {
-    $backend = Get-Process -Id ([int]$runtime.backend.pid) -ErrorAction SilentlyContinue
-    if ($backend) {
-      if ($backend.StartTime.ToUniversalTime().Ticks -ne $backendStartTicks -or [int]$runtime.backend.port -ne $backendPort) { $failure = "cleanup refused changed backend identity" }
-      else { Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue }
+  try {
+    if ($launcherProcess) {
+      try { $launcherProcess.StandardInput.Close() } catch { }
+      if (-not $launcherProcess.WaitForExit(60000)) { $launcherProcess.Kill($true); [void]$launcherProcess.WaitForExit(15000) }
+      $launcherProcess.Dispose()
     }
+    if ($tempRoot) {
+      $leaseDir = Join-Path $tempRoot "state/codex-plugin-leases"
+      $leaseDeadline = [DateTime]::UtcNow.AddSeconds(10)
+      do {
+        $cleanup.cold_leases_after_close = @(Get-ChildItem $leaseDir -Filter "bridge-*.json" -File -ErrorAction SilentlyContinue).Count
+        if ($cleanup.cold_leases_after_close -eq 0) { break }
+        Start-Sleep -Milliseconds 100
+      } while ([DateTime]::UtcNow -lt $leaseDeadline)
+    }
+    if ($runtime -and $backendStartTicks) {
+      $backend = Get-Process -Id ([int]$runtime.backend.pid) -ErrorAction SilentlyContinue
+      if ($backend) {
+        $currentStartTime = $backend.StartTime
+        if (-not $currentStartTime) { $backend = $null }
+        elseif ($currentStartTime.ToUniversalTime().Ticks -ne $backendStartTicks -or [int]$runtime.backend.port -ne $backendPort) { $failure = "cleanup refused changed backend identity" }
+        else { Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue }
+      }
+    }
+    $ownedRoot = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\') + '\'
+    if ([System.IO.Path]::GetFullPath($tempRoot).StartsWith($ownedRoot, [System.StringComparison]::OrdinalIgnoreCase)) { Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($backendPort) { $cleanup.backend_port_free = @(Get-ListenerPids $backendPort).Count -eq 0 }
+    if ($dashboardPort) { $cleanup.dashboard_port_free = @(Get-ListenerPids $dashboardPort).Count -eq 0 }
+    $cleanup.isolated_root_removed = -not (Test-Path $tempRoot)
+  } catch {
+    $cleanupCaught = $_
+    $cleanupDetail = @(
+      [string]$cleanupCaught.Exception.Message
+      [string]$cleanupCaught.ScriptStackTrace
+      [string]$cleanupCaught.InvocationInfo.PositionMessage
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $failure = (@($failure, "cleanup failure: $($cleanupDetail -join [Environment]::NewLine)") |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [Environment]::NewLine
   }
-  $ownedRoot = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\') + '\'
-  if ([System.IO.Path]::GetFullPath($tempRoot).StartsWith($ownedRoot, [System.StringComparison]::OrdinalIgnoreCase)) { Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue }
-  if ($backendPort) { $cleanup.backend_port_free = @(Get-ListenerPids $backendPort).Count -eq 0 }
-  if ($dashboardPort) { $cleanup.dashboard_port_free = @(Get-ListenerPids $dashboardPort).Count -eq 0 }
-  $cleanup.isolated_root_removed = -not (Test-Path $tempRoot)
+  if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_PERFORMANCE_PROGRESS_FILE)) {
+    try {
+      [System.IO.File]::AppendAllText(
+        $env:SYMPP_PERFORMANCE_PROGRESS_FILE,
+        "$([DateTime]::UtcNow.ToString('O')) Performance gate cleanup completed: backend_port_free=$($cleanup.backend_port_free) dashboard_port_free=$($cleanup.dashboard_port_free) cold_leases_after_close=$($cleanup.cold_leases_after_close) isolated_root_removed=$($cleanup.isolated_root_removed)$([Environment]::NewLine)"
+      )
+    } catch { }
+  }
 }
 
 if ($failure) {
-  [Console]::Out.WriteLine("status: error")
-  [Console]::Out.WriteLine("error: $(Quote-Toon $failure)")
-  [Console]::Out.WriteLine("cleanup:")
-  foreach ($name in $cleanup.Keys) { $value = if ($name -eq "cold_leases_after_close") { $cleanup[$name] } else { ([bool]$cleanup[$name]).ToString().ToLowerInvariant() }; [Console]::Out.WriteLine("  ${name}: $value") }
+  try {
+    [Console]::Out.WriteLine("status: error")
+    [Console]::Out.WriteLine("error: $(Quote-Toon $failure)")
+    [Console]::Out.WriteLine("cleanup:")
+    foreach ($name in $cleanup.Keys) { $value = if ($name -eq "cold_leases_after_close") { $cleanup[$name] } else { ([bool]$cleanup[$name]).ToString().ToLowerInvariant() }; [Console]::Out.WriteLine("  ${name}: $value") }
+    if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_PERFORMANCE_PROGRESS_FILE)) {
+      [System.IO.File]::AppendAllText(
+        $env:SYMPP_PERFORMANCE_PROGRESS_FILE,
+        "$([DateTime]::UtcNow.ToString('O')) Performance gate rendered captured failure.$([Environment]::NewLine)"
+      )
+    }
+  } catch {
+    $renderCaught = $_
+    $renderDetail = @(
+      [string]$renderCaught.Exception.Message
+      [string]$renderCaught.ScriptStackTrace
+      [string]$renderCaught.InvocationInfo.PositionMessage
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_PERFORMANCE_PROGRESS_FILE)) {
+      [System.IO.File]::AppendAllText(
+        $env:SYMPP_PERFORMANCE_PROGRESS_FILE,
+        "$([DateTime]::UtcNow.ToString('O')) Performance gate final render failed: $((($renderDetail -join ' | ') -replace '\r?\n', ' ').Trim())$([Environment]::NewLine)"
+      )
+    }
+    throw
+  }
   exit 1
 }
 $failures = Add-CleanupFailure @(Get-GateFailures $metrics $thresholds) $cleanup

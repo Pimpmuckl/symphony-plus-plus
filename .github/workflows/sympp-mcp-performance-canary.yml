@@ -33,9 +33,35 @@ jobs:
           New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
           $stdout = Join-Path $outputDirectory "stdout.toon"
           $stderr = Join-Path $outputDirectory "stderr.log"
+          $env:SYMPP_PERFORMANCE_PROGRESS_FILE = Join-Path $outputDirectory "exact-command-progress.log"
+          New-Item -ItemType File -Path $env:SYMPP_PERFORMANCE_PROGRESS_FILE -Force | Out-Null
 
-          & pwsh -NoProfile -File scripts/benchmarks/sympp-mcp/run-performance-gate.ps1 1> $stdout 2> $stderr
-          $gateExitCode = $LASTEXITCODE
+          $env:SYMPP_REAL_MIX = (& mise -C elixir which mix).Trim()
+          if (-not [IO.Path]::GetExtension($env:SYMPP_REAL_MIX)) { $env:SYMPP_REAL_MIX += '.bat' }
+          $mixWrapper = Join-Path $env:RUNNER_TEMP 'sympp-mix.cmd'
+          Set-Content -LiteralPath $mixWrapper -Encoding ascii -Value @"
+          @echo off
+          call "$env:SYMPP_REAL_MIX" %*
+          exit /b %ERRORLEVEL%
+          "@
+          $env:SYMPP_MIX = $mixWrapper
+          $gateProcess = Start-Process `
+            -FilePath (Get-Command pwsh -ErrorAction Stop).Source `
+            -ArgumentList '-NoProfile', '-File', 'scripts/benchmarks/sympp-mcp/run-performance-gate.ps1' `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr `
+            -WindowStyle Hidden `
+            -PassThru
+
+          $timeoutMilliseconds = [int]([TimeSpan]::FromMinutes(120).TotalMilliseconds)
+          if ($gateProcess.WaitForExit($timeoutMilliseconds)) {
+            $gateExitCode = $gateProcess.ExitCode
+          } else {
+            $gateProcess.Kill($true)
+            $gateProcess.WaitForExit()
+            Add-Content -LiteralPath $stderr -Value 'Performance gate exceeded the 120-minute process timeout.'
+            $gateExitCode = 124
+          }
 
           [Console]::Out.Write((Get-Content -LiteralPath $stdout -Raw))
           [Console]::Error.Write((Get-Content -LiteralPath $stderr -Raw))
@@ -54,3 +80,10 @@ jobs:
         with:
           name: sympp-mcp-performance-stderr-${{ github.run_attempt }}
           path: ${{ runner.temp }}\sympp-mcp-performance-gate\stderr.log
+
+      - name: Upload exact-command progress
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sympp-mcp-performance-exact-progress-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\sympp-mcp-performance-gate\exact-command-progress.log
