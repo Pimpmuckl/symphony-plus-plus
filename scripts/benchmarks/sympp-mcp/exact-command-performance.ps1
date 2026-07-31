@@ -226,6 +226,7 @@ function Wait-ClientsReady([object[]]$Cohort, [int]$TimeoutSec) {
     try { Save-BackendCleanupIdentity $Cohort -Force } catch { }
     throw
   }
+  try { Save-BackendCleanupIdentity $Cohort -Force } catch { }
 }
 
 function Stop-ExactClients([object[]]$Clients) {
@@ -233,9 +234,14 @@ function Stop-ExactClients([object[]]$Clients) {
   $exitDeadline = [DateTime]::UtcNow.AddSeconds(60)
   foreach ($client in $active) {
     try { $client.process.StandardInput.Close() } catch { }
-    $remainingMs = [Math]::Max(0, [int][Math]::Ceiling(($exitDeadline - [DateTime]::UtcNow).TotalMilliseconds))
-    if ($remainingMs -eq 0 -or -not $client.process.WaitForExit($remainingMs)) { break }
+    while (-not $client.process.HasExited -and [DateTime]::UtcNow -lt $exitDeadline) {
+      try { Save-BackendCleanupIdentity $active -Force } catch { }
+      $remainingMs = [Math]::Max(0, [int][Math]::Ceiling(($exitDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+      [void]$client.process.WaitForExit([Math]::Min(100, $remainingMs))
+    }
+    if (-not $client.process.HasExited) { break }
   }
+  try { Save-BackendCleanupIdentity $active -Force } catch { }
   foreach ($client in @($active | Where-Object { -not $_.process.HasExited })) {
     try { $client.process.Kill($true) } catch [System.InvalidOperationException] { }
   }
