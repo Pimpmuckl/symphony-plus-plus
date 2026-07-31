@@ -32,6 +32,7 @@ $backendStartTicks = 0L
 $backendPort = 0
 $cleanupBackendPid = 0
 $cleanupBackendStartTicks = 0L
+$cleanupClientRootPids = [System.Collections.Generic.HashSet[int]]::new()
 $nextCleanupIdentityProbe = [DateTime]::MinValue
 $result = $null
 $probeFailure = $null
@@ -138,6 +139,7 @@ function Start-ExactClient([hashtable]$Environment) {
   $process.StartInfo = $info
   $watch = [System.Diagnostics.Stopwatch]::StartNew()
   if (-not $process.Start()) { throw "Exact shipped MCP command failed to start." }
+  [void]$script:cleanupClientRootPids.Add([int]$process.Id)
   $process.StandardInput.AutoFlush = $true
   $process.StandardInput.WriteLine('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"sympp-exact-benchmark","version":"1"},"capabilities":{}}}')
   $client = [pscustomobject]@{
@@ -170,6 +172,7 @@ function Save-BackendCleanupIdentity([object[]]$Cohort, [switch]$Force) {
   }
 
   $roots = [System.Collections.Generic.HashSet[int]]::new()
+  foreach ($rootPid in $script:cleanupClientRootPids) { [void]$roots.Add($rootPid) }
   foreach ($client in $Cohort) {
     if ($client -and $client.process) { [void]$roots.Add([int]$client.process.Id) }
   }
@@ -685,17 +688,23 @@ exit /b %ERRORLEVEL%
     }
   }
   if ($backendPort) {
-    if ($probeFailure -and $cleanupBackendPid -and $cleanupBackendStartTicks -and $cleanupBackendPid -in @(Get-ListenerPids $backendPort)) {
-      $cleanupBackend = Get-Process -Id $cleanupBackendPid -ErrorAction SilentlyContinue
-      if ($cleanupBackend) {
-        try { $cleanupStartTime = $cleanupBackend.StartTime } catch { $cleanupStartTime = $null }
-        if ($cleanupStartTime -and $cleanupStartTime.ToUniversalTime().Ticks -eq $cleanupBackendStartTicks) {
-          Stop-Process -Id $cleanupBackendPid -Force -ErrorAction SilentlyContinue
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    do {
+      if ($probeFailure) {
+        try { Save-BackendCleanupIdentity @() -Force } catch { }
+        if ($cleanupBackendPid -and $cleanupBackendStartTicks -and $cleanupBackendPid -in @(Get-ListenerPids $backendPort)) {
+          $cleanupBackend = Get-Process -Id $cleanupBackendPid -ErrorAction SilentlyContinue
+          if ($cleanupBackend) {
+            try { $cleanupStartTime = $cleanupBackend.StartTime } catch { $cleanupStartTime = $null }
+            if ($cleanupStartTime -and $cleanupStartTime.ToUniversalTime().Ticks -eq $cleanupBackendStartTicks) {
+              Stop-Process -Id $cleanupBackendPid -Force -ErrorAction SilentlyContinue
+            }
+          }
         }
       }
-    }
-    $deadline = [DateTime]::UtcNow.AddSeconds(30)
-    while ((Get-ListenerPids $backendPort).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+      if (-not $probeFailure -and (Get-ListenerPids $backendPort).Count -eq 0) { break }
+      Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
     $remainingListeners = @(Get-ListenerPids $backendPort)
     if ($remainingListeners.Count -gt 0) {
       $cleanupFailure = "Benchmark cleanup left port $backendPort occupied; owners=$($remainingListeners -join ',')."
