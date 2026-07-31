@@ -61,9 +61,9 @@ describe("focus board interactions", () => {
     expect(requests).toEqual(["priority", "deferred"]);
 
     releaseDeferred();
-    const activity = board.locator('[data-frontier-measure="state"]');
+    const row = board.locator('[data-request-id="wr-interaction"]');
+    const activity = row.locator('[data-frontier-measure="state"]');
     await activity.waitFor({ state: "attached" });
-    const row = activity.locator("xpath=ancestor::section[contains(@class,'v3-request-row')][1]");
     const section = activity.locator("xpath=ancestor::section[contains(@class,'focus-board__section')][1]");
     if (await section.getAttribute("data-section-open") !== "true") await section.locator(".focus-board__section-toggle").click();
     await row.waitFor();
@@ -84,6 +84,9 @@ describe("focus board interactions", () => {
     await expand.click();
     await waitForPhase(page, "focused");
     expect(await board.getAttribute("data-focus-request-id")).toBe("wr-interaction");
+    const visibleMatchingGroup = board.locator('[data-focus-lane="attention"] [data-focus-repo-key="fixture/secondary"]');
+    expect(await visibleMatchingGroup.getAttribute("aria-hidden")).toBeNull();
+    expect(await visibleMatchingGroup.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
     await board.getByRole("button", { name: "Collapse Interaction request" }).click();
     await waitForCollapsed(page);
 
@@ -239,15 +242,36 @@ const request = {
   work_package_count: 1,
 };
 
+const earlierLaneRequest = {
+  id: "wr-earlier-lane",
+  title: "Earlier lane request",
+  repo: "fixture/secondary",
+  repo_key: "fixture/secondary",
+  base_branch: "main",
+  status: "clarifying",
+  open_question_count: 1,
+  work_package_count: 0,
+};
+
+const followingGroupRequest = {
+  id: "wr-following-group",
+  title: "Following group request",
+  repo: "fixture/secondary",
+  repo_key: "fixture/secondary",
+  base_branch: "main",
+  status: "sliced",
+  work_package_count: 1,
+};
+
 const priorityDashboard = {
   generated_at: "2026-07-23T12:00:00Z",
-  work_requests: { work_requests: [request], total_count: 1 },
+  work_requests: { work_requests: [request, earlierLaneRequest, followingGroupRequest], total_count: 3 },
   deferred: { dashboard_sections: true },
 };
 
 const deferredDashboard = {
   generated_at: "2026-07-23T12:00:00Z",
-  work_packages: [{ id: "wp-interaction", status: "active" }],
+  work_packages: [{ id: "wp-interaction", status: "active" }, { id: "wp-following-group", status: "active" }],
   work_request_details: [{
     work_request: request,
     work_packages: [{
@@ -262,6 +286,25 @@ const deferredDashboard = {
     product_tree: {
       nodes: [{ id: "delivery", position: 0, title: "Delivery", work_package_ids: ["slice-interaction"] }],
       execution_graph: { available: true, work_package_ids: ["slice-interaction"], effective_edges: [], topological_order: ["slice-interaction"] },
+    },
+  }, {
+    work_request: earlierLaneRequest,
+    work_packages: [],
+    clarification_questions: [{ id: "question-earlier-lane", status: "open" }],
+    product_tree: { nodes: [] },
+  }, {
+    work_request: followingGroupRequest,
+    work_packages: [{
+      id: "slice-following-group",
+      work_request_id: followingGroupRequest.id,
+      work_package_id: "wp-following-group",
+      title: "Following group slice",
+      status: "implementing",
+      worker_signal: { status: "active" },
+    }],
+    product_tree: {
+      nodes: [{ id: "following", position: 0, title: "Following", work_package_ids: ["slice-following-group"] }],
+      execution_graph: { available: true, work_package_ids: ["slice-following-group"], effective_edges: [], topological_order: ["slice-following-group"] },
     },
   }],
   active_blocking_edges: [],

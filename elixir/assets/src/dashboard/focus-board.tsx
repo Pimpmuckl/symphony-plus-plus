@@ -558,7 +558,7 @@ function FocusSection({
                 <div className="focus-board__repo-groups">
                   {repoGroups.map((group, index) => {
                     const headingId = `focus-board-${lane}-repo-${index}`;
-                    const groupEjected = focusEjectedRepos.has(group.key);
+                    const groupEjected = focusSelected && focusEjectedRepos.has(group.key);
                     return (
                       <section
                         key={group.key}
