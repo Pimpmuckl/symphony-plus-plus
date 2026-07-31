@@ -728,7 +728,24 @@ exit /b %ERRORLEVEL%
       if ($processStartTime -and $processStartTime.ToUniversalTime().Ticks -eq $backendStartTicks) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
     }
   }
+  $resolvedTemp = [System.IO.Path]::GetFullPath($tempRoot)
+  if (-not $resolvedTemp.StartsWith($ownedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Benchmark cleanup root escaped its owned prefix." }
+  $remainingListeners = @()
   if ($backendPort) {
+    if ($probeFailure) {
+      foreach ($listenerPid in @(Get-ListenerPids $backendPort)) {
+        $listenerProcess = Get-Process -Id ([int]$listenerPid) -ErrorAction SilentlyContinue
+        $listenerDetails = Get-CimInstance Win32_Process -Filter "ProcessId = $listenerPid" -ErrorAction SilentlyContinue
+        try { $listenerStartedAt = if ($listenerProcess) { $listenerProcess.StartTime.ToUniversalTime() } else { $null } } catch { $listenerStartedAt = $null }
+        if ($listenerStartedAt -and
+            $listenerStartedAt -ge $probeStartedAt -and
+            -not [string]::IsNullOrWhiteSpace([string]$listenerDetails.CommandLine) -and
+            ([string]$listenerDetails.CommandLine).IndexOf($resolvedTemp, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+          Write-BenchmarkProgress "Stopping verified exact backend listener after probe failure: pid=$listenerPid"
+          Stop-Process -Id ([int]$listenerPid) -Force -ErrorAction SilentlyContinue
+        }
+      }
+    }
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     while ((Get-ListenerPids $backendPort).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
     $remainingListeners = @(Get-ListenerPids $backendPort)
@@ -737,12 +754,14 @@ exit /b %ERRORLEVEL%
       if ($probeFailure) { Write-BenchmarkProgress "Exact cleanup failed after probe failure: $cleanupFailure" } else { throw $cleanupFailure }
     }
   }
-  $resolvedTemp = [System.IO.Path]::GetFullPath($tempRoot)
-  if (-not $resolvedTemp.StartsWith($ownedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Benchmark cleanup root escaped its owned prefix." }
-  Remove-Item -LiteralPath $resolvedTemp -Recurse -Force -ErrorAction SilentlyContinue
-  if (Test-Path -LiteralPath $resolvedTemp) {
-    $cleanupFailure = "Benchmark cleanup did not remove its isolated root."
-    if ($probeFailure) { Write-BenchmarkProgress "Exact cleanup failed after probe failure: $cleanupFailure" } else { throw $cleanupFailure }
+  if ($remainingListeners.Count -eq 0) {
+    Remove-Item -LiteralPath $resolvedTemp -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $resolvedTemp) {
+      $cleanupFailure = "Benchmark cleanup did not remove its isolated root."
+      if ($probeFailure) { Write-BenchmarkProgress "Exact cleanup failed after probe failure: $cleanupFailure" } else { throw $cleanupFailure }
+    }
+  } else {
+    Write-BenchmarkProgress "Preserving exact benchmark root because backend ownership could not be verified: $resolvedTemp"
   }
 }
 
