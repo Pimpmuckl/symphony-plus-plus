@@ -188,22 +188,28 @@ function scheduleTopPanelTransition(
   framesRef: MutableRefObject<number[]>,
 ) {
   if (transition.kind === "opening") {
-    nextFrame(framesRef, () => dispatch({ type: "patch", state: { height: transition.targetHeight } }));
-    later(timersRef, TOP_PANEL_SLIDE_MS, () => dispatch({ type: "patch", state: { phase: "idle", height: "auto" } }));
+    nextFrame(framesRef, () => {
+      dispatch({ type: "patch", state: { height: transition.targetHeight } });
+      later(timersRef, TOP_PANEL_SLIDE_MS, () => dispatch({ type: "patch", state: { phase: "idle", height: "auto" } }));
+    });
     return;
   }
 
   if (transition.kind === "closing") {
-    nextFrame(framesRef, () => dispatch({ type: "patch", state: { height: 0 } }));
-    later(timersRef, TOP_PANEL_SLIDE_MS, () => dispatch({ type: "patch", state: { visiblePanel: null, phase: "idle", height: 0 } }));
+    nextFrame(framesRef, () => {
+      dispatch({ type: "patch", state: { height: 0 } });
+      later(timersRef, TOP_PANEL_SLIDE_MS, () => dispatch({ type: "patch", state: { visiblePanel: null, phase: "idle", height: 0 } }));
+    });
     return;
   }
 
   if (transition.kind === "pre-resize") {
-    nextFrame(framesRef, () => dispatch({ type: "patch", state: { height: transition.targetHeight } }));
-    later(timersRef, TOP_PANEL_RESIZE_MS, () => {
-      dispatch({ type: "patch", state: { phase: "swapping" } });
-      later(timersRef, TOP_PANEL_SLIDE_MS, () => dispatch({ type: "patch", state: { previousPanel: null, phase: "idle", height: "auto" } }));
+    nextFrame(framesRef, () => {
+      dispatch({ type: "patch", state: { height: transition.targetHeight } });
+      later(timersRef, TOP_PANEL_RESIZE_MS, () => {
+        dispatch({ type: "patch", state: { phase: "swapping" } });
+        later(timersRef, TOP_PANEL_SLIDE_MS, () => dispatch({ type: "patch", state: { previousPanel: null, phase: "idle", height: "auto" } }));
+      });
     });
     return;
   }
@@ -221,7 +227,7 @@ function scheduleTopPanelTransition(
 function topPanelView(state: TopPanelCarouselState) {
   const showStaticPrevious = state.phase === "pre-resize" && state.previousPanel;
   const showSwapping = state.phase === "swapping" && state.previousPanel !== null && state.visiblePanel !== null;
-  const showTrackCurrent = state.visiblePanel !== null && !showStaticPrevious && state.phase !== "opening" && state.phase !== "closing";
+  const showTrackCurrent = showSwapping;
   const showStaticCurrent = state.visiblePanel && !showStaticPrevious && !showTrackCurrent;
 
   return {

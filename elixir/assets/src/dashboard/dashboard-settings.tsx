@@ -12,7 +12,7 @@ import { sortedCopy } from "@/lib/collections";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DashboardTheme, REPO_SUMMARY_PLATE_TONES, RepoSummaryPlateTone, WorkRequestMutation } from "./runtime";
 import { detailDate } from "./detail-utils";
-import { repoDisplayName } from "./dashboard-persistence";
+import { repoDisplayName, useStoredUseFocusBoard, writeStoredUseFocusBoard } from "./dashboard-persistence";
 import { sortableTime } from "./workstream-data";
 
 export function ThemeToggle({ theme, onToggle }: { theme: DashboardTheme; onToggle: () => void }) {
@@ -226,6 +226,7 @@ export function DashboardSettingsDialog({
   onShowWelcomeToastChange: (value: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const useFocusBoard = useStoredUseFocusBoard();
   const initialFocusRef = useRef<HTMLDivElement | null>(null);
   const visibilityLabel = hideEmptyWorkstreams
     ? workstreamHiddenSummary(hiddenWorkstreamCount)
@@ -320,6 +321,14 @@ export function DashboardSettingsDialog({
               description={contextBarLabel}
               label="Board context bar"
               onChange={onShowWorkstreamContextBarChange}
+            />
+
+            <SettingsSwitch
+              ariaLabel="Use Focus Board"
+              checked={useFocusBoard}
+              description={useFocusBoard ? "Shows the experimental Focus Board above the repository list." : "The stable repository list remains the main dashboard surface."}
+              label="Use Focus Board"
+              onChange={writeStoredUseFocusBoard}
             />
           </div>
         </DialogContent>

@@ -223,6 +223,18 @@ describe("dashboard data helpers", () => {
     expect(repos[0]).toMatchObject({ repo: "primary-repo", baseBranches: ["main"], packages: [linkedPackage] });
   });
 
+  it("keeps deferred-only WorkRequests in their repository summary", () => {
+    const detail: WorkRequestDetail = {
+      work_request: { id: "wr-deferred-only", title: "Deferred only", repo: "deferred-repo", status: "sliced" },
+      work_packages: [{ id: "wp-root", work_request_id: "wr-deferred-only", title: "Root package", status: "planned" }],
+    };
+
+    const [repo] = repoSummaries([], [], [], [], [detail]);
+
+    expect(repo).toMatchObject({ repo: "deferred-repo", requests: [{ id: "wr-deferred-only" }] });
+    expect(repo?.active).toBeGreaterThan(0);
+  });
+
   it("counts canonical packages once when board and WorkRequest detail overlap", () => {
     const request: WorkRequestCard = { id: "wr-canonical", repo: "canonical-repo", base_branch: "main" };
     const pkg: WorkPackageCard = { id: "pkg-canonical", title: "Canonical package", status: "implementing" };

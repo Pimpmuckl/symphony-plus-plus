@@ -13,7 +13,7 @@ import { applyDashboardTheme, repoWorkstreamHasWorkItems, shouldShowUpdateSimula
 import { canMutateDashboardComments, canMutateDashboardOperatorActions } from "./detail-utils";
 import { useDashboardOperatorSettings } from "./dashboard-operator-settings";
 import { filterWorkstreamsBySearch } from "./dashboard-search";
-import { activeWorkRequestDetails, packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
+import { dashboardWorkRequestDetails, packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
 import { useDashboardUpdateAnimations } from "./update-animations";
 import { useDashboardSurfaceLoading } from "./dashboard-surface-loading";
 import { createDashboardEventRefresh, useBestEffortGithubSync } from "./dashboard-demand-loading";
@@ -170,14 +170,14 @@ function useDashboardController() {
   const loadDashboardDeferred = useCallback(async () => {
     const baseDashboard = dashboardRef.current;
     if (!baseDashboard?.deferred?.dashboard_sections) return;
-    const failureVersion = failureVersionRef.current;
+    const failureVersion = failureVersionRef.current; const loadMutationVersion = mutationVersionRef.current;
     const loadSequence = deferredLoadSequenceRef.current + 1;
     deferredLoadSequenceRef.current = loadSequence;
     try {
       await withLocalOperatorReconnect(async () => {
         const response = await operatorFetch(operatorApiUrl("/dashboard/deferred"), { headers: jsonHeaders() });
         const payload = await readDashboardApiResponse(response, "Dashboard details unavailable");
-        if (loadSequence !== deferredLoadSequenceRef.current || dashboardRef.current !== baseDashboard) return;
+        if (loadSequence !== deferredLoadSequenceRef.current || loadMutationVersion !== mutationVersionRef.current || dashboardRef.current !== baseDashboard) return;
         const nextDashboard = mergeDashboardPayload(dashboardRef.current, payload as DashboardPayload);
         if (nextDashboard) setDashboard(nextDashboard);
         clearConnectionFailure(failureVersion);
@@ -224,10 +224,10 @@ function useDashboardController() {
       if (options.remove) setDashboard(removeDashboardWorkRequest(dashboardRef.current, workRequestId));
       else if (workRequest) setDashboard(patchDashboardWorkRequest(dashboardRef.current, workRequest, options));
       clearConnectionFailure();
-      setSelectedCardDetail(null);
+      setSelectedAttention(null); setSelectedCardDetail(null);
       if (mutationShouldRefreshDashboard(payload)) void loadDashboard("silent");
     },
-    [clearConnectionFailure, loadDashboard, setDashboard, setSelectedCardDetail],
+    [clearConnectionFailure, loadDashboard, setDashboard, setSelectedAttention, setSelectedCardDetail],
   );
   const submitGuidanceAnswer = useCallback(async (item: GuidanceItem, submission: GuidanceAnswerSubmission) => {
     await withLocalOperatorReconnect(async () => {
@@ -464,7 +464,7 @@ function useDashboardController() {
   const packages = useMemo(() => allPackages(dashboard), [dashboard]);
   const requests = useMemo(() => dashboard?.work_requests?.work_requests ?? [], [dashboard]);
   const archivedRequests = useMemo(() => dashboard?.archived_work_requests?.work_requests ?? [], [dashboard]);
-  const requestDetails = useMemo(() => activeWorkRequestDetails(dashboard), [dashboard]);
+  const requestDetails = useMemo(() => dashboardWorkRequestDetails(dashboard), [dashboard]);
   const linkedWorkPackageIds = useMemo(() => new Set(dashboard?.linked_work_package_ids ?? []), [dashboard]);
   const requestDetailsByRepo = useMemo(() => requestDetailsByRepoKey(requestDetails), [requestDetails]);
   const packageSelections = useMemo(() => packageSelectionIndex(requestDetails, packages), [packages, requestDetails]);

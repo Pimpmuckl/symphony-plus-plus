@@ -18,7 +18,9 @@ import { isFinishedBoardStatus, operationalLabel, operationalStatusIsRunning, sl
 import { PullRequestBadge } from "./execution-graph/pull-request-badge";
 import { requestBadgeLabel } from "./workstream-row-age";
 import { architectStartPrompt, mergeRequestDetailsWithExiting, visibleRequestBranch } from "./workstream-utils";
-import type { AttentionSelect } from "./workstream-attention";
+import type { AttentionJumpTarget, AttentionSelect } from "./workstream-attention";
+import { ProductPlanBody } from "./workstream-product-plan";
+import { useRepositoryAttentionJump } from "./use-repository-attention-jump";
 const REQUEST_EXIT_MOTION_MS = 320;
 const WorkRequestExecutionGraph = lazy(() => import("./work-request-execution-graph-loading"));
 export type RequestFrontierMode = "attention" | "active" | "next" | "recent" | "waiting";
@@ -27,7 +29,7 @@ export function WorkstreamBoard({
   repoDetails,
   now,
   packages,
-  activeBlockingEdges, guidanceItems = [],
+  activeBlockingEdges, guidanceItems = [], jumpTarget,
   onSelectAttention,
   onSelectGuidance,
   onSelectCard,
@@ -42,7 +44,7 @@ export function WorkstreamBoard({
   repoDetails: WorkRequestDetail[];
   now?: string;
   packages: WorkPackageCard[];
-  activeBlockingEdges: ActiveBlockingEdge[]; guidanceItems?: GuidanceItem[];
+  activeBlockingEdges: ActiveBlockingEdge[]; guidanceItems?: GuidanceItem[]; jumpTarget?: AttentionJumpTarget | null;
   onSelectAttention: AttentionSelect;
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
@@ -60,6 +62,7 @@ export function WorkstreamBoard({
   const blockerCounts = useMemo(() => activeBlockerEntityCounts(activeBlockingEdges, repoDetails), [activeBlockingEdges, repoDetails]);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const contextSignature = useMemo(() => workstreamContextSignature(sortedActiveDetails), [sortedActiveDetails]);
+  useRepositoryAttentionJump(boardRef, jumpTarget, repoDetails, onSetFinishedRequestChildrenOpen);
   return (
     <div className="workstream-board-shell">
       {showContextBar ? <WorkstreamContextBar boardRef={boardRef} repoLabel={repoLabel} signature={contextSignature} /> : null}
@@ -80,6 +83,7 @@ export function WorkstreamBoard({
               activeBlockerCount={blockerCounts.requests.get(detail.work_request.id) ?? 0}
               activeBlockerCountBySliceId={blockerCounts.slices}
               expanded={expanded}
+              expandedContent="list" inheritedStatusRail
               detachedExpandedBody={false}
               focusSelected={false}
               index={index}
@@ -130,7 +134,6 @@ function useExitingRequestDetails(currentDetails: WorkRequestDetail[]) {
 function requestDetailId(detail: WorkRequestDetail) {
   return detail.work_request.id;
 }
-
 function workstreamContextSignature(details: WorkRequestDetail[]) {
   return JSON.stringify(
     details.map((detail) => ({
@@ -149,7 +152,6 @@ function workstreamContextSignature(details: WorkRequestDetail[]) {
     })),
   );
 }
-
 export function ProductRequestRow({
   detail,
   now,
@@ -159,6 +161,7 @@ export function ProductRequestRow({
   activeBlockerCount,
   activeBlockerCountBySliceId,
   expanded,
+  expandedContent,
   expandedBodyVisible = expanded,
   detachedExpandedBody,
   focusEjected = false,
@@ -169,7 +172,7 @@ export function ProductRequestRow({
   onSelectGuidance,
   onSelectCard,
   primaryBranch,
-  frontierMode,
+  frontierMode, inheritedStatusRail,
   autoCollapseWhenDone = true,
   updateAnimations,
 }: {
@@ -181,6 +184,7 @@ export function ProductRequestRow({
   activeBlockerCount: number;
   activeBlockerCountBySliceId: Map<string, number>;
   expanded: boolean;
+  expandedContent?: "graph" | "list";
   expandedBodyVisible?: boolean;
   detachedExpandedBody: boolean;
   focusEjected?: boolean;
@@ -191,7 +195,7 @@ export function ProductRequestRow({
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
   primaryBranch?: string;
-  frontierMode?: RequestFrontierMode;
+  frontierMode?: RequestFrontierMode; inheritedStatusRail?: boolean;
   autoCollapseWhenDone?: boolean;
   updateAnimations: DashboardUpdateAnimations;
 }) {
@@ -206,7 +210,6 @@ export function ProductRequestRow({
   const requestState = requestBoardState(detail, packageById, counts, progress);
   const tone = requestState.tone;
   const requestLabel = requestState.label;
-  const frontier = requestFrontier(detail, slices, packageById, activeBlockerCountBySliceId, frontierMode ?? requestFrontierMode(requestState.kind), requestLabel);
   const badgeLabel = requestBadgeLabel(requestLabel, detail, packageById, now);
   const selectWorkPackage = (id: string) => {
     const slice = slices.find((item) => item.id === id);
@@ -214,17 +217,15 @@ export function ProductRequestRow({
     if (slice) onSelectCard({ kind: "slice", detail, slice, pkg });
     else if (pkg) onSelectCard({ kind: "package", detail, pkg });
   };
-  const rowStyle = { "--v3-row-badge-width": statusBadgeWidthForLabels([badgeLabel]), animationDelay: `${index * 30}ms` } as CSSProperties;
+  const frontierNode = (() => { if (expandedContent === "list") return null; const frontier = requestFrontier(detail, slices, packageById, activeBlockerCountBySliceId, frontierMode ?? requestFrontierMode(requestState.kind), requestLabel); return <RequestFrontier summary={frontier} onSelectWorkPackage={selectWorkPackage} hidden={requestFrontierIsHidden(focusSelected, expanded)} />; })();
+  const rowStyle = { "--v3-row-badge-width": (() => inheritedStatusRail ? "inherit" : statusBadgeWidthForLabels([badgeLabel]))(), animationDelay: `${index * 30}ms` } as CSSProperties;
   const rowHidden = requestRowIsHidden(exiting, focusEjected);
-  const frontierHidden = requestFrontierIsHidden(focusSelected, expanded);
   const requestFinished = requestState.kind === "done";
   const collapseRequest = useCallback(() => onSetOpen(false), [onSetOpen]);
   useAutoCollapseWhenDone(requestFinished, expanded, collapseRequest, requestFinished && autoCollapseWhenDone);
   const updateMotion = requestRowUpdateMotion(exiting, detail, updateAnimations);
-  const [inlineExpandedBody, detachedBodyNode] = placeExpandedRequestBody(
-    <RequestExpandedBody activeBlockingEdges={activeBlockingEdges} detail={detail} guidanceItems={guidanceItems} now={now} packageById={packageById} openQuestion={openQuestion} onSelectAttention={onSelectAttention} onSelectGuidance={onSelectGuidance} onSelectCard={onSelectCard} requestPath={requestPath} />,
-    expandedBodyVisible, detachedExpandedBody, requestTitle,
-  );
+  const expandedBody = <RequestExpandedBody activeBlockingEdges={activeBlockingEdges} detail={detail} expandedContent={expandedContent} guidanceItems={guidanceItems} now={now} packageById={packageById} openQuestion={openQuestion} onSelectAttention={onSelectAttention} onSelectGuidance={onSelectGuidance} onSelectCard={onSelectCard} requestPath={requestPath} updateAnimations={updateAnimations} />;
+  const [inlineExpandedBody, detachedBodyNode] = placeExpandedRequestBody(expandedBody, expandedContent, expanded, expandedBodyVisible, detachedExpandedBody, requestTitle);
   return (
     <>
       <section
@@ -260,7 +261,7 @@ export function ProductRequestRow({
             </button>
           </div>
           <RequestProgressBar progress={progress} />
-          <RequestFrontier summary={frontier} onSelectWorkPackage={selectWorkPackage} hidden={frontierHidden} />
+          {frontierNode}
         </div>
         {inlineExpandedBody}
       </section>
@@ -270,7 +271,8 @@ export function ProductRequestRow({
 }
 function requestRowIsHidden(exiting: boolean, focusEjected: boolean) { return exiting || focusEjected; }
 function requestFrontierIsHidden(focusSelected: boolean, expanded: boolean) { return focusSelected && expanded; }
-function placeExpandedRequestBody(body: ReactNode, visible: boolean, detached: boolean, title: string) {
+function placeExpandedRequestBody(body: ReactNode, content: "graph" | "list" | undefined, expanded: boolean, visible: boolean, detached: boolean, title: string) {
+  if (content === "list") return [<div className="v3-disclosure-reveal" data-open={expanded ? "true" : "false"} aria-hidden={!expanded} inert={!expanded}>{body}</div>, null] as const;
   if (!visible) return [null, null] as const;
   if (!detached) return [body, null] as const;
   return [null, <div key="expanded-request" className="focus-board__expanded-slot"><section className="focus-board__expanded-request" aria-label={`${title} execution graph`}>{body}</section></div>] as const;
@@ -288,9 +290,9 @@ function RequestIdentity({ detail, branch }: { detail: WorkRequestDetail; branch
     </span>
   );
 }
-
 function RequestExpandedBody({
   activeBlockingEdges, detail, guidanceItems,
+  expandedContent,
   now,
   packageById,
   openQuestion,
@@ -298,8 +300,9 @@ function RequestExpandedBody({
   onSelectGuidance,
   onSelectCard,
   requestPath,
+  updateAnimations,
 }: {
-  activeBlockingEdges: ActiveBlockingEdge[]; detail: WorkRequestDetail; guidanceItems: GuidanceItem[];
+  activeBlockingEdges: ActiveBlockingEdge[]; detail: WorkRequestDetail; expandedContent?: "graph" | "list"; guidanceItems: GuidanceItem[];
   now?: string;
   packageById: Map<string, WorkPackageCard>;
   openQuestion?: NonNullable<WorkRequestDetail["clarification_questions"]>[number];
@@ -307,26 +310,26 @@ function RequestExpandedBody({
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
   requestPath: ContextPathPart[];
+  updateAnimations: DashboardUpdateAnimations;
 }) {
   return (
     <div className="v3-request-body">
       {requestHasWork(detail) ? <>
         <RequestActions detail={detail} openQuestion={openQuestion} onSelectGuidance={onSelectGuidance} />
-        <ExecutionGraphBody activeBlockingEdges={activeBlockingEdges} detail={detail} guidanceItems={guidanceItems} now={now} packageById={packageById} onSelectAttention={onSelectAttention} onSelectCard={onSelectCard} requestPath={requestPath} />
+        {expandedContent === "list"
+          ? <ProductPlanBody activeBlockingEdges={activeBlockingEdges} detail={detail} guidanceItems={guidanceItems} packageById={packageById} onSelectAttention={onSelectAttention} onSelectCard={onSelectCard} requestPath={requestPath} slices={detail.work_packages ?? []} updateAnimations={updateAnimations} />
+          : <ExecutionGraphBody activeBlockingEdges={activeBlockingEdges} detail={detail} guidanceItems={guidanceItems} now={now} packageById={packageById} onSelectAttention={onSelectAttention} onSelectCard={onSelectCard} requestPath={requestPath} />}
       </> : <EmptyWorkRequest workRequestId={detail.work_request.id} />}
     </div>
   );
 }
-
 function requestRowUpdateMotion(exiting: boolean, detail: WorkRequestDetail, updateAnimations: DashboardUpdateAnimations) {
   if (exiting) return { kind: "removed" as const, token: 0 };
   return updateAnimations.motionFor(requestUpdateKey(detail));
 }
-
 type RequestFrontierItem = { activity?: string; id: string; pr?: WorkRequestPackage["pr_signal"]; title: string };
 type RequestFrontierGroup = { id: string; items: RequestFrontierItem[]; title?: string };
 type RequestFrontierSummary = { groups: RequestFrontierGroup[]; moreLabel?: string };
-
 function RequestFrontier({ summary, onSelectWorkPackage, hidden }: { summary: RequestFrontierSummary | null; onSelectWorkPackage: (id: string) => void; hidden: boolean }) {
   if (!summary) return <div className="v3-request-frontier" aria-hidden={hidden} inert={hidden} />;
   return (
@@ -359,7 +362,6 @@ function RequestFrontier({ summary, onSelectWorkPackage, hidden }: { summary: Re
     </div>
   );
 }
-
 function requestFrontier(
   detail: WorkRequestDetail,
   slices: WorkRequestPackage[],
@@ -590,11 +592,9 @@ function ExecutionGraphBody({
   onSelectCard: CardDetailSelect;
   requestPath: ContextPathPart[];
 }) {
-  return (
-    <div className="v3-execution-graph">
+  return <div className="v3-execution-graph">
       <Suspense fallback={<div className="v3-execution-graph-loading" role="status" aria-label="Loading execution graph" />}>
         <WorkRequestExecutionGraph activeBlockingEdges={activeBlockingEdges} detail={detail} guidanceItems={guidanceItems} now={now} packageById={packageById} onSelectAttention={onSelectAttention} onSelectCard={onSelectCard} requestPath={requestPath} />
       </Suspense>
-    </div>
-  );
+    </div>;
 }

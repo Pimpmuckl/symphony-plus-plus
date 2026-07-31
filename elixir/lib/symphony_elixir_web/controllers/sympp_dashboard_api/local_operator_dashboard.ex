@@ -452,6 +452,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       completion_source: work_request.completion_source,
       archived_at: timestamp(work_request.archived_at),
       archive_reason: work_request.archive_reason,
+      status: work_request.status,
       operational_state: completed_work_request_mutation_state(work_request)
     }
   end

@@ -6678,6 +6678,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
+  test "local operator can clear status-only WorkRequest human info", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      clearable = create_work_request!(repo, id: "WR-LOCAL-CLEAR-HUMAN-INFO", status: "human_info_needed")
+
+      payload =
+        local_operator_csrf_conn()
+        |> post("/api/v1/sympp/operator/work-requests/#{clearable.id}/state", %{"state" => "ready_for_slicing"})
+        |> json_response(200)
+
+      assert get_in(payload, ["refresh", "work_request_id"]) == clearable.id
+      assert get_in(payload, ["work_request", "status"]) == "ready_for_slicing"
+      assert {:ok, %{status: "ready_for_slicing"}} = WorkRequestRepository.get(repo, clearable.id)
+
+      guarded = create_work_request!(repo, id: "WR-LOCAL-GUARD-HUMAN-INFO", status: "human_info_needed")
+      assert {:ok, _question} = WorkRequestRepository.ask_question(repo, guarded.id, question_attrs(id: "WRQ-LOCAL-GUARD-HUMAN-INFO"))
+
+      error =
+        local_operator_csrf_conn()
+        |> post("/api/v1/sympp/operator/work-requests/#{guarded.id}/state", %{"state" => "ready_for_slicing"})
+        |> json_response(409)
+
+      assert get_in(error, ["error", "code"]) == "open_questions"
+      assert {:ok, %{status: "human_info_needed"}} = WorkRequestRepository.get(repo, guarded.id)
+    end)
+  end
+
   test "local operator can force complete an unfinished WorkRequest", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-LOCAL-COMPLETE-STATE", status: "ready_for_slicing")

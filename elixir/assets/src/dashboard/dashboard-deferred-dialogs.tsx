@@ -70,6 +70,7 @@ export function DashboardDeferredDialogs({
         <AttentionDialogWithFocusReturn
           canMutateOperatorActions={canMutateOperatorActions}
           onChangeWorkPackageState={changeWorkPackageState}
+          onChangeWorkRequestState={changeWorkRequestState}
           onClearWorkPackageBlocker={onClearWorkPackageBlocker}
           onJumpToAttention={onJumpToAttention}
           onOpenChange={(open) => {

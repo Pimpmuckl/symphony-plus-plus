@@ -398,7 +398,10 @@ export function repoSummaries(
     return summary;
   };
 
-  requests.forEach((request) => {
+  const requestById = new Map(requests.map((request) => [request.id, request]));
+  details.forEach((detail) => requestById.set(detail.work_request.id, detail.work_request));
+
+  requestById.forEach((request) => {
     const summary = ensure(request);
     summary.requests.push(request);
     addBranch(summary, request.base_branch);

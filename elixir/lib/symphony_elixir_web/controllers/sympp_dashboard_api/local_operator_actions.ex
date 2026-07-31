@@ -28,6 +28,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
   def local_operator_work_request_state(params) do
     case text_param(params, "state") || text_param(params, "status") do
       "completed" -> {:ok, "completed"}
+      "ready_for_slicing" -> {:ok, "ready_for_slicing"}
       _state -> {:error, :invalid_status}
     end
   end

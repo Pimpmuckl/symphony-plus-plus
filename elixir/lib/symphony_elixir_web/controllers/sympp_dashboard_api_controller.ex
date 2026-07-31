@@ -818,13 +818,18 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       work_request_target(work_request_id),
       :operator_update_work_request_state,
       fn repo ->
-        with {:ok, "completed"} <- LocalOperatorActions.local_operator_work_request_state(params),
-             {:ok, work_request} <- WorkRequestService.force_complete(repo, work_request_id) do
+        with {:ok, state} <- LocalOperatorActions.local_operator_work_request_state(params),
+             {:ok, work_request} <- update_work_request_state(repo, work_request_id, state) do
           json(conn, mutation_success_payload(%{work_request: LocalOperatorDashboard.work_request_mutation_payload(work_request)}, %{dashboard: false, work_request_id: work_request.id}))
         end
       end
     )
   end
+
+  defp update_work_request_state(repo, work_request_id, "completed"), do: WorkRequestService.force_complete(repo, work_request_id)
+
+  defp update_work_request_state(repo, work_request_id, "ready_for_slicing"),
+    do: WorkRequestService.update_status(repo, work_request_id, "human_info_needed", "ready_for_slicing")
 
   @spec operator_update_work_package_state(Conn.t(), map()) :: Conn.t()
   def operator_update_work_package_state(conn, %{"work_package_id" => work_package_id} = params) do
@@ -1655,6 +1660,10 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp error_response(conn, {:invalid_work_package_status, _status}) do
     error_response(conn, 422, "invalid_work_package_status", "WorkPackage is not ready for this action")
+  end
+
+  defp error_response(conn, :open_questions) do
+    error_response(conn, 409, "open_questions", "Answer or close the open questions before clearing human info")
   end
 
   defp error_response(conn, {:storage_failed, _reason}) do

@@ -15,17 +15,24 @@ export function requestDetailsByRepoKey(details: WorkRequestDetail[]) {
   }, new Map());
 }
 
-export function activeWorkRequestDetails(dashboard: DashboardPayload | null): WorkRequestDetail[] {
-  const detailsById = new Map((dashboard?.work_request_details ?? []).map((detail) => [detail.work_request.id, detail]));
-
-  return (dashboard?.work_requests?.work_requests ?? []).map((request) => {
-    const detail = detailsById.get(request.id);
+export function dashboardWorkRequestDetails(dashboard: DashboardPayload | null): WorkRequestDetail[] {
+  const priorityRequests = dashboard?.work_requests?.work_requests ?? [];
+  const priorityById = new Map(priorityRequests.map((request) => [request.id, request]));
+  const details = (dashboard?.work_request_details ?? []).map((detail) => {
+    const request = priorityById.get(detail.work_request.id);
+    if (!request) return detail;
     return {
       ...detail,
-      work_request: { ...detail?.work_request, ...request },
-      summary: priorityRequestSummary(request, detail?.summary),
+      work_request: { ...detail.work_request, ...request },
+      summary: priorityRequestSummary(request, detail.summary),
     };
   });
+  const detailedIds = new Set(details.map((detail) => detail.work_request.id));
+  const priorityOnly: WorkRequestDetail[] = [];
+  for (const request of priorityRequests) {
+    if (!detailedIds.has(request.id)) priorityOnly.push({ work_request: { ...request }, summary: priorityRequestSummary(request) });
+  }
+  return [...details, ...priorityOnly];
 }
 
 function priorityRequestSummary(request: WorkRequestDetail["work_request"], current: WorkRequestDetail["summary"] = {}) {
@@ -77,9 +84,9 @@ export function sliceSuccessorLabel(slice: WorkRequestPackage) {
 
 export function sortWorkRequestDetails(details: WorkRequestDetail[]) {
   return sortedCopy(details, (left, right) => {
-    const leftTime = sortableTime(left.work_request.inserted_at || left.work_request.updated_at);
-    const rightTime = sortableTime(right.work_request.inserted_at || right.work_request.updated_at);
-    if (leftTime !== rightTime) return leftTime - rightTime;
+    const leftTime = sortableTime(left.work_request.updated_at || left.work_request.inserted_at);
+    const rightTime = sortableTime(right.work_request.updated_at || right.work_request.inserted_at);
+    if (leftTime !== rightTime) return rightTime - leftTime;
     return (left.work_request.title || left.work_request.id).localeCompare(right.work_request.title || right.work_request.id);
   });
 }
