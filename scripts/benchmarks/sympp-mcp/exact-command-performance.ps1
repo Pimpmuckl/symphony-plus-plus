@@ -618,13 +618,27 @@ exit /b %ERRORLEVEL%
     }
     $attachRejectionBefore = [int](Get-TraceCounts)["warm_miss_generation"]
     $attachTraceOffsets = Get-TraceFileOffsets
-    $mutated = Start-ExactClient $environment
-    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    $mutationStream = $null
     if ($LauncherMode -eq "NodePresent") {
-      while (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved") -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
-      if (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved")) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
+      $mutationStream = [System.IO.File]::Open($mutationFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::Read)
     }
-    Set-Content -LiteralPath $mutationFile -Value 'Set-Content -LiteralPath $env:SYMPP_INTEGRITY_MARKER -Value invoked' -Encoding utf8NoBOM
+    try {
+      $mutated = Start-ExactClient $environment
+      $deadline = [DateTime]::UtcNow.AddSeconds(60)
+      if ($LauncherMode -eq "NodePresent") {
+        while (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved") -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+        if (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved")) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
+        $mutationBytes = [System.Text.UTF8Encoding]::new($false).GetBytes('Set-Content -LiteralPath $env:SYMPP_INTEGRITY_MARKER -Value invoked')
+        $mutationStream.Position = 0
+        $mutationStream.SetLength(0)
+        $mutationStream.Write($mutationBytes, 0, $mutationBytes.Length)
+        $mutationStream.Flush($true)
+      } else {
+        Set-Content -LiteralPath $mutationFile -Value 'Set-Content -LiteralPath $env:SYMPP_INTEGRITY_MARKER -Value invoked' -Encoding utf8NoBOM
+      }
+    } finally {
+      if ($null -ne $mutationStream) { $mutationStream.Dispose() }
+    }
     while (-not $mutated.process.HasExited -and -not $mutated.line_task.IsCompleted -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
     $mutation.shortcut_rejected = $mutated.process.HasExited -and
       $mutated.line_task.IsCompleted -and
