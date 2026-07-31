@@ -25,9 +25,7 @@ function deletedPackageIds(dashboard: DashboardPayload, workRequestId: string) {
     detail?.work_packages?.flatMap((pkg) => [pkg.id, pkg.work_package_id].filter((id): id is string => Boolean(id))) ?? [],
   );
   for (const edge of dashboard.active_blocking_edges ?? []) {
-    if (edge.work_request_id === workRequestId) {
-      [edge.work_package_id, edge.from.id, edge.to.id].forEach((id) => id && ids.add(id));
-    }
+    if (edge.work_request_id === workRequestId && edge.work_package_id) ids.add(edge.work_package_id);
   }
   return ids;
 }

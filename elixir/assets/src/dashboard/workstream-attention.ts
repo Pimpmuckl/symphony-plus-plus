@@ -386,7 +386,7 @@ function attentionItemForBlocker(item: BlockerItem): AttentionItem {
   }
   return {
     kind: "status",
-    key: `blocker:${item.id}`,
+    key: `status:blocked:package:${item.id}`,
     label: "Blocked",
     tone: "blocked",
     title: item.title,

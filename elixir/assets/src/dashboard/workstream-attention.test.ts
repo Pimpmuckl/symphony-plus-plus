@@ -85,6 +85,24 @@ describe("WorkRequest attention badge targets", () => {
     });
   });
 
+  it("deduplicates linked status-only blocker projections", () => {
+    const slice = requestSlice("slice-blocked", "blocked", "wp-blocked");
+    const detail = requestDetail([slice]);
+    const pkg: WorkPackageCard = { id: "wp-blocked", status: "blocked", active_blocker_count: 1 };
+    const blocker: BlockerItem = {
+      id: pkg.id,
+      title: "Blocked package",
+      repo: "fixture/repo",
+      blockerCount: 1,
+      detail: "No blocker record is attached.",
+      selection: { kind: "slice", detail, slice, pkg },
+    };
+
+    expect(dashboardAttentionItems([detail], new Map([[pkg.id, pkg]]), [], [], [blocker])).toMatchObject([
+      { kind: "status", key: "status:blocked:package:wp-blocked" },
+    ]);
+  });
+
   it("keeps the pre-run Clarifying state out of top-bar human guidance", () => {
     const clarifying = requestDetail([]);
     clarifying.work_request = {
