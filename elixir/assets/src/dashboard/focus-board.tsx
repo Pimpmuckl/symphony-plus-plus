@@ -9,7 +9,7 @@ import { ProductRequestRow } from "./workstream-board";
 import { activeBlockerEntityCounts } from "./workstream-progress";
 import { readStoredFocusBoardSectionOpen, repoIdentityKey, writeStoredFocusBoardSectionOpen } from "./dashboard-persistence";
 import { buildFocusBoardItems, groupFocusItemsByRepo, preserveFocusedItem, requestHasExecutionBoard, type FocusBoardItem, type FocusBoardLane } from "./focus-board-data";
-import { focusAttachOffset, focusSectionOffset, focusSpaceOffsets, focusTravelScale, type FocusEjectOffset, type FocusEjectRect } from "./focus-board-motion";
+import { focusAttachOffset, focusCameraTop, focusSectionOffset, focusSpaceOffsets, focusTravelScale, type FocusEjectOffset, type FocusEjectRect } from "./focus-board-motion";
 import type { AttentionJumpTarget, AttentionSelect } from "./workstream-attention";
 const FOCUS_BOARD_COLUMNS = ["pr", "state"] as const;
 const FOCUS_BOARD_COLUMN_CAPS_REM = { pr: Number.POSITIVE_INFINITY, state: Number.POSITIVE_INFINITY };
@@ -124,7 +124,6 @@ export function FocusBoard({
   const items = useMemo(() => preserveFocusedItem(classifiedItems, focus?.item), [classifiedItems, focus?.item]);
   const boardRef = useRef<HTMLElement | null>(null);
   const [ejectedContent, setEjectedContent] = useState<EjectedContent>(NO_EJECTED_CONTENT);
-  const initialScrollYRef = useRef(0);
   const cameraFrameRef = useRef<number | null>(null);
   const phaseFrameRef = useRef<number | null>(null);
   const timersRef = useRef<number[]>([]);
@@ -185,7 +184,6 @@ export function FocusBoard({
     const item = items.find((candidate) => candidate.id === id)!;
     clearTimers();
     setInlineExpandedRequestId(undefined);
-    initialScrollYRef.current = window.scrollY;
     setFocus({ item, phase: "measuring" });
   }, [clearTimers, focus, items]);
 
@@ -199,7 +197,8 @@ export function FocusBoard({
     const rects = measureFocusRows(rows);
     const frontierHeight = selectedRow.querySelector<HTMLElement>(".v3-request-frontier")?.getBoundingClientRect().height ?? 0;
     const groupedRects = rects.map((rect) => rect.id === id ? { ...rect, height: Math.max(0, rect.height - frontierHeight) } : rect);
-    boardRef.current?.style.setProperty("--focus-attach-offset", `${focusAttachOffset(groupedRects, id)}px`);
+    const attachOffset = focusAttachOffset(groupedRects, id);
+    boardRef.current?.style.setProperty("--focus-attach-offset", `${attachOffset}px`);
     const expandedHeight = selectedGrid.querySelector<HTMLElement>(".focus-board__expanded-request")?.getBoundingClientRect().height ?? 0;
     const travelScale = focusTravelScale(expandedHeight, window.innerHeight);
     const offsets = focusSpaceOffsets(
@@ -215,7 +214,9 @@ export function FocusBoard({
       repoGroups: applyFollowingRepoGroupOffsets(selectedGrid, travelScale),
       lanes: applyFollowingSectionOffsets(selectedGrid, travelScale),
     };
-    const cameraTop = Math.max(0, window.scrollY + selectedRow.getBoundingClientRect().top - FOCUS_CAMERA_TOP);
+    const selectedRect = selectedRow.getBoundingClientRect();
+    const focusedHeight = selectedRect.height - frontierHeight + expandedHeight - attachOffset;
+    const cameraTop = focusCameraTop(window.scrollY, selectedRect.top, focusedHeight, window.innerHeight, FOCUS_CAMERA_TOP);
 
     const motionScale = focusMotionScale();
     schedule(() => {
@@ -246,7 +247,6 @@ export function FocusBoard({
     if (dashboardPrefersReducedMotion()) {
       setFocus(null);
       clearEjectOffsets();
-      window.scrollTo({ top: initialScrollYRef.current, behavior: "auto" });
       return;
     }
     const motionScale = focusMotionScale();
@@ -255,14 +255,13 @@ export function FocusBoard({
       setFocus((current) => current ? { ...current, phase: "ungrouping" } : null);
       schedule(() => {
         setFocus((current) => current ? { ...current, phase: "returning" } : null);
-        animateCamera(initialScrollYRef.current, FOCUS_RETURN_MS * motionScale);
         schedule(() => {
           setFocus(null);
           clearEjectOffsets();
         }, FOCUS_RETURN_MS * motionScale);
       }, FOCUS_GROUP_MS * motionScale);
     }, FOCUS_EXPANSE_MS * motionScale);
-  }, [animateCamera, clearEjectOffsets, clearTimers, focus, schedule]);
+  }, [clearEjectOffsets, clearTimers, focus, schedule]);
 
   useEffect(() => {
     if (!jumpTarget || handledJumpTokenRef.current >= jumpTarget.token) return;

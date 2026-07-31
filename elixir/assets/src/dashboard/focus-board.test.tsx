@@ -6,7 +6,7 @@ import type { WorkPackageCard, WorkRequestDetail, WorkRequestPackage } from "@/t
 
 import { FocusBoard } from "./focus-board";
 import { buildFocusBoardItems } from "./focus-board-data";
-import { focusAttachOffset, focusSectionOffset, focusSpaceOffsets, focusTravelScale } from "./focus-board-motion";
+import { focusAttachOffset, focusCameraTop, focusSectionOffset, focusSpaceOffsets, focusTravelScale } from "./focus-board-motion";
 
 describe("focus board", () => {
   it("uses existing row slack before reserving expanded board space", () => {
@@ -39,19 +39,24 @@ describe("focus board", () => {
   });
 
   it("keeps small boards from over-ejecting surrounding requests", () => {
-    expect(focusTravelScale(120, 800)).toBe(0.35);
+    expect(focusTravelScale(120, 800)).toBe(0);
     expect(focusTravelScale(640, 800)).toBe(1);
 
     const offsets = focusSpaceOffsets([
       { id: "selected", left: 400, top: 300, width: 200, height: 100 },
       { id: "right", left: 700, top: 300, width: 200, height: 100 },
       { id: "offscreen", left: 400, top: 900, width: 200, height: 100 },
-    ], "selected", { width: 1200, height: 800 }, 40, 0.35);
+    ], "selected", { width: 1200, height: 800 }, 40, 0);
 
-    expect(offsets.get("right")?.x).toBe(192);
+    expect(offsets.get("right")).toEqual({ opacity: 1, x: 0, y: 0 });
     expect(offsets.get("offscreen")).toEqual({ opacity: 1, x: 0, y: 0 });
-    expect(focusSectionOffset(600, 800, 0.35)).toBe(87);
+    expect(focusSectionOffset(600, 800, 0)).toBe(0);
     expect(focusSectionOffset(900, 800)).toBe(0);
+  });
+
+  it("moves the camera only when the focused board does not fit in the viewport", () => {
+    expect(focusCameraTop(252, 626, 228, 1_300, 88)).toBe(252);
+    expect(focusCameraTop(252, 626, 800, 800, 88)).toBe(790);
   });
 
   it("assigns each request to one operational category and keeps only recently finished work", () => {
