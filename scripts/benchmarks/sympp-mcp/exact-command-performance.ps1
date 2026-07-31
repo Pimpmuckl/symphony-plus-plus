@@ -30,6 +30,9 @@ $clients = [System.Collections.Generic.List[object]]::new()
 $runtimeState = $null
 $backendStartTicks = 0L
 $backendPort = 0
+$cleanupBackendPid = 0
+$cleanupBackendStartTicks = 0L
+$nextCleanupIdentityProbe = [DateTime]::MinValue
 $result = $null
 $probeFailure = $null
 $startupBurst = 10
@@ -149,9 +152,45 @@ function Start-ExactClient([hashtable]$Environment) {
   return $client
 }
 
+function Save-BackendCleanupIdentity([object[]]$Cohort) {
+  if ($script:cleanupBackendPid -or -not $script:backendPort -or [DateTime]::UtcNow -lt $script:nextCleanupIdentityProbe) { return }
+  $script:nextCleanupIdentityProbe = [DateTime]::UtcNow.AddMilliseconds(250)
+  $owners = @(Get-ListenerPids $script:backendPort)
+  if ($owners.Count -ne 1) { return }
+
+  $roots = [System.Collections.Generic.HashSet[int]]::new()
+  foreach ($client in $Cohort) {
+    if ($client -and $client.process) { [void]$roots.Add([int]$client.process.Id) }
+  }
+  $parents = @{}
+  foreach ($row in @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)) {
+    $parents[[int]$row.ProcessId] = [int]$row.ParentProcessId
+  }
+  $ownerPid = [int]$owners[0]
+  $currentPid = $ownerPid
+  $owned = $false
+  foreach ($depth in 1..64) {
+    if ($roots.Contains($currentPid)) { $owned = $true; break }
+    if (-not $parents.ContainsKey($currentPid) -or $parents[$currentPid] -eq $currentPid) { break }
+    $currentPid = [int]$parents[$currentPid]
+  }
+  if (-not $owned -or $ownerPid -notin @(Get-ListenerPids $script:backendPort)) { return }
+
+  $process = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+  if ($process) {
+    try { $processStartTime = $process.StartTime } catch { return }
+    if ($processStartTime) {
+      $script:cleanupBackendPid = $ownerPid
+      $script:cleanupBackendStartTicks = $processStartTime.ToUniversalTime().Ticks
+      Write-BenchmarkProgress "Exact backend cleanup identity captured: pid=$ownerPid name=$($process.ProcessName)"
+    }
+  }
+}
+
 function Wait-ClientsReady([object[]]$Cohort, [int]$TimeoutSec) {
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
   while (@($Cohort | Where-Object { -not $_.ready }).Count -gt 0) {
+    Save-BackendCleanupIdentity $Cohort
     foreach ($client in @($Cohort | Where-Object { -not $_.ready })) {
       if ($client.line_task.IsCompleted) {
         $client.watch.Stop()
@@ -625,19 +664,18 @@ exit /b %ERRORLEVEL%
     }
   }
   if ($backendPort) {
+    if ($probeFailure -and $cleanupBackendPid -and $cleanupBackendStartTicks -and $cleanupBackendPid -in @(Get-ListenerPids $backendPort)) {
+      $cleanupBackend = Get-Process -Id $cleanupBackendPid -ErrorAction SilentlyContinue
+      if ($cleanupBackend) {
+        try { $cleanupStartTime = $cleanupBackend.StartTime } catch { $cleanupStartTime = $null }
+        if ($cleanupStartTime -and $cleanupStartTime.ToUniversalTime().Ticks -eq $cleanupBackendStartTicks) {
+          Stop-Process -Id $cleanupBackendPid -Force -ErrorAction SilentlyContinue
+        }
+      }
+    }
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     while ((Get-ListenerPids $backendPort).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
     $remainingListeners = @(Get-ListenerPids $backendPort)
-    if ($probeFailure -and $remainingListeners.Count -gt 0) {
-      foreach ($listenerPid in $remainingListeners) {
-        if ($listenerPid -in @(Get-ListenerPids $backendPort)) {
-          Stop-Process -Id ([int]$listenerPid) -Force -ErrorAction SilentlyContinue
-        }
-      }
-      $deadline = [DateTime]::UtcNow.AddSeconds(10)
-      while ((Get-ListenerPids $backendPort).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
-      $remainingListeners = @(Get-ListenerPids $backendPort)
-    }
     if ($remainingListeners.Count -gt 0) {
       $cleanupFailure = "Benchmark cleanup left port $backendPort occupied; owners=$($remainingListeners -join ',')."
       if ($probeFailure) { Write-BenchmarkProgress "Exact cleanup failed after probe failure: $cleanupFailure" } else { throw $cleanupFailure }
