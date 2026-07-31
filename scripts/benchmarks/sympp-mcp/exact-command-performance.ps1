@@ -339,7 +339,7 @@ function Limit-DiagnosticText([string]$Text, [int]$MaximumLength) {
 }
 
 function Write-PreCleanupBackendDiagnostics {
-  $url = "http://127.0.0.1:$backendPort/"
+  $url = "http://127.0.0.1:$backendPort/mcp/readiness"
   try {
     $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5 -SkipHttpErrorCheck
     Write-BenchmarkProgress "Exact backend HTTP before cleanup: status=$([int]$response.StatusCode) body=$(Limit-DiagnosticText ([string]$response.Content) 2000)"
