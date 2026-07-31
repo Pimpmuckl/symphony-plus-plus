@@ -38,8 +38,12 @@ jobs:
 
           $env:SYMPP_REAL_MIX = (& mise -C elixir which mix).Trim()
           if (-not [IO.Path]::GetExtension($env:SYMPP_REAL_MIX)) { $env:SYMPP_REAL_MIX += '.bat' }
-          $mixWrapper = Join-Path $env:RUNNER_TEMP 'sympp-mix.ps1'
-          Set-Content -LiteralPath $mixWrapper -Value '& $env:SYMPP_REAL_MIX @args; if ($LASTEXITCODE) { exit $LASTEXITCODE }'
+          $mixWrapper = Join-Path $env:RUNNER_TEMP 'sympp-mix.cmd'
+          Set-Content -LiteralPath $mixWrapper -Encoding ascii -Value @"
+          @echo off
+          call "$env:SYMPP_REAL_MIX" %*
+          exit /b %ERRORLEVEL%
+          "@
           $env:SYMPP_MIX = $mixWrapper
           $gateProcess = Start-Process `
             -FilePath (Get-Command pwsh -ErrorAction Stop).Source `

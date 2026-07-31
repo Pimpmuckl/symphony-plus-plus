@@ -238,18 +238,46 @@ function Stop-CapturedProcessTree($Process, [string]$Label) {
   if (-not $Process.WaitForExit(15000)) { throw "$Label timed out and its process tree did not exit" }
 }
 
+function Read-AvailableProcessLines([object[]]$Streams) {
+  foreach ($stream in $Streams) {
+    while ($null -ne $stream.task -and $stream.task.IsCompleted) {
+      $line = $stream.task.GetAwaiter().GetResult()
+      if ($null -eq $line) { $stream.task = $null }
+      else { $stream.lines.Add($line); $stream.task = $stream.reader.ReadLineAsync() }
+    }
+  }
+}
+
 function Invoke-CapturedProcess($Info, [int]$TimeoutMs, [string]$Label) {
   $Info.UseShellExecute = $false; $Info.CreateNoWindow = $true
   $Info.RedirectStandardOutput = $true; $Info.RedirectStandardError = $true
   $process = [System.Diagnostics.Process]::new(); $process.StartInfo = $Info
   if (-not $process.Start()) { throw "$Label failed to start" }
-  $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
-  if (-not $process.WaitForExit($TimeoutMs)) {
-    try { Stop-CapturedProcessTree $process $Label } finally { $process.Dispose() }
-    throw "$Label timed out"
+  $streams = @(
+    [pscustomobject]@{ reader = $process.StandardOutput; task = $process.StandardOutput.ReadLineAsync(); lines = [System.Collections.Generic.List[string]]::new() }
+    [pscustomobject]@{ reader = $process.StandardError; task = $process.StandardError.ReadLineAsync(); lines = [System.Collections.Generic.List[string]]::new() }
+  )
+  $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+  while (-not $process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+    Read-AvailableProcessLines $streams
+    Start-Sleep -Milliseconds 10
   }
-  $stdout = $stdoutTask.GetAwaiter().GetResult(); $stderr = $stderrTask.GetAwaiter().GetResult()
-  $result = [pscustomobject]@{ stdout = $stdout; stderr = $stderr; exit_code = $process.ExitCode }
+  $timedOut = -not $process.HasExited
+  if ($timedOut) {
+    try { Stop-CapturedProcessTree $process $Label } catch { $process.Dispose(); throw }
+  }
+  $drainDeadline = [DateTime]::UtcNow.AddSeconds(2)
+  do {
+    Read-AvailableProcessLines $streams
+    if (@($streams | Where-Object { $null -ne $_.task }).Count -eq 0) { break }
+    Start-Sleep -Milliseconds 10
+  } while ([DateTime]::UtcNow -lt $drainDeadline)
+  if ($timedOut) { $process.Dispose(); throw "$Label timed out" }
+  $result = [pscustomobject]@{
+    stdout = [string]::Join([Environment]::NewLine, $streams[0].lines)
+    stderr = [string]::Join([Environment]::NewLine, $streams[1].lines)
+    exit_code = $process.ExitCode
+  }
   $process.Dispose()
   return $result
 }
