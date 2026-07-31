@@ -85,7 +85,7 @@ function desktopPaths(candidates: RouteCandidate[], model: ExecutionGraphLayoutM
   const ordered = planningOrder(candidates);
   const plans = ordered.map((candidate) => ({
     candidate,
-    obstacles: model.rects.filter((rect) => !rect.parent_group_id && ![candidate.sourceRoot.key, candidate.targetRoot.key].includes(rect.key)),
+    obstacles: model.rects.filter((rect) => ![candidate.source.key, candidate.target.key, candidate.sourceRoot.key, candidate.targetRoot.key].includes(rect.key)),
     options: routeOptions(candidate, model),
   }));
 
@@ -149,45 +149,42 @@ function mobilePaths(candidates: RouteCandidate[]) {
 function routeOptions(candidate: RouteCandidate, model: ExecutionGraphLayoutModel) {
   const routing = model.routing;
   if (candidate.kind === "direct" && candidate.sourceRoot.key === candidate.targetRoot.key && candidate.target.x < candidate.source.x) return [wrappedInternalRoute(candidate)];
-  if (candidate.kind === "direct") return directOptions(candidate, candidate.sourceRoot.key === candidate.targetRoot.key ? undefined : routing);
+  if (candidate.kind === "direct") return candidate.sourceRoot.key === candidate.targetRoot.key ? directOptions(candidate) : [...directOptions(candidate, routing), ...crossRootDirectOptions(candidate)];
   if (!routing) return [routeFromPoints([candidate.start, candidate.end])];
-
   const sourceXs = sourceLaneOptions(candidate, routing);
   const targetXs = targetLaneOptions(candidate, model);
   const targetYs = candidate.kind === "local"
     ? spread(candidate.sourceRoot.y + candidate.sourceRoot.height + 16, candidate.sourceRoot.y + candidate.sourceRoot.height + 28, 3)
-    : [
-        ...lowerBandLaneOptions(candidate, model),
-        ...bandLaneOptions(candidate.targetRoot.row, model, "target"),
-      ];
+    : [...lowerBandLaneOptions(candidate, model), ...bandLaneOptions(candidate.targetRoot.row, model, "target")];
   const crossBand = candidate.sourceRoot.row !== candidate.targetRoot.row;
-  if (!crossBand) return sameBandOptions(candidate, sourceXs, targetYs, targetXs);
-  return crossBandOptions(candidate, model, sourceXs, targetYs, targetXs);
+  return crossBand ? crossBandOptions(candidate, model, sourceXs, targetYs, targetXs) : sameBandOptions(candidate, sourceXs, targetYs, targetXs);
 }
-
+function crossRootDirectOptions(candidate: RouteCandidate) {
+  const sourceX = candidate.start.x + 8, targetX = candidate.end.x - 8;
+  const corridorYs = [Math.max(4, Math.min(candidate.sourceRoot.y, candidate.targetRoot.y) - 16), Math.max(candidate.sourceRoot.y + candidate.sourceRoot.height, candidate.targetRoot.y + candidate.targetRoot.height) + 16];
+  return corridorYs.map((y) => routeFromPoints([...sourceApproach(candidate, sourceX, y), { x: targetX, y }, { x: targetX, y: candidate.end.y }, candidate.end]));
+}
 function wrappedInternalRoute(candidate: RouteCandidate) {
   const corridorY = (candidate.source.y + candidate.source.height + candidate.target.y) / 2;
   return routeFromPoints([candidate.start, { x: candidate.sourceRoot.x + candidate.sourceRoot.width - 4, y: candidate.start.y }, { x: candidate.sourceRoot.x + candidate.sourceRoot.width - 4, y: corridorY }, { x: candidate.target.x - 8, y: corridorY }, { x: candidate.target.x - 8, y: candidate.end.y }, candidate.end]);
 }
-
 function sameBandOptions(candidate: RouteCandidate, sourceXs: number[], targetYs: number[], targetXs: number[]) {
-  return sourceXs.flatMap((sourceX) => targetYs.flatMap((targetY) => targetXs.map((targetX) => (
-    routeFromPoints([candidate.start, { x: sourceX, y: candidate.start.y }, { x: sourceX, y: targetY }, { x: targetX, y: targetY }, { x: targetX, y: candidate.end.y }, candidate.end])
-  ))));
+  return sourceXs.flatMap((sourceX) => targetYs.flatMap((targetY) => targetXs.map((targetX) => routeFromPoints([...sourceApproach(candidate, sourceX, targetY), { x: targetX, y: targetY }, { x: targetX, y: candidate.end.y }, candidate.end]))));
 }
-
 function crossBandOptions(candidate: RouteCandidate, model: ExecutionGraphLayoutModel, sourceXs: number[], targetYs: number[], targetXs: number[]) {
   const routing = model.routing as NonNullable<ExecutionGraphLayoutModel["routing"]>;
   const busXs = spread(routing.contentRight + 20, model.width - 20, 6);
-  if (candidate.sourceRoot.column >= 2) {
-    return busXs.flatMap((busX) => targetYs.flatMap((targetY) => targetXs.map((targetX) => (
-      routeFromPoints([candidate.start, { x: busX, y: candidate.start.y }, { x: busX, y: targetY }, { x: targetX, y: targetY }, { x: targetX, y: candidate.end.y }, candidate.end])
-    ))));
-  }
+  if (candidate.sourceRoot.column >= 2) return busXs.flatMap((busX) => targetYs.flatMap((targetY) => targetXs.map((targetX) => routeFromPoints([...sourceApproach(candidate, busX, targetY), { x: targetX, y: targetY }, { x: targetX, y: candidate.end.y }, candidate.end]))));
   const sourceYs = sourceBandLaneOptions(candidate, model);
-  return sourceXs.flatMap((sourceX) => sourceYs.flatMap((sourceY) => busXs.flatMap((busX) => targetYs.flatMap((targetY) => targetXs.map((targetX) => (
-    routeFromPoints([candidate.start, { x: sourceX, y: candidate.start.y }, { x: sourceX, y: sourceY }, { x: busX, y: sourceY }, { x: busX, y: targetY }, { x: targetX, y: targetY }, { x: targetX, y: candidate.end.y }, candidate.end])
-  ))))));
+  return sourceXs.flatMap((sourceX) => sourceYs.flatMap((sourceY) => busXs.flatMap((busX) => targetYs.flatMap((targetY) => targetXs.map((targetX) => routeFromPoints([...sourceApproach(candidate, sourceX, sourceY), { x: busX, y: sourceY }, { x: busX, y: targetY }, { x: targetX, y: targetY }, { x: targetX, y: candidate.end.y }, candidate.end]))))));
+}
+function sourceApproach(candidate: RouteCandidate, sourceX: number, laneY: number): Point[] {
+  if (candidate.sourceRoot.key === candidate.targetRoot.key || candidate.source.key === candidate.sourceRoot.key) return [candidate.start, { x: sourceX, y: candidate.start.y }, { x: sourceX, y: laneY }];
+  const top = candidate.sourceRoot.y - 16, bottom = candidate.sourceRoot.y + candidate.sourceRoot.height + 16;
+  const exitY = Math.abs(candidate.start.y - top) <= Math.abs(candidate.start.y - bottom) ? top : bottom;
+  const innerX = candidate.start.x + 8;
+  const outerX = candidate.sourceRoot.x + candidate.sourceRoot.width + 16;
+  return [candidate.start, { x: innerX, y: candidate.start.y }, { x: innerX, y: exitY }, { x: outerX, y: exitY }, { x: outerX, y: laneY }];
 }
 
 function directOptions(candidate: RouteCandidate, routing?: ExecutionGraphLayoutModel["routing"]) {
@@ -204,6 +201,7 @@ function directOptions(candidate: RouteCandidate, routing?: ExecutionGraphLayout
 }
 
 function sourceLaneOptions(candidate: RouteCandidate, routing: NonNullable<ExecutionGraphLayoutModel["routing"]>) {
+  if (candidate.sourceRoot.key !== candidate.targetRoot.key && candidate.source.key !== candidate.sourceRoot.key) return [candidate.start.x + 8];
   const fanoutLane = sourceFanoutLane(candidate, routing);
   if (fanoutLane !== undefined) return [fanoutLane];
   if (candidate.kind === "local") return spread(candidate.sourceRoot.x + candidate.sourceRoot.width + 8, candidate.sourceRoot.x + candidate.sourceRoot.width + 18, 3);
@@ -220,6 +218,7 @@ function targetLaneOptions(candidate: RouteCandidate, model: ExecutionGraphLayou
     ? 8
     : Math.max(...model.rects.filter((rect) => !rect.parent_group_id && rect.row === candidate.targetRoot.row && rect.column === candidate.targetRoot.column - 1).map((rect) => rect.x + rect.width), 8) + 8;
   const lanes = spread(previousRight, candidate.end.x - BRANCH_STUB, 6);
+  if (candidate.sourceRoot.key !== candidate.targetRoot.key && candidate.target.key !== candidate.targetRoot.key) lanes.unshift(candidate.end.x - 8);
   return candidate.kind === "local" ? lanes.reverse() : lanes;
 }
 

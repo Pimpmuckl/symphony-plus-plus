@@ -14,7 +14,8 @@ export function focusTravelScale(expandedHeight: number, viewportHeight: number)
 }
 
 export function focusCameraTop(scrollTop: number, rowTop: number, focusedHeight: number, viewportHeight: number, viewportTop: number) {
-  return rowTop + focusedHeight <= viewportHeight ? scrollTop : scrollTop + Math.max(0, rowTop - viewportTop);
+  const fits = rowTop >= viewportTop && rowTop + focusedHeight <= viewportHeight;
+  return fits ? scrollTop : Math.max(0, scrollTop + rowTop - viewportTop);
 }
 
 export function focusSectionOffset(sectionTop: number, viewportHeight: number, travelScale = 1) {

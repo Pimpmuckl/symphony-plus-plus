@@ -1,5 +1,5 @@
-import { memo, useMemo, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import { memo, useMemo, useRef, useState } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import {
   buildExecutionGraphLayout,
@@ -117,6 +117,7 @@ function GraphSurface({
   onToggleGroup: (groupId: string) => void;
   contextPath?: ContextPathPart[];
 }) {
+  const pan = useRef<{ left: number; pointerId: number; x: number } | null>(null);
   const children = new Map<string, GraphEntityRect[]>();
   model.rects.forEach((rect) => {
     if (!rect.parent_group_id) return;
@@ -134,6 +135,21 @@ function GraphSurface({
     return <WorkPackageCard attention={attentionByEntity.get(rect.key)} key={rect.key} rect={localRect} model={model} now={now} onSelectAttention={onSelectAttention ? () => onSelectAttention(rect.key) : undefined} onSelectWorkPackage={onSelectWorkPackage} contextPath={contextPath} />;
   };
   const roots = model.rects.filter((rect) => !rect.parent_group_id);
+  const beginPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button, a")) return;
+    pan.current = { left: event.currentTarget.scrollLeft, pointerId: event.pointerId, x: event.clientX };
+    event.currentTarget.dataset.panning = "true";
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const movePan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (pan.current?.pointerId !== event.pointerId) return;
+    event.currentTarget.scrollLeft = pan.current.left + pan.current.x - event.clientX;
+  };
+  const endPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (pan.current?.pointerId !== event.pointerId) return;
+    pan.current = null;
+    delete event.currentTarget.dataset.panning;
+  };
 
   return (
     <div
@@ -142,6 +158,11 @@ function GraphSurface({
       role="region"
       tabIndex={0}
       aria-label={`${orientation === "desktop" ? (model.routing?.wrapped ? "Wrapped left-to-right" : "Left-to-right") : "Top-to-bottom"} execution order; scroll to inspect`}
+      onLostPointerCapture={endPan}
+      onPointerCancel={endPan}
+      onPointerDown={beginPan}
+      onPointerMove={movePan}
+      onPointerUp={endPan}
     >
       <div className="execution-graph__canvas" style={{ width: model.width, height: model.height } as CSSProperties}>
         {roots.map((rect) => renderNode(rect))}

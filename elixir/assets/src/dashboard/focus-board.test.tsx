@@ -57,6 +57,7 @@ describe("focus board", () => {
   it("moves the camera only when the focused board does not fit in the viewport", () => {
     expect(focusCameraTop(252, 626, 228, 1_300, 88)).toBe(252);
     expect(focusCameraTop(252, 626, 800, 800, 88)).toBe(790);
+    expect(focusCameraTop(252, 40, 228, 800, 88)).toBe(204);
   });
 
   it("assigns each request to one operational category and keeps only recently finished work", () => {

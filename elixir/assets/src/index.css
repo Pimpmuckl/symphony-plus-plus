@@ -4521,6 +4521,12 @@
     border-radius: 0;
     overscroll-behavior-x: contain;
     overscroll-behavior-y: auto;
+    cursor: grab;
+  }
+
+  .execution-graph__viewport[data-panning="true"] {
+    cursor: grabbing;
+    user-select: none;
   }
 
   .execution-graph__viewport:focus-visible {
