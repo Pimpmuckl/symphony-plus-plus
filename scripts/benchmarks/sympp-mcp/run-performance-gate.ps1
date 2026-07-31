@@ -565,13 +565,43 @@ try {
     $failure = (@($failure, "cleanup failure: $($cleanupDetail -join [Environment]::NewLine)") |
       Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [Environment]::NewLine
   }
+  if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_PERFORMANCE_PROGRESS_FILE)) {
+    try {
+      [System.IO.File]::AppendAllText(
+        $env:SYMPP_PERFORMANCE_PROGRESS_FILE,
+        "$([DateTime]::UtcNow.ToString('O')) Performance gate cleanup completed: backend_port_free=$($cleanup.backend_port_free) dashboard_port_free=$($cleanup.dashboard_port_free) cold_leases_after_close=$($cleanup.cold_leases_after_close) isolated_root_removed=$($cleanup.isolated_root_removed)$([Environment]::NewLine)"
+      )
+    } catch { }
+  }
 }
 
 if ($failure) {
-  [Console]::Out.WriteLine("status: error")
-  [Console]::Out.WriteLine("error: $(Quote-Toon $failure)")
-  [Console]::Out.WriteLine("cleanup:")
-  foreach ($name in $cleanup.Keys) { $value = if ($name -eq "cold_leases_after_close") { $cleanup[$name] } else { ([bool]$cleanup[$name]).ToString().ToLowerInvariant() }; [Console]::Out.WriteLine("  ${name}: $value") }
+  try {
+    [Console]::Out.WriteLine("status: error")
+    [Console]::Out.WriteLine("error: $(Quote-Toon $failure)")
+    [Console]::Out.WriteLine("cleanup:")
+    foreach ($name in $cleanup.Keys) { $value = if ($name -eq "cold_leases_after_close") { $cleanup[$name] } else { ([bool]$cleanup[$name]).ToString().ToLowerInvariant() }; [Console]::Out.WriteLine("  ${name}: $value") }
+    if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_PERFORMANCE_PROGRESS_FILE)) {
+      [System.IO.File]::AppendAllText(
+        $env:SYMPP_PERFORMANCE_PROGRESS_FILE,
+        "$([DateTime]::UtcNow.ToString('O')) Performance gate rendered captured failure.$([Environment]::NewLine)"
+      )
+    }
+  } catch {
+    $renderCaught = $_
+    $renderDetail = @(
+      [string]$renderCaught.Exception.Message
+      [string]$renderCaught.ScriptStackTrace
+      [string]$renderCaught.InvocationInfo.PositionMessage
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_PERFORMANCE_PROGRESS_FILE)) {
+      [System.IO.File]::AppendAllText(
+        $env:SYMPP_PERFORMANCE_PROGRESS_FILE,
+        "$([DateTime]::UtcNow.ToString('O')) Performance gate final render failed: $((($renderDetail -join ' | ') -replace '\r?\n', ' ').Trim())$([Environment]::NewLine)"
+      )
+    }
+    throw
+  }
   exit 1
 }
 $failures = Add-CleanupFailure @(Get-GateFailures $metrics $thresholds) $cleanup

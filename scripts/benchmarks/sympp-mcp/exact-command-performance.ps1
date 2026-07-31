@@ -597,6 +597,24 @@ exit /b %ERRORLEVEL%
     if ($logDiagnostics.Count) {
       Write-BenchmarkProgress "Exact launcher logs after cleanup: $((($logDiagnostics -join ' | ') -replace '\r?\n', ' ').Trim())"
     }
+    $failureRuntime = $null
+    if (Test-Path -LiteralPath $runtimeFile -PathType Leaf) {
+      $runtimeContent = [string](Get-Content -LiteralPath $runtimeFile -Raw -ErrorAction SilentlyContinue)
+      if ($runtimeContent.Length -gt 4000) { $runtimeContent = $runtimeContent.Substring($runtimeContent.Length - 4000) }
+      if (-not [string]::IsNullOrWhiteSpace($runtimeContent)) {
+        Write-BenchmarkProgress "Exact runtime before backend cleanup: $((($runtimeContent -replace '\r?\n', ' ').Trim()))"
+        try { $failureRuntime = $runtimeContent | ConvertFrom-Json } catch { }
+      }
+    }
+    $failureListenerPids = if ($backendPort) { @(Get-ListenerPids $backendPort) } else { @() }
+    $failureListeners = @($failureListenerPids | ForEach-Object {
+      $listenerProcess = Get-Process -Id ([int]$_) -ErrorAction SilentlyContinue
+      if ($listenerProcess) { "pid=$($listenerProcess.Id) name=$($listenerProcess.ProcessName)" } else { "pid=$_" }
+    })
+    $failureHealth = if ($failureRuntime -and $failureRuntime.frontend -and $failureRuntime.frontend.url) {
+      Test-Dashboard ([string]$failureRuntime.frontend.url)
+    } else { $false }
+    Write-BenchmarkProgress "Exact listener before backend cleanup: port=$backendPort owners=$($failureListeners -join ',') dashboard_healthy=$failureHealth"
     Write-BenchmarkProgress "Exact-command post-cleanup trace: $((Get-TraceCounts | ConvertTo-Json -Compress)) git_invocations=$(Get-GitInvocationCount)"
   }
   if ((-not $runtimeState -or -not $runtimeState.backend) -and (Test-Path -LiteralPath $runtimeFile -PathType Leaf)) {
@@ -619,12 +637,19 @@ exit /b %ERRORLEVEL%
   if ($backendPort) {
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     while ((Get-ListenerPids $backendPort).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
-    if ((Get-ListenerPids $backendPort).Count -gt 0) { throw "Benchmark cleanup left port $backendPort occupied." }
+    $remainingListeners = @(Get-ListenerPids $backendPort)
+    if ($remainingListeners.Count -gt 0) {
+      $cleanupFailure = "Benchmark cleanup left port $backendPort occupied; owners=$($remainingListeners -join ',')."
+      if ($probeFailure) { Write-BenchmarkProgress "Exact cleanup failed after probe failure: $cleanupFailure" } else { throw $cleanupFailure }
+    }
   }
   $resolvedTemp = [System.IO.Path]::GetFullPath($tempRoot)
   if (-not $resolvedTemp.StartsWith($ownedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Benchmark cleanup root escaped its owned prefix." }
   Remove-Item -LiteralPath $resolvedTemp -Recurse -Force -ErrorAction SilentlyContinue
-  if (Test-Path -LiteralPath $resolvedTemp) { throw "Benchmark cleanup did not remove its isolated root." }
+  if (Test-Path -LiteralPath $resolvedTemp) {
+    $cleanupFailure = "Benchmark cleanup did not remove its isolated root."
+    if ($probeFailure) { Write-BenchmarkProgress "Exact cleanup failed after probe failure: $cleanupFailure" } else { throw $cleanupFailure }
+  }
 }
 
 $result | ConvertTo-Json -Depth 12
