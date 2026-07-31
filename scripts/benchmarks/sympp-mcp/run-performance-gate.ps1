@@ -273,11 +273,17 @@ function Invoke-CapturedProcess($Info, [int]$TimeoutMs, [string]$Label) {
     try { Stop-CapturedProcessTree $process $Label } catch { $process.Dispose(); throw }
   }
   $drainDeadline = [DateTime]::UtcNow.AddSeconds(2)
+  $maximumDrainDeadline = [DateTime]::UtcNow.AddSeconds(30)
   do {
+    $capturedLength = $streams[0].output.Length + $streams[1].output.Length
     Read-AvailableProcessOutput $streams
+    if (($streams[0].output.Length + $streams[1].output.Length) -gt $capturedLength) {
+      $extendedDeadline = [DateTime]::UtcNow.AddSeconds(2)
+      $drainDeadline = if ($extendedDeadline -lt $maximumDrainDeadline) { $extendedDeadline } else { $maximumDrainDeadline }
+    }
     if (@($streams | Where-Object { $null -ne $_.task }).Count -eq 0) { break }
     Start-Sleep -Milliseconds 10
-  } while ([DateTime]::UtcNow -lt $drainDeadline)
+  } while ([DateTime]::UtcNow -lt $drainDeadline -and [DateTime]::UtcNow -lt $maximumDrainDeadline)
   if ($timedOut) { $process.Dispose(); throw "$Label timed out" }
   $result = [pscustomobject]@{
     stdout = $streams[0].output.ToString()
