@@ -225,14 +225,19 @@ function Stop-CapturedProcessTree($Process, [string]$Label) {
   $killInfo.FileName = (Get-Command taskkill.exe -ErrorAction Stop).Source
   foreach ($arg in @("/PID", [string]$Process.Id, "/T", "/F")) { [void]$killInfo.ArgumentList.Add($arg) }
   $killInfo.UseShellExecute = $false; $killInfo.CreateNoWindow = $true
+  $killInfo.RedirectStandardOutput = $true; $killInfo.RedirectStandardError = $true
   $killer = [System.Diagnostics.Process]::new(); $killer.StartInfo = $killInfo
+  $stdoutTask = $null; $stderrTask = $null
   try {
     if (-not $killer.Start()) { throw "$Label timeout cleanup failed to start" }
+    $stdoutTask = $killer.StandardOutput.ReadToEndAsync(); $stderrTask = $killer.StandardError.ReadToEndAsync()
     if (-not $killer.WaitForExit(15000)) {
       try { $killer.Kill() } catch [System.InvalidOperationException] { }
       [void]$killer.WaitForExit(5000)
     }
   } finally {
+    if ($stdoutTask) { [void]$stdoutTask.GetAwaiter().GetResult() }
+    if ($stderrTask) { [void]$stderrTask.GetAwaiter().GetResult() }
     $killer.Dispose()
   }
   if (-not $Process.WaitForExit(15000)) { throw "$Label timed out and its process tree did not exit" }

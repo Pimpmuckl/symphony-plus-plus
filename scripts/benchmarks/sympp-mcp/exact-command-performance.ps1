@@ -357,7 +357,7 @@ function Write-PreCleanupBackendDiagnostics {
         if (-not $currentPid -or -not $seen.Add($currentPid)) { break }
         $row = @(Get-CimInstance Win32_Process -Filter "ProcessId = $currentPid" -ErrorAction SilentlyContinue | Select-Object -First 1)
         if ($row.Count -ne 1) { $processRows.Add("pid=$currentPid unavailable"); break }
-        $processRows.Add("pid=$($row[0].ProcessId) parent=$($row[0].ParentProcessId) name=$($row[0].Name) command=$(Limit-DiagnosticText ([string]$row[0].CommandLine) 1000)")
+        $processRows.Add("pid=$($row[0].ProcessId) parent=$($row[0].ParentProcessId) name=$($row[0].Name)")
         $currentPid = [int]$row[0].ParentProcessId
       }
     }
