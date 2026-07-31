@@ -617,16 +617,6 @@ exit /b %ERRORLEVEL%
     Write-BenchmarkProgress "Exact listener before backend cleanup: port=$backendPort owners=$($failureListeners -join ',') dashboard_healthy=$failureHealth"
     Write-BenchmarkProgress "Exact-command post-cleanup trace: $((Get-TraceCounts | ConvertTo-Json -Compress)) git_invocations=$(Get-GitInvocationCount)"
   }
-  if ((-not $runtimeState -or -not $runtimeState.backend) -and (Test-Path -LiteralPath $runtimeFile -PathType Leaf)) {
-    try { $runtimeState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json } catch { $runtimeState = $null }
-    if ($runtimeState -and $runtimeState.backend) {
-      $process = Get-Process -Id ([int]$runtimeState.backend.pid) -ErrorAction SilentlyContinue
-      if ($process) {
-        $processStartTime = $process.StartTime
-        if ($processStartTime) { $backendStartTicks = $processStartTime.ToUniversalTime().Ticks }
-      }
-    }
-  }
   if ($runtimeState -and $runtimeState.backend -and $backendStartTicks) {
     $process = Get-Process -Id ([int]$runtimeState.backend.pid) -ErrorAction SilentlyContinue
     if ($process) {
