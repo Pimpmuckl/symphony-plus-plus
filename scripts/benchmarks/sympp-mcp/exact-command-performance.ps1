@@ -30,10 +30,6 @@ $clients = [System.Collections.Generic.List[object]]::new()
 $runtimeState = $null
 $backendStartTicks = 0L
 $backendPort = 0
-$cleanupBackendPid = 0
-$cleanupBackendStartTicks = 0L
-$cleanupClientRootPids = [System.Collections.Generic.HashSet[int]]::new()
-$nextCleanupIdentityProbe = [DateTime]::MinValue
 $result = $null
 $probeFailure = $null
 $startupBurst = 10
@@ -139,7 +135,6 @@ function Start-ExactClient([hashtable]$Environment) {
   $process.StartInfo = $info
   $watch = [System.Diagnostics.Stopwatch]::StartNew()
   if (-not $process.Start()) { throw "Exact shipped MCP command failed to start." }
-  [void]$script:cleanupClientRootPids.Add([int]$process.Id)
   $process.StandardInput.AutoFlush = $true
   $process.StandardInput.WriteLine('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"sympp-exact-benchmark","version":"1"},"capabilities":{}}}')
   $client = [pscustomobject]@{
@@ -154,97 +149,44 @@ function Start-ExactClient([hashtable]$Environment) {
   return $client
 }
 
-function Save-BackendCleanupIdentity([object[]]$Cohort, [switch]$Force) {
-  if (-not $script:backendPort -or (-not $Force -and [DateTime]::UtcNow -lt $script:nextCleanupIdentityProbe)) { return }
-  $owners = @(Get-ListenerPids $script:backendPort)
-  if ($owners.Count -ne 1) {
-    $script:nextCleanupIdentityProbe = [DateTime]::UtcNow.AddMilliseconds(250)
-    return
-  }
-  $script:nextCleanupIdentityProbe = [DateTime]::UtcNow.AddMilliseconds(250)
-  $ownerPid = [int]$owners[0]
-  if ($ownerPid -eq $script:cleanupBackendPid) {
-    $recordedProcess = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
-    if ($recordedProcess) {
-      try { $recordedStartTime = $recordedProcess.StartTime } catch { $recordedStartTime = $null }
-      if ($recordedStartTime -and $recordedStartTime.ToUniversalTime().Ticks -eq $script:cleanupBackendStartTicks) { return }
-    }
-  }
-
-  $roots = [System.Collections.Generic.HashSet[int]]::new()
-  foreach ($rootPid in $script:cleanupClientRootPids) { [void]$roots.Add($rootPid) }
-  foreach ($client in $Cohort) {
-    if ($client -and $client.process) { [void]$roots.Add([int]$client.process.Id) }
-  }
-  $parents = @{}
-  foreach ($row in @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)) {
-    $parents[[int]$row.ProcessId] = [int]$row.ParentProcessId
-  }
-  $currentPid = $ownerPid
-  $owned = $false
-  foreach ($depth in 1..64) {
-    if ($roots.Contains($currentPid)) { $owned = $true; break }
-    if (-not $parents.ContainsKey($currentPid) -or $parents[$currentPid] -eq $currentPid) { break }
-    $currentPid = [int]$parents[$currentPid]
-  }
-  if (-not $owned -or $ownerPid -notin @(Get-ListenerPids $script:backendPort)) { return }
-
-  $process = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
-  if ($process) {
-    try { $processStartTime = $process.StartTime } catch { return }
-    if ($processStartTime) {
-      $script:cleanupBackendPid = $ownerPid
-      $script:cleanupBackendStartTicks = $processStartTime.ToUniversalTime().Ticks
-      Write-BenchmarkProgress "Exact backend cleanup identity captured: pid=$ownerPid name=$($process.ProcessName)"
-    }
-  }
-}
-
 function Wait-ClientsReady([object[]]$Cohort, [int]$TimeoutSec) {
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
-  try {
-    while (@($Cohort | Where-Object { -not $_.ready }).Count -gt 0) {
-      try { Save-BackendCleanupIdentity $Cohort } catch { }
-      foreach ($client in @($Cohort | Where-Object { -not $_.ready })) {
-        if ($client.line_task.IsCompleted) {
-          $client.watch.Stop()
-          $line = $client.line_task.GetAwaiter().GetResult()
-          if ([string]::IsNullOrWhiteSpace($line)) {
-            $detail = if ($client.process.HasExited) { $client.stderr_task.GetAwaiter().GetResult().Trim() } else { "stdout closed before initialize" }
-            throw "Exact client failed initialize: $detail"
-          }
-          $response = $line | ConvertFrom-Json
-          if ($null -eq $response.result -or $response.error) { throw "Exact client returned an invalid initialize response: $line" }
-          $client.elapsed_ms = $client.watch.Elapsed.TotalMilliseconds
-          $client.ready = $true
-          $client.process.StandardInput.WriteLine('{"jsonrpc":"2.0","method":"notifications/initialized"}')
-        } elseif ($client.process.HasExited) {
-          throw "Exact client exited before initialize: $($client.stderr_task.GetAwaiter().GetResult().Trim())"
+  while (@($Cohort | Where-Object { -not $_.ready }).Count -gt 0) {
+    foreach ($client in @($Cohort | Where-Object { -not $_.ready })) {
+      if ($client.line_task.IsCompleted) {
+        $client.watch.Stop()
+        $line = $client.line_task.GetAwaiter().GetResult()
+        if ([string]::IsNullOrWhiteSpace($line)) {
+          $detail = if ($client.process.HasExited) { $client.stderr_task.GetAwaiter().GetResult().Trim() } else { "stdout closed before initialize" }
+          throw "Exact client failed initialize: $detail"
         }
+        $response = $line | ConvertFrom-Json
+        if ($null -eq $response.result -or $response.error) { throw "Exact client returned an invalid initialize response: $line" }
+        $client.elapsed_ms = $client.watch.Elapsed.TotalMilliseconds
+        $client.ready = $true
+        $client.process.StandardInput.WriteLine('{"jsonrpc":"2.0","method":"notifications/initialized"}')
+      } elseif ($client.process.HasExited) {
+        throw "Exact client exited before initialize: $($client.stderr_task.GetAwaiter().GetResult().Trim())"
       }
-      if ([DateTime]::UtcNow -ge $deadline) { throw "Timed out waiting for exact-command initialize." }
-      Start-Sleep -Milliseconds 5
     }
-  } catch {
-    try { Save-BackendCleanupIdentity $Cohort -Force } catch { }
-    throw
+    if ([DateTime]::UtcNow -ge $deadline) { throw "Timed out waiting for exact-command initialize." }
+    Start-Sleep -Milliseconds 5
   }
-  try { Save-BackendCleanupIdentity $Cohort -Force } catch { }
 }
 
 function Stop-ExactClients([object[]]$Clients) {
   $active = @($Clients | Where-Object { $null -ne $_ -and $null -ne $_.process })
+  if ($script:probeFailure) {
+    foreach ($client in @($active | Where-Object { -not $_.process.HasExited })) {
+      try { $client.process.Kill($true) } catch { }
+    }
+  }
   $exitDeadline = [DateTime]::UtcNow.AddSeconds(60)
   foreach ($client in $active) {
     try { $client.process.StandardInput.Close() } catch { }
-    while (-not $client.process.HasExited -and [DateTime]::UtcNow -lt $exitDeadline) {
-      try { Save-BackendCleanupIdentity $active -Force } catch { }
-      $remainingMs = [Math]::Max(0, [int][Math]::Ceiling(($exitDeadline - [DateTime]::UtcNow).TotalMilliseconds))
-      [void]$client.process.WaitForExit([Math]::Min(100, $remainingMs))
-    }
-    if (-not $client.process.HasExited) { break }
+    $remainingMs = [Math]::Max(0, [int][Math]::Ceiling(($exitDeadline - [DateTime]::UtcNow).TotalMilliseconds))
+    if ($remainingMs -eq 0 -or -not $client.process.WaitForExit($remainingMs)) { break }
   }
-  try { Save-BackendCleanupIdentity $active -Force } catch { }
   foreach ($client in @($active | Where-Object { -not $_.process.HasExited })) {
     try { $client.process.Kill($true) } catch [System.InvalidOperationException] { }
   }
@@ -689,22 +631,7 @@ exit /b %ERRORLEVEL%
   }
   if ($backendPort) {
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
-    do {
-      if ($probeFailure) {
-        try { Save-BackendCleanupIdentity @() -Force } catch { }
-        if ($cleanupBackendPid -and $cleanupBackendStartTicks -and $cleanupBackendPid -in @(Get-ListenerPids $backendPort)) {
-          $cleanupBackend = Get-Process -Id $cleanupBackendPid -ErrorAction SilentlyContinue
-          if ($cleanupBackend) {
-            try { $cleanupStartTime = $cleanupBackend.StartTime } catch { $cleanupStartTime = $null }
-            if ($cleanupStartTime -and $cleanupStartTime.ToUniversalTime().Ticks -eq $cleanupBackendStartTicks) {
-              Stop-Process -Id $cleanupBackendPid -Force -ErrorAction SilentlyContinue
-            }
-          }
-        }
-      }
-      if (-not $probeFailure -and (Get-ListenerPids $backendPort).Count -eq 0) { break }
-      Start-Sleep -Milliseconds 100
-    } while ([DateTime]::UtcNow -lt $deadline)
+    while ((Get-ListenerPids $backendPort).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
     $remainingListeners = @(Get-ListenerPids $backendPort)
     if ($remainingListeners.Count -gt 0) {
       $cleanupFailure = "Benchmark cleanup left port $backendPort occupied; owners=$($remainingListeners -join ',')."
