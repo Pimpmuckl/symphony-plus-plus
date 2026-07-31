@@ -512,6 +512,12 @@ try {
     [string]$caught.InvocationInfo.PositionMessage
   ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
   $failure = $failure -join [Environment]::NewLine
+  if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_PERFORMANCE_PROGRESS_FILE)) {
+    [System.IO.File]::AppendAllText(
+      $env:SYMPP_PERFORMANCE_PROGRESS_FILE,
+      "$([DateTime]::UtcNow.ToString('O')) Performance gate captured failure: $(($failure -replace '\r?\n', ' ').Trim())$([Environment]::NewLine)"
+    )
+  }
   $backendLog = @(Get-ChildItem (Join-Path $tempRoot "logs") -Filter "backend-*.err.log" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -Last 1); if ($backendLog) { $detail = ([string](Get-Content $backendLog.FullName -Raw)).Trim(); if ($detail.Length -gt 2000) { $detail = $detail.Substring($detail.Length - 2000) }; $failure += "`nbackend stderr: $detail" }
 } finally {
   try {

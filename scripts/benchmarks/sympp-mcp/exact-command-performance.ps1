@@ -584,6 +584,19 @@ exit /b %ERRORLEVEL%
     if ($clientDiagnostics.Count) {
       Write-BenchmarkProgress "Exact client stderr after cleanup: $((($clientDiagnostics -join ' | ') -replace '\r?\n', ' ').Trim())"
     }
+    $logDiagnostics = @(Get-ChildItem -LiteralPath $tempRoot -Recurse -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match '\.(err|out)\.log$' } |
+      ForEach-Object {
+        $content = [string](Get-Content -LiteralPath $_.FullName -Raw -ErrorAction SilentlyContinue)
+        if ($content.Length -gt 2000) { $content = $content.Substring($content.Length - 2000) }
+        if (-not [string]::IsNullOrWhiteSpace($content)) {
+          $role = if ($_.Name -match '^(.+?)-\d{8}-') { $Matches[1] } else { $_.BaseName }
+          "path=$([System.IO.Path]::GetRelativePath($tempRoot, $_.FullName)) role=$role tail=$content"
+        }
+      })
+    if ($logDiagnostics.Count) {
+      Write-BenchmarkProgress "Exact launcher logs after cleanup: $((($logDiagnostics -join ' | ') -replace '\r?\n', ' ').Trim())"
+    }
     Write-BenchmarkProgress "Exact-command post-cleanup trace: $((Get-TraceCounts | ConvertTo-Json -Compress)) git_invocations=$(Get-GitInvocationCount)"
   }
   if ((-not $runtimeState -or -not $runtimeState.backend) -and (Test-Path -LiteralPath $runtimeFile -PathType Leaf)) {
