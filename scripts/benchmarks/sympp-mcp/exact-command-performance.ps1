@@ -333,10 +333,12 @@ exit /b %ERRORLEVEL%
   if ((Get-ListenerPids $backendPort).Count -ne 0) { throw "Selected benchmark port was not empty." }
   $effectivePath = $env:PATH
   if ($LauncherMode -eq "NodeMissing") {
-    $node = Get-Command node.exe -ErrorAction Stop | Select-Object -First 1
-    $nodeDirectory = [System.IO.Path]::GetFullPath((Split-Path -Parent $node.Source)).TrimEnd("\")
+    $nodeDirectories = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($node in @(Get-Command node.exe -All -ErrorAction Stop)) {
+      [void]$nodeDirectories.Add([System.IO.Path]::GetFullPath((Split-Path -Parent $node.Source)).TrimEnd("\"))
+    }
     $effectivePath = (@($env:PATH -split ";" | Where-Object {
-          $_ -and -not [System.IO.Path]::GetFullPath($_).TrimEnd("\").Equals($nodeDirectory, [System.StringComparison]::OrdinalIgnoreCase)
+          $_ -and -not $nodeDirectories.Contains([System.IO.Path]::GetFullPath($_).TrimEnd("\"))
         }) -join ";")
   }
   $environment = @{
