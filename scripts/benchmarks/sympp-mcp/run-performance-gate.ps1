@@ -240,10 +240,11 @@ function Stop-CapturedProcessTree($Process, [string]$Label) {
 
 function Read-AvailableProcessLines([object[]]$Streams) {
   foreach ($stream in $Streams) {
-    while ($null -ne $stream.task -and $stream.task.IsCompleted) {
+    $linesRead = 0
+    while ($linesRead -lt 1024 -and $null -ne $stream.task -and $stream.task.IsCompleted) {
       $line = $stream.task.GetAwaiter().GetResult()
       if ($null -eq $line) { $stream.task = $null }
-      else { $stream.lines.Add($line); $stream.task = $stream.reader.ReadLineAsync() }
+      else { $stream.lines.Add($line); $stream.task = $stream.reader.ReadLineAsync(); $linesRead++ }
     }
   }
 }
