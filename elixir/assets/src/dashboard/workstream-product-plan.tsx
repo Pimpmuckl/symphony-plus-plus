@@ -69,7 +69,7 @@ function ProductTreeNodeRow({ node, depth, context, path }: { node: ProductTreeN
   const attention = groupDirectAttention(context.detail, node.id, context.packageById, context.activeBlockingEdges, context.guidanceItems);
 
   return (
-    <div className="v3-product-node" style={{ "--tree-depth": depth } as CSSProperties} data-tone={attention?.tone} data-v3-context-path={contextPathValue(nodePath)}>
+    <div className="v3-product-node" style={{ "--tree-depth": depth } as CSSProperties} data-group-id={node.id} data-tone={attention?.tone} data-v3-context-path={contextPathValue(nodePath)}>
       <ProductNodeHeader node={node} nodeSliceCount={nodeSlices.length} attention={attention} collapsible={hasDisclosureContent} expanded={expanded} contentId={hasDisclosureContent ? contentId : undefined} onSelectAttention={context.onSelectAttention} onToggle={() => setExpanded((open) => !open)} />
       {hasDisclosureContent ? <div className="v3-disclosure-reveal" data-open={expanded ? "true" : "false"} aria-hidden={!expanded} inert={!expanded}><ProductTreeNodeContent contentId={contentId} node={node} nodeSlices={nodeSlices} childNodes={childNodes} depth={depth} path={nodePath} context={context} /></div> : null}
     </div>

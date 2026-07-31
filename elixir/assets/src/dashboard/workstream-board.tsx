@@ -18,8 +18,9 @@ import { isFinishedBoardStatus, operationalLabel, operationalStatusIsRunning, sl
 import { PullRequestBadge } from "./execution-graph/pull-request-badge";
 import { requestBadgeLabel } from "./workstream-row-age";
 import { architectStartPrompt, mergeRequestDetailsWithExiting, visibleRequestBranch } from "./workstream-utils";
-import type { AttentionSelect } from "./workstream-attention";
+import type { AttentionJumpTarget, AttentionSelect } from "./workstream-attention";
 import { ProductPlanBody } from "./workstream-product-plan";
+import { useRepositoryAttentionJump } from "./use-repository-attention-jump";
 const REQUEST_EXIT_MOTION_MS = 320;
 const WorkRequestExecutionGraph = lazy(() => import("./work-request-execution-graph-loading"));
 export type RequestFrontierMode = "attention" | "active" | "next" | "recent" | "waiting";
@@ -28,7 +29,7 @@ export function WorkstreamBoard({
   repoDetails,
   now,
   packages,
-  activeBlockingEdges, guidanceItems = [],
+  activeBlockingEdges, guidanceItems = [], jumpTarget,
   onSelectAttention,
   onSelectGuidance,
   onSelectCard,
@@ -43,7 +44,7 @@ export function WorkstreamBoard({
   repoDetails: WorkRequestDetail[];
   now?: string;
   packages: WorkPackageCard[];
-  activeBlockingEdges: ActiveBlockingEdge[]; guidanceItems?: GuidanceItem[];
+  activeBlockingEdges: ActiveBlockingEdge[]; guidanceItems?: GuidanceItem[]; jumpTarget?: AttentionJumpTarget | null;
   onSelectAttention: AttentionSelect;
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
@@ -61,6 +62,7 @@ export function WorkstreamBoard({
   const blockerCounts = useMemo(() => activeBlockerEntityCounts(activeBlockingEdges, repoDetails), [activeBlockingEdges, repoDetails]);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const contextSignature = useMemo(() => workstreamContextSignature(sortedActiveDetails), [sortedActiveDetails]);
+  useRepositoryAttentionJump(boardRef, jumpTarget, repoDetails, onSetFinishedRequestChildrenOpen);
   return (
     <div className="workstream-board-shell">
       {showContextBar ? <WorkstreamContextBar boardRef={boardRef} repoLabel={repoLabel} signature={contextSignature} /> : null}

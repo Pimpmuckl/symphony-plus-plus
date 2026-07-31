@@ -828,13 +828,8 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp update_work_request_state(repo, work_request_id, "completed"), do: WorkRequestService.force_complete(repo, work_request_id)
 
-  defp update_work_request_state(repo, work_request_id, "ready_for_slicing") do
-    case WorkRequestService.get(repo, work_request_id) do
-      {:ok, %{status: "human_info_needed"}} -> WorkRequestService.prepare_for_work_packages(repo, work_request_id)
-      {:ok, _work_request} -> {:error, :invalid_status}
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  defp update_work_request_state(repo, work_request_id, "ready_for_slicing"),
+    do: WorkRequestService.update_status(repo, work_request_id, "human_info_needed", "ready_for_slicing")
 
   @spec operator_update_work_package_state(Conn.t(), map()) :: Conn.t()
   def operator_update_work_package_state(conn, %{"work_package_id" => work_package_id} = params) do

@@ -13,7 +13,7 @@ import { WorkstreamBoard } from "./workstream-board";
 import { defaultRepoWorkstreamOpen, readStoredFinishedRequestChildren, readStoredRepoWorkstreamOpen, repoWorkstreamStateKey, writeStoredFinishedRequestChildren, writeStoredRepoWorkstreamOpen } from "./dashboard-persistence";
 import { finishedRequestChildrenStorageKey, workstreamCategoryCounts } from "./workstream-data";
 import { repoSummaryMetrics, type RepoSummaryMetricKey } from "./repo-summary-state";
-import type { AttentionSelect } from "./workstream-attention";
+import type { AttentionJumpTarget, AttentionSelect } from "./workstream-attention";
 
 export function RepoWorkstream({
   repo,
@@ -21,6 +21,7 @@ export function RepoWorkstream({
   now,
   activeBlockingEdges,
   guidanceItems,
+  jumpTarget,
   onSelectAttention,
   onSelectGuidance,
   onSelectCard,
@@ -33,6 +34,7 @@ export function RepoWorkstream({
   now?: string;
   activeBlockingEdges: ActiveBlockingEdge[];
   guidanceItems: GuidanceItem[];
+  jumpTarget?: AttentionJumpTarget | null;
   onSelectAttention: AttentionSelect;
   onSelectGuidance: (item: GuidanceItem) => void;
   onSelectCard: CardDetailSelect;
@@ -55,6 +57,7 @@ export function RepoWorkstream({
   const [open, setOpen] = useState(() => readStoredRepoWorkstreamOpen(stateKey, defaultRepoWorkstreamOpen(repo)));
   const [openMotion, setOpenMotion] = useState(false);
   const previousOpenRef = useRef(open);
+  const openedJumpTokenRef = useRef(0);
   const openMotionTimerRef = useRef<number | null>(null);
   const toggleOpen = useCallback(() => {
     setOpen((currentOpen) => !currentOpen);
@@ -91,6 +94,12 @@ export function RepoWorkstream({
   useEffect(() => {
     writeStoredRepoWorkstreamOpen(stateKey, open);
   }, [open, stateKey]);
+
+  useEffect(() => {
+    if (!jumpTarget || openedJumpTokenRef.current >= jumpTarget.token || !repoDetails.some((detail) => detail.work_request.id === jumpTarget.requestId)) return;
+    openedJumpTokenRef.current = jumpTarget.token;
+    setOpen(true);
+  }, [jumpTarget, repoDetails]);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -137,6 +146,7 @@ export function RepoWorkstream({
               packages={repo.packages}
               activeBlockingEdges={activeBlockingEdges}
               guidanceItems={guidanceItems}
+              jumpTarget={jumpTarget}
               onSelectAttention={onSelectAttention}
               onSelectGuidance={onSelectGuidance}
               onSelectCard={onSelectCard}

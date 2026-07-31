@@ -74,6 +74,7 @@ export function WorkstreamsPane({
           now={now}
           activeBlockingEdges={activeBlockingEdges}
           guidanceItems={guidanceItems}
+          jumpTarget={jumpTarget}
           onSelectAttention={onSelectAttention}
           onSelectGuidance={onSelectGuidance}
           onSelectCard={onSelectCard}

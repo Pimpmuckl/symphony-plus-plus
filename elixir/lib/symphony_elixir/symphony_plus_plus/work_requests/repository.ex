@@ -471,11 +471,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
     repo.transaction(fn ->
       id
-      |> status_update_query(current_status)
+      |> status_update_query(current_status, next_status)
       |> repo.update_all(set: status_update_values(next_status, now))
       |> case do
         {1, _rows} -> repo.get!(WorkRequest, id)
-        {0, _rows} -> repo.rollback(stale_status_error(repo, id))
+        {0, _rows} -> repo.rollback(status_update_error(repo, id, current_status, next_status))
       end
     end)
     |> case do
@@ -627,11 +627,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end
   end
 
-  defp status_update_query(id, current_status) do
+  defp status_update_query(id, "human_info_needed", "ready_for_slicing"),
+    do: ready_for_slicing_update_query(id, "human_info_needed")
+
+  defp status_update_query(id, current_status, _next_status) do
     from(work_request in WorkRequest,
       where: work_request.id == ^id and work_request.status == ^current_status
     )
   end
+
+  defp status_update_error(repo, id, "human_info_needed", "ready_for_slicing") do
+    case ensure_no_open_questions(repo, id) do
+      :ok -> stale_status_error(repo, id)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp status_update_error(repo, id, _current_status, _next_status), do: stale_status_error(repo, id)
 
   defp insert_with_sequence(repo, attrs, next_sequence, changeset_fun, opts \\ []) do
     do_insert_with_sequence(repo, attrs, next_sequence, changeset_fun, opts, sequence_retry_attempts())

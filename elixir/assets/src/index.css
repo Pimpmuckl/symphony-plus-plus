@@ -521,8 +521,6 @@
   .dashboard-top-panel-shell .top-panel-viewport {
     --dashboard-motion-shadow-gutter: 0.75rem;
     margin-block: 0;
-    backdrop-filter: blur(3px);
-    -webkit-backdrop-filter: blur(3px);
   }
 
   .dashboard-top-panel-shell .top-panel-viewport[data-phase="swapping"] {
@@ -2925,8 +2923,12 @@
       margin-left: calc(var(--tree-depth) * 0.45rem);
     }
 
-    .v3-slice-row {
+    .workstream-repo-card .v3-slice-row {
       grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .workstream-repo-card .v3-slice-row > .v3-row-badge-slot {
+      grid-column: 2;
     }
 
   }

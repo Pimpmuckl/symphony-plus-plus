@@ -6688,6 +6688,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> json_response(200)
 
       assert get_in(payload, ["refresh", "work_request_id"]) == clearable.id
+      assert get_in(payload, ["work_request", "status"]) == "ready_for_slicing"
       assert {:ok, %{status: "ready_for_slicing"}} = WorkRequestRepository.get(repo, clearable.id)
 
       guarded = create_work_request!(repo, id: "WR-LOCAL-GUARD-HUMAN-INFO", status: "human_info_needed")

@@ -188,6 +188,9 @@ describe("focus board interactions", () => {
     await page.getByRole("button", { name: "Active Blockers: 1" }).click();
     const panel = page.locator(".top-panel-inline");
     await panel.locator(".attention-location__repo:visible").waitFor();
+    await page.waitForFunction(() => document.querySelector(".top-panel-viewport")?.getAttribute("data-phase") === "idle");
+    expect(await panel.locator(".top-panel-static").count()).toBe(1);
+    expect(await panel.locator(".top-panel-track").count()).toBe(0);
     const panelText = await panel.textContent();
     expect(panelText).toContain("Jump request");
     expect(panelText).toContain("Jump group – Jump package");
@@ -213,10 +216,55 @@ describe("focus board interactions", () => {
 
     await page.close();
   }, 20_000);
+
+  it("opens the stable repository hierarchy when jumping to nested attention", async () => {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await disableFocusBoard(page);
+    page.setDefaultTimeout(5_000);
+    await page.route("**/api/v1/sympp/operator/config*", (route) =>
+      route.fulfill({ json: { apiBase: "/api/v1/sympp/operator", basePath: "/sympp/board", operatorMode: true } }),
+    );
+    await page.route("**/api/v1/sympp/operator/dashboard/events", (route) => route.abort());
+    await page.route("**/api/v1/sympp/operator/dashboard", (route) => route.fulfill({ json: attentionDashboard }));
+    await page.route("**/api/v1/sympp/operator/work-packages/wp-jump", (route) => route.fulfill({
+      json: { work_package: attentionPackage, blockers: [attentionBlocker] },
+    }));
+    await page.route("**/api/v1/sympp/operator/work-requests/wr-jump*", (route) => route.fulfill({
+      json: attentionDashboard.work_request_details[0],
+    }));
+
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
+    await page.waitForTimeout(500);
+    await page.keyboard.press("Escape");
+    await page.locator(".dialog-overlay").waitFor({ state: "hidden" });
+    await page.getByRole("button", { name: "Active Blockers: 1" }).click();
+    const panel = page.locator(".top-panel-inline");
+    await panel.getByRole("button", { name: /Open Blocked/ }).click();
+    const modal = page.locator(".attention-dialog");
+    await modal.getByTitle("Jump to Jump package").click();
+
+    const request = page.locator('.workstream-repo-card [data-request-id="wr-jump"]');
+    const group = request.locator('[data-group-id="group-jump"]');
+    const target = group.locator('[data-work-package-id="slice-jump"]');
+    await target.waitFor({ state: "visible" });
+    await page.waitForFunction(() => document.querySelector('[data-work-package-id="slice-jump"]')?.getAttribute("data-attention-jump") === "true");
+    expect(await request.getAttribute("data-expanded")).toBe("true");
+    expect(await group.locator(":scope > .v3-product-node-header .v3-product-node-chevron-button").getAttribute("aria-expanded")).toBe("true");
+    expect(await page.locator(".focus-board").count()).toBe(0);
+    await page.setViewportSize({ width: 700, height: 800 });
+    expect(await target.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length)).toBe(2);
+    expect(await target.locator(":scope > .v3-row-badge-slot").evaluate((element) => getComputedStyle(element).gridColumnStart)).toBe("2");
+
+    await page.close();
+  }, 20_000);
 });
 
 async function enableFocusBoard(page: Awaited<ReturnType<Browser["newPage"]>>) {
   await page.addInitScript((key) => localStorage.setItem(key, JSON.stringify({ useFocusBoard: true })), DASHBOARD_UI_STATE_KEY);
+}
+
+async function disableFocusBoard(page: Awaited<ReturnType<Browser["newPage"]>>) {
+  await page.addInitScript((key) => localStorage.setItem(key, JSON.stringify({ useFocusBoard: false })), DASHBOARD_UI_STATE_KEY);
 }
 
 async function waitForPhase(page: Awaited<ReturnType<Browser["newPage"]>>, phase: string) {
