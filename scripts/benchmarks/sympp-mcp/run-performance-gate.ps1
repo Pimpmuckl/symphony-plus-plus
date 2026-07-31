@@ -284,7 +284,14 @@ function Invoke-CapturedProcess($Info, [int]$TimeoutMs, [string]$Label) {
     if (@($streams | Where-Object { $null -ne $_.task }).Count -eq 0) { break }
     Start-Sleep -Milliseconds 10
   } while ([DateTime]::UtcNow -lt $drainDeadline -and [DateTime]::UtcNow -lt $maximumDrainDeadline)
-  if ($timedOut) { $process.Dispose(); throw "$Label timed out" }
+  if ($timedOut) {
+    $timeoutStdout = $streams[0].output.ToString()
+    $timeoutStderr = $streams[1].output.ToString()
+    if ($timeoutStdout.Length -gt 2000) { $timeoutStdout = $timeoutStdout.Substring($timeoutStdout.Length - 2000) }
+    if ($timeoutStderr.Length -gt 2000) { $timeoutStderr = $timeoutStderr.Substring($timeoutStderr.Length - 2000) }
+    $process.Dispose()
+    throw "$Label timed out. stdout_tail=$timeoutStdout stderr_tail=$timeoutStderr"
+  }
   $result = [pscustomobject]@{
     stdout = $streams[0].output.ToString()
     stderr = $streams[1].output.ToString()
