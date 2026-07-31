@@ -13,6 +13,12 @@ unless dashboard_built? do
   raise "Built dashboard assets missing. Compile dev first, then run npm ci and npm run build from elixir/assets."
 end
 
+case Task.Supervisor.start_link(name: SymphonyElixir.TaskSupervisor) do
+  {:ok, _pid} -> :ok
+  {:error, {:already_started, _pid}} -> :ok
+  {:error, reason} -> raise "Could not start benchmark task supervisor: #{inspect(reason)}"
+end
+
 Mix.Tasks.Sympp.Cockpit.run_cockpit_for_test(
   [
     host: "127.0.0.1",
