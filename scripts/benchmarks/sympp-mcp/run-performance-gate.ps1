@@ -288,16 +288,13 @@ function Invoke-CapturedProcess($Info, [int]$TimeoutMs, [string]$Label) {
   return $result
 }
 
-function Invoke-ExactCommandProbe([string]$Mode, [string]$Cohorts, [int]$StartupTimeoutSec, [switch]$CheckMutation) {
+function Invoke-ExactCommandProbe([string]$Mode, [string]$Cohorts, [switch]$CheckMutation) {
   $info = [System.Diagnostics.ProcessStartInfo]::new()
   $info.FileName = (Get-Command pwsh -ErrorAction Stop).Source
-  foreach ($arg in @("-NoProfile", "-File", $exactProbe, "-LauncherMode", $Mode, "-Cohorts", $Cohorts, "-Repeats", "1", "-StartupTimeoutSec", [string]$StartupTimeoutSec)) { [void]$info.ArgumentList.Add($arg) }
+  foreach ($arg in @("-NoProfile", "-File", $exactProbe, "-LauncherMode", $Mode, "-Cohorts", $Cohorts, "-Repeats", "1")) { [void]$info.ArgumentList.Add($arg) }
   if (-not $CheckMutation) { [void]$info.ArgumentList.Add("-SkipMutationCheck") }
   $info.WorkingDirectory = $repoRoot
-  $startupStageCount = 2 + @($Cohorts -split ",").Count
-  if ($Mode -eq "NodePresent") { $startupStageCount += 4 + [int][bool]$CheckMutation }
-  $probeTimeoutMs = 900000 + ($startupStageCount * [Math]::Max(0, $StartupTimeoutSec - 300) * 1000)
-  $run = Invoke-CapturedProcess $info $probeTimeoutMs "exact shipped command ($Mode)"
+  $run = Invoke-CapturedProcess $info 900000 "exact shipped command ($Mode)"
   if ($run.exit_code -ne 0) { throw "exact shipped command ($Mode) failed: $(([string]$run.stderr).Trim()) $(([string]$run.stdout).Trim())" }
   return $run.stdout | ConvertFrom-Json
 }
@@ -487,11 +484,10 @@ try {
   if ($directRun.exit_code -ne 0) { throw "direct HTTP probe failed: $(([string]$directRun.stdout).Trim()) $(([string]$directRun.stderr).Trim())" }
   $direct = ConvertFrom-DirectProbe @($directRun.stdout -split "`r?`n") $directWatch.Elapsed.TotalMilliseconds
   [Console]::Error.WriteLine("Measuring the shipped command with Node present and missing...")
-  $exactStartupTimeoutSec = [Math]::Max(30, [Math]::Min(600, [int][Math]::Ceiling($MaxColdMs / 1000.0)))
   [Console]::Error.WriteLine("Measuring shipped command with Node missing...")
-  $exactFallback = Invoke-ExactCommandProbe "NodeMissing" "1,10" $exactStartupTimeoutSec
+  $exactFallback = Invoke-ExactCommandProbe "NodeMissing" "1,10"
   [Console]::Error.WriteLine("Measuring shipped command with Node present...")
-  $exactNode = Invoke-ExactCommandProbe "NodePresent" "1,10,100" $exactStartupTimeoutSec -CheckMutation
+  $exactNode = Invoke-ExactCommandProbe "NodePresent" "1,10,100" -CheckMutation
   [Console]::Error.WriteLine("Measuring MCP profiles and representative payloads...")
   $payloadOutput = Invoke-IsolatedMix @("run", "--no-start", $payloadProbe) $environment
   $payloadJson = @($payloadOutput -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1)
