@@ -83,9 +83,17 @@ describe("focus board interactions", () => {
 
     await page.keyboard.press("Escape");
     await page.locator(".dialog-overlay").waitFor({ state: "hidden" });
+    await board.evaluate((element) => { const phases: string[] = []; new MutationObserver(() => phases.push(element.getAttribute("data-focus-phase") ?? "collapsed")).observe(element, { attributeFilter: ["data-focus-phase"] }); Object.assign(element, { testFocusPhases: phases }); });
     await expand.click();
     await waitForPhase(page, "focused");
+    expect(await board.evaluate((element) => (element as HTMLElement & { testFocusPhases: string[] }).testFocusPhases[0])).toBe("preparing");
     expect(await board.getAttribute("data-focus-request-id")).toBe("wr-interaction");
+    const focusedTail = await board.evaluate((element) => {
+      const boardRect = element.getBoundingClientRect();
+      const graphRect = element.querySelector<HTMLElement>(".focus-board__expanded-request")!.getBoundingClientRect();
+      return boardRect.bottom - graphRect.bottom;
+    });
+    expect(focusedTail).toBeLessThanOrEqual(24);
     const visibleMatchingGroup = board.locator('[data-focus-lane="attention"] [data-focus-repo-key="fixture/secondary"]');
     expect(await visibleMatchingGroup.getAttribute("aria-hidden")).toBeNull();
     expect(await visibleMatchingGroup.evaluate((element) => (element as HTMLElement).inert)).toBe(false);

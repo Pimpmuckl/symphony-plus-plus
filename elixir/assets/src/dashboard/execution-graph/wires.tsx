@@ -3,49 +3,57 @@ import type { CSSProperties } from "react";
 
 import type { ExecutionGraphLayoutModel, GraphOrientation } from "./model";
 import { graphWireRoutes } from "./router";
-import { wireMorphs } from "./wire-morphs";
+import { wireTransitionLayers } from "./wire-morphs";
 
 type Routes = ReturnType<typeof graphWireRoutes>;
 type Motion = "entering" | "leaving";
+type Bounds = { width: number; height: number };
 const SNAP_MS = 220;
 
 export const GraphWires = memo(function GraphWires({ model, orientation }: { model: ExecutionGraphLayoutModel; orientation: GraphOrientation }) {
   const next = useMemo(() => graphWireRoutes(model, orientation), [model, orientation]);
   const signature = wireSignature(next);
   const current = useRef(next);
-  const [frame, setFrame] = useState<{ current: Routes; previous?: Routes; sequence: number }>({ current: next, sequence: 0 });
+  const bounds = useRef<Bounds>({ width: model.width, height: model.height });
+  const [frame, setFrame] = useState<{ current: Routes; previous?: Routes; previousBounds?: Bounds; sequence: number }>({ current: next, sequence: 0 });
 
-  const animate = useEffectEvent(() => {
+  const animate = useEffectEvent((target: Routes, targetBounds: Bounds) => {
     const previous = current.current;
-    current.current = next;
-    setFrame(({ sequence }) => ({ current: next, previous, sequence: sequence + 1 }));
-    return setTimeout(() => setFrame((value) => ({ ...value, previous: undefined })), SNAP_MS);
+    const previousBounds = bounds.current;
+    current.current = target;
+    bounds.current = targetBounds;
+    setFrame(({ sequence }) => ({ current: target, previous, previousBounds, sequence: sequence + 1 }));
+    return setTimeout(() => setFrame((value) => ({ ...value, previous: undefined, previousBounds: undefined })), SNAP_MS);
   });
 
   useLayoutEffect(() => {
-    if (wireSignature(current.current) === signature) return;
-    const timer = animate();
+    const nextBounds = { width: model.width, height: model.height };
+    if (wireSignature(current.current) === signature) {
+      bounds.current = nextBounds;
+      return;
+    }
+    const timer = animate(next, nextBounds);
     return () => clearTimeout(timer);
-  }, [signature]);
+  }, [model.height, model.width, next, signature]);
+  const transition = frame.previous ? wireTransitionLayers(frame.previous.paths, frame.current.paths) : undefined;
+  const currentRoutes = transition ? { ...frame.current, paths: transition.entering } : frame.current;
 
   return (
-    <svg className="execution-graph__wires" width={model.width} height={model.height} aria-hidden="true" role="presentation" focusable="false">
-      <WireLayer key={`current-${frame.sequence}`} routes={frame.current} motion={frame.previous ? "entering" : undefined} />
-      {frame.previous ? <WireTransition key={`previous-${frame.sequence}`} from={frame.previous} to={frame.current} /> : null}
+    <svg className="execution-graph__wires" width={Math.max(model.width, frame.previousBounds?.width ?? 0)} height={Math.max(model.height, frame.previousBounds?.height ?? 0)} aria-hidden="true" role="presentation" focusable="false">
+      <WireLayer key={`current-${frame.sequence}`} routes={currentRoutes} motion={transition ? "entering" : undefined} />
+      {frame.previous && transition ? <WireTransition key={`previous-${frame.sequence}`} from={frame.previous} to={frame.current} transition={transition} /> : null}
     </svg>
   );
 });
 
-function WireTransition({ from, to }: { from: Routes; to: Routes }) {
-  const morphs = wireMorphs(from.paths, to.paths);
-  const moving = new Set(morphs.map((morph) => morph.from.key));
-  const leaving = { paths: from.paths.filter((path) => !moving.has(path.key)), gates: from.gates };
+function WireTransition({ from, to, transition }: { from: Routes; to: Routes; transition: ReturnType<typeof wireTransitionLayers> }) {
+  const leaving = { paths: transition.leaving, gates: from.gates.filter((gate) => !to.gates.some((current) => current.key === gate.key)) };
 
   return (
     <>
       <WireLayer routes={leaving} motion="leaving" />
       <g className="execution-graph__wire-layer" data-motion="morphing" style={{ "--wire-snap-duration": `${SNAP_MS}ms` } as CSSProperties}>
-        {morphs.map(({ from: route, to: target }) => (
+        {transition.morphs.map(({ from: route, to: target }) => (
           <path key={`${route.key}:${target.key}`} className={`execution-graph__edge${route.bundle ? " execution-graph__edge--bundle" : ""}`} data-edge={route.edge} data-state={route.state} data-route="orthogonal" data-intent-count={route.intentCount} d={route.path} style={{ "--wire-from": `path("${route.path}")`, "--wire-to": `path("${target.path}")` } as CSSProperties} />
         ))}
       </g>

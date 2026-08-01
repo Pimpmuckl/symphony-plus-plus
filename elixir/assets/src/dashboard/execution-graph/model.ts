@@ -1,5 +1,5 @@
 import { isFinishedBoardStatus } from "@/lib/operational-state";
-import { layoutGroupChildren } from "./group-layout";
+import { layoutGroupChildren, projectGroupDependencies } from "./group-layout";
 import { entityRect, layoutRootEntities, orderWithinRanks } from "./layout";
 
 export type DependencyPathState = "satisfied" | "active" | "waiting" | "blocked";
@@ -151,6 +151,7 @@ export type ExecutionGraphLayoutModel = {
   baseRepo?: string | null;
   baseBranch?: string | null;
   rects: GraphEntityRect[];
+  visibleRects: GraphEntityRect[];
   dependencies: VisibleGraphDependency[];
   incoming: Map<string, VisibleGraphDependency[]>;
   routing?: ExecutionGraphRouting;
@@ -158,23 +159,15 @@ export type ExecutionGraphLayoutModel = {
   height: number;
 };
 const metrics = {
-  desktop: { cardWidth: 268, childCardWidth: 244, cardHeight: 62, scopedCardHeight: 76, groupWidth: 268, xGap: 92, yGap: 20, x: 28, y: 28, groupHeader: 62, groupPadding: 12, childGap: 8, childXGap: 52, childBandGap: 52 },
+  desktop: { cardWidth: 268, childCardWidth: 244, cardHeight: 62, scopedCardHeight: 76, groupWidth: 268, xGap: 92, yGap: 20, x: 48, y: 48, groupHeader: 62, groupPadding: 12, childGap: 8, childXGap: 52, childBandGap: 52 },
   mobile: { cardWidth: 256, childCardWidth: 232, cardHeight: 62, scopedCardHeight: 76, groupWidth: 256, xGap: 0, yGap: 44, x: 16, y: 16, groupHeader: 62, groupPadding: 12, childGap: 8, childXGap: 52, childBandGap: 52 },
 } as const;
 export function graphCardSize(orientation: GraphOrientation) {
-  const value = metrics[orientation];
-  return { width: value.cardWidth, height: value.cardHeight, xGap: value.xGap, yGap: value.yGap };
+  const value = metrics[orientation]; return { width: value.cardWidth, height: value.cardHeight, xGap: value.xGap, yGap: value.yGap };
 }
 export function graphGroupHeaderSize(orientation: GraphOrientation) { return metrics[orientation].groupHeader; }
-export function defaultExpandedGroupIds(graph: WorkRequestExecutionGraphModel) {
-  const context = graphContext(graph);
-  return new Set(
-    [...context.groups.values()]
-      .filter((group) => context.groupStates.get(group.id)?.tone !== "complete")
-      .map((group) => group.id),
-  );
-}
-export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel, orientation: GraphOrientation, expandedGroupIds = defaultExpandedGroupIds(graph), renderedGroupIds = expandedGroupIds): ExecutionGraphLayoutModel {
+export function defaultExpandedGroupIds() { return new Set<string>(); }
+export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel, orientation: GraphOrientation, expandedGroupIds = defaultExpandedGroupIds(), renderedGroupIds = expandedGroupIds): ExecutionGraphLayoutModel {
   const context = graphContext(graph);
   const rootKeys = rootEntityKeys(context);
   const rootDependencies = projectedRootDependencies(graphDependencies(graph), context);
@@ -192,6 +185,9 @@ export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel,
   const rectByKey = new Map(visibleRects.map((rect) => [rect.key, rect]));
   const dependencies = visibleDependencies(graphDependencies(graph), rectByKey, context);
   const incoming = groupBy(dependencies, (dependency) => dependency.target_key);
+  const crossBandDependencyCount = dependencies.filter((dependency) => (
+    rootRow(dependency.source_key, rectByKey) !== rootRow(dependency.target_key, rectByKey)
+  )).length;
   const edge = Math.max(0, ...visibleRects.map((rect) => rect.x + rect.width));
   const bottom = Math.max(0, ...visibleRects.map((rect) => rect.y + rect.height));
   const outerMargin = orientation === "mobile" ? 16 : 28;
@@ -205,14 +201,19 @@ export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel,
     baseRepo: graph.base_repo,
     baseBranch: graph.base_branch,
     rects,
+    visibleRects,
     dependencies,
     incoming,
     routing: rootLayout.routing,
     width: Math.ceil(rootLayout.routing
-      ? rootLayout.routing.contentRight + (dependencies.length ? Math.max(84, dependencies.length * 8 + 36) : outerMargin)
+      ? rootLayout.routing.contentRight + (crossBandDependencyCount ? Math.max(84, crossBandDependencyCount * 8 + 36) : outerMargin)
       : edge + outerMargin),
     height: Math.ceil(bottom + outerMargin),
   };
+}
+function rootRow(key: string, rects: Map<string, GraphEntityRect>) {
+  let rect = rects.get(key);
+  while (rect?.parent_group_id) rect = rects.get(groupKey(rect.parent_group_id)); return rect?.row;
 }
 export function dependencyProgress(model: ExecutionGraphLayoutModel, targetKey: string) {
   const incoming = model.incoming.get(targetKey) ?? [];
@@ -447,7 +448,8 @@ function entitySize(
 
 function expandedGroupLayout(groupId: string, orientation: GraphOrientation, expandedGroupIds: Set<string>, context: GraphContext, seen = new Set<string>()) {
   const nextSeen = new Set(seen).add(groupId);
-  return layoutGroupChildren(directChildKeys(groupId, context), (child) => entitySize(child, orientation, expandedGroupIds, context, nextSeen), context.childDependencies, orientation, metrics[orientation]);
+  const dependencies = projectGroupDependencies(groupId, context.childDependencies, context.groups, context.refs);
+  return layoutGroupChildren(directChildKeys(groupId, context), (child) => entitySize(child, orientation, expandedGroupIds, context, nextSeen), dependencies, groupKey(groupId), orientation, metrics[orientation]);
 }
 
 function layoutExpandedChildren(
@@ -468,8 +470,8 @@ function layoutExpandedChildren(
       { width: item.width, height: item.height },
       parent.depth,
       index,
-      parent.row,
-      parent.column,
+      item.row,
+      item.column,
       parent.id,
       key.startsWith("group:") && expandedGroupIds.has(key.slice("group:".length)),
     );

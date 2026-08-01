@@ -9,7 +9,7 @@ import { ProductRequestRow } from "./workstream-board";
 import { activeBlockerEntityCounts } from "./workstream-progress";
 import { readStoredFocusBoardSectionOpen, repoIdentityKey, writeStoredFocusBoardSectionOpen } from "./dashboard-persistence";
 import { buildFocusBoardItems, groupFocusItemsByRepo, preserveFocusedItem, requestHasExecutionBoard, type FocusBoardItem, type FocusBoardLane } from "./focus-board-data";
-import { focusAttachOffset, focusCameraTop, focusSectionOffset, focusSpaceOffsets, focusTravelScale, type FocusEjectOffset, type FocusEjectRect } from "./focus-board-motion";
+import { focusAttachOffset, focusCameraTop, focusSectionOffset, focusSpaceOffsets, focusTravelScale, observeFocusedBoardHeight, type FocusEjectOffset, type FocusEjectRect } from "./focus-board-motion";
 import type { AttentionJumpTarget, AttentionSelect } from "./workstream-attention";
 const FOCUS_BOARD_COLUMNS = ["pr", "state"] as const;
 const FOCUS_BOARD_COLUMN_CAPS_REM = { pr: Number.POSITIVE_INFINITY, state: Number.POSITIVE_INFINITY };
@@ -19,7 +19,7 @@ const FOCUS_EXPANSE_MS = 780;
 const FOCUS_RETURN_MS = 720;
 const FOCUS_CAMERA_TOP = 88;
 
-type FocusPhase = "measuring" | "spacing" | "grouping" | "expanse-ready" | "expanding" | "focused" | "unexpanding" | "ungrouping" | "returning";
+type FocusPhase = "preparing" | "measuring" | "spacing" | "grouping" | "expanse-ready" | "expanding" | "focused" | "unexpanding" | "ungrouping" | "returning";
 type FocusState = { item: FocusBoardItem; phase: FocusPhase };
 type EjectedContent = { lanes: Set<FocusBoardLane>; repoGroups: Set<string>; requests: Set<string> };
 const FOCUS_EJECTED_PHASES = new Set<FocusPhase>(["grouping", "expanse-ready", "expanding", "focused", "unexpanding", "ungrouping", "returning"]);
@@ -184,9 +184,11 @@ export function FocusBoard({
     const item = items.find((candidate) => candidate.id === id)!;
     clearTimers();
     setInlineExpandedRequestId(undefined);
-    setFocus({ item, phase: "measuring" });
+    setFocus({ item, phase: "preparing" });
   }, [clearTimers, focus, items]);
-
+  useLayoutEffect(() => {
+    if (focus?.phase === "preparing") scheduleAfterPaint(() => setFocus((current) => current?.phase === "preparing" ? { ...current, phase: "measuring" } : current));
+  }, [focus?.phase, scheduleAfterPaint]);
   useLayoutEffect(() => {
     if (focus?.phase !== "measuring") return;
     const id = focus.item.id;
@@ -240,7 +242,6 @@ export function FocusBoard({
       }, FOCUS_SPACE_MS * motionScale);
     }, 0);
   }, [animateCamera, focus, requestRows, schedule, scheduleAfterPaint]);
-
   const endFocus = useCallback(() => {
     if (!focus) return;
     clearTimers();
@@ -399,9 +400,15 @@ export function FocusBoard({
   const focusedId = focus?.item.id;
   const focusPhase = focus?.phase;
   const hiddenContent = visibleEjectedContent(focusPhase, ejectedContent);
+  useLayoutEffect(() => {
+    const board = boardRef.current;
+    const graph = board?.querySelector<HTMLElement>(".focus-board__expanded-request");
+    if (!board || !graph || focusPhase !== "focused") return;
+    return observeFocusedBoardHeight(board, graph);
+  }, [focusPhase]);
   const renderItem = (item: FocusBoardItem) => {
     const inlineExpanded = inlineExpandedRequestId === item.id;
-    const focusExpanded = focusedId === item.id && ["grouping", "expanse-ready", "expanding", "focused", "unexpanding"].includes(focusPhase ?? "");
+    const focusExpanded = focusedId === item.id && ["preparing", "grouping", "expanse-ready", "expanding", "focused", "unexpanding"].includes(focusPhase ?? "");
     const focusBodyVisible = focusedId === item.id && ["measuring", "spacing", "grouping", "expanse-ready", "expanding", "focused", "unexpanding"].includes(focusPhase ?? "");
     return (
       <ProductRequestRow
@@ -435,9 +442,7 @@ export function FocusBoard({
       />
     );
   };
-  const previewQuery = import.meta.env.DEV && typeof window !== "undefined"
-    ? new URLSearchParams(window.location.search).get("focus-card-preview")?.trim().toLowerCase()
-    : undefined;
+  const previewQuery = focusCardPreviewQuery();
   const previewItem = previewQuery
     ? items.find((item) => (item.detail.work_request.title || item.id).toLowerCase().includes(previewQuery))
     : undefined;
@@ -479,7 +484,9 @@ export function FocusBoard({
     </section>
   );
 }
-
+function focusCardPreviewQuery() {
+  return import.meta.env.DEV && typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("focus-card-preview")?.trim().toLowerCase() : undefined;
+}
 function visibleGraphViewport(row: HTMLElement) {
   return [...row.parentElement?.querySelectorAll<HTMLElement>(".execution-graph__viewport") ?? []]
     .find((viewport) => viewport.getClientRects().length > 0);

@@ -18,6 +18,23 @@ export function focusCameraTop(scrollTop: number, rowTop: number, focusedHeight:
   return fits ? scrollTop : Math.max(0, scrollTop + rowTop - viewportTop);
 }
 
+export function observeFocusedBoardHeight(board: HTMLElement, graph: HTMLElement) {
+  const fitBoardToGraph = () => {
+    const boardRect = board.getBoundingClientRect();
+    const graphRect = graph.getBoundingClientRect();
+    const style = getComputedStyle(board);
+    const bottomInset = Number.parseFloat(style.paddingBottom) + Number.parseFloat(style.borderBottomWidth);
+    board.style.setProperty("--focus-settled-height", `${Math.ceil(graphRect.bottom - boardRect.top + bottomInset)}px`);
+  };
+  fitBoardToGraph();
+  const observer = new ResizeObserver(fitBoardToGraph);
+  observer.observe(graph);
+  return () => {
+    observer.disconnect();
+    board.style.removeProperty("--focus-settled-height");
+  };
+}
+
 export function focusSectionOffset(sectionTop: number, viewportHeight: number, travelScale = 1) {
   return Math.round(Math.max(0, viewportHeight - sectionTop + 48) * travelScale);
 }
