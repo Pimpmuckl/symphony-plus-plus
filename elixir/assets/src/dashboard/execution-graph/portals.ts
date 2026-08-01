@@ -90,10 +90,10 @@ export function localBottomPoints(candidate: PortalRouteCandidate) {
   const laneY = localLane(candidate.sourceRoot, candidate.localLaneIndex);
   const reversedIndex = (candidate.localLaneCount ?? 1) - (candidate.localLaneIndex ?? 0) - 1;
   const sourceX = candidate.source.key === candidate.sourceRoot.key
-    ? candidate.sourceRoot.x + candidate.sourceRoot.width - 12 - reversedIndex * LOCAL_LANE_PITCH
+    ? candidate.sourceRoot.x + candidate.sourceRoot.width
     : candidate.start.x + LOCAL_LANE_PITCH + reversedIndex * LOCAL_LANE_PITCH;
   const targetX = candidate.target.key === candidate.targetRoot.key
-    ? candidate.targetRoot.x + 12 + reversedIndex * LOCAL_LANE_PITCH
+    ? candidate.targetRoot.x
     : candidate.end.x - LOCAL_LANE_PITCH - reversedIndex * LOCAL_LANE_PITCH;
   return [candidate.start, { x: sourceX, y: candidate.start.y }, { x: sourceX, y: laneY }, { x: targetX, y: laneY }, { x: targetX, y: candidate.end.y }, candidate.end];
 }

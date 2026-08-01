@@ -276,7 +276,7 @@ describe("WorkRequestExecutionGraph", () => {
     ))).toBe(true);
     expect(routes.flatMap((route) => model.visibleRects
       .filter((item) => item.parent_group_id === "shell" && item.key !== model.dependencies.find(({ key }) => key === route.edge)?.target_key)
-      .filter((item) => routeSegments(route.path).some((segment) => segmentIntersectsInterior(segment, item))))).toEqual([]);
+      .filter((item) => routeSegments(route.path).some((segment) => segmentIntersectsInterior(segment, item))))).toEqual([]); expect(auditWireGeometry(model, routes).fatal.filter((issue) => issue.startsWith("header:"))).toEqual([]);
   });
 
   it("routes cross-Group dependencies around horizontal sibling cards", () => {
