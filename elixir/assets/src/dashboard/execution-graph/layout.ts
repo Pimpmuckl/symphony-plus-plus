@@ -26,10 +26,6 @@ export function layoutRootEntities(
   const ranks = groupByRank(order, depths);
   const maxRank = Math.max(...ranks.keys());
   const bandCount = Math.floor(maxRank / RANKS_PER_BAND) + 1;
-  const columnWidths = columnWidthsFor(ranks, sizes, metrics);
-  const columnX = positions(RANKS_PER_BAND, metrics.x, (column) => (
-    (columnWidths.get(column) ?? metrics.cardWidth) + metrics.xGap
-  ));
   const bandHeights = new Map<number, number>();
 
   for (let band = 0; band < bandCount; band += 1) {
@@ -42,27 +38,26 @@ export function layoutRootEntities(
   const bandY = positions(bandCount, metrics.y, (band) => (
     (bandHeights.get(band) ?? metrics.cardHeight) + BAND_GAP
   ));
-  const rects: GraphEntityRect[] = [];
+  const drafts: GraphEntityRect[] = [];
   let placed = 0;
 
   for (let rank = 0; rank <= maxRank; rank += 1) {
     const band = Math.floor(rank / RANKS_PER_BAND);
-    const column = rank % RANKS_PER_BAND;
+    const column = columnForRank(rank, maxRank);
     let y = bandY.get(band) ?? metrics.y;
     for (const key of ranks.get(rank) ?? []) {
       const size = sizes.get(key) ?? { width: metrics.cardWidth, height: metrics.cardHeight };
-      rects.push(entityRect(key, columnX.get(column) ?? metrics.x, y, size, rank, placed, band, column));
+      drafts.push(entityRect(key, 0, y, size, rank, placed, band, column));
       y += size.height + metrics.yGap;
       placed += 1;
     }
   }
 
+  const columnX = rootColumnPositions(drafts, metrics);
+  const rects = drafts.map((draft) => ({ ...draft, x: columnX.get(draft.column) ?? metrics.x }));
   const contentRight = Math.max(...rects.map((rect) => rect.x + rect.width));
   const columnGutters = new Map(
-    [...columnX].map(([column, x]) => [
-      column,
-      x + (columnWidths.get(column) ?? metrics.cardWidth) + metrics.xGap / 2,
-    ]),
+    [...columnX].map(([column, x]) => [column, ((columnX.get(column + 1) ?? contentRight + metrics.xGap) + x + metrics.cardWidth) / 2]),
   );
   const rowCorridors = new Map(
     [...bandY].map(([band, y]) => [band, Math.max(16, y - (band === 0 ? 48 : BAND_GAP / 2))]),
@@ -141,19 +136,29 @@ function groupByRank(order: string[], depths: Map<string, number>) {
   return ranks;
 }
 
-function columnWidthsFor(
-  ranks: Map<number, string[]>,
-  sizes: Map<string, EntitySize>,
-  metrics: LayoutMetrics,
-) {
-  const widths = new Map<number, number>();
-  ranks.forEach((keys, rank) => {
-    const column = rank % RANKS_PER_BAND;
-    for (const key of keys) {
-      widths.set(column, Math.max(widths.get(column) ?? metrics.cardWidth, sizes.get(key)?.width ?? metrics.cardWidth));
-    }
-  });
-  return widths;
+function columnForRank(rank: number, maxRank: number) {
+  const offset = rank % RANKS_PER_BAND;
+  const finalBand = Math.floor(maxRank / RANKS_PER_BAND);
+  return finalBand > 0 && Math.floor(rank / RANKS_PER_BAND) === finalBand
+    ? offset + RANKS_PER_BAND - (maxRank % RANKS_PER_BAND + 1)
+    : offset;
+}
+
+function rootColumnPositions(rects: GraphEntityRect[], metrics: LayoutMetrics) {
+  const values = new Map([[0, metrics.x]]);
+  for (let column = 1; column < RANKS_PER_BAND; column += 1) {
+    const previousX = values.get(column - 1) as number;
+    const current = rects.filter((rect) => rect.column === column);
+    const constraints = rects
+      .filter((rect) => rect.column < column && current.some((other) => verticallyOverlap(rect, other)))
+      .map((rect) => (values.get(rect.column) as number) + rect.width + metrics.xGap);
+    values.set(column, Math.max(previousX + metrics.cardWidth + metrics.xGap, ...constraints));
+  }
+  return values;
+}
+
+function verticallyOverlap(left: GraphEntityRect, right: GraphEntityRect) {
+  return left.y < right.y + right.height && right.y < left.y + left.height;
 }
 
 function stackHeight(keys: string[], sizes: Map<string, EntitySize>, metrics: LayoutMetrics) {

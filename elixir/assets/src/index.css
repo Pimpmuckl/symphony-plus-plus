@@ -1921,6 +1921,10 @@
     visibility: visible;
   }
 
+  .focus-board[data-focus-phase="focused"] {
+    height: var(--focus-settled-height);
+  }
+
   .focus-board[data-focus-phase="expanding"] .focus-board__expanded-request {
     animation: focus-board-reveal-graph var(--focus-expanse-duration) cubic-bezier(0.16, 1, 0.3, 1) both;
   }
@@ -1934,7 +1938,9 @@
   }
 
   .focus-board__expanded-request {
+    width: fit-content;
     min-width: 0;
+    max-width: 100%;
     contain: layout paint;
     border: 1px solid hsl(var(--border) / 0.82);
     border-radius: 0 var(--radius) var(--radius) var(--radius);
@@ -4881,7 +4887,10 @@
 
   .execution-graph__group-card {
     z-index: auto;
-    display: block;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 62px;
+    align-content: start;
     padding: 0;
     color: inherit;
     font: inherit;
@@ -4894,12 +4903,10 @@
   }
 
   .execution-graph__group-header {
-    position: absolute;
+    position: relative;
     z-index: 3;
-    top: 0;
-    right: 0;
-    left: 0;
     display: grid;
+    width: 100%;
     height: 62px;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto;
@@ -4910,7 +4917,7 @@
     border: 0;
     border-radius: inherit;
     background: transparent;
-    padding: 0.625rem 9.75rem 0.625rem 0.75rem;
+    padding: 0.625rem 0.25rem 0.625rem 0.75rem;
     color: inherit;
     font: inherit;
     text-align: left;
@@ -4921,8 +4928,17 @@
   }
 
   .execution-graph__group-card[data-expanded="true"] .execution-graph__group-header {
-    border-bottom: 1px solid hsl(var(--border) / 0.72);
     border-radius: var(--radius) var(--radius) 0 0;
+  }
+
+  .execution-graph__group-card[data-expanded="true"]::after {
+    position: absolute;
+    z-index: 2;
+    top: 61px;
+    right: 0;
+    left: 0;
+    border-bottom: 1px solid hsl(var(--border) / 0.72);
+    content: "";
   }
 
   .execution-graph__group-contents {
@@ -4996,10 +5012,12 @@
   }
 
   .execution-graph__group-card > .execution-graph__status {
-    position: absolute;
+    position: relative;
     z-index: 4;
-    top: 0.75rem;
-    right: 0.75rem;
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    margin-right: 0.75rem;
   }
 
   .execution-graph__card[data-state="active"],

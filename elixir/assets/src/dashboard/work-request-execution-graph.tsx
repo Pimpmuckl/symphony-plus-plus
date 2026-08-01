@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, useState } from "react";
+import { memo, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 
 import {
@@ -42,27 +42,24 @@ export const WorkRequestExecutionGraph = memo(function WorkRequestExecutionGraph
   contextPath,
 }: WorkRequestExecutionGraphProps) {
   const [groupOverrides, setGroupOverrides] = useState<Record<string, boolean>>({});
+  const orientation = useGraphOrientation();
   const notice = executionGraphNotice(graph);
   const expandedGroupIds = useMemo(() => {
-    const expanded = defaultExpandedGroupIds(graph);
+    const expanded = defaultExpandedGroupIds();
     Object.entries(groupOverrides).forEach(([id, value]) => value ? expanded.add(id) : expanded.delete(id));
     return expanded;
-  }, [graph, groupOverrides]);
+  }, [groupOverrides]);
   const renderedGroupIds = useMemo(() => new Set((graph.groups ?? []).map((group) => group.id)), [graph.groups]);
-  const layouts = useMemo(() => notice ? undefined : {
-    desktop: buildExecutionGraphLayout(graph, "desktop", expandedGroupIds, renderedGroupIds),
-    mobile: buildExecutionGraphLayout(graph, "mobile", expandedGroupIds, renderedGroupIds),
-  }, [expandedGroupIds, graph, notice, renderedGroupIds]);
+  const layout = useMemo(() => notice ? undefined : buildExecutionGraphLayout(graph, orientation, expandedGroupIds, renderedGroupIds), [expandedGroupIds, graph, notice, orientation, renderedGroupIds]);
 
   if (notice) return <GraphNotice ariaLabel={ariaLabel} title={notice.title} detail={notice.detail} />;
 
-  const { desktop, mobile } = layouts!;
   const toggleGroup = (id: string) => {
     const current = expandedGroupIds.has(id);
     setGroupOverrides((values) => ({ ...values, [id]: !current }));
   };
 
-  if (!desktop.rects.length) {
+  if (!layout!.rects.length) {
     return (
       <section className="execution-graph execution-graph--empty" aria-label={ariaLabel}>
         <p>No execution packages to show.</p>
@@ -71,12 +68,19 @@ export const WorkRequestExecutionGraph = memo(function WorkRequestExecutionGraph
   }
 
   return (
-    <section className="execution-graph" aria-label={ariaLabel}>
-      <GraphSurface attentionByEntity={attentionByEntity} model={desktop} orientation="desktop" now={now} onSelectAttention={onSelectAttention} onSelectWorkPackage={onSelectWorkPackage} onToggleGroup={toggleGroup} contextPath={contextPath} />
-      <GraphSurface attentionByEntity={attentionByEntity} model={mobile} orientation="mobile" now={now} onSelectAttention={onSelectAttention} onSelectWorkPackage={onSelectWorkPackage} onToggleGroup={toggleGroup} contextPath={contextPath} />
+    <section className="execution-graph" aria-label={ariaLabel} style={{ width: Math.max(416, layout!.width), maxWidth: "100%" }}>
+      <GraphSurface attentionByEntity={attentionByEntity} model={layout!} orientation={orientation} now={now} onSelectAttention={onSelectAttention} onSelectWorkPackage={onSelectWorkPackage} onToggleGroup={toggleGroup} contextPath={contextPath} />
     </section>
   );
 });
+function subscribeGraphOrientation(callback: () => void) {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => undefined;
+  const query = window.matchMedia("(max-width: 720px)");
+  query.addEventListener("change", callback);
+  return () => query.removeEventListener("change", callback);
+}
+function graphOrientationSnapshot(): GraphOrientation { return typeof window !== "undefined" && window.matchMedia?.("(max-width: 720px)").matches ? "mobile" : "desktop"; }
+function useGraphOrientation(): GraphOrientation { return useSyncExternalStore<GraphOrientation>(subscribeGraphOrientation, graphOrientationSnapshot, () => "desktop"); }
 function GraphNotice({ ariaLabel, title, detail }: { ariaLabel: string; title: string; detail: string }) {
   return (
     <section className="execution-graph execution-graph--empty" aria-label={ariaLabel} role="status">

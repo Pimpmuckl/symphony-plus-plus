@@ -15,6 +15,17 @@ export function wireMorphs(previous: WirePath[], current: WirePath[]) {
   return morphs;
 }
 
+export function wireTransitionLayers(previous: WirePath[], current: WirePath[]) {
+  const morphs = wireMorphs(previous, current);
+  const moving = new Set(morphs.map(({ from }) => from.key));
+  const targeted = new Set(morphs.map(({ to }) => to.key));
+  return {
+    morphs,
+    entering: current.filter((path) => !targeted.has(path.key)),
+    leaving: previous.filter((path) => !moving.has(path.key)),
+  };
+}
+
 function bestMatch(source: WirePath, candidates: WirePath[]) {
   let best: WirePath | undefined;
   let bestScore = 0;
