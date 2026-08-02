@@ -16,8 +16,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository do
 
   @spec get(repo()) :: {:ok, Settings.t()} | {:error, error()}
   def get(repo) when is_atom(repo) do
-    normalize_hidden_work_package_ids(repo)
-
     {:ok, repo.get(Settings, Settings.settings_id()) || Settings.default()}
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)

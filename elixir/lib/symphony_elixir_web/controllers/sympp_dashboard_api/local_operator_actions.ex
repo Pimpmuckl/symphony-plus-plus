@@ -240,7 +240,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
     now = DateTime.utc_now(:microsecond)
 
     with {:ok, _settings} <- ensure_operator_settings_for_local_operator(repo),
-         {:ok, _settings} <- OperatorSettingsRepository.get(repo),
+         {:ok, _settings} <- OperatorSettingsRepository.update(repo, %{}),
          {1, _rows} <-
            repo.update_all(append_hidden_work_package_id_query(work_package_id, now), []),
          %OperatorSettings{} = settings <- repo.get(OperatorSettings, OperatorSettings.settings_id()) do
