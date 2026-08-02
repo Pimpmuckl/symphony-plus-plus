@@ -3,7 +3,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from
 
 import {
   buildExecutionGraphLayout,
-  defaultExpandedGroupIds,
+  defaultExpandedGroupIds as blockedExpandedGroupIds,
   dependencyProgress,
   graphGroupHeaderSize,
   operationalStateIsBlocked,
@@ -25,6 +25,8 @@ import type { DirectAttention } from "./workstream-attention";
 
 export type WorkRequestExecutionGraphProps = {
   model: WorkRequestExecutionGraphModel;
+  initialExpandedGroupIds?: ReadonlySet<string>;
+  wrapRootRanks?: boolean;
   attentionByEntity?: ReadonlyMap<string, Pick<DirectAttention, "label" | "tone">>;
   now?: string | number | Date;
   ariaLabel?: string;
@@ -34,6 +36,8 @@ export type WorkRequestExecutionGraphProps = {
 };
 export const WorkRequestExecutionGraph = memo(function WorkRequestExecutionGraph({
   model: graph,
+  initialExpandedGroupIds,
+  wrapRootRanks = true,
   attentionByEntity = new Map(),
   now,
   ariaLabel = "WorkRequest execution graph",
@@ -42,15 +46,16 @@ export const WorkRequestExecutionGraph = memo(function WorkRequestExecutionGraph
   contextPath,
 }: WorkRequestExecutionGraphProps) {
   const [groupOverrides, setGroupOverrides] = useState<Record<string, boolean>>({});
+  const [initialGroups] = useState(() => new Set(initialExpandedGroupIds ?? blockedExpandedGroupIds(graph)));
   const orientation = useGraphOrientation();
   const notice = executionGraphNotice(graph);
   const expandedGroupIds = useMemo(() => {
-    const expanded = defaultExpandedGroupIds();
+    const expanded = new Set(initialGroups);
     Object.entries(groupOverrides).forEach(([id, value]) => value ? expanded.add(id) : expanded.delete(id));
     return expanded;
-  }, [groupOverrides]);
+  }, [groupOverrides, initialGroups]);
   const renderedGroupIds = useMemo(() => new Set((graph.groups ?? []).map((group) => group.id)), [graph.groups]);
-  const layout = useMemo(() => notice ? undefined : buildExecutionGraphLayout(graph, orientation, expandedGroupIds, renderedGroupIds), [expandedGroupIds, graph, notice, orientation, renderedGroupIds]);
+  const layout = useMemo(() => notice ? undefined : buildExecutionGraphLayout(graph, orientation, expandedGroupIds, renderedGroupIds, wrapRootRanks), [expandedGroupIds, graph, notice, orientation, renderedGroupIds, wrapRootRanks]);
 
   if (notice) return <GraphNotice ariaLabel={ariaLabel} title={notice.title} detail={notice.detail} />;
 
@@ -121,7 +126,7 @@ function GraphSurface({
   onToggleGroup: (groupId: string) => void;
   contextPath?: ContextPathPart[];
 }) {
-  const pan = useRef<{ left: number; pointerId: number; x: number } | null>(null);
+  const pan = useRef<{ left: number; pointerId: number; top: number; x: number; y: number } | null>(null);
   const children = new Map<string, GraphEntityRect[]>();
   model.rects.forEach((rect) => {
     if (!rect.parent_group_id) return;
@@ -141,13 +146,14 @@ function GraphSurface({
   const roots = model.rects.filter((rect) => !rect.parent_group_id);
   const beginPan = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest("button, a")) return;
-    pan.current = { left: event.currentTarget.scrollLeft, pointerId: event.pointerId, x: event.clientX };
+    pan.current = { left: event.currentTarget.scrollLeft, pointerId: event.pointerId, top: event.currentTarget.scrollTop, x: event.clientX, y: event.clientY };
     event.currentTarget.dataset.panning = "true";
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const movePan = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (pan.current?.pointerId !== event.pointerId) return;
     event.currentTarget.scrollLeft = pan.current.left + pan.current.x - event.clientX;
+    event.currentTarget.scrollTop = pan.current.top + pan.current.y - event.clientY;
   };
   const endPan = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (pan.current?.pointerId !== event.pointerId) return;

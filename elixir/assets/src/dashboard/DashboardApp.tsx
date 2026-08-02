@@ -509,7 +509,7 @@ function useDashboardController() {
           repos={searchedWorkstreams.repos}
           hiddenRepoCount={hiddenWorkstreamCount}
           searchActive={searchedWorkstreams.active}
-          requestDetailsByRepo={searchedWorkstreams.requestDetailsByRepo}
+          requestDetailsByRepo={searchedWorkstreams.requestDetailsByRepo} focusBoardReady={animationBaselineReady}
           now={dashboard?.generated_at}
           activeBlockingEdges={dashboard?.active_blocking_edges ?? []}
           guidanceItems={guidanceItems}
@@ -526,7 +526,7 @@ function useDashboardController() {
     [
       dashboard?.active_blocking_edges,
       dashboard?.generated_at,
-      attentionJumpTarget,
+      attentionJumpTarget, animationBaselineReady,
       guidanceItems,
       hiddenWorkstreamCount,
       searchedWorkstreams,

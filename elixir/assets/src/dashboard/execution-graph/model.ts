@@ -166,8 +166,8 @@ export function graphCardSize(orientation: GraphOrientation) {
   const value = metrics[orientation]; return { width: value.cardWidth, height: value.cardHeight, xGap: value.xGap, yGap: value.yGap };
 }
 export function graphGroupHeaderSize(orientation: GraphOrientation) { return metrics[orientation].groupHeader; }
-export function defaultExpandedGroupIds() { return new Set<string>(); }
-export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel, orientation: GraphOrientation, expandedGroupIds = defaultExpandedGroupIds(), renderedGroupIds = expandedGroupIds): ExecutionGraphLayoutModel {
+export function defaultExpandedGroupIds(graph?: WorkRequestExecutionGraphModel) { const expanded = new Set<string>(); if (graph) for (const [id, state] of graphContext(graph).groupStates) if (state.tone === "blocked") expanded.add(id); return expanded; }
+export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel, orientation: GraphOrientation, expandedGroupIds = defaultExpandedGroupIds(), renderedGroupIds = expandedGroupIds, wrapRootRanks = true): ExecutionGraphLayoutModel {
   const context = graphContext(graph);
   const rootKeys = rootEntityKeys(context);
   const rootDependencies = projectedRootDependencies(graphDependencies(graph), context);
@@ -175,7 +175,7 @@ export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel,
   const depths = entityDepths(order, rootDependencies);
   const rankedOrder = orderWithinRanks(order, depths, rootDependencies);
   const sizes = new Map(rankedOrder.map((key) => [key, entitySize(key, orientation, expandedGroupIds, context)]));
-  const rootLayout = layoutRootEntities(rankedOrder, depths, sizes, orientation, metrics[orientation]);
+  const rootLayout = layoutRootEntities(rankedOrder, depths, sizes, orientation, metrics[orientation], wrapRootRanks);
   const rootRects = rootLayout.rects.map((rect) => ({
     ...rect,
     expanded: rect.kind === "group" && expandedGroupIds.has(rect.id),
@@ -190,7 +190,7 @@ export function buildExecutionGraphLayout(graph: WorkRequestExecutionGraphModel,
   )).length;
   const edge = Math.max(0, ...visibleRects.map((rect) => rect.x + rect.width));
   const bottom = Math.max(0, ...visibleRects.map((rect) => rect.y + rect.height));
-  const outerMargin = orientation === "mobile" ? 16 : 28;
+  const outerMargin = metrics[orientation].y;
   return {
     groups: context.groups,
     refs: context.refs,

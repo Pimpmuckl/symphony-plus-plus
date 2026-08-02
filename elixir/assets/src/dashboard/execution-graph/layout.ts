@@ -19,18 +19,20 @@ export function layoutRootEntities(
   sizes: Map<string, EntitySize>,
   orientation: GraphOrientation,
   metrics: LayoutMetrics,
+  wrapRanks = true,
 ): { rects: GraphEntityRect[]; routing?: ExecutionGraphRouting } {
   if (orientation === "mobile") return { rects: mobileLayout(order, sizes, metrics) };
   if (!order.length) return { rects: [] };
 
   const ranks = groupByRank(order, depths);
   const maxRank = Math.max(...ranks.keys());
-  const bandCount = Math.floor(maxRank / RANKS_PER_BAND) + 1;
+  const ranksPerBand = wrapRanks ? RANKS_PER_BAND : maxRank + 1;
+  const bandCount = Math.floor(maxRank / ranksPerBand) + 1;
   const bandHeights = new Map<number, number>();
 
   for (let band = 0; band < bandCount; band += 1) {
-    const heights = Array.from({ length: RANKS_PER_BAND }, (_value, column) => (
-      stackHeight(ranks.get(band * RANKS_PER_BAND + column) ?? [], sizes, metrics)
+    const heights = Array.from({ length: ranksPerBand }, (_value, column) => (
+      stackHeight(ranks.get(band * ranksPerBand + column) ?? [], sizes, metrics)
     ));
     bandHeights.set(band, Math.max(metrics.cardHeight, ...heights));
   }
@@ -42,8 +44,8 @@ export function layoutRootEntities(
   let placed = 0;
 
   for (let rank = 0; rank <= maxRank; rank += 1) {
-    const band = Math.floor(rank / RANKS_PER_BAND);
-    const column = columnForRank(rank, maxRank);
+    const band = Math.floor(rank / ranksPerBand);
+    const column = columnForRank(rank, maxRank, ranksPerBand);
     let y = bandY.get(band) ?? metrics.y;
     for (const key of ranks.get(rank) ?? []) {
       const size = sizes.get(key) ?? { width: metrics.cardWidth, height: metrics.cardHeight };
@@ -136,17 +138,18 @@ function groupByRank(order: string[], depths: Map<string, number>) {
   return ranks;
 }
 
-function columnForRank(rank: number, maxRank: number) {
-  const offset = rank % RANKS_PER_BAND;
-  const finalBand = Math.floor(maxRank / RANKS_PER_BAND);
-  return finalBand > 0 && Math.floor(rank / RANKS_PER_BAND) === finalBand
-    ? offset + RANKS_PER_BAND - (maxRank % RANKS_PER_BAND + 1)
+function columnForRank(rank: number, maxRank: number, ranksPerBand: number) {
+  const offset = rank % ranksPerBand;
+  const finalBand = Math.floor(maxRank / ranksPerBand);
+  return finalBand > 0 && Math.floor(rank / ranksPerBand) === finalBand
+    ? offset + ranksPerBand - (maxRank % ranksPerBand + 1)
     : offset;
 }
 
 function rootColumnPositions(rects: GraphEntityRect[], metrics: LayoutMetrics) {
   const values = new Map([[0, metrics.x]]);
-  for (let column = 1; column < RANKS_PER_BAND; column += 1) {
+  const maxColumn = Math.max(0, ...rects.map((rect) => rect.column));
+  for (let column = 1; column <= maxColumn; column += 1) {
     const previousX = values.get(column - 1) as number;
     const current = rects.filter((rect) => rect.column === column);
     const constraints = rects
