@@ -120,6 +120,24 @@ function Set-SanitizedEnvironment($Info, [hashtable]$Environment) {
   foreach ($entry in $Environment.GetEnumerator()) { $Info.Environment[$entry.Key] = [string]$entry.Value }
 }
 
+function ConvertFrom-ArtifactPhaseTiming([string]$Stderr, [double]$ElapsedMs) {
+  $line = @($Stderr -split "`r?`n" | Where-Object { $_ -like "artifact_phases:*" } | Select-Object -Last 1)
+  if ($line.Count -ne 1) { throw "Exact-command runtime artifact preparation omitted phase timings." }
+  $values = @{}
+  foreach ($match in [regex]::Matches($line[0], '([a-z_]+)=([^ ]+)')) { $values[$match.Groups[1].Value] = $match.Groups[2].Value }
+  return [pscustomobject]@{
+    cache = [string]$values.cache
+    process_ms = [Math]::Round($ElapsedMs, 2)
+    lock_wait_ms = [double]$(if ($values.lock_wait_ms) { $values.lock_wait_ms } else { 0 })
+    download_ms = [double]$values.download_ms
+    hash_ms = [double]$values.hash_ms
+    extract_ms = [double]$values.extract_ms
+    dashboard_proof_ms = [double]$values.dashboard_proof_ms
+    promotion_ms = [double]$values.promotion_ms
+    total_ms = [double]$values.total_ms
+  }
+}
+
 function Prepare-ExactArtifact([hashtable]$Environment) {
   $preparationEnvironment = @{} + $Environment
   $preparationEnvironment.SYMPP_LAUNCHER_TRACE_DIR = Join-Path $tempRoot "preparation-trace"
@@ -157,6 +175,7 @@ function Prepare-ExactArtifact([hashtable]$Environment) {
   if (-not $validationCache.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) { throw "Exact-command preparation cache escaped its isolated root." }
   Remove-Item -LiteralPath $validationCache -Recurse -Force -ErrorAction SilentlyContinue
   Write-BenchmarkProgress "Verified exact-command runtime artifact acquired in $([Math]::Round($watch.Elapsed.TotalMilliseconds, 2)) ms."
+  return ConvertFrom-ArtifactPhaseTiming $stderr $watch.Elapsed.TotalMilliseconds
 }
 
 function Start-ExactClient([hashtable]$Environment) {
@@ -455,7 +474,8 @@ exit /b %ERRORLEVEL%
     PATH = (Join-Path $tempRoot "shim") + ";" + $effectivePath
   }
 
-  Prepare-ExactArtifact $environment
+  $artifactCacheMiss = Prepare-ExactArtifact $environment
+  $artifactPreparedCache = Prepare-ExactArtifact $environment
   Write-BenchmarkProgress "Starting exact-command artifact cold client on port $backendPort..."
   $cold = Start-ExactClient $environment
   Wait-ClientsReady @($cold) $StartupTimeoutSec
@@ -656,6 +676,7 @@ exit /b %ERRORLEVEL%
     launcher_mode = $LauncherMode
     command = "cmd.exe /d /s /c scripts\start-sympp-mcp.cmd"
     backend_port = $backendPort
+    artifact = [pscustomobject]@{ cache_miss = $artifactCacheMiss; prepared_cache = $artifactPreparedCache }
     cold = $coldMetrics
     warm = @($warmResults)
     cache_release = $cacheRelease
