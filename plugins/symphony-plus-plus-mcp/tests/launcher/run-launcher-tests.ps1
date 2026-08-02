@@ -19,6 +19,7 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../.."
 $scriptPath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/start-sympp-mcp.ps1"
 $helperPath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-mcp-launcher-helpers.ps1"
 $runtimePath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-launcher-runtime.ps1"
+$artifactRuntimePath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-mcp-artifact-runtime.ps1"
 . $runtimePath
 . $helperPath
 foreach ($name in @(
@@ -31,6 +32,10 @@ foreach ($name in @(
   )) {
   Import-ScriptFunction $scriptPath $name
 }
+foreach ($name in @("Get-SymppArtifactDirectoryFingerprint", "Test-SymppArtifactDashboardReady", "Remove-SymppArtifactExtractionStaging", "Expand-SymppArtifactArchive")) {
+  Import-ScriptFunction $artifactRuntimePath $name
+}
+function Write-Diagnostic([string]$Message) { }
 function Write-CompatibleSourceMismatchDiagnostic { }
 $pluginRoot = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp"
 $fingerprint = Resolve-LocalMcpContractFingerprint $pluginRoot
@@ -61,6 +66,7 @@ $health = [pscustomobject]@{ healthy = $true; source_revision = $state.backend.s
 $plan = Resolve-FastAttachRuntimePlan $state $state.backend.source_revision $fingerprint 0 0 $false $false $null $null $health $true $true
 Assert-True ($null -ne $plan -and -not $plan.dashboard_plan.managed) "Artifact-static runtime should produce an unmanaged-dashboard fallback plan"
 $source = Get-Content -LiteralPath $scriptPath -Raw
+$artifactSource = Get-Content -LiteralPath $artifactRuntimePath -Raw
 $warmCall = $source.LastIndexOf("if (Invoke-WarmAttachFromRuntimeState")
 $artifactCall = $source.LastIndexOf('Resolve-SymppArtifactProbe $pluginRoot')
 $coldLock = $source.LastIndexOf('$startupLock = Enter-FileLock')
@@ -87,6 +93,7 @@ $bridgeSource = $node.Substring($bridgeStart, $bridgeEnd - $bridgeStart)
 Assert-True ($cmd.Contains('%%~$PATH:I') -and -not $cmd.Contains('where node.exe') -and $cmd.Contains('-PrepareRuntimeOnly') -and $cmd.Contains('if "%bridge_exit%"=="42" goto :run_pwsh')) "Bootstrap must select Node without a per-client discovery process and preserve PowerShell fallback after preparation"
 Assert-True ($cmd.Contains('-CleanupPreparedRuntime') -and $source.Contains('if ($CleanupPreparedRuntime)')) "Unexpected post-prepare Node failures must clean an unleased managed runtime"
 Assert-True ($source.Contains('if ($PrepareRuntimeOnly)') -and $source.IndexOf('if ($PrepareRuntimeOnly)') -lt $source.LastIndexOf('Invoke-HttpMcpBridge')) "Prepared cold runtime must exit before any PowerShell stdio bridge"
+Assert-True ($artifactSource.Contains('Remove-SymppArtifactExtractionStaging $ExtractRoot') -and $artifactSource.IndexOf('Remove-SymppArtifactExtractionStaging $ExtractRoot') -gt $artifactSource.IndexOf('Enter-FileLock (Join-Path $CacheRoot "artifact.lock")')) "Orphaned artifact extraction staging must be cleaned under the artifact lock"
 Assert-True ($preflightCall -ge 0 -and $preflightCall -lt $stdinRead -and $node.Contains('trace("warm_miss_health");')) "Node health mismatches must route through cold recovery before consuming stdin"
 Assert-True ($node.Contains('/mcp/readiness') -and $node.Contains('response.status === 404') -and $node.Contains('legacyBackendHealth')) "Node launcher health probes must prefer stateless readiness and retain a 404-only legacy runtime fallback"
 Assert-True ($source.Contains('/mcp/readiness') -and $source.Contains('StatusCode -eq 404') -and $source.Contains('Get-LegacySymppBackendHealth')) "PowerShell launcher health probes must prefer stateless readiness and retain a 404-only legacy runtime fallback"
@@ -105,6 +112,24 @@ Assert-True ($node.IndexOf('cleanupScript = prepareCleanupScript(identity);') -l
 Assert-True (-not $node.Contains('confirmedCleanupScript')) "Warm bridge attachment must stage and hash its exact cleanup generation only once"
 Assert-True ($node -match '(?s)function prepareCleanupScript\(identity\).*?try \{\s*const names = fs\.readdirSync\(__dirname\).*?\} catch \(_\) \{\s*return null;') "Cleanup staging must fail closed when the invalidatable plugin cache disappears"
 Assert-True ((@([regex]::Matches($node, 'require\("([^./][^"]*)"\)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique) -join ",") -eq "child_process,crypto,fs,http,net,os,path,readline") "Node bridge must use standard-library modules only"
+$artifactTemp = Join-Path $PSScriptRoot (".artifact-runtime-" + [guid]::NewGuid().ToString("N"))
+try {
+  $payload = Join-Path $artifactTemp "payload"
+  New-Item -ItemType Directory -Path (Join-Path $payload "dashboard-static") -Force | Out-Null
+  Set-Content -LiteralPath (Join-Path $payload "start-runtime.ps1") -Value "exit 0" -Encoding UTF8
+  Set-Content -LiteralPath (Join-Path $payload "dashboard-static/index.html") -Value "ready" -Encoding UTF8
+  $fingerprint = Get-SymppArtifactDirectoryFingerprint (Join-Path $payload "dashboard-static")
+  $archive = Join-Path $artifactTemp "runtime.zip"
+  [System.IO.Compression.ZipFile]::CreateFromDirectory($payload, $archive)
+  $extractRoot = Join-Path $artifactTemp "runtime"
+  New-Item -ItemType Directory -Path "$extractRoot.extracting-orphan" | Out-Null
+  Remove-SymppArtifactExtractionStaging $extractRoot
+  Assert-True (-not (Test-Path -LiteralPath "$extractRoot.extracting-orphan")) "Artifact staging cleanup must remove an orphaned extraction directory"
+  $timings = Expand-SymppArtifactArchive $archive $extractRoot "start-runtime.ps1" ("a" * 64) "windows-x64" ("b" * 40) "0.1.9" "manifest.json" "dashboard-static" $fingerprint
+  Assert-True (($timings.extract_ms -ge 0) -and (Test-SymppArtifactDashboardReady $extractRoot "dashboard-static" $fingerprint)) "Stdlib artifact extraction must preserve dashboard proof"
+} finally {
+  Remove-Item -LiteralPath $artifactTemp -Recurse -Force -ErrorAction SilentlyContinue
+}
 & (Get-Command node.exe -ErrorAction Stop).Source --check $nodePath
 Assert-True ($LASTEXITCODE -eq 0) "Node bridge must parse"
 & (Get-Command node.exe -ErrorAction Stop).Source $nodePath --runtime-supported

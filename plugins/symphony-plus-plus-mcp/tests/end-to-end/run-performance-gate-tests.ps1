@@ -17,7 +17,7 @@ $selfTest = @(& (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -File $ga
 Assert-True ($LASTEXITCODE -eq 0) "threshold self-test must pass"
 Assert-True ($selfTest -contains "status: pass") "threshold self-test must emit TOON status"
 $expectedFailures = @(
-  "cold.isolated_bootstrap_ms", "warm.p95_ms", "direct.elapsed_ms", "cohort.clients", "backend.singleton", "backend.identity",
+  "cold.isolated_bootstrap_ms", "exact.node.artifact_cache_miss_ms", "exact.node.artifact_prepared_ms", "warm.p95_ms", "direct.elapsed_ms", "cohort.clients", "backend.singleton", "backend.identity",
   "warm.lease_lifecycle", "warm.network_attempts", "direct.wrapper_processes",
   "direct.wrapper_private_bytes", "direct.backend_private_bytes",
   "state_hot_path.readiness_state", "state_hot_path.recovery_writes", "state_hot_path.ready_guard", "state_hot_path.busy_retries",

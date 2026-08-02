@@ -10,6 +10,8 @@ pwsh -NoProfile -File scripts/benchmarks/sympp-mcp/run-performance-gate.ps1 -Sel
 param(
   [ValidateRange(1, 1000)][int]$Clients = 100,
   [ValidateRange(1, 3600000)][int]$MaxColdMs = 600000,
+  [ValidateRange(1, 600000)][int]$MaxArtifactCacheMissMs = 120000,
+  [ValidateRange(1, 60000)][int]$MaxArtifactPreparedMs = 5000,
   [ValidateRange(1, 60000)][int]$MaxWarmP95Ms = 2000,
   [ValidateRange(1, 2147483647)][int64]$MaxExactWarmBytes = 66864537,
   [ValidateRange(1, 600000)][int]$MaxDirectMs = 30000,
@@ -40,6 +42,7 @@ $responseListCaps = [ordered]@{
 $exactP95Caps = @{ 1 = $MaxWarmP95Ms; 10 = $MaxWarmP95Ms }
 $thresholds = @{
   cold_ms = $MaxColdMs; warm_p95_ms = $MaxWarmP95Ms; exact_warm_p95_ms = $exactP95Caps
+  artifact_cache_miss_ms = $MaxArtifactCacheMissMs; artifact_prepared_ms = $MaxArtifactPreparedMs
   exact_warm_bytes = $MaxExactWarmBytes; direct_ms = $MaxDirectMs
   clients = $Clients; backend_bytes = $MaxBackendBytes; profile_caps = $profileCaps; result_caps = $resultCaps
   response_list_caps = $responseListCaps
@@ -52,6 +55,8 @@ function Quote-Toon([string]$Value) {
 function Get-GateFailures($Metrics, $Limits) {
   $failures = [System.Collections.Generic.List[string]]::new()
   if ($Metrics.cold.isolated_bootstrap_ms -gt $Limits.cold_ms) { $failures.Add("cold.isolated_bootstrap_ms") }
+  if ($Metrics.exact.node.artifact.cache_miss.process_ms -gt $Limits.artifact_cache_miss_ms) { $failures.Add("exact.node.artifact_cache_miss_ms") }
+  if ($Metrics.exact.node.artifact.prepared_cache.process_ms -gt $Limits.artifact_prepared_ms) { $failures.Add("exact.node.artifact_prepared_ms") }
   if ($Metrics.warm.p95_ms -gt $Limits.warm_p95_ms) { $failures.Add("warm.p95_ms") }
   if ($Metrics.direct.elapsed_ms -gt $Limits.direct_ms) { $failures.Add("direct.elapsed_ms") }
   if ($Metrics.warm.clients -ne $Limits.clients -or $Metrics.direct.clients -ne $Limits.clients) { $failures.Add("cohort.clients") }
@@ -116,6 +121,8 @@ function Write-Result($Metrics, [string[]]$Failures, $Cleanup) {
   [Console]::Out.WriteLine("clients: $($Metrics.warm.clients)")
   [Console]::Out.WriteLine("thresholds:")
   [Console]::Out.WriteLine("  isolated_bootstrap_ms: $MaxColdMs")
+  [Console]::Out.WriteLine("  artifact_cache_miss_ms: $MaxArtifactCacheMissMs")
+  [Console]::Out.WriteLine("  artifact_prepared_ms: $MaxArtifactPreparedMs")
   [Console]::Out.WriteLine("  warm_p95_ms: $MaxWarmP95Ms")
   [Console]::Out.WriteLine("  exact_warm_p95_ms: 1=$($exactP95Caps[1]),10=$($exactP95Caps[10])")
   [Console]::Out.WriteLine("  exact_warm_private_bytes: $MaxExactWarmBytes")
@@ -137,6 +144,9 @@ function Write-Result($Metrics, [string[]]$Failures, $Cleanup) {
     [Console]::Out.WriteLine("  ${name}: $($Metrics.warm.$name)")
   }
   [Console]::Out.WriteLine("exact_command:")
+  $artifact = $Metrics.exact.node.artifact
+  [Console]::Out.WriteLine("  artifact_cache_miss: process_ms=$($artifact.cache_miss.process_ms),download_ms=$($artifact.cache_miss.download_ms),hash_ms=$($artifact.cache_miss.hash_ms),extract_ms=$($artifact.cache_miss.extract_ms),dashboard_proof_ms=$($artifact.cache_miss.dashboard_proof_ms),promotion_ms=$($artifact.cache_miss.promotion_ms)")
+  [Console]::Out.WriteLine("  artifact_prepared_cache: process_ms=$($artifact.prepared_cache.process_ms),dashboard_proof_ms=$($artifact.prepared_cache.dashboard_proof_ms)")
   foreach ($mode in @("node", "fallback")) {
     $exact = $Metrics.exact.$mode
     $cohorts = @($exact.warm | Where-Object { $_.clients -ge 10 })
@@ -361,7 +371,7 @@ function Invoke-SelfTest {
     warm = [pscustomobject]@{ clients = 100; p95_ms = 1; backend_processes = 1; leases_peak = 100; leases_after = 0; remote_resolution_attempts = 0 }
     direct = [pscustomobject]@{ clients = 100; elapsed_ms = 1; backend_processes = 1; backend_pid = 1; backend_start_ticks = 1; transport_processes = 0; transport_private_bytes = 0; backend_private_bytes = 1 }
     exact = [pscustomobject]@{
-      node = [pscustomobject]@{ cold = [pscustomobject]@{ trace = [pscustomobject]@{ installed_identity_full_validation = 1; payload_hash_validation = 0; marketplace_git_validation = 0; artifact_manifest_resolution = 1 } }; warm = @(New-SelfTestExactCohort 1; New-SelfTestExactCohort 10; New-SelfTestExactCohort 100); lock_recovery = [pscustomobject]@{ checked = $true; reclaimed = $true }; lifecycle_race = [pscustomobject]@{ checked = $true; healthy = $true }; recovery = [pscustomobject]@{ dashboard_healthy = $true }; mutation = [pscustomobject]@{ checked = $true; shortcut_rejected = $true; scan_race_detected = $true; attach_race_rejected = $true } }
+      node = [pscustomobject]@{ artifact = [pscustomobject]@{ cache_miss = [pscustomobject]@{ process_ms = 1 }; prepared_cache = [pscustomobject]@{ process_ms = 1 } }; cold = [pscustomobject]@{ trace = [pscustomobject]@{ installed_identity_full_validation = 1; payload_hash_validation = 0; marketplace_git_validation = 0; artifact_manifest_resolution = 1 } }; warm = @(New-SelfTestExactCohort 1; New-SelfTestExactCohort 10; New-SelfTestExactCohort 100); lock_recovery = [pscustomobject]@{ checked = $true; reclaimed = $true }; lifecycle_race = [pscustomobject]@{ checked = $true; healthy = $true }; recovery = [pscustomobject]@{ dashboard_healthy = $true }; mutation = [pscustomobject]@{ checked = $true; shortcut_rejected = $true; scan_race_detected = $true; attach_race_rejected = $true } }
       fallback = [pscustomobject]@{ warm = @([pscustomobject]@{ clients = 10; p95_initialize_ms = 1; process_tree = [pscustomobject]@{ median_private_bytes_per_client = 1 } }); recovery = [pscustomobject]@{ dashboard_healthy = $true } }
     }
     profiles = [pscustomobject]@{ full = @{ tools = 1; bytes = 1 }; worker = @{ tools = 1; bytes = 1 }; architect = @{ tools = 1; bytes = 1 }; coordinator = @{ tools = 1; bytes = 1 }; solo = @{ tools = 1; bytes = 1 } }
@@ -385,6 +395,8 @@ function Invoke-SelfTest {
   }
   $cases = [ordered]@{
     "cold.isolated_bootstrap_ms" = { param($m) $m.cold.isolated_bootstrap_ms = $MaxColdMs + 1 }
+    "exact.node.artifact_cache_miss_ms" = { param($m) $m.exact.node.artifact.cache_miss.process_ms = $MaxArtifactCacheMissMs + 1 }
+    "exact.node.artifact_prepared_ms" = { param($m) $m.exact.node.artifact.prepared_cache.process_ms = $MaxArtifactPreparedMs + 1 }
     "warm.p95_ms" = { param($m) $m.warm.p95_ms = $MaxWarmP95Ms + 1 }
     "direct.elapsed_ms" = { param($m) $m.direct.elapsed_ms = $MaxDirectMs + 1 }
     "cohort.clients" = { param($m) $m.direct.clients = 99 }

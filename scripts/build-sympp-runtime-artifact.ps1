@@ -219,6 +219,10 @@ Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContin
 New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
 Copy-Item -LiteralPath $releaseDir -Destination (Join-Path $stagingDir "runtime") -Recurse
 Copy-Item -LiteralPath $sourceStaticDir -Destination (Join-Path $stagingDir "dashboard-static") -Recurse
+if ($platformId -eq "windows-x64") {
+  Get-ChildItem -LiteralPath (Join-Path $stagingDir "runtime") -File -Recurse -Filter "*.pdb" | Remove-Item -Force
+  Get-ChildItem -LiteralPath (Join-Path $stagingDir "runtime") -File -Recurse -Filter "beam.debug.smp.dll" | Remove-Item -Force
+}
 @'
 #!/usr/bin/env bash
 set -euo pipefail
