@@ -677,7 +677,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   def operator_config(conn, _params) do
     with {:ok, conn} <- ensure_local_operator_api_session(conn),
          {:ok, %Decision{}} <- authorize_local_operator_policy(conn, :dashboard_read, Target.new(:dashboard)) do
-      json(conn, operator_runtime_config(conn))
+      json(conn, operator_runtime_config(conn) |> maybe_put_dashboard_bootstrap())
     else
       {:error, reason} -> error_response(conn, reason)
     end
@@ -1205,6 +1205,13 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       logoUrl: prefixed_path(conn, "/splusplus-logo.png"),
       operatorMode: local_operator_api_request?(conn)
     }
+  end
+
+  defp maybe_put_dashboard_bootstrap(config) do
+    case Runtime.with_dashboard_repo(&LocalOperatorDashboard.operator_dashboard_payload/1) do
+      {:ok, dashboard} -> Map.put(config, :dashboard, dashboard)
+      {:error, _reason} -> config
+    end
   end
 
   defp mutation_success_payload(payload, refresh \\ %{}) when is_map(payload) and is_map(refresh) do

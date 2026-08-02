@@ -157,17 +157,6 @@ export function DashboardShell({
 
   useDashboardScrollbarOffset(headerRef, loading);
 
-  if (loading) {
-    return (
-      <main className="flex min-h-screen items-center justify-center">
-        <div className="flex items-center gap-3 rounded-lg border bg-card px-5 py-4 text-sm text-muted-foreground shadow-sm">
-          <Loader2 className="size-4 animate-spin" />
-          Loading Symphony++
-        </div>
-      </main>
-    );
-  }
-
   return (
     <TooltipProvider delayDuration={150}>
       <main className="dashboard-shell min-h-screen">
@@ -281,7 +270,13 @@ export function DashboardShell({
             </Card>
           ) : null}
 
-          <Tabs value={workspaceTab} onValueChange={(value) => onWorkspaceTabChange(value as WorkspaceTab)} className="min-w-0 motion-card">
+          {loading ? (
+            <div className="dashboard-glass-surface grid min-h-[180px] gap-4 rounded-lg border p-5" aria-busy="true" aria-label="Loading workstreams">
+              <div className="h-5 w-40 animate-pulse rounded bg-muted" />
+              <div className="h-16 animate-pulse rounded bg-muted/70" />
+              <div className="h-16 animate-pulse rounded bg-muted/70" />
+            </div>
+          ) : <Tabs value={workspaceTab} onValueChange={(value) => onWorkspaceTabChange(value as WorkspaceTab)} className="min-w-0 motion-card">
             <div className="dashboard-tabs-row">
               <TabsList className="dashboard-tabs-list">
                 <span className="dashboard-tabs-indicator" data-tab={workspaceTab} aria-hidden="true" />
@@ -294,7 +289,7 @@ export function DashboardShell({
               </TabsList>
             </div>
             <WorkspaceTabCarousel activeTab={workspaceTab} paneContent={workspacePanes} />
-          </Tabs>
+          </Tabs>}
         </div>
 
         <DashboardDeferredDialogs

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createLatestTaskQueue, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, enqueueLatestTask, mergeDashboardPayload, mutationShouldRefreshDashboard, patchDashboardWorkRequest, removeDashboardWorkRequest } from "./runtime";
+import { createLatestTaskQueue, dashboardBootstrapFromRuntimeConfig, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, enqueueLatestTask, mergeDashboardPayload, mutationShouldRefreshDashboard, patchDashboardWorkRequest, removeDashboardWorkRequest } from "./runtime";
 import { createBestEffortGithubSync, createDashboardEventRefresh } from "./dashboard-demand-loading";
 import type { DashboardPayload, WorkRequestCard } from "@/types/dashboard";
 
@@ -109,6 +109,13 @@ describe("dashboard runtime mutation helpers", () => {
 
   it("refreshes from the operator-priority base endpoint", () => {
     expect(dashboardRefreshPath()).toBe("/dashboard");
+  });
+
+  it("accepts only a shaped dashboard bootstrap and otherwise falls back", () => {
+    const dashboard = { work_requests: { work_requests: [], total_count: 0 }, deferred: { dashboard_sections: true } };
+    expect(dashboardBootstrapFromRuntimeConfig({ dashboard })).toBe(dashboard);
+    expect(dashboardBootstrapFromRuntimeConfig({ dashboard: { work_requests: [] } })).toBeNull();
+    expect(dashboardBootstrapFromRuntimeConfig({ dashboard: "<script>alert(1)</script>" })).toBeNull();
   });
 
   it("starts best-effort GitHub sync when deferred dashboard data is ready", async () => {

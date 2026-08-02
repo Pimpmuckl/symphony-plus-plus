@@ -2,7 +2,7 @@ import type { ArchitectHandoffPayload, ContextComment, CopyArchitectHandoff, Cre
 import type { NewRequestForm } from "@/components/dashboard/new-request-dialog";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, DashboardRuntimeConfig, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, createLatestTaskQueue, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, dashboardRuntimeConfig, enqueueLatestTask, ensureDashboardRuntimeConfig, isReconnectableLocalOperatorError, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, reconnectLocalOperatorSession, removeDashboardWorkRequest, withLocalOperatorReconnect } from "./runtime";
+import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, DashboardRuntimeConfig, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, createLatestTaskQueue, dashboardBootstrapFromRuntimeConfig, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, dashboardRuntimeConfig, enqueueLatestTask, ensureDashboardRuntimeConfig, isReconnectableLocalOperatorError, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, reconnectLocalOperatorSession, removeDashboardWorkRequest, withLocalOperatorReconnect } from "./runtime";
 import { DashboardShell } from "./dashboard-shell";
 import { DashboardDebugTools } from "./dashboard-debug-tools";
 import { SoloSessions } from "./solo-sessions";
@@ -145,6 +145,10 @@ function useDashboardController() {
       await withLocalOperatorReconnect(async () => {
         const config = mode === "reconnect" ? await reconnectLocalOperatorSession() : await ensureDashboardRuntimeConfig();
         setRuntimeConfig(config);
+        const bootstrap = mode === "initial" ? dashboardBootstrapFromRuntimeConfig(config) : null;
+        if (bootstrap && loadSequence === loadSequenceRef.current && loadMutationVersion === mutationVersionRef.current) {
+          setDashboard(mergeDashboardPayload(dashboardRef.current, bootstrap)); clearConnectionFailure(failureVersion); setSurfaceRefreshVersion((version) => version + 1); return;
+        }
         const response = await operatorFetch(operatorApiUrl(dashboardRefreshPath()), { headers: jsonHeaders() });
         if (loadSequence !== loadSequenceRef.current) return;
         const loaded = await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current, failureVersion);
@@ -161,7 +165,7 @@ function useDashboardController() {
         setRefreshing(false);
       }
     }
-  }, [applyDashboardResponse, recordDashboardLoadFailure, setLoading, setRefreshing]);
+  }, [applyDashboardResponse, clearConnectionFailure, recordDashboardLoadFailure, setDashboard, setLoading, setRefreshing]);
   const loadDashboard = useCallback(
     (mode: DashboardLoadMode = "refresh") =>
       enqueueLatestTask(refreshQueueRef.current, mode, runDashboardLoad, mergeDashboardLoadMode),
@@ -403,19 +407,15 @@ function useDashboardController() {
     setSelectedAttention(null);
     setSelectedCardDetail(null);
   }, [refreshAfterMutation, setSelectedAttention, setSelectedCardDetail]);
-
   useEffect(() => {
     let cancelled = false;
-
     queueMicrotask(() => {
       if (!cancelled) void loadDashboard("initial");
     });
-
     return () => {
       cancelled = true;
     };
   }, [loadDashboard]);
-
   useEffect(() => {
     if (dashboard?.deferred?.dashboard_sections) void loadDashboardDeferred();
   }, [dashboard, dashboard?.deferred?.dashboard_sections, loadDashboardDeferred, surfaceRefreshVersion]);

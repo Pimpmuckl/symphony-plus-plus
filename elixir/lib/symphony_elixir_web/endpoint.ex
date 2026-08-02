@@ -28,7 +28,14 @@ defmodule SymphonyElixirWeb.Endpoint do
   plug(Plug.Static,
     at: "/",
     from: {:symphony_elixir, "priv/static"},
-    only: ~w(assets favicon.ico splusplus-logo.png)
+    only: ~w(assets),
+    cache_control_for_etags: "public, max-age=31536000, immutable"
+  )
+
+  plug(Plug.Static,
+    at: "/",
+    from: {:symphony_elixir, "priv/static"},
+    only: ~w(favicon.ico splusplus-logo.png)
   )
 
   plug(Plug.Parsers,
