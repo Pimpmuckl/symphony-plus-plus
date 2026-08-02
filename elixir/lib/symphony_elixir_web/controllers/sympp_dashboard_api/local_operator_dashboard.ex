@@ -112,10 +112,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   defp operator_dashboard_context(repo) do
     with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo),
          {:ok, settings} <- OperatorSettingsRepository.get(repo),
-         :ok <- run_operator_retention(repo, settings),
-         {:ok, settings} <- OperatorSettingsRepository.get(repo),
-         {:ok, work_request_work_package_id_sets} <- work_request_work_package_id_sets(repo),
-         {:ok, settings} <- dedupe_hidden_work_package_ids_for_local_operator(repo, settings) do
+         {:ok, work_request_work_package_id_sets} <- work_request_work_package_id_sets(repo) do
       {:ok,
        %{
          repo: repo,
@@ -168,16 +165,6 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     settings.hidden_work_package_ids
     |> MapSet.new()
     |> MapSet.difference(work_request_work_package_ids)
-  end
-
-  defp dedupe_hidden_work_package_ids_for_local_operator(repo, %OperatorSettings{} = settings) do
-    hidden_work_package_ids = Enum.uniq(settings.hidden_work_package_ids)
-
-    if hidden_work_package_ids == settings.hidden_work_package_ids do
-      {:ok, settings}
-    else
-      OperatorSettingsRepository.update(repo, %{"hidden_work_package_ids" => hidden_work_package_ids})
-    end
   end
 
   defp expired_unwork_request_work_package_ids_for_local_operator(repo, %OperatorSettings{} = settings, work_request_work_package_ids) do
@@ -414,7 +401,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       work_request_archive_after_days: settings.work_request_archive_after_days,
       solo_session_delete_after_days: settings.solo_session_delete_after_days,
       open_dashboard_on_boot: settings.open_dashboard_on_boot,
-      hidden_work_package_ids: settings.hidden_work_package_ids
+      hidden_work_package_ids: Enum.uniq(settings.hidden_work_package_ids)
     }
   end
 

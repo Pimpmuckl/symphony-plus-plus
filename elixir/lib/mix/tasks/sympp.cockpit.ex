@@ -16,6 +16,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   @shortdoc "Starts the local Symphony++ operator cockpit"
   @default_host "127.0.0.1"
   @default_port 19_998
+  @retention_interval_ms 30_000
   @board_path "/sympp/board"
   @operator_bootstrap_param "operator_bootstrap"
   @operator_bootstrap_config_key :sympp_local_operator_bootstrap_token
@@ -671,7 +672,12 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   end
 
   defp wait_forever do
-    Process.sleep(:infinity)
+    receive do
+    after
+      @retention_interval_ms ->
+        run_work_request_retention_pass()
+        wait_forever()
+    end
   end
 
   defp resolved_database(nil), do: nil
