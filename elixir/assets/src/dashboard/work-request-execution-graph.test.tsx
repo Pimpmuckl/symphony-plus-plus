@@ -1,7 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { workRequestExecutionGraphModel } from "@/dashboard/execution-graph/adapter";
 import { auditWireGeometry, routeConflicts, routeSegments, segmentIntersectsInterior } from "@/dashboard/execution-graph/geometry-audit";
 import { buildExecutionGraphLayout, defaultExpandedGroupIds } from "@/dashboard/execution-graph/model";
 import type { WorkRequestExecutionGraphModel } from "@/dashboard/execution-graph/model";
@@ -10,54 +9,8 @@ import type { WirePath } from "@/dashboard/execution-graph/router";
 import { wireMorphs, wireTransitionLayers } from "@/dashboard/execution-graph/wire-morphs";
 import { GraphWires } from "@/dashboard/execution-graph/wires";
 import { WorkRequestExecutionGraph } from "@/dashboard/work-request-execution-graph";
-import type { WorkRequestDetail } from "@/types/dashboard";
 
 describe("WorkRequestExecutionGraph", () => {
-  it("maps original dependency intent and package lifecycle signals without replacing it with effective edges", () => {
-    const detail: WorkRequestDetail = {
-      work_request: { id: "wr-adapter", title: "Adapter fixture" },
-      work_packages: [
-        {
-          id: "wp-active",
-          work_request_id: "wr-adapter",
-          product_tree_node_id: "group-a",
-          title: "Active projection",
-          status: "implementing",
-          operational_state: { key: "implementing", label: "Implementing", tone: "info" },
-          worker_signal: { status: "active", run_label: "fixture-worker" },
-        },
-        { id: "wp-old", work_request_id: "wr-adapter", product_tree_node_id: "group-a", title: "Old", status: "merged", delivery: { outcome: "superseded" } },
-      ],
-      product_tree: {
-        available: true,
-        nodes: [{ id: "group-a", title: "Group A", work_package_ids: ["wp-active", "wp-old"] }],
-        dependency_edges: [
-          { id: "depends", kind: "depends_on", source: { kind: "work_package", id: "wp-active" }, target: { kind: "product_node", id: "group-a" } },
-          { id: "blocks", kind: "blocks", source: { kind: "product_node", id: "group-a" }, target: { kind: "work_package", id: "wp-old" } },
-        ],
-        execution_graph: {
-          available: true,
-          work_package_ids: ["wp-active", "wp-old"],
-          effective_edges: [{ prerequisite_work_package_id: "wp-old", dependent_work_package_id: "wp-active", dependency_ids: ["expanded"] }],
-          topological_order: ["wp-old", "wp-active"],
-        },
-      },
-    };
-
-    const active = workRequestExecutionGraphModel(detail);
-    const all = workRequestExecutionGraphModel(detail, { includeHistorical: true });
-
-    expect(active.work_packages).toEqual([
-      expect.objectContaining({ id: "wp-active", group_id: "group-a", title: "Active projection", worker_signal: { status: "active", run_label: "fixture-worker" } }),
-    ]);
-    expect(active.dependency_intents).toEqual([
-      { id: "depends", prerequisite: { kind: "group", id: "group-a" }, dependent: { kind: "work_package", id: "wp-active" } },
-      { id: "blocks", prerequisite: { kind: "group", id: "group-a" }, dependent: { kind: "work_package", id: "wp-old" } },
-    ]);
-    expect(active.effective_edges).toEqual(detail.product_tree?.execution_graph?.effective_edges);
-    expect(all.work_packages.map((item) => item.id)).toEqual(["wp-active", "wp-old"]);
-  });
-
   it("uses Groups as the root graph entities and gives dependent roots greater desktop depth", () => {
     const model = buildExecutionGraphLayout(graphFixture, "desktop", new Set(["workers", "output"]));
     const source = rect(model, "group:source");
@@ -76,6 +29,12 @@ describe("WorkRequestExecutionGraph", () => {
     expect(roots.map((item) => item.key)).toEqual(["group:a", "group:b", "group:c", "group:d"]);
     expect(roots.map(({ row, column }) => [row, column])).toEqual([[0, 0], [0, 0], [0, 1], [0, 1]]);
     expect(rect(buildExecutionGraphLayout(graphFixture, "desktop"), "work_package:playtest").column).toBe(1);
+  });
+
+  it("keeps Frontier dependency ranks in one left-to-right cadence", () => {
+    const roots = buildExecutionGraphLayout(foldedFanInFixture, "desktop", new Set(), new Set(), false).rects.filter((item) => !item.parent_group_id);
+    expect(new Set(roots.map((item) => item.row))).toEqual(new Set([0]));
+    expect(roots.map(({ depth, column }) => [depth, column])).toEqual(roots.map(({ depth }) => [depth, depth]));
   });
 
   it("keeps later root columns stable when a vertically separate Group expands", () => {
@@ -97,21 +56,25 @@ describe("WorkRequestExecutionGraph", () => {
     expect(route.path).toMatch(/^M [\d.]+ [\d.]+ V [\d.]+ H [\d.]+ V [\d.]+$/);
   });
 
-  it("reserves desktop cable room above and left without changing the other outer margins", () => {
+  it("uses the same outer margin on every side of a simple desktop graph", () => {
     const model = buildExecutionGraphLayout({ work_packages: [{ id: "only", title: "Only package" }] }, "desktop");
     const only = rect(model, "work_package:only");
 
     expect(only).toMatchObject({ x: 48, y: 48 });
-    expect(model.width).toBe(only.x + only.width + 28);
-    expect(model.height).toBe(only.y + only.height + 28);
+    expect(model.width).toBe(only.x + only.width + 48);
+    expect(model.height).toBe(only.y + only.height + 48);
   });
 
-  it("starts Groups collapsed without deriving geometry from lifecycle state", () => {
+  it("keeps low-level Group layout collapsed while opening blocked Groups in the rendered graph", () => {
     expect([...defaultExpandedGroupIds()]).toEqual([]);
     const model = buildExecutionGraphLayout(graphFixture, "desktop");
     const expanded = buildExecutionGraphLayout(graphFixture, "desktop", new Set(["workers", "output"]));
     const collapsed = buildExecutionGraphLayout(graphFixture, "desktop", new Set());
     const exiting = buildExecutionGraphLayout(graphFixture, "desktop", new Set(), new Set(["workers"]));
+    const blocked = renderToStaticMarkup(<WorkRequestExecutionGraph model={{
+      groups: [{ id: "blocked", title: "Blocked Group", work_package_ids: ["blocked-package"] }],
+      work_packages: [{ id: "blocked-package", group_id: "blocked", status: "blocked" }],
+    }} />);
 
     expect(rect(model, "group:source")).toMatchObject({ expanded: false, height: 62 });
     expect(rect(model, "group:workers")).toMatchObject({ expanded: false, height: 62 });
@@ -120,6 +83,7 @@ describe("WorkRequestExecutionGraph", () => {
     expect(rect(expanded, "group:output").height).toBeGreaterThan(62);
     expect(exiting.rects.some((item) => item.key === "work_package:parse")).toBe(true);
     expect(exiting.height).toBe(collapsed.height);
+    expect(blocked).toContain('data-group-id="blocked" data-state="blocked" data-expanded="true"');
   });
 
   it("keeps group-intent edges on the shell and proxies hidden WP endpoints to their collapsed Group", () => {
@@ -235,6 +199,19 @@ describe("WorkRequestExecutionGraph", () => {
     expect(new Set(large.rects.filter(({ parent_group_id }) => parent_group_id === "large").map(({ x }) => x)).size).toBeGreaterThan(1); expect(rect(large, "work_package:large-1").y).toBe(rect(large, "work_package:large-7").y);
     expect(Math.max(...largeRoutes.flatMap(({ path }) => routeSegments(path).flatMap(({ y1, y2 }) => [y1, y2])))).toBeLessThanOrEqual(largeGroup.y + largeGroup.height - 12);
     expect(auditWireGeometry(large, largeRoutes).fatal).toEqual([]);
+  });
+
+  it("uses the nearest clear child-band corridor for a skipped-column intra-Group dependency", () => {
+    const model = buildExecutionGraphLayout(localBandCorridorFixture, "desktop", new Set(["group"]));
+    const source = rect(model, "work_package:source");
+    const laterBand = rect(model, "work_package:later-one");
+    const route = graphWireRoutes(model, "desktop").paths.find((path) => path.intentIds.includes("source-target"));
+    const detour = routeSegments(route?.path ?? "").find((segment) => segment.y1 === segment.y2
+      && Math.abs(segment.x2 - segment.x1) > source.width);
+
+    expect(detour?.y1).toBeGreaterThan(source.y + source.height);
+    expect(detour?.y1).toBeLessThan(laterBand.y);
+    expect(auditWireGeometry(model, [route!])).toEqual({ fatal: [], soft: [] });
   });
 
   it("projects nested dependencies and reserves shell lanes inside expanded Groups", () => {
@@ -490,7 +467,7 @@ describe("WorkRequestExecutionGraph", () => {
     const model = buildExecutionGraphLayout(graphFixture, "desktop", new Set(["workers", "output"]));
 
     expect(new Set(model.visibleRects.filter((item) => !item.parent_group_id).map((item) => item.row))).toEqual(new Set([0]));
-    expect(model.width).toBe((model.routing?.contentRight ?? 0) + 28);
+    expect(model.width).toBe((model.routing?.contentRight ?? 0) + 48);
   });
 
   it("keeps lower skipped-root fan-in below the intervening root", () => {
@@ -788,6 +765,27 @@ const wrappedGraphFixture: WorkRequestExecutionGraphModel = {
     { id: "0-2", prerequisite: { kind: "work_package", id: "wp-0" }, dependent: { kind: "work_package", id: "wp-2" } },
     { id: "0-7", prerequisite: { kind: "work_package", id: "wp-0" }, dependent: { kind: "work_package", id: "wp-7" } },
   ],
+};
+
+const localBandCorridorFixture: WorkRequestExecutionGraphModel = {
+  groups: [{ id: "group", title: "Group" }],
+  work_packages: [
+    ["root", 0], ["second-root", 1], ["source", 2],
+    ["bridge", 3], ["second-middle", 4], ["source-middle", 5],
+    ["target", 6], ["second-end", 7], ["source-end", 8],
+    ["later-one", 9], ["later-two", 10], ["later-three", 11],
+  ].map(([id, sequence]) => ({ id: String(id), group_id: "group", sequence: Number(sequence), title: String(id) })),
+  dependency_intents: [
+    ["root", "bridge", "root-bridge"], ["bridge", "target", "bridge-target"],
+    ["second-root", "second-middle", "second-middle"], ["second-middle", "second-end", "second-end"],
+    ["source", "source-middle", "source-middle"], ["source-middle", "source-end", "source-end"],
+    ["source", "target", "source-target"],
+    ["target", "later-one", "target-later"], ["later-one", "later-two", "later-two"], ["later-two", "later-three", "later-three"],
+  ].map(([prerequisite, dependent, id]) => ({
+    id,
+    prerequisite: { kind: "work_package" as const, id: prerequisite },
+    dependent: { kind: "work_package" as const, id: dependent },
+  })),
 };
 
 const tallCrossBandFixture: WorkRequestExecutionGraphModel = {

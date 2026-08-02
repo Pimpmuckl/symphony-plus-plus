@@ -403,7 +403,6 @@ function renderFocusRow(detail: WorkRequestDetail, packages: WorkPackageCard[] =
     activeBlockerCount: 0,
     activeBlockerCountBySliceId: new Map(),
     expanded: false,
-    detachedExpandedBody: false,
     focusSelected: false,
     index: 0,
     onSetOpen: () => undefined,

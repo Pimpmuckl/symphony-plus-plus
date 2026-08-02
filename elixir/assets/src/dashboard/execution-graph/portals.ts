@@ -86,8 +86,7 @@ export function localLane(root: GraphEntityRect, index = 0) {
   return root.y + root.height - 12 - index * LOCAL_LANE_PITCH;
 }
 
-export function localBottomPoints(candidate: PortalRouteCandidate) {
-  const laneY = localLane(candidate.sourceRoot, candidate.localLaneIndex);
+export function localTrackPoints(candidate: PortalRouteCandidate, laneY = localLane(candidate.sourceRoot, candidate.localLaneIndex)) {
   const reversedIndex = (candidate.localLaneCount ?? 1) - (candidate.localLaneIndex ?? 0) - 1;
   const sourceX = candidate.source.key === candidate.sourceRoot.key
     ? candidate.sourceRoot.x + candidate.sourceRoot.width
@@ -96,6 +95,30 @@ export function localBottomPoints(candidate: PortalRouteCandidate) {
     ? candidate.targetRoot.x
     : candidate.end.x - LOCAL_LANE_PITCH - reversedIndex * LOCAL_LANE_PITCH;
   return [candidate.start, { x: sourceX, y: candidate.start.y }, { x: sourceX, y: laneY }, { x: targetX, y: laneY }, { x: targetX, y: candidate.end.y }, candidate.end];
+}
+
+export function localTrackPointOptions(candidate: PortalRouteCandidate, rects: GraphEntityRect[]) {
+  const root = candidate.sourceRoot;
+  const obstacles = rects.filter((rect) => ![candidate.source.key, candidate.target.key, root.key].includes(rect.key));
+  const low = root.y + graphGroupHeaderSize("desktop") + WIRE_CLEARANCE;
+  const high = root.y + root.height - WIRE_CLEARANCE;
+  const tracks = new Set<number>();
+  for (const rect of rects) {
+    if (rect.parent_group_id !== root.id) continue;
+    for (const track of [rect.y - WIRE_CLEARANCE, rect.y + rect.height + WIRE_CLEARANCE]) {
+      if (track > low && track < high) tracks.add(track);
+    }
+  }
+  const options: Point[][] = [];
+  for (const track of tracks) {
+    const points = localTrackPoints(candidate, track);
+    let clear = true;
+    for (let index = 1; index < points.length && clear; index += 1) {
+      clear = obstacles.every((rect) => !segmentIntersectsPaddedRect(points[index - 1], points[index], rect, WIRE_CLEARANCE));
+    }
+    if (clear) options.push(points);
+  }
+  return [...options, localTrackPoints(candidate)];
 }
 
 export function localSidePoints(candidate: PortalRouteCandidate) {
@@ -170,6 +193,13 @@ function assignBoundarySlots<T extends PortalRouteCandidate>(candidates: T[], si
 function compareRect(left: GraphEntityRect, right: GraphEntityRect) {
   return left.y - right.y || left.x - right.x || left.key.localeCompare(right.key);
 }
+
+function segmentIntersectsPaddedRect(start: Point, end: Point, rect: GraphEntityRect, padding: number) {
+  if (start.x === end.x) return start.x > rect.x - padding && start.x < rect.x + rect.width + padding && intervalOverlap(start.y, end.y, rect.y - padding, rect.y + rect.height + padding) > 0;
+  return start.y > rect.y - padding && start.y < rect.y + rect.height + padding && intervalOverlap(start.x, end.x, rect.x - padding, rect.x + rect.width + padding) > 0;
+}
+
+function intervalOverlap(a1: number, a2: number, b1: number, b2: number) { return Math.min(Math.max(a1, a2), Math.max(b1, b2)) - Math.max(Math.min(a1, a2), Math.min(b1, b2)); }
 
 function sourceBoundaryPortal(candidate: PortalRouteCandidate) {
   return {

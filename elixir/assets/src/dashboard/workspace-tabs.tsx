@@ -7,7 +7,7 @@ import { EmptyPanel } from "./empty-panel";
 import { RepoSummary } from "./dashboard-data";
 import { RepoWorkstream } from "./repo-workstream";
 import { repoWorkstreamStateKey, useStoredUseFocusBoard, workspaceTabDirection } from "./dashboard-persistence";
-import { FocusBoard } from "./focus-board";
+import { FocusBoard, FocusBoardLoading } from "./focus-board";
 import type { AttentionJumpTarget, AttentionSelect } from "./workstream-attention";
 
 export function WorkstreamsPane({
@@ -15,6 +15,7 @@ export function WorkstreamsPane({
   hiddenRepoCount,
   searchActive,
   requestDetailsByRepo,
+  focusBoardReady,
   now,
   activeBlockingEdges,
   guidanceItems,
@@ -29,6 +30,7 @@ export function WorkstreamsPane({
   hiddenRepoCount: number;
   searchActive: boolean;
   requestDetailsByRepo: Map<string, WorkRequestDetail[]>;
+  focusBoardReady: boolean;
   now?: string;
   activeBlockingEdges: ActiveBlockingEdge[];
   guidanceItems: GuidanceItem[];
@@ -53,7 +55,7 @@ export function WorkstreamsPane({
 
   return (
     <div className="v3-workstreams-pane grid gap-5">
-      {useFocusBoard ? <FocusBoard
+      {useFocusBoard && focusBoardReady ? <FocusBoard
         details={focusDetails}
         now={now}
         packages={repos.flatMap((repo) => repo.packages)}
@@ -65,7 +67,7 @@ export function WorkstreamsPane({
         onSelectCard={onSelectCard}
         primaryBranchByRepo={primaryBranchByRepo}
         updateAnimations={updateAnimations}
-      /> : null}
+      /> : useFocusBoard ? <FocusBoardLoading openCount={focusDetails.length} /> : null}
       {repos.map((repo) => (
         <RepoWorkstream
           key={repoWorkstreamStateKey(repo)}

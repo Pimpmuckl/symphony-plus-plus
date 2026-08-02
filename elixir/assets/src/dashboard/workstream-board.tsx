@@ -84,7 +84,6 @@ export function WorkstreamBoard({
               activeBlockerCountBySliceId={blockerCounts.slices}
               expanded={expanded}
               expandedContent="list" inheritedStatusRail
-              detachedExpandedBody={false}
               focusSelected={false}
               index={index}
               onSetOpen={(open) => onSetFinishedRequestChildrenOpen(detail.work_request.id, open)}
@@ -163,7 +162,6 @@ export function ProductRequestRow({
   expanded,
   expandedContent,
   expandedBodyVisible = expanded,
-  detachedExpandedBody,
   focusEjected = false,
   focusSelected,
   index,
@@ -173,6 +171,7 @@ export function ProductRequestRow({
   onSelectCard,
   primaryBranch,
   frontierMode, inheritedStatusRail,
+  selectionMode = false,
   autoCollapseWhenDone = true,
   updateAnimations,
 }: {
@@ -186,7 +185,6 @@ export function ProductRequestRow({
   expanded: boolean;
   expandedContent?: "graph" | "list";
   expandedBodyVisible?: boolean;
-  detachedExpandedBody: boolean;
   focusEjected?: boolean;
   focusSelected: boolean;
   index: number;
@@ -196,6 +194,7 @@ export function ProductRequestRow({
   onSelectCard: CardDetailSelect;
   primaryBranch?: string;
   frontierMode?: RequestFrontierMode; inheritedStatusRail?: boolean;
+  selectionMode?: boolean;
   autoCollapseWhenDone?: boolean;
   updateAnimations: DashboardUpdateAnimations;
 }) {
@@ -221,14 +220,14 @@ export function ProductRequestRow({
   const rowStyle = { "--v3-row-badge-width": (() => inheritedStatusRail ? "inherit" : statusBadgeWidthForLabels([badgeLabel]))(), animationDelay: `${index * 30}ms` } as CSSProperties;
   const rowHidden = requestRowIsHidden(exiting, focusEjected);
   const requestFinished = requestState.kind === "done";
+  const disclosure = requestRowDisclosure(selectionMode, focusSelected, expanded, requestTitle, onSetOpen);
   const collapseRequest = useCallback(() => onSetOpen(false), [onSetOpen]);
   useAutoCollapseWhenDone(requestFinished, expanded, collapseRequest, requestFinished && autoCollapseWhenDone);
   const updateMotion = requestRowUpdateMotion(exiting, detail, updateAnimations);
   const expandedBody = <RequestExpandedBody activeBlockingEdges={activeBlockingEdges} detail={detail} expandedContent={expandedContent} guidanceItems={guidanceItems} now={now} packageById={packageById} openQuestion={openQuestion} onSelectAttention={onSelectAttention} onSelectGuidance={onSelectGuidance} onSelectCard={onSelectCard} requestPath={requestPath} updateAnimations={updateAnimations} />;
-  const [inlineExpandedBody, detachedBodyNode] = placeExpandedRequestBody(expandedBody, expandedContent, expanded, expandedBodyVisible, detachedExpandedBody, requestTitle);
+  const inlineExpandedBody = placeExpandedRequestBody(expandedBody, expandedContent, expanded, expandedBodyVisible);
   return (
-    <>
-      <section
+    <section
         className="v3-request-row stagger-item"
         aria-hidden={rowHidden}
         inert={rowHidden}
@@ -242,7 +241,7 @@ export function ProductRequestRow({
       >
         <div className="v3-request-header v3-entity-row" data-tone={tone}>
           <div className="v3-request-controls">
-            <button type="button" className="v3-request-chevron-button" aria-expanded={expanded} aria-label={`${expanded ? "Collapse" : "Expand"} ${requestTitle}`} onClick={() => onSetOpen(!expanded)}><ChevronRight className={cn("size-4 transition-transform duration-200", expanded && "rotate-90")} /></button>
+            <button type="button" className="v3-request-chevron-button" aria-expanded={disclosure.expanded} aria-pressed={disclosure.pressed} aria-label={disclosure.label} onClick={disclosure.onClick}><ChevronRight className={cn("size-4 transition-transform duration-200", disclosure.rotated && "rotate-90")} /></button>
             <RequestInfoButton detail={detail} onSelectCard={onSelectCard} />
             <RequestIdentityCopyButton detail={detail} />
           </div>
@@ -256,7 +255,7 @@ export function ProductRequestRow({
               packageById={packageById}
               state={requestState}
             />
-            <button type="button" className="v3-request-main" aria-expanded={expanded} onClick={() => onSetOpen(!expanded)}>
+            <button type="button" className="v3-request-main" aria-expanded={disclosure.expanded} aria-pressed={disclosure.pressed} onClick={disclosure.onClick}>
               <RequestIdentity detail={detail} branch={branch} />
             </button>
           </div>
@@ -264,18 +263,17 @@ export function ProductRequestRow({
           {frontierNode}
         </div>
         {inlineExpandedBody}
-      </section>
-      {detachedBodyNode}
-    </>
+    </section>
   );
+}
+function requestRowDisclosure(selectionMode: boolean, selected: boolean, expanded: boolean, title: string, onSetOpen: (open: boolean) => void) {
+  return { expanded: selectionMode ? undefined : expanded, pressed: selectionMode ? selected : undefined, label: `${selectionMode ? selected ? "Close" : "View" : expanded ? "Collapse" : "Expand"} ${title}`, onClick: () => onSetOpen(selectionMode ? !selected : !expanded), rotated: !selectionMode && expanded };
 }
 function requestRowIsHidden(exiting: boolean, focusEjected: boolean) { return exiting || focusEjected; }
 function requestFrontierIsHidden(focusSelected: boolean, expanded: boolean) { return focusSelected && expanded; }
-function placeExpandedRequestBody(body: ReactNode, content: "graph" | "list" | undefined, expanded: boolean, visible: boolean, detached: boolean, title: string) {
-  if (content === "list") return [<div className="v3-disclosure-reveal" data-open={expanded ? "true" : "false"} aria-hidden={!expanded} inert={!expanded}>{body}</div>, null] as const;
-  if (!visible) return [null, null] as const;
-  if (!detached) return [body, null] as const;
-  return [null, <div key="expanded-request" className="focus-board__expanded-slot"><section className="focus-board__expanded-request" aria-label={`${title} execution graph`}>{body}</section></div>] as const;
+function placeExpandedRequestBody(body: ReactNode, content: "graph" | "list" | undefined, expanded: boolean, visible: boolean) {
+  if (content === "list") return <div className="v3-disclosure-reveal" data-open={expanded ? "true" : "false"} aria-hidden={!expanded} inert={!expanded}>{body}</div>;
+  return visible ? body : null;
 }
 function RequestIdentity({ detail, branch }: { detail: WorkRequestDetail; branch?: string }) {
   const request = detail.work_request;

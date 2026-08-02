@@ -56,9 +56,9 @@ describe("request detail actions", () => {
     expect(renderToStaticMarkup(createElement(RecentDecisionsDisclosure, { detail }))).toContain("5 recorded");
   });
 
-  it("keeps status actions behind the summary-bar glyph", () => {
+  it("places status actions beside Add Comment before the summary", () => {
     const detail = {
-      work_request: { id: "wr-actions", title: "Actionable request", status: "sliced" },
+      work_request: { id: "wr-actions", title: "Actionable request", status: "completed" },
       work_packages: [],
     } satisfies WorkRequestDetail;
     const html = renderToStaticMarkup(createElement(
@@ -74,13 +74,16 @@ describe("request detail actions", () => {
         canMutateOperatorActions: true,
         onSubmitComment: async () => ({ id: "comment-1", body: "" }),
         onResolveComment: async () => ({ id: "comment-1", body: "" }),
-        canMutateComments: false,
+        canMutateComments: true,
       }),
     ));
 
     expect(html).toContain("WorkPackages");
-    expect(html).toContain('aria-label="Show WorkRequest status actions"');
-    expect(html).toContain("Mark Delivered");
-    expect(html.indexOf("WorkPackages")).toBeLessThan(html.indexOf("Mark Delivered"));
+    expect(html).toContain("Add Comment");
+    expect(html).toContain("Archive Request");
+    expect(html).toContain("Delete Request");
+    expect(html).not.toContain("Show WorkRequest status actions");
+    expect(html.indexOf("Add Comment")).toBeLessThan(html.indexOf("Archive Request"));
+    expect(html.indexOf("Delete Request")).toBeLessThan(html.indexOf("WorkPackages"));
   });
 });

@@ -216,7 +216,6 @@ export type DashboardUiState = {
   useFocusBoard?: boolean;
   topPanel?: TopPanelKey | null;
   repoWorkstreams?: Record<string, boolean>;
-  focusBoardSections?: Record<string, boolean>;
   finishedRequestChildren?: Record<string, boolean>;
   hideEmptyWorkstreams?: boolean;
   showWorkstreamContextBar?: boolean;

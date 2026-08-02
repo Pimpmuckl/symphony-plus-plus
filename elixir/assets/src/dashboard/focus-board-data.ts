@@ -2,14 +2,22 @@ import type { WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 
 import type { RequestFrontierMode } from "./workstream-board";
 import { isFinishedBoardStatus, sliceOperationalState } from "@/lib/operational-state";
-import { repoDisplayName, repoIdentityKey } from "./dashboard-persistence";
 import { productTreeCounts, requestProgress } from "./workstream-progress";
 import { requestBoardState, sliceActionableBlockerCount, type BoardRowStateKind } from "./workstream-row-state";
 
 export type FocusBoardLane = RequestFrontierMode;
 export type FocusBoardItem = { detail: WorkRequestDetail; finishedAt?: string; id: string; lane: FocusBoardLane };
 
+export function scrollFocusLane(lane: Pick<HTMLElement, "clientWidth" | "scrollLeft" | "scrollWidth">, deltaX: number, deltaY: number) {
+  const delta = Math.abs(deltaX) > Math.abs(deltaY) ? deltaX : deltaY;
+  const maximum = Math.max(0, lane.scrollWidth - lane.clientWidth);
+  if (!delta || (delta < 0 && lane.scrollLeft <= 0) || (delta > 0 && lane.scrollLeft >= maximum - 1)) return false;
+  lane.scrollLeft = Math.max(0, Math.min(maximum, lane.scrollLeft + delta));
+  return true;
+}
+
 const CLARIFICATION_STATES = new Set(["clarifying", "ready_for_clarification"]);
+const PRE_RUN_STATES = new Set([...CLARIFICATION_STATES, "ready_for_slicing"]);
 const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const NO_ACTIVE_BLOCKERS = new Map<string, number>();
 
@@ -36,13 +44,6 @@ export function buildFocusBoardItems(
   return items;
 }
 
-export function preserveFocusedItem(items: FocusBoardItem[], focused?: FocusBoardItem) {
-  if (!focused) return items;
-  const current = items.find((item) => item.id === focused.id);
-  const preserved = { ...(current ?? focused), lane: focused.lane };
-  return current ? items.map((item) => item.id === focused.id ? preserved : item) : [...items, preserved];
-}
-
 export function requestHasExecutionBoard(detail: WorkRequestDetail) {
   if (!detail.product_tree) return (detail.summary?.work_package_count ?? detail.work_request.work_package_count ?? 0) > 0;
   const graph = detail.product_tree.execution_graph;
@@ -51,25 +52,14 @@ export function requestHasExecutionBoard(detail: WorkRequestDetail) {
     && Boolean(detail.product_tree.nodes?.length || graph.work_package_ids?.length);
 }
 
-export function groupFocusItemsByRepo(items: FocusBoardItem[]) {
-  const groups = new Map<string, { key: string; label: string; items: FocusBoardItem[] }>();
-  for (const item of items) {
-    const request = item.detail.work_request;
-    const key = repoIdentityKey(request);
-    const group = groups.get(key) ?? { key, label: repoDisplayName(request), items: [] };
-    group.items.push(item);
-    groups.set(key, group);
-  }
-  return [...groups.values()].toSorted((left, right) => left.label.localeCompare(right.label) || left.key.localeCompare(right.key));
-}
-
 function requestLane(detail: WorkRequestDetail, kind: BoardRowStateKind, blockerCount: number, packageById: Map<string, WorkPackageCard>): Exclude<FocusBoardLane, "recent"> {
   if (kind === "blocked") return blockedRequestLane(detail, blockerCount, packageById);
-  if (kind === "guidance") return requestOnlyNeedsClarification(detail) ? "next" : "attention";
+  if (kind === "guidance") return requestOnlyNeedsClarification(detail) ? "waiting" : "attention";
+  const requestState = detail.work_request.operational_state?.key || detail.work_request.status || "created";
+  if (PRE_RUN_STATES.has(requestState)) return "waiting";
   if (kind === "active") return "active";
   if (kind === "ready") return "next";
-  const requestState = detail.work_request.operational_state?.key || detail.work_request.status || "created";
-  return CLARIFICATION_STATES.has(requestState) ? "next" : "waiting";
+  return "waiting";
 }
 
 function blockedRequestLane(detail: WorkRequestDetail, blockerCount: number, packageById: Map<string, WorkPackageCard>): Exclude<FocusBoardLane, "recent"> {

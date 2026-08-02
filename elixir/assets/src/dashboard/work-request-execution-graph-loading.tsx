@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from "react";
 
 import type { ActiveBlockingEdge, GuidanceItem, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
-import { workRequestExecutionGraphModel } from "./execution-graph/adapter";
+import { workRequestExecutionFrontierProjection, workRequestExecutionGraphModel, type FocusFrontierVariant } from "./execution-graph/adapter";
 import { WorkRequestExecutionGraph } from "./work-request-execution-graph";
 import type { CardDetailSelect } from "./runtime";
 import type { ContextPathPart } from "./workstream-context-path";
@@ -16,6 +16,8 @@ export default function WorkRequestExecutionGraphLoading({
   onSelectCard,
   onSelectAttention,
   requestPath,
+  viewMode = "full",
+  frontierVariant = "horizon-1",
 }: {
   activeBlockingEdges: ActiveBlockingEdge[];
   detail: WorkRequestDetail;
@@ -25,9 +27,10 @@ export default function WorkRequestExecutionGraphLoading({
   onSelectCard: CardDetailSelect;
   onSelectAttention: AttentionSelect;
   requestPath: ContextPathPart[];
+  viewMode?: "frontier" | "full";
+  frontierVariant?: FocusFrontierVariant;
 }) {
   const slicesById = useMemo(() => new Map((detail.work_packages ?? []).map((slice) => [slice.id, slice])), [detail.work_packages]);
-  const model = useMemo(() => workRequestExecutionGraphModel(detail, { includeHistorical: true }), [detail]);
   const attentionTargets = useMemo(() => {
     const targets = new Map<string, ReturnType<typeof workPackageDirectAttention>>();
     for (const slice of detail.work_packages ?? []) {
@@ -39,6 +42,10 @@ export default function WorkRequestExecutionGraphLoading({
     }
     return new Map([...targets].filter((entry): entry is [string, NonNullable<typeof entry[1]>] => Boolean(entry[1])));
   }, [activeBlockingEdges, detail, guidanceItems, packageById]);
+  const fullModel = useMemo(() => workRequestExecutionGraphModel(detail, { includeHistorical: true }), [detail]);
+  const projection = useMemo(() => viewMode === "frontier"
+    ? workRequestExecutionFrontierProjection(fullModel, new Set(attentionTargets.keys()), frontierVariant)
+    : { expandedGroupIds: undefined, model: fullModel }, [attentionTargets, frontierVariant, fullModel, viewMode]);
   const selectWorkPackage = useCallback((workPackageId: string) => {
     const slice = slicesById.get(workPackageId);
     const pkg = packageById.get(slice?.work_package_id || workPackageId);
@@ -51,5 +58,5 @@ export default function WorkRequestExecutionGraphLoading({
     onSelectAttention(target);
   }, [attentionTargets, onSelectAttention]);
 
-  return <WorkRequestExecutionGraph attentionByEntity={attentionTargets} model={model} now={now} onSelectAttention={selectAttention} onSelectWorkPackage={selectWorkPackage} contextPath={requestPath} />;
+  return <WorkRequestExecutionGraph key={`${viewMode}:${frontierVariant}`} attentionByEntity={attentionTargets} initialExpandedGroupIds={projection.expandedGroupIds} model={projection.model} now={now} onSelectAttention={selectAttention} onSelectWorkPackage={selectWorkPackage} contextPath={requestPath} wrapRootRanks={viewMode !== "frontier"} />;
 }

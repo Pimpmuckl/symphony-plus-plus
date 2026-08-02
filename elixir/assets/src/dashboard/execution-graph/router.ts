@@ -6,7 +6,7 @@ import type {
   GraphOrientation,
   VisibleGraphDependency,
 } from "./model";
-import { assignCandidateSlots, clearSourceLane, localBottomPoints, localSidePoints, outerEnd, outerStart, portalRouteKind, sourceEndpointLeg, sourcePortalApproach, targetEndpointLeg, targetPortalApproach, WIRE_CLEARANCE } from "./portals";
+import { assignCandidateSlots, clearSourceLane, localSidePoints, localTrackPointOptions, outerEnd, outerStart, portalRouteKind, sourceEndpointLeg, sourcePortalApproach, targetEndpointLeg, targetPortalApproach, WIRE_CLEARANCE } from "./portals";
 import type { Point } from "./portals";
 export type WirePath = {
   key: string;
@@ -155,7 +155,7 @@ function mobilePaths(candidates: RouteCandidate[]) {
 function routeOptions(candidate: RouteCandidate, model: ExecutionGraphLayoutModel) {
   const routing = model.routing;
   if (candidate.kind === "vertical") return [routeFromPoints(localSidePoints(candidate))];
-  if (candidate.kind === "local" && candidate.sourceRoot.key === candidate.targetRoot.key) return [localBottomRoute(candidate)];
+  if (candidate.kind === "local" && candidate.sourceRoot.key === candidate.targetRoot.key) return localTrackPointOptions(candidate, model.visibleRects).map(routeFromPoints);
   if (candidate.kind === "direct") return candidate.sourceRoot.key === candidate.targetRoot.key ? directOptions(candidate) : [...directOptions(candidate, routing), ...crossRootDirectOptions(candidate)];
   if (!routing) return [routeFromPoints([candidate.start, candidate.end])];
   const sourceXs = sourceLaneOptions(candidate, routing).map((x) => clearSourceLane(candidate, x));
@@ -170,9 +170,6 @@ function crossRootDirectOptions(candidate: RouteCandidate) {
   const sourceX = outerStart(candidate).x + 8, targetX = outerEnd(candidate).x - 8;
   const corridorYs = [Math.max(4, Math.min(candidate.sourceRoot.y, candidate.targetRoot.y) - 16), Math.max(candidate.sourceRoot.y + candidate.sourceRoot.height, candidate.targetRoot.y + candidate.targetRoot.height) + 16];
   return corridorYs.map((y) => routeFromPoints([...sourcePortalApproach(candidate, sourceX, y), ...targetPortalApproach(candidate, targetX, y)]));
-}
-function localBottomRoute(candidate: RouteCandidate) {
-  return routeFromPoints(localBottomPoints(candidate));
 }
 function sameBandOptions(candidate: RouteCandidate, sourceXs: number[], targetYs: number[], targetXs: number[]) {
   return sourceXs.flatMap((sourceX) => targetYs.flatMap((targetY) => targetXs.map((targetX) => routeFromPoints([...sourcePortalApproach(candidate, sourceX, targetY), ...targetPortalApproach(candidate, targetX, targetY)]))));
@@ -218,7 +215,7 @@ function sourceLaneOptions(candidate: RouteCandidate, routing: NonNullable<Execu
   const fanoutLane = sourceFanoutLane(candidate, routing);
   if (fanoutLane !== undefined) return [fanoutLane];
   if (candidate.kind === "local") return spread(candidate.sourceRoot.x + candidate.sourceRoot.width + 8, candidate.sourceRoot.x + candidate.sourceRoot.width + 18, 3);
-  if (candidate.sourceRoot.column < 2) {
+  if (!routing.wrapped || candidate.sourceRoot.column < 2) {
     const right = candidate.sourceRoot.x + candidate.sourceRoot.width;
     const gutter = routing.columnGutters.get(candidate.sourceRoot.column) ?? right + 28;
     return spread(right + 5, Math.max(right + 12, gutter - 6), 8);
@@ -241,7 +238,7 @@ function targetLaneOptions(candidate: RouteCandidate, model: ExecutionGraphLayou
 function sourceFanoutLane(candidate: RouteCandidate, routing: NonNullable<ExecutionGraphLayoutModel["routing"]>, laneIndex = candidate.start.index) {
   if (candidate.start.count <= 1) return undefined;
   const right = candidate.sourceRoot.x + candidate.sourceRoot.width;
-  const max = candidate.sourceRoot.column < 2
+  const max = !routing.wrapped || candidate.sourceRoot.column < 2
     ? (routing.columnGutters.get(candidate.sourceRoot.column) ?? right + BRANCH_STUB + WIRE_CLEARANCE) - WIRE_CLEARANCE
     : right + BRANCH_STUB + (candidate.start.count - 1) * WIRE_CLEARANCE;
   const requiredMax = right + BRANCH_STUB + (candidate.start.count - 1) * WIRE_CLEARANCE;
