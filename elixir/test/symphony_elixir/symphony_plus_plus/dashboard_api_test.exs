@@ -5262,6 +5262,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert payload["logoUrl"] == "/splusplus-logo.png"
       assert is_binary(payload["csrfToken"])
       assert byte_size(payload["csrfToken"]) > 20
+      assert payload["dashboard"]["deferred"] == %{"dashboard_sections" => true}
+    end)
+  end
+
+  test "local operator config keeps runtime bootstrap usable when priority data is unavailable" do
+    with_local_operator_endpoint(fn ->
+      Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint,
+        sympp_local_operator: true,
+        sympp_repo: BusyRepo
+      )
+
+      payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/config"), 200)
+
+      assert payload["operatorMode"] == true
+      assert is_binary(payload["csrfToken"])
+      refute Map.has_key?(payload, "dashboard")
     end)
   end
 
@@ -7028,6 +7044,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   test "endpoint serves the built dashboard logo asset" do
     with_static_dashboard_file("splusplus-logo.png", "logo-bytes", fn ->
       assert response(get(build_conn(), "/splusplus-logo.png"), 200) == "logo-bytes"
+    end)
+  end
+
+  test "endpoint caches hashed dashboard assets immutably" do
+    with_static_dashboard_file("assets/index-deadbeef.js", "asset-bytes", fn ->
+      conn = get(build_conn(), "/assets/index-deadbeef.js")
+
+      assert response(conn, 200) == "asset-bytes"
+      assert Plug.Conn.get_resp_header(conn, "cache-control") == ["public, max-age=31536000, immutable"]
     end)
   end
 

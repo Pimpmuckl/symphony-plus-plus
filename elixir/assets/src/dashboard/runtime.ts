@@ -48,6 +48,7 @@ export type DashboardRuntimeConfig = {
   apiBase?: string;
   basePath?: string;
   csrfToken?: string;
+  dashboard?: unknown;
   logoUrl?: string;
   operatorMode?: boolean;
 };
@@ -364,6 +365,13 @@ export function isReconnectableLocalOperatorError(caught: unknown) {
 export function dashboardFromEnvelope(payload: DashboardApiResponse) {
   if (!isRecord(payload) || !isRecord(payload.dashboard)) return null;
   return payload.dashboard as DashboardPayload;
+}
+
+export function dashboardBootstrapFromRuntimeConfig(config: DashboardRuntimeConfig | undefined) {
+  const dashboard = dashboardFromEnvelope(config);
+  if (!dashboard || !isRecord(dashboard.work_requests) || !Array.isArray(dashboard.work_requests.work_requests)) return null;
+  if (!isRecord(dashboard.deferred) || typeof dashboard.deferred.dashboard_sections !== "boolean") return null;
+  return dashboard;
 }
 
 export function mutationShouldRefreshDashboard(payload: DashboardApiResponse) {

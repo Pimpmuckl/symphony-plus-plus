@@ -27,6 +27,34 @@ afterAll(async () => {
 }, 20_000);
 
 describe("focus board interactions", () => {
+  it("paints the application shell and consumes the config bootstrap without a priority waterfall", async () => {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    let releaseConfig!: () => void;
+    const configReady = new Promise<void>((resolve) => { releaseConfig = resolve; });
+    let priorityRequests = 0;
+
+    await page.route("**/api/v1/sympp/operator/config*", async (route) => {
+      await configReady;
+      await route.fulfill({ json: { apiBase: "/api/v1/sympp/operator", operatorMode: true, dashboard: priorityDashboard } });
+    });
+    await page.route("**/api/v1/sympp/operator/dashboard", (route) => {
+      priorityRequests += 1;
+      return route.fulfill({ json: priorityDashboard });
+    });
+    await page.route("**/api/v1/sympp/operator/dashboard/deferred", (route) => route.fulfill({ json: deferredDashboard }));
+    await page.route("**/api/v1/sympp/operator/dashboard/events", (route) => route.abort());
+
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
+    await page.getByRole("heading", { name: "Symphony++" }).waitFor();
+    expect(await page.getByLabel("Loading workstreams").isVisible()).toBe(true);
+    expect(await page.getByText("Loading Symphony++").count()).toBe(0);
+
+    releaseConfig();
+    await page.getByText("Interaction request", { exact: true }).waitFor();
+    expect(priorityRequests).toBe(0);
+    await page.close();
+  }, 20_000);
+
   it("toggles the docked workbench and keeps it stable while selection swaps", async () => {
     const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
     await enableFocusBoard(page);
