@@ -468,7 +468,7 @@ function useDashboardController() {
   const linkedWorkPackageIds = useMemo(() => new Set(dashboard?.linked_work_package_ids ?? []), [dashboard]);
   const requestDetailsByRepo = useMemo(() => requestDetailsByRepoKey(requestDetails), [requestDetails]);
   const packageSelections = useMemo(() => packageSelectionIndex(requestDetails, packages), [packages, requestDetails]);
-  const { archiveAfterDays, openDashboardOnBoot, soloSessionDeleteAfterDays, updateArchiveAfterDays, updateOpenDashboardOnBoot, updateSoloSessionDeleteAfterDays } = useDashboardOperatorSettings({
+  const { archiveAfterDays, captureFailedMcpCalls, openDashboardOnBoot, soloSessionDeleteAfterDays, updateArchiveAfterDays, updateCaptureFailedMcpCalls, updateOpenDashboardOnBoot, updateSoloSessionDeleteAfterDays } = useDashboardOperatorSettings({
     dashboard,
     refreshAfterMutation,
   });
@@ -545,7 +545,7 @@ function useDashboardController() {
     archivedRequests,
     attentionItems,
     canMutateComments: canMutateDashboardComments(runtimeConfig),
-    canMutateOperatorActions,
+    captureFailedMcpCalls, canMutateOperatorActions,
     changeWorkPackageState,
     changeWorkRequestState,
     connectionIssue,
@@ -561,7 +561,7 @@ function useDashboardController() {
     linkedWorkPackageIds,
     loading,
     onArchiveWorkPackage: archiveWorkPackage,
-    onClearWorkPackageBlocker: clearWorkPackageBlocker,
+    onClearWorkPackageBlocker: clearWorkPackageBlocker, onCaptureFailedMcpCallsChange: updateCaptureFailedMcpCalls,
     onArchiveWorkRequest: archiveWorkRequest,
     onOpenArchivedRequests: loadArchived,
     onDeleteWorkRequest: deleteWorkRequest,

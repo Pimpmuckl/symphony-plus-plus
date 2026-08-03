@@ -36,6 +36,7 @@ export function DashboardShell({
   archivedRequests,
   attentionItems,
   canMutateComments,
+  captureFailedMcpCalls,
   changeWorkPackageState,
   changeWorkRequestState,
   connectionIssue,
@@ -54,6 +55,7 @@ export function DashboardShell({
   onArchiveWorkRequest,
   onOpenArchivedRequests,
   onClearWorkPackageBlocker,
+  onCaptureFailedMcpCallsChange,
   onDeleteWorkRequest,
   onDashboardSearchQueryChange,
   onHideEmptyWorkstreamsChange,
@@ -92,6 +94,7 @@ export function DashboardShell({
   archivedRequests: WorkRequestCard[];
   attentionItems: AttentionItem[];
   canMutateComments: boolean;
+  captureFailedMcpCalls: boolean;
   changeWorkPackageState: WorkPackageStateMutation;
   changeWorkRequestState: WorkRequestStateMutation;
   connectionIssue: DashboardConnectionIssue | null;
@@ -110,6 +113,7 @@ export function DashboardShell({
   onArchiveWorkRequest: WorkRequestMutation;
   onOpenArchivedRequests: () => Promise<void>;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
+  onCaptureFailedMcpCallsChange: (capture: boolean) => Promise<void>;
   onDeleteWorkRequest: WorkRequestMutation;
   onDashboardSearchQueryChange: (query: string) => void;
   onHideEmptyWorkstreamsChange: (hide: boolean) => void;
@@ -185,6 +189,7 @@ export function DashboardShell({
               <DashboardSettingsDialog
                 archiveAfterDays={archiveAfterDays}
                 canUpdateRetentionSettings={canMutateOperatorActions}
+                captureFailedMcpCalls={captureFailedMcpCalls}
                 soloSessionDeleteAfterDays={soloSessionDeleteAfterDays}
                 openDashboardOnBoot={openDashboardOnBoot}
                 showWelcomeToast={showWelcomeToast}
@@ -192,6 +197,7 @@ export function DashboardShell({
                 hiddenWorkstreamCount={hiddenWorkstreamCount}
                 showWorkstreamContextBar={showWorkstreamContextBar}
                 onArchiveAfterDaysChange={onUpdateArchiveAfterDays}
+                onCaptureFailedMcpCallsChange={onCaptureFailedMcpCallsChange}
                 onSoloSessionDeleteAfterDaysChange={onUpdateSoloSessionDeleteAfterDays}
                 onOpenDashboardOnBootChange={onOpenDashboardOnBootChange}
                 onShowWelcomeToastChange={onShowWelcomeToastChange}

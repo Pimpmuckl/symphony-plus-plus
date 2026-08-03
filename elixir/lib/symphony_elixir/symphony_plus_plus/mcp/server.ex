@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @moduledoc false
 
+  require Logger
+
   import Ecto.Query, only: [from: 2]
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
@@ -62,6 +64,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     WorkRequestPayloads,
     WorkRequestScope
   }
+
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
@@ -700,11 +704,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
           {:tool_error, reason} ->
             {:error, code, message, data} = invalid_params_error(@assignment_release_tool, reason)
-            {Response.error(id, code, message, data), server}
+            {failed_tool_response(server, params, id, code, message, data), server}
         end
 
       {:error, code, message, data} ->
-        {Response.error(id, code, message, data), server}
+        {failed_tool_response(server, params, id, code, message, data), server}
     end
   end
 
@@ -719,7 +723,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         }
 
       {:error, code, message, data} ->
-        {Response.error(id, code, message, data), server}
+        {failed_tool_response(server, params, id, code, message, data), server}
     end
   end
 
@@ -734,7 +738,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         }
 
       {:error, code, message, data} ->
-        {Response.error(id, code, message, data), server}
+        {failed_tool_response(server, params, id, code, message, data), server}
     end
   end
 
@@ -2202,17 +2206,91 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
             {Response.response(id, result), updated_server}
 
           {:error, code, message, data} ->
-            {Response.error(id, code, message, data), server}
+            {failed_dispatch_response(server, method, params, id, code, message, data), server}
         end
 
       {:error, code, message, data, %__MODULE__{} = updated_server} ->
-        {Response.error(id, code, message, data), updated_server}
+        {failed_dispatch_response(server, method, params, id, code, message, data), updated_server}
     end
   end
 
   defp dispatch_request_state({:error, code, message, data}, _method, id, %__MODULE__{} = server) do
     {Response.error(id, code, message, data), server}
   end
+
+  defp failed_dispatch_response(server, "tools/call", params, id, code, message, data),
+    do: failed_tool_response(server, params, id, code, message, data)
+
+  defp failed_dispatch_response(_server, _method, _params, id, code, message, data),
+    do: Response.error(id, code, message, data)
+
+  defp failed_tool_response(%__MODULE__{} = server, %{"name" => tool_name} = params, id, code, message, data)
+       when is_binary(tool_name) and is_map(data) do
+    case failed_tool_diagnostic(server, params, tool_name, code) do
+      nil -> Response.error(id, code, message, data)
+      diagnostic_id -> Response.error(id, code, message, Map.put(data, "diagnostic_id", diagnostic_id))
+    end
+  end
+
+  defp failed_tool_response(_server, _params, id, code, message, data), do: Response.error(id, code, message, data)
+
+  defp failed_tool_diagnostic(%__MODULE__{config: %Config{repo: repo} = config} = server, params, tool_name, code) do
+    case OperatorSettingsRepository.get(repo) do
+      {:ok, %{capture_failed_mcp_calls: true}} ->
+        diagnostic_id = "mcpdiag_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+        {safe_tool_name, safe_argument_keys} = safe_tool_metadata(params, tool_name, server)
+
+        Logger.warning(
+          Jason.encode!(%{
+            "argument_keys" => safe_argument_keys,
+            "diagnostic_id" => diagnostic_id,
+            "error_classification" => error_classification(code),
+            "event" => "sympp_failed_mcp_call",
+            "source" => Health.source_identity(config),
+            "tool_name" => safe_tool_name
+          })
+        )
+
+        diagnostic_id
+
+      _disabled_or_unavailable ->
+        nil
+    end
+  rescue
+    _diagnostic_failure -> nil
+  catch
+    _kind, _reason -> nil
+  end
+
+  defp safe_tool_metadata(params, tool_name, %__MODULE__{} = server) do
+    with {:ok, specs} <- Surface.tool_specs_for_server(server),
+         %{"name" => safe_tool_name} = spec <- Enum.find(specs, &(&1["name"] == tool_name)) do
+      {safe_tool_name, schema_argument_keys(params, spec)}
+    else
+      _unknown_or_unavailable -> {"unknown", []}
+    end
+  end
+
+  defp schema_argument_keys(
+         %{"arguments" => arguments},
+         %{"inputSchema" => %{"properties" => properties}}
+       )
+       when is_map(arguments) and is_map(properties) do
+    properties
+    |> Map.keys()
+    |> Enum.filter(&Map.has_key?(arguments, &1))
+    |> Enum.sort()
+  end
+
+  defp schema_argument_keys(_params, _spec), do: []
+
+  defp error_classification(-32_601), do: "method_not_found"
+  defp error_classification(-32_602), do: "invalid_params"
+  defp error_classification(-32_001), do: "unauthorized"
+  defp error_classification(-32_003), do: "forbidden"
+  defp error_classification(-32_004), do: "not_found"
+  defp error_classification(-32_009), do: "precondition_failed"
+  defp error_classification(_code), do: "server_error"
 
   defp dispatch_with_text_profile(method, params, %__MODULE__{} = server) do
     build_tool_result(server, fn -> dispatch(method, params, server) end)
