@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @cutover_version 20_260_716_190_000
+  @cleanup_proof_version 20_260_803_010_000
   @pre_cutover_version 20_260_714_160_000
 
   test "populated legacy ledger migrates to one canonical WorkPackage identity" do
@@ -25,7 +26,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
 
       seed_legacy_ledger!()
 
-      assert [@cutover_version] = Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false)
+      assert [@cutover_version, @cleanup_proof_version] =
+               Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false)
 
       assert [["WP-LINKED", "WR-CANONICAL-MIGRATION", "PTN-CANONICAL", 1, "Linked legacy goal", "ready_for_worker"]] =
                rows!("""

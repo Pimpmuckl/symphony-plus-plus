@@ -58,6 +58,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeLifecycleCompatTest do
     assert {:ok, package} = Repository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-P1-001"))
     assert package.worktree_path == nil
     assert package.worktree_target_repo_root == nil
+    assert package.worktree_cleanup_proof == nil
 
     worktree_path = Path.join(System.tmp_dir!(), "sympp-worktree-path")
     target_repo_root = Path.join(System.tmp_dir!(), "sympp-target-repo-root")
@@ -65,15 +66,85 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeLifecycleCompatTest do
     assert {:ok, updated} =
              Repository.update(repo, package.id, %{
                worktree_path: worktree_path,
-               worktree_target_repo_root: target_repo_root
+               worktree_target_repo_root: target_repo_root,
+               worktree_cleanup_proof: "proof"
              })
 
     assert updated.worktree_path == worktree_path
     assert updated.worktree_target_repo_root == target_repo_root
+    assert updated.worktree_cleanup_proof == "proof"
 
-    assert {:ok, cleared} = Repository.update(repo, package.id, %{worktree_path: nil, worktree_target_repo_root: nil})
+    assert {:ok, cleared} =
+             Repository.update(repo, package.id, %{
+               worktree_path: nil,
+               worktree_target_repo_root: nil,
+               worktree_cleanup_proof: nil
+             })
+
     assert cleared.worktree_path == nil
     assert cleared.worktree_target_repo_root == nil
+    assert cleared.worktree_cleanup_proof == nil
+  end
+
+  test "cleanup retries a proven Windows partial worktree removal", %{repo: repo} do
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-worktree-recovery")
+    codex_home = Path.join(fixture.root, "codex-home")
+
+    assert {:ok, package} =
+             Repository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-WT-RECOVERY", kind: "mcp", base_branch: "main"))
+
+    assert {:ok, prepared} =
+             WorktreeLifecycle.prepare(
+               repo,
+               package.id,
+               %{"repo_root" => fixture.repo_root, "base_branch" => "main", "branch" => "feat/partial-remove"},
+               codex_home: codex_home
+             )
+
+    fake_git = partial_remove_git(prepared.worktree_path)
+
+    assert {:error, {:git_failed, 255, details}} =
+             WorktreeLifecycle.cleanup(repo, package.id, codex_home: codex_home, git: fake_git)
+
+    assert details.stage == "git_worktree_remove"
+    assert details.rule == "durable_preflight_proof"
+    assert Path.expand(details.recorded_worktree_path) == Path.expand(prepared.worktree_path)
+    assert Path.expand(details.resolved_worktree_path) == Path.expand(prepared.worktree_path)
+    assert File.exists?(Path.join(prepared.worktree_path, "README.md"))
+    refute File.exists?(Path.join(prepared.worktree_path, ".git"))
+
+    assert {:ok, failed_package} = Repository.get(repo, package.id)
+    assert is_binary(failed_package.worktree_cleanup_proof)
+
+    assert {:ok, recovered} =
+             File.cd!(fixture.root, fn ->
+               WorktreeLifecycle.cleanup(repo, package.id, codex_home: codex_home, git: fake_git)
+             end)
+
+    assert recovered.stage == "residue_removal"
+    assert recovered.rule == "durable_preflight_proof"
+    refute File.exists?(prepared.worktree_path)
+
+    assert {:ok, cleaned_package} = Repository.get(repo, package.id)
+    assert cleaned_package.worktree_path == nil
+    assert cleaned_package.worktree_target_repo_root == nil
+    assert cleaned_package.worktree_cleanup_proof == nil
+  end
+
+  defp partial_remove_git(worktree_path) do
+    git = System.find_executable("git") || flunk("git executable is required")
+
+    fn repo_root, args ->
+      case args do
+        ["worktree", "remove", ^worktree_path] ->
+          File.rm!(Path.join(worktree_path, ".git"))
+          {_output, 0} = System.cmd(git, ["-C", repo_root, "worktree", "prune"], stderr_to_stdout: true)
+          {"simulated Windows partial worktree removal\n", 255}
+
+        _args ->
+          System.cmd(git, ["-C", repo_root | args], stderr_to_stdout: true)
+      end
+    end
   end
 
   defp previous_worktree_path(codex_home, repo_root, package_id, branch) do

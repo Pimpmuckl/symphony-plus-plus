@@ -72,13 +72,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackagesCleanupOwnershipTest do
                repo_root: fixture.repo_root
              )
 
-    refute File.exists?(prepared.worktree_path)
+    assert File.exists?(prepared.worktree_path)
 
     assert {:ok, fetched} = Repository.get(repo, package.id)
     assert fetched.worktree_path == prepared.worktree_path
 
     assert {:ok, recovered} = WorktreeLifecycle.cleanup(repo, package.id, codex_home: codex_home, repo_root: fixture.repo_root)
-    assert recovered.status == "stale_record_cleared"
+    assert recovered.status == "cleaned"
 
     assert {:ok, cleared} = Repository.get(repo, package.id)
     assert cleared.worktree_path == nil
