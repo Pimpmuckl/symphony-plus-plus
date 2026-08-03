@@ -29,6 +29,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
+  alias SymphonyElixir.TestSupport
   alias SymphonyElixir.WorkPackageFactory
 
   setup_all do
@@ -706,6 +707,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
       assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
       assert repo.get!(WorkPackage, linked_package.id).status == "ready_for_merge"
     end
+  end
+
+  test "delivery matches merged PR evidence to a local checkout scope", %{repo: repo} do
+    {work_request, _work_package, linked_package} =
+      linked_slice!(repo,
+        work_request_id: "WR-RECONCILE-LOCAL-REPO",
+        work_package_id: "WP-RECONCILE-LOCAL-REPO",
+        status: "ready_for_merge"
+      )
+
+    repo_path = TestSupport.git_repo_with_origin_fixture!("https://github.com/nextide/repo.git", prefix: "sympp-delivery-repo")
+    repo.update_all(from(package in WorkPackage, where: package.id == ^linked_package.id), set: [repo: repo_path])
+    append_merged_pr_evidence!(repo, linked_package, 906, "head-906")
+
+    assert {:ok, result} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply)
+    assert result.applied_count == 1
+    assert repo.get!(WorkPackage, linked_package.id).status == "merged"
   end
 
   test "blank work-package base branch is skipped with a clear reason", %{repo: repo} do

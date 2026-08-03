@@ -356,7 +356,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   end
 
   defp require_work_package_repo_scope(%WorkPackage{} = work_package, %WorkRequest{} = work_request, %WorkPackage{} = work_package) do
-    if work_package.repo == WorkPackage.repo(work_request, work_package), do: :ok, else: {:error, :forbidden}
+    if repo_scope_name_matches?(work_package.repo, WorkPackage.repo(work_request, work_package), []), do: :ok, else: {:error, :forbidden}
   end
 
   defp require_work_package_delivery_base_scope(%WorkPackage{base_branch: base_branch}, %WorkPackage{base_branch: base_branch}),
@@ -478,7 +478,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   defp require_phase_child_scope(%WorkPackage{kind: "phase_child", phase_id: phase_id} = child, anchor, phase_id) do
     cond do
       child.parent_id != anchor.id -> {:error, :phase_scope_not_available}
-      child.repo != anchor.repo -> {:tool_error, "repo_scope_mismatch"}
+      not repo_scope_name_matches?(child.repo, anchor.repo, []) -> {:tool_error, "repo_scope_mismatch"}
       child.base_branch != anchor.base_branch -> {:tool_error, "base_branch_scope_mismatch"}
       true -> PhaseChildScope.require_file_scope(child, anchor)
     end
@@ -702,7 +702,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
         where:
           work_package.id == ^work_package_id and work_package.status == "ready_for_worker" and
             work_package.kind == "phase_child" and work_package.phase_id == ^phase_id and work_package.parent_id == ^anchor.id and
-            work_package.repo == ^anchor.repo and work_package.base_branch == ^anchor.base_branch
+            work_package.base_branch == ^anchor.base_branch
       )
 
     case repo.update_all(query, set: [updated_at: now]) do
