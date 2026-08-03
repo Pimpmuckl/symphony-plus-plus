@@ -50,7 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
           | :invalid_target_repo_root
           | :invalid_worktree_path
           | :recorded_worktree_missing
-          | :stale_existing_branch
+          | {:stale_existing_branch, map()}
           | :unsafe_worktree_path
           | :worktree_path_exists
           | :worktree_path_missing_on_disk
@@ -332,12 +332,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
   defp maybe_delete_created_branch(_repo_root, _branch, false, _opts), do: :ok
 
   defp require_existing_branch_matches_base(repo_root, branch, base_branch, opts) do
+    base_ref = "origin/#{base_branch}"
+
     with {:ok, branch_revision} <- git_revision(repo_root, branch, opts),
-         {:ok, base_revision} <- git_revision(repo_root, "origin/#{base_branch}", opts),
-         true <- branch_revision == base_revision do
-      :ok
+         {:ok, base_revision} <- git_revision(repo_root, base_ref, opts) do
+      if branch_revision == base_revision do
+        :ok
+      else
+        {:error,
+         {:stale_existing_branch,
+          %{
+            branch: branch,
+            existing_revision: branch_revision,
+            base_revision: base_revision,
+            base_ref: base_ref,
+            remediation: "Retry without branch if this branch was explicit; otherwise choose another unused branch."
+          }}}
+      end
     else
-      false -> {:error, :stale_existing_branch}
       {:error, reason} -> {:error, reason}
     end
   end

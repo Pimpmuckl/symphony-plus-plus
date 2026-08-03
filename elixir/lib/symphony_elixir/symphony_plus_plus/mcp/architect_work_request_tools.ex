@@ -973,6 +973,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
      }}
   end
 
+  defp architect_error({:stale_existing_branch, details}, tool) do
+    {:error, -32_602, "Invalid params",
+     %{
+       "tool" => tool,
+       "reason" => "stale_existing_branch",
+       "branch" => details.branch,
+       "existing_revision" => details.existing_revision,
+       "base_revision" => details.base_revision,
+       "base_ref" => details.base_ref,
+       "remediation" => details.remediation
+     }}
+  end
+
   defp architect_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp invalid_params_error(tool, {:work_package_scope_violation, errors}) do

@@ -619,7 +619,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       %{
         "work_package_id" => string_schema(),
         "target_repo_root" => described_string_schema("Optional target product repository root. Omit when the current MCP repo root or a standard local checkout matches the WorkPackage repo."),
-        "branch" => described_string_schema("Optional branch override, used only when the WorkPackage branch_pattern is a template or absent. Exact branch patterns are derived from the WorkPackage.")
+        "branch" =>
+          described_string_schema("Optional branch override. Omit it to derive a package-unique branch from the WorkPackage id or branch_pattern template. Exact branch patterns are used unchanged.")
       },
       ["work_package_id"]
     )
