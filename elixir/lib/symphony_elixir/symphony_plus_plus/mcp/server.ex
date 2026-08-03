@@ -2289,6 +2289,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp error_classification(-32_001), do: "unauthorized"
   defp error_classification(-32_003), do: "forbidden"
   defp error_classification(-32_004), do: "not_found"
+  defp error_classification(-32_009), do: "precondition_failed"
   defp error_classification(_code), do: "server_error"
 
   defp dispatch_with_text_profile(method, params, %__MODULE__{} = server) do
