@@ -384,7 +384,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
         end
 
       [] ->
-        {:tool_error, "missing_evidence"}
+        work_package_delivery_typed_evidence_attrs(outcome, %{})
 
       _keys ->
         {:tool_error, "conflicting_delivery_evidence"}
@@ -392,36 +392,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   defp work_package_delivery_typed_evidence_attrs(outcome, evidence) do
-    field_specs = work_package_delivery_evidence_field_specs(outcome)
-    allowed_keys = Enum.map(field_specs, &elem(&1, 0))
+    case WorkPackageDelivery.validate_evidence(outcome, evidence) do
+      :ok ->
+        collect_work_package_delivery_evidence_attrs(
+          evidence,
+          WorkPackageDelivery.evidence_field_specs(outcome)
+        )
 
-    with :ok <- require_work_package_delivery_evidence_fields(evidence, allowed_keys) do
-      collect_work_package_delivery_evidence_attrs(evidence, field_specs)
+      {:error, details} ->
+        {:tool_error, {:invalid_evidence, details}}
     end
   end
 
-  defp work_package_delivery_evidence_field_specs("pr_merged"),
-    do: [
-      {"pr_url", :string},
-      {"pr_number", :positive_integer},
-      {"pr_repository", :string},
-      {"pr_merged_at", :string},
-      {"merge_commit_sha", :string}
-    ]
-
-  defp work_package_delivery_evidence_field_specs("completed_no_pr"), do: [{"no_pr_evidence", :string}]
-
-  defp work_package_delivery_evidence_field_specs("superseded"),
-    do: [
-      {"successor_work_package_id", :string},
-      {"successor_work_package_id", :string},
-      {"superseded_reason", :string}
-    ]
-
-  defp work_package_delivery_evidence_field_specs("abandoned"), do: [{"abandoned_rationale", :string}]
-
   defp collect_work_package_delivery_evidence_attrs(evidence, field_specs) do
-    Enum.reduce_while(field_specs, {:ok, %{}}, fn {field, type}, {:ok, attrs} ->
+    Enum.reduce_while(field_specs, {:ok, %{}}, fn %{name: field, type: type}, {:ok, attrs} ->
       case work_package_delivery_evidence_field(evidence, field, type) do
         {:ok, value} -> {:cont, {:ok, optional_put(attrs, field, value)}}
         {:tool_error, reason} -> {:halt, {:tool_error, reason}}
@@ -433,13 +417,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp work_package_delivery_evidence_field(evidence, field, :positive_integer),
     do: optional_positive_integer_argument(evidence, field)
-
-  defp require_work_package_delivery_evidence_fields(evidence, allowed_keys) do
-    case Map.keys(evidence) -- allowed_keys do
-      [] -> :ok
-      _unexpected -> {:tool_error, "invalid_evidence"}
-    end
-  end
 
   defp maybe_prepare_slice_delivery_blocker_closeout(
          repo,
@@ -1361,6 +1338,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp invalid_params_error(tool, {:invalid_changeset, reason, %Ecto.Changeset{} = changeset}) do
     changeset_invalid_params_error(tool, reason, changeset)
+  end
+
+  defp invalid_params_error(tool, {:invalid_evidence, details}) do
+    {:error, -32_602, "Invalid params",
+     details
+     |> Map.put("tool", tool)
+     |> Map.put("reason", "invalid_evidence")}
   end
 
   defp invalid_params_error(tool, {:invalid_enum, _field, _allowed_values} = reason) do
