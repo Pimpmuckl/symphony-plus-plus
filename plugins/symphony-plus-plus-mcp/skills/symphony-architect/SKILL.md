@@ -140,7 +140,8 @@ for secrets.
 
 Dispatch workers with `prepare_work_package_worktree`; pass the WorkPackage id
 and use the returned `worker_launch.workspace_path` as the worker cwd. Pass a
-concrete `branch` when the WorkPackage branch pattern is absent or templated.
+concrete `branch` only to override the package-unique branch derived when the
+WorkPackage branch pattern is absent or templated.
 If prepare or cleanup returns `target_repo_root_required`, retry with the
 product checkout that owns the recorded worktree path.
 
