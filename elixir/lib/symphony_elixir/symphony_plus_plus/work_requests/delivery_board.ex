@@ -436,7 +436,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp project_slice(%WorkPackage{} = work_package, deliveries_by_slice_id, slices_by_scope, context, opts) do
     delivery = delivery_for_slice(deliveries_by_slice_id, work_package)
-    work_package_summary = slice_work_package_summary(work_package.id, context, opts)
+    work_package_summary = slice_work_package_summary(work_package.id, delivery, context, opts)
     operational_work_package = work_package_summary || hidden_work_package_marker(work_package, context)
     operational_state = operational_state(work_package, delivery, operational_work_package)
 
@@ -477,11 +477,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     }
   end
 
-  defp slice_work_package_summary(work_package_id, context, opts) do
+  defp slice_work_package_summary(work_package_id, delivery, context, opts) do
     if Keyword.get(opts, :slice_projection) == :operational_state do
       operational_work_package_summary(work_package_id, context)
     else
-      work_package_summary(work_package_id, context)
+      work_package_summary(work_package_id, delivery, context)
     end
   end
 
@@ -535,14 +535,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     }
   end
 
-  defp work_package_summary(nil, _context), do: nil
-  defp work_package_summary("", _context), do: nil
+  defp work_package_summary(nil, _delivery, _context), do: nil
+  defp work_package_summary("", _delivery, _context), do: nil
 
-  defp work_package_summary(work_package_id, context) do
-    visible_work_package_summary(work_package_id, context)
+  defp work_package_summary(work_package_id, delivery, context) do
+    visible_work_package_summary(work_package_id, delivery, context)
   end
 
-  defp visible_work_package_summary(work_package_id, context) do
+  defp visible_work_package_summary(work_package_id, delivery, context) do
     case get_in(context, [:work_packages, work_package_id]) do
       %WorkPackage{} = work_package ->
         events = Map.get(context.progress_events, work_package_id, [])
@@ -564,7 +564,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           pr: pr_summary(legacy_pr_metadata(metadata)),
           review: review_summary(metadata),
           worker_signal: Map.get(activity, :worker_signal),
-          pr_signal: Signals.pr(metadata),
+          pr_signal: Signals.pr(metadata, delivery),
           review_signal: Signals.review(work_package, metadata, Map.get(context.review_observations, work_package.id)),
           dependency_signal: Signals.dependency(work_package, context),
           blocker_state: Map.fetch!(activity, :blocker_state),

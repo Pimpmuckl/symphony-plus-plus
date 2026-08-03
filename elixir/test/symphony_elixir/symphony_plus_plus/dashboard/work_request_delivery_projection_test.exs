@@ -119,9 +119,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
     assert {:ok, _merged_delivery_progress} =
              PlanningRepository.append_progress_event(repo, %{
                work_package_id: merged_delivery_package.id,
-               summary: "Worker progress exists",
-               status: "progress",
-               payload: %{type: "progress"}
+               summary: "PR attached",
+               status: "pr_attached",
+               payload: %{
+                 type: "pr",
+                 source_tool: "attach_pr",
+                 url: "https://github.com/nextide/symphony-plus-plus/pull/904",
+                 number: 904,
+                 repository: "nextide/symphony-plus-plus",
+                 check_summary: %{status: "completed", conclusion: "success", completed: 2, total: 2}
+               }
              })
 
     assert {:ok, _dispatched_merged_delivery} =
@@ -199,6 +206,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
     assert get_in(slices_by_id, ["WRS-DASH-NO-PR", "delivery", "outcome"]) == "completed_no_pr"
     assert get_in(slices_by_id, ["WRS-DASH-NO-PR", "operational_state", "key"]) == "completed_no_pr"
     assert get_in(slices_by_id, ["WRS-DASH-RECORDED-MERGED", "delivery", "outcome"]) == "pr_merged"
+
+    assert get_in(slices_by_id, ["WRS-DASH-RECORDED-MERGED", "work_package", "pr_signal"]) == %{
+             "status" => "merged",
+             "url" => "https://github.com/nextide/symphony-plus-plus/pull/904",
+             "number" => 904,
+             "repository" => "nextide/symphony-plus-plus",
+             "checks" => %{"status" => "passing", "current" => 2, "total" => 2}
+           }
+
     assert get_in(slices_by_id, ["WRS-DASH-RECORDED-MERGED", "operational_state", "key"]) == "delivered"
     assert get_in(slices_by_id, ["WRS-DASH-SUPERSEDED", "successor", "work_package", "id"]) == successor_package.id
     assert get_in(slices_by_id, ["WRS-DASH-FILTERED-SUCCESSOR", "successor", "work_package"]) == nil

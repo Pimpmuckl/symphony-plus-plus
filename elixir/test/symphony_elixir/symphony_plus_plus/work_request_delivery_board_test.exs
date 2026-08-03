@@ -122,6 +122,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "stale", active: true}
              })
 
+    assert {:ok, _pr} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: linked_package.id,
+               summary: "PR attached",
+               status: "pr_attached",
+               payload: %{
+                 type: "pr",
+                 source_tool: "attach_pr",
+                 url: "https://github.com/nextide/symphony-plus-plus/pull/901",
+                 number: 901,
+                 repository: "nextide/symphony-plus-plus",
+                 head_sha: "head-901",
+                 check_summary: %{status: "completed", conclusion: "success", completed: 3, total: 3},
+                 provider: "github"
+               }
+             })
+
     assert {:ok, _delivery} =
              Repository.record_work_package_delivery(
                repo,
@@ -142,6 +159,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     assert slice.operational_state.key == "delivered"
     assert slice.operational_state.raw_status == "blocked"
     assert slice.work_package.raw_status == "blocked"
+
+    assert %{
+             status: "merged",
+             url: "https://github.com/nextide/symphony-plus-plus/pull/901",
+             number: 901,
+             repository: "nextide/symphony-plus-plus",
+             head_sha: "head-901",
+             checks: %{status: "passing", current: 3, total: 3}
+           } = slice.work_package.pr_signal
+
     assert "work_package_blocked_after_delivery" in slice.attention_reason_codes
     assert "work_package_status_stale_after_delivery" in slice.attention_reason_codes
   end

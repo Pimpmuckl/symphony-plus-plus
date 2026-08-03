@@ -79,8 +79,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       if missing_product_tree_schema_error?(error), do: {:ok, %{}}, else: normalize_exqlite_error(error)
   end
 
-  @spec pr(map()) :: map()
-  def pr(metadata) do
+  @spec pr(map(), map() | nil) :: map()
+  def pr(metadata, delivery \\ nil) do
     case map_value(metadata, "pr") do
       nil ->
         %{status: "none"}
@@ -113,6 +113,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       _invalid ->
         %{status: "unavailable"}
     end
+    |> override_pr_status(delivery)
   end
 
   @spec review(WorkPackage.t(), map()) :: map() | nil
@@ -214,6 +215,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       true -> "unavailable"
     end
   end
+
+  defp override_pr_status(signal, %{outcome: "pr_merged"}), do: %{signal | status: "merged"}
+  defp override_pr_status(signal, _delivery), do: signal
 
   defp checks(nil), do: nil
   defp checks(value) when not is_map(value), do: %{status: "unavailable"}
