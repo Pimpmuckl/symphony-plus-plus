@@ -197,6 +197,7 @@ function RetentionCutoffSetting({
 export function DashboardSettingsDialog({
   archiveAfterDays,
   canUpdateRetentionSettings,
+  captureFailedMcpCalls,
   hideEmptyWorkstreams,
   hiddenWorkstreamCount,
   openDashboardOnBoot,
@@ -204,6 +205,7 @@ export function DashboardSettingsDialog({
   showWelcomeToast,
   soloSessionDeleteAfterDays,
   onArchiveAfterDaysChange,
+  onCaptureFailedMcpCallsChange,
   onHideEmptyWorkstreamsChange,
   onOpenDashboardOnBootChange,
   onSoloSessionDeleteAfterDaysChange,
@@ -212,6 +214,7 @@ export function DashboardSettingsDialog({
 }: {
   archiveAfterDays: number;
   canUpdateRetentionSettings: boolean;
+  captureFailedMcpCalls: boolean;
   hideEmptyWorkstreams: boolean;
   hiddenWorkstreamCount: number;
   openDashboardOnBoot: boolean;
@@ -219,6 +222,7 @@ export function DashboardSettingsDialog({
   showWelcomeToast: boolean;
   soloSessionDeleteAfterDays: number;
   onArchiveAfterDaysChange: (value: number) => Promise<void>;
+  onCaptureFailedMcpCallsChange: (value: boolean) => Promise<void>;
   onHideEmptyWorkstreamsChange: (value: boolean) => void;
   onOpenDashboardOnBootChange: (value: boolean) => Promise<void>;
   onSoloSessionDeleteAfterDaysChange: (value: number) => Promise<void>;
@@ -269,7 +273,7 @@ export function DashboardSettingsDialog({
         >
           <DialogHeader>
             <DialogTitle>Settings</DialogTitle>
-            <DialogDescription>Dashboard display preferences</DialogDescription>
+            <DialogDescription>Operator preferences</DialogDescription>
           </DialogHeader>
 
           <div ref={initialFocusRef} tabIndex={-1} className="grid gap-3 outline-none">
@@ -295,6 +299,13 @@ export function DashboardSettingsDialog({
                   description={openOnBootLabel}
                   label="Open dashboard with Codex"
                   onChange={onOpenDashboardOnBootChange}
+                />
+                <SettingsSwitch
+                  ariaLabel="Capture failed MCP calls"
+                  checked={captureFailedMcpCalls}
+                  description="Writes a diagnostic ID and redacted metadata to the rotating runtime log."
+                  label="Capture failed MCP calls"
+                  onChange={onCaptureFailedMcpCallsChange}
                 />
               </>
             ) : null}
