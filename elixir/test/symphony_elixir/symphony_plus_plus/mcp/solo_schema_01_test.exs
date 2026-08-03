@@ -985,7 +985,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              "target product repository root"
 
     assert get_in(tools_by_name, ["prepare_work_package_worktree", "inputSchema", "properties", "branch", "description"]) =~
-             "Optional branch override"
+             "Omit it to derive a package-unique branch"
 
     assert get_in(tools_by_name, ["cleanup_work_package_worktree", "inputSchema", "required"]) == [
              "work_package_id"
