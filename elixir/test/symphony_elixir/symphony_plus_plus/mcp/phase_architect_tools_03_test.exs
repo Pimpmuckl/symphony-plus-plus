@@ -126,6 +126,54 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools03Test do
     assert get_in(expired_response, ["error", "data", "reason"]) == "invalid_expires_at"
   end
 
+  test "phase child scope resolves local checkout repository identity", %{repo: repo} do
+    {anchor, architect_session} =
+      create_architect_session(repo, "SYMPP-P7-002-MINT-LOCAL-REPO-ANCHOR", ["mint:child_worker_key", "read:phase"])
+
+    matching_path =
+      TestSupport.git_repo_with_origin_fixture!("https://github.com/nextide/symphony-plus-plus.git", prefix: "sympp-phase-child-repo")
+
+    assert {:ok, child} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-P7-002-MINT-LOCAL-REPO-CHILD",
+                 kind: "phase_child",
+                 policy_template: "phase_child",
+                 phase_id: @architect_phase_id,
+                 parent_id: anchor.id,
+                 base_branch: anchor.base_branch,
+                 repo: matching_path,
+                 status: "ready_for_worker",
+                 allowed_file_globs: anchor.allowed_file_globs
+               )
+             )
+
+    response = mcp_tool(repo, architect_session, "mint_child_worker_key", %{"work_package_id" => child.id})
+    assert get_in(response, ["result", "structuredContent", "worker_grant", "work_package_id"]) == child.id
+
+    different_path = TestSupport.git_repo_with_origin_fixture!("https://github.com/elsewhere/symphony-plus-plus.git", prefix: "sympp-phase-child-other")
+
+    assert {:ok, different_child} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-P7-002-MINT-OTHER-REPO-CHILD",
+                 kind: "phase_child",
+                 policy_template: "phase_child",
+                 phase_id: @architect_phase_id,
+                 parent_id: anchor.id,
+                 base_branch: anchor.base_branch,
+                 repo: different_path,
+                 status: "ready_for_worker",
+                 allowed_file_globs: anchor.allowed_file_globs
+               )
+             )
+
+    rejected = mcp_tool(repo, architect_session, "mint_child_worker_key", %{"work_package_id" => different_child.id})
+    assert get_in(rejected, ["error", "data", "reason"]) == "repo_scope_mismatch"
+  end
+
   test "phase architect cannot mint or read child worker key for sibling anchor, sibling phase, or mismatched base branch", %{repo: repo} do
     {_anchor, architect_session} =
       create_architect_session(repo, "SYMPP-P7-002-MINT-SCOPE-ANCHOR", [
