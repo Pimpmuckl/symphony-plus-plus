@@ -6,6 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
@@ -553,7 +554,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
       is_nil(expected) or is_nil(actual) ->
         {:skip, "missing_repository", %{expected_repository: work_package.repo, actual_repository: evidence.repository}}
 
-      expected != actual ->
+      not RepoIdentity.scope_match?(work_package.repo, evidence.repository, local_path_remotes?: true) ->
         {:skip, "repository_mismatch", %{expected_repository: work_package.repo, actual_repository: evidence.repository}}
 
       true ->
