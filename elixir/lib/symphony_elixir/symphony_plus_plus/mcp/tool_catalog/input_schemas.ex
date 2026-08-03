@@ -695,45 +695,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     %{
       "type" => "object",
       "description" => "Exactly one typed evidence object matching outcome.",
-      "additionalProperties" => false,
-      "properties" => %{
-        "pr_merged" =>
-          schema(
-            %{
-              "pr_url" => described_string_schema("Merged pull request URL."),
-              "pr_number" => integer_schema() |> Map.put("minimum", 1) |> Map.put("description", "Optional positive pull request number."),
-              "pr_repository" => described_string_schema("Optional owner/repository."),
-              "pr_merged_at" => described_string_schema("ISO-8601 merge timestamp."),
-              "merge_commit_sha" => described_string_schema("Required for WorkPackage closeout strong evidence.")
-            },
-            ["pr_url", "pr_merged_at"]
-          ),
-        "completed_no_pr" =>
-          schema(
-            %{
-              "no_pr_evidence" => markdown_string_schema("Markdown evidence for direct no-PR completion.")
-            },
-            ["no_pr_evidence"]
-          ),
-        "superseded" =>
-          schema(
-            %{
-              "successor_work_package_id" => described_string_schema("Successor WorkPackage id in the same WorkRequest."),
-              "superseded_reason" => markdown_string_schema("Markdown reason for supersession.")
-            },
-            ["successor_work_package_id", "superseded_reason"]
-          ),
-        "abandoned" =>
-          schema(
-            %{
-              "abandoned_rationale" => markdown_string_schema("Markdown rationale for abandonment.")
-            },
-            ["abandoned_rationale"]
-          )
-      },
-      "oneOf" => Enum.map(WorkPackageDelivery.outcomes(), &%{"required" => [&1]})
+      "oneOf" => Enum.map(WorkPackageDelivery.outcomes(), &work_package_delivery_outcome_evidence_schema/1)
     }
   end
+
+  defp work_package_delivery_outcome_evidence_schema(outcome) do
+    schema(%{outcome => work_package_delivery_typed_evidence_schema(outcome)}, [outcome])
+  end
+
+  defp work_package_delivery_typed_evidence_schema(outcome) do
+    field_specs = WorkPackageDelivery.evidence_field_specs(outcome)
+
+    properties =
+      Map.new(field_specs, fn field_spec ->
+        {field_spec.name, work_package_delivery_evidence_field_schema(field_spec)}
+      end)
+
+    required = for %{name: name, required: true} <- field_specs, do: name
+
+    schema(properties, required)
+  end
+
+  defp work_package_delivery_evidence_field_schema(%{type: :string, description: description}),
+    do: described_string_schema(description)
+
+  defp work_package_delivery_evidence_field_schema(%{type: :positive_integer, description: description}),
+    do: positive_integer_schema() |> Map.put("description", description)
 
   @spec explicit_work_request_architect_tool_input_schema(tool_name()) :: input_schema()
   def explicit_work_request_architect_tool_input_schema(name) do

@@ -654,10 +654,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     assert event.status == "merged_into_phase"
   end
 
-  test "linked PR merged closeout rejects weak PR evidence and rolls back", %{repo: repo} do
+  test "linked PR merged closeout requires merge commit evidence and rolls back", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_merge")
 
-    assert {:error, :missing_strong_pr_evidence} =
+    assert {:error, %Ecto.Changeset{} = changeset} =
              Service.record_work_package_delivery(
                repo,
                work_request.id,
@@ -672,6 +672,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
                })
              )
 
+    assert {"can't be blank", [validation: :required]} = changeset.errors[:merge_commit_sha]
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
     assert repo.get!(WorkPackage, linked_package.id).status == "ready_for_merge"
   end
@@ -722,7 +723,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
   end
 
-  test "replayed closeout skips weak PR evidence only with matching audit and terminal state", %{repo: repo} do
+  test "replayed closeout requires matching audit and terminal state", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_merge")
 
     attrs =
@@ -732,7 +733,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
         pr_url: "https://github.com/nextide/symphony-plus-plus/pull/790",
         pr_number: 790,
         pr_repository: "nextide/symphony-plus-plus",
-        pr_merged_at: ~U[2026-05-24 14:30:00.000000Z]
+        pr_merged_at: ~U[2026-05-24 14:30:00.000000Z],
+        merge_commit_sha: "legacy-790"
       })
 
     assert {:ok, delivery} = Repository.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)

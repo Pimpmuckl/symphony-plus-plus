@@ -61,6 +61,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     :ok
   end
 
+  test "delivery evidence errors expose the selected outcome contract", %{repo: repo} do
+    {work_request, work_package, _linked_package} =
+      linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-EVIDENCE-CONTRACT")
+
+    session =
+      create_work_request_architect_session(
+        repo,
+        work_request,
+        ArchitectHandoff.capabilities()
+      )
+
+    response =
+      record_delivery(repo, session, %{
+        "work_request_id" => work_request.id,
+        "work_package_id" => work_package.id,
+        "outcome" => "pr_merged",
+        "idempotency_key" => "delivery-evidence-contract",
+        "evidence" => %{
+          "pr_merged" => %{
+            "pr_url" => "https://github.com/nextide/symphony-plus-plus/pull/301",
+            "no_pr_evidence" => "Wrong outcome evidence."
+          }
+        }
+      })
+
+    assert get_in(response, ["error", "data"]) == %{
+             "tool" => "record_work_package_delivery",
+             "reason" => "invalid_evidence",
+             "missing_fields" => ["pr_merged_at", "merge_commit_sha"],
+             "unexpected_fields" => ["no_pr_evidence"],
+             "allowed_fields" => [
+               "pr_url",
+               "pr_number",
+               "pr_repository",
+               "pr_merged_at",
+               "merge_commit_sha"
+             ]
+           }
+  end
+
   test "WR architect stale capabilities still read scoped package status and record closeout", %{
     repo: repo
   } do

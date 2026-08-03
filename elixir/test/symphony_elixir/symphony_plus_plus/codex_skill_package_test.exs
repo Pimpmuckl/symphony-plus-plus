@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
   use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
 
   test "documentation index links only current local files" do
     index_path = Path.join(@repo_root, "docs/README.md")
@@ -37,7 +38,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
           "record_work_package_delivery",
           "reconcile_work_request",
           "PR-size or line-budget",
-          "cleanup_work_request_work_package_runtime"
+          "cleanup_work_request_work_package_runtime",
+          ~s({"pr_merged":{"pr_url":"...","pr_merged_at":"...","merge_commit_sha":"..."}}),
+          ~s({"completed_no_pr":{"no_pr_evidence":"..."}}),
+          ~s({"superseded":{"successor_work_package_id":"...","superseded_reason":"..."}}),
+          ~s({"abandoned":{"abandoned_rationale":"..."}})
         ] do
       assert architect_skill =~ marker
     end
@@ -48,6 +53,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
         ] do
       assert worker_skill =~ marker
     end
+  end
+
+  test "delivery evidence schema exposes each concrete runtime contract" do
+    evidence_schema =
+      ToolCatalog.architect_tool_input_schema("record_work_package_delivery")
+      |> get_in(["properties", "evidence"])
+
+    assert length(evidence_schema["oneOf"]) == 4
+
+    for outcome <- WorkPackageDelivery.outcomes() do
+      assert branch = Enum.find(evidence_schema["oneOf"], &(&1["required"] == [outcome]))
+      assert branch["additionalProperties"] == false
+
+      typed_schema = get_in(branch, ["properties", outcome])
+      field_specs = WorkPackageDelivery.evidence_field_specs(outcome)
+
+      assert Map.keys(typed_schema["properties"]) |> Enum.sort() ==
+               field_specs |> Enum.map(& &1.name) |> Enum.sort()
+
+      assert typed_schema["required"] ==
+               for(%{name: name, required: true} <- field_specs, do: name)
+    end
+
+    pr_merged_branch = Enum.find(evidence_schema["oneOf"], &(&1["required"] == ["pr_merged"]))
+
+    assert get_in(pr_merged_branch, ["properties", "pr_merged", "required"]) == [
+             "pr_url",
+             "pr_merged_at",
+             "merge_commit_sha"
+           ]
   end
 
   test "runtime schemas and packaged worker skill agree on compact calls" do

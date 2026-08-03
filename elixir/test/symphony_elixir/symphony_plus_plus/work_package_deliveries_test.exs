@@ -153,6 +153,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackageDeliveriesTest d
 
     assert "can't be blank" in errors_on(pr_changeset).pr_url
     assert "can't be blank" in errors_on(pr_changeset).pr_merged_at
+    assert "can't be blank" in errors_on(pr_changeset).merge_commit_sha
+
+    assert {:error,
+            %{
+              "missing_fields" => ["pr_merged_at", "merge_commit_sha"],
+              "unexpected_fields" => ["no_pr_evidence"],
+              "allowed_fields" => [
+                "pr_url",
+                "pr_number",
+                "pr_repository",
+                "pr_merged_at",
+                "merge_commit_sha"
+              ]
+            }} =
+             WorkPackageDelivery.validate_evidence("pr_merged", %{
+               "pr_url" => "https://github.com/nextide/symphony-plus-plus/pull/123",
+               "no_pr_evidence" => "Wrong outcome evidence."
+             })
+
+    assert {:error,
+            %{
+              "missing_fields" => [],
+              "unexpected_fields" => ["no_pr_evidence"]
+            }} =
+             WorkPackageDelivery.validate_evidence("pr_merged", %{
+               "pr_url" => "https://github.com/nextide/symphony-plus-plus/pull/123",
+               "pr_merged_at" => "2026-08-03T02:00:00Z",
+               "merge_commit_sha" => "abc123",
+               "no_pr_evidence" => "   "
+             })
 
     assert {:error, %Ecto.Changeset{} = no_pr_changeset} =
              Repository.record_work_package_delivery(
@@ -163,6 +193,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackageDeliveriesTest d
              )
 
     assert "can't be blank" in errors_on(no_pr_changeset).no_pr_evidence
+
+    assert {:error, %Ecto.Changeset{} = unexpected_no_pr_changeset} =
+             Repository.record_work_package_delivery(
+               repo,
+               work_request.id,
+               work_package.id,
+               delivery_attrs(%{
+                 outcome: "completed_no_pr",
+                 no_pr_evidence: "Direct completion.",
+                 pr_url: "https://github.com/nextide/symphony-plus-plus/pull/123"
+               })
+             )
+
+    assert "is not allowed for outcome" in errors_on(unexpected_no_pr_changeset).pr_url
 
     assert {:error, %Ecto.Changeset{} = superseded_changeset} =
              Repository.record_work_package_delivery(
