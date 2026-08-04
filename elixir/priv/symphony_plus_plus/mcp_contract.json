@@ -1,6 +1,6 @@
 {
   "version": 6,
-  "mcp_contract_fingerprint": "9e7c5d0616e24225944ce097ab776fee1617290b556f15142e024b80bf532a39",
+  "mcp_contract_fingerprint": "5b98be440f48c177837f14d070f9dc8290d1fbe6ecb4a20c3793e6eb4a56a1ca",
   "tool_sets": {
     "unbound_tools": [
       "sympp.health",
@@ -36,12 +36,9 @@
       "append_finding",
       "append_progress",
       "set_status",
-      "report_blocker",
-      "resolve_blocker",
       "add_comment",
       "list_comments",
       "resolve_comment",
-      "create_guidance_request",
       "read_guidance_request",
       "request_scope_expansion",
       "attach_branch",
@@ -97,7 +94,6 @@
       "add_comment",
       "list_comments",
       "resolve_comment",
-      "resolve_blocker",
       "read_guidance_request"
     ]
   }

@@ -65,7 +65,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
   end
 
-  test "mark_ready rejects empty review packages and allows resolved blockers", %{repo: repo} do
+  test "mark_ready rejects empty review packages and requires an external blocker resolution", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
@@ -96,43 +96,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
 
     assert get_in(empty_review_response, ["error", "data", "reason"]) == "missing_summary"
 
-    invalid_blocker_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "invalid-blocker",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "report_blocker",
-            "arguments" => %{"summary" => "Invalid blocker", "idempotency_key" => "invalid-blocker", "blocker_id" => 1}
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(invalid_blocker_response, ["error", "data", "reason"]) == "invalid_blocker_id"
-
-    attach_tool(repo, session, "append_progress", %{"summary" => "Progress with shared retry key", "idempotency_key" => "blocker-1"})
-
-    blocker_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "blocker",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "report_blocker",
-            "arguments" => %{"summary" => "Temporarily blocked", "idempotency_key" => "blocker-1", "blocker_id" => "blocker-1 "}
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    blocker_payload = response_progress_payload(repo, blocker_response)
-    assert blocker_payload["active"] == true
-    assert blocker_payload["blocker_id"] == "blocker-1"
+    assert {:ok, _blocker} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: package.id,
+               summary: "Temporarily blocked",
+               status: "blocked",
+               payload: %{"type" => "blocker", "source_tool" => "report_blocker", "blocker_id" => "blocker-1", "active" => true}
+             })
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-READY-BLOCKER/worker", "head_sha" => "abc125"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/125", "head_sha" => "abc125"})
@@ -157,40 +127,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     package_id = package.id
     assert [%{"blocker_id" => "blocker-1", "work_package_id" => ^package_id}] = get_in(blocked_response, ["error", "data", "active_blockers"])
 
-    still_blocked_response =
+    worker_closeout_response =
       MCPHarness.request(
         %{
           "jsonrpc" => "2.0",
-          "id" => "ready-still-blocked",
+          "id" => "ready-worker-closeout",
           "method" => "tools/call",
           "params" => %{
             "name" => "mark_ready",
-            "arguments" => %{"blocker_closeout" => %{"decision" => "still_active", "blocker_ids" => ["blocker-1"]}}
+            "arguments" => %{"blocker_closeout" => %{"decision" => "resolved", "blocker_ids" => ["blocker-1"], "resolution" => "worker supplied"}}
           }
         },
         repo: repo,
         session: session
       )
 
-    assert "no_active_blockers" in get_in(still_blocked_response, ["error", "data", "missing"])
-    assert Enum.any?(get_in(still_blocked_response, ["error", "data", "reasons"]), &(&1["gate"] == "no_active_blockers"))
+    assert get_in(worker_closeout_response, ["error", "code"]) == -32_602
 
-    resolved_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "resolve",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "resolve_blocker",
-            "arguments" => %{"blocker_id" => "blocker-1", "resolution" => "Unblocked", "summary" => "Resolved", "idempotency_key" => "resolve-1"}
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert response_progress_payload(repo, resolved_response)["active"] == false
+    assert {:ok, _resolution} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: package.id,
+               summary: "Resolved by an authorized operator",
+               status: "resolved",
+               payload: %{
+                 "type" => "blocker",
+                 "source_tool" => "resolve_blocker",
+                 "blocker_id" => "blocker-1",
+                 "resolution" => "Unblocked",
+                 "active" => false
+               }
+             })
 
     ready_response =
       MCPHarness.request(

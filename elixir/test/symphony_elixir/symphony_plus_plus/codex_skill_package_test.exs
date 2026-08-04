@@ -89,8 +89,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     worker_skill = @mcp_plugin_skill_path |> File.read!() |> normalize_newlines()
     prompt = File.read!(@mcp_plugin_prompt_path)
 
-    assert Map.has_key?(ToolCatalog.worker_tool_input_schema("set_status")["properties"], "blocker_closeout")
-    assert Map.keys(ToolCatalog.worker_tool_input_schema("mark_ready")["properties"]) == ["blocker_closeout"]
+    refute Map.has_key?(ToolCatalog.worker_tool_input_schema("set_status")["properties"], "blocker_closeout")
+    assert ToolCatalog.worker_tool_input_schema("mark_ready")["properties"] == %{}
     assert Map.keys(ToolCatalog.worker_tool_input_schema("complete_review")["properties"]) |> Enum.sort() == ["note", "reference"]
     assert ToolCatalog.worker_tool_input_schema("add_comment")["required"] == ["body"]
     assert ToolCatalog.worker_tool_input_schema("list_comments")["required"] == []
@@ -102,12 +102,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
           "append_finding",
           "append_progress",
           "set_status",
-          "report_blocker",
-          "resolve_blocker",
           "add_comment",
           "list_comments",
           "resolve_comment",
-          "create_guidance_request",
           "read_guidance_request",
           "request_scope_expansion",
           "attach_branch",
@@ -125,8 +122,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
       assert content =~ "attach_branch(head_sha)"
       assert content =~ "complete_review(reference?, note?)"
       assert content =~ "sync_pr()"
-      assert content =~ "blocker_closeout"
       assert content =~ "attached PR"
+      assert content =~ "Workers do not create"
+      refute content =~ "blocker_closeout"
+      refute content =~ "report_blocker"
+      refute content =~ "resolve_blocker"
+      refute content =~ "create_guidance_request"
       refute content =~ "sync_pr(metadata, url|number)"
       refute content =~ "sync_pr(url_or_number, metadata)"
     end
@@ -141,7 +142,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
       assert content =~ "Worktree path: <PREPARED_WORKTREE_PATH>"
       assert content =~ ~s({"work_package_id":"<WORK_PACKAGE_ID>"})
       assert content =~ "update_task_plan(patch, expected_version)"
-      assert content =~ "resolve_blocker(blocker_id, resolution, summary, idempotency_key)"
+      refute content =~ "resolve_blocker"
       assert content =~ "request_scope_expansion(summary, idempotency_key, payload)"
       assert content =~ "attach_pr(url, head_sha)"
       assert content =~ "Do not create local planning files as the WorkPackage source of truth."

@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext
+  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Service, as: GuidanceRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   test "create_work_request creates provenance and a claimable redacted architect handoff", %{repo: repo} do
@@ -600,17 +601,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
 
     assert {:ok, minted_worker} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, worker_assignment} = AccessGrantService.claim(repo, minted_worker.work_key.secret, claimed_by: "toon-worker")
-    worker_session = MCPHarness.session(worker_assignment, proof_hash: minted_worker.grant.secret_hash)
 
-    guidance_response =
-      mcp_tool(repo, worker_session, "create_guidance_request", %{
-        "summary" => "Need architect guidance",
-        "question" => "Should the worker keep TOON text only in MCP content?",
-        "context" => "Structured delivery data must remain the source of truth.",
-        "idempotency_key" => "toon-architect-guidance"
-      })
+    assert {:ok, guidance_request} =
+             GuidanceRequestService.create_for_assignment(repo, worker_assignment, %{
+               "summary" => "Need architect guidance",
+               "question" => "Should the worker keep TOON text only in MCP content?",
+               "context" => "Structured delivery data must remain the source of truth.",
+               "idempotency_key" => "toon-architect-guidance"
+             })
 
-    guidance_id = get_in(guidance_response, ["result", "structuredContent", "guidance_request", "id"])
+    guidance_id = guidance_request.id
 
     read_response = mcp_tool(repo, session, "read_work_request", %{"work_request_id" => work_request.id})
     read_text = get_in(read_response, ["result", "content", Access.at(0), "text"])

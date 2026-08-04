@@ -3,6 +3,7 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Service, as: GuidanceRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
 
   test "worker comment tools create list and resolve exact package comments only", %{repo: repo} do
@@ -741,16 +742,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
   defp create_worker_guidance_request!(repo, work_package_id, suffix) do
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, work_package_id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-#{suffix}")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    response =
-      mcp_tool(repo, session, "create_guidance_request", %{
-        "summary" => "Need #{suffix} guidance",
-        "question" => "What should #{suffix} do next?",
-        "context" => "Testing WorkRequest-scoped guidance filters.",
-        "idempotency_key" => "guidance-filter-#{suffix}"
-      })
+    assert {:ok, request} =
+             GuidanceRequestService.create_for_assignment(repo, assignment, %{
+               "summary" => "Need #{suffix} guidance",
+               "question" => "What should #{suffix} do next?",
+               "context" => "Testing WorkRequest-scoped guidance filters.",
+               "idempotency_key" => "guidance-filter-#{suffix}"
+             })
 
-    get_in(response, ["result", "structuredContent", "guidance_request", "id"])
+    request.id
   end
 end

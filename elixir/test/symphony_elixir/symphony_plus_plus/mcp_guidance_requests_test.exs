@@ -104,7 +104,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     :ok
   end
 
-  test "workers create and read their own package guidance idempotently", %{repo: repo} do
+  test "guidance service creates records that workers can read only within their package", %{repo: repo} do
     {package, worker_session} = create_worker_session(repo, "SYMPP-GUIDANCE-WORKER")
 
     create_args = %{
@@ -114,7 +114,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
       "idempotency_key" => "guidance-create-1"
     }
 
-    create_response = mcp_tool(repo, worker_session, "create_guidance_request", create_args)
+    create_response = create_guidance_request_fixture(repo, worker_session, create_args)
     guidance_request = get_in(create_response, ["result", "structuredContent", "guidance_request"])
 
     assert guidance_request["status"] == "open"
@@ -122,12 +122,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     assert guidance_request["requested_by"] == "worker-1"
     assert guidance_request["answer"] == nil
 
-    replay_response = mcp_tool(repo, worker_session, "create_guidance_request", create_args)
+    replay_response = create_guidance_request_fixture(repo, worker_session, create_args)
     assert get_in(replay_response, ["result", "structuredContent", "guidance_request", "id"]) == guidance_request["id"]
     assert get_in(replay_response, ["result", "structuredContent", "guidance_request", "requested_by"]) == "worker-1"
 
     conflict_response =
-      mcp_tool(repo, worker_session, "create_guidance_request", %{create_args | "question" => "Different question"})
+      create_guidance_request_fixture(repo, worker_session, %{create_args | "question" => "Different question"})
 
     assert get_in(conflict_response, ["error", "data", "reason"]) == "idempotency_conflict"
 
@@ -138,7 +138,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     second_worker_session = create_worker_session_for_package(repo, package, "worker-2")
 
     second_response =
-      mcp_tool(repo, second_worker_session, "create_guidance_request", %{
+      create_guidance_request_fixture(repo, second_worker_session, %{
         create_args
         | "question" => "A different worker can reuse the same key inside the same package."
       })
@@ -458,15 +458,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     assert blocker_id == "guidance_request:#{request_id}"
     assert package_id == package.id
 
-    still_blocked_response =
+    worker_closeout_response =
       mcp_tool(repo, worker_session, "mark_ready", %{
         "blocker_closeout" => %{
-          "decision" => "still_active",
+          "decision" => "resolved",
           "blocker_ids" => [blocker_id]
         }
       })
 
-    assert "no_active_blockers" in get_in(still_blocked_response, ["error", "data", "missing"])
+    assert get_in(worker_closeout_response, ["error", "code"]) == -32_602
 
     assert {:error, :unauthenticated} =
              GuidanceRequestService.answer_human_info_needed_for_local_operator(repo, nil, request_id, %{
@@ -543,12 +543,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     assert repo.get!(GuidanceRequest, request_id).status == "open"
   end
 
-  test "worker guidance creation is gated to worker-active lifecycle statuses", %{repo: repo} do
+  test "guidance service creation is gated to worker-active lifecycle statuses", %{repo: repo} do
     for status <- @guidance_eligible_statuses do
       {_package, worker_session} = create_worker_session(repo, "SYMPP-GUIDANCE-ELIGIBLE-#{status}", status: status)
 
       response =
-        mcp_tool(repo, worker_session, "create_guidance_request", %{
+        create_guidance_request_fixture(repo, worker_session, %{
           "summary" => "Question from #{status}",
           "question" => "Can worker guidance be created from #{status}?",
           "context" => "Lifecycle gating should allow worker-active statuses.",
@@ -562,7 +562,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
       {_package, worker_session} = create_worker_session(repo, "SYMPP-GUIDANCE-INELIGIBLE-#{status}", status: status)
 
       response =
-        mcp_tool(repo, worker_session, "create_guidance_request", %{
+        create_guidance_request_fixture(repo, worker_session, %{
           "summary" => "Question from #{status}",
           "question" => "Can worker guidance be created from #{status}?",
           "context" => "Lifecycle gating should deny pre-dispatch, ready, merge, and terminal states.",
@@ -573,7 +573,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     end
   end
 
-  test "exact worker create replay bypasses lifecycle gate without new side effects", %{repo: repo} do
+  test "exact guidance service replay bypasses lifecycle gate without new side effects", %{repo: repo} do
     {package, worker_session} = create_worker_session(repo, "SYMPP-GUIDANCE-REPLAY-AFTER-READY", status: "ci_waiting")
 
     create_args = %{
@@ -583,14 +583,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
       "idempotency_key" => "guidance-replay-after-ready"
     }
 
-    create_response = mcp_tool(repo, worker_session, "create_guidance_request", create_args)
+    create_response = create_guidance_request_fixture(repo, worker_session, create_args)
     request_id = get_in(create_response, ["result", "structuredContent", "guidance_request", "id"])
     assert get_in(create_response, ["result", "structuredContent", "guidance_request", "requested_by"]) == "worker-1"
     created = repo.get!(GuidanceRequest, request_id)
 
     assert {:ok, _package} = WorkPackageRepository.update(repo, package.id, %{"status" => "ready_for_merge"})
 
-    replay_response = mcp_tool(repo, worker_session, "create_guidance_request", create_args)
+    replay_response = create_guidance_request_fixture(repo, worker_session, create_args)
 
     assert get_in(replay_response, ["result", "structuredContent", "guidance_request", "id"]) == request_id
     assert get_in(replay_response, ["result", "structuredContent", "guidance_request", "requested_by"]) == "worker-1"
@@ -604,7 +604,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     assert {:ok, renamed_worker_session} =
              Auth.session_from_grant(repo, updated_grant, proof_hash: worker_session.proof_hash)
 
-    renamed_replay_response = mcp_tool(repo, renamed_worker_session, "create_guidance_request", create_args)
+    renamed_replay_response = create_guidance_request_fixture(repo, renamed_worker_session, create_args)
 
     assert get_in(renamed_replay_response, ["result", "structuredContent", "guidance_request", "id"]) == request_id
     assert get_in(renamed_replay_response, ["result", "structuredContent", "guidance_request", "requested_by"]) == "worker-1"
@@ -620,25 +620,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     assert repo.aggregate(ProgressEvent, :count, :id) == 0
 
     conflict_response =
-      mcp_tool(repo, worker_session, "create_guidance_request", %{create_args | "question" => "Different question"})
+      create_guidance_request_fixture(repo, worker_session, %{create_args | "question" => "Different question"})
 
-    assert get_in(conflict_response, ["error", "data", "reason"]) == "idempotency_conflict"
+    assert get_in(conflict_response, ["error", "data", "reason"]) == "assignment_mismatch"
 
     second_worker_session = create_worker_session_for_package(repo, package, "worker-2")
-    second_worker_response = mcp_tool(repo, second_worker_session, "create_guidance_request", create_args)
+    second_worker_response = create_guidance_request_fixture(repo, second_worker_session, create_args)
 
     assert get_in(second_worker_response, ["error", "data", "reason"]) == "work_package_not_worker_active"
     assert repo.aggregate(GuidanceRequest, :count, :id) == 1
   end
 
-  test "new worker guidance creation rechecks lifecycle inside the insert transaction", %{repo: repo} do
+  test "new guidance service creation rechecks lifecycle inside the insert transaction", %{repo: repo} do
     {package, worker_session} = create_worker_session(repo, "SYMPP-GUIDANCE-CREATE-LIFECYCLE-RACE", status: "ci_waiting")
 
     GuidanceCreateLifecycleRaceRepo.arm(package.id, "ready_for_merge")
 
     response =
       try do
-        mcp_tool(GuidanceCreateLifecycleRaceRepo, worker_session, "create_guidance_request", %{
+        create_guidance_request_fixture(GuidanceCreateLifecycleRaceRepo, worker_session, %{
           "summary" => "Race-sensitive guidance",
           "question" => "Can a stale active status create a guidance request?",
           "context" => "The package leaves the worker-active window before insert.",
@@ -774,9 +774,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     {package, MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)}
   end
 
-  defp expected_guidance_denial_reason(status) when status in ["merged_into_phase", "merged", "closed", "abandoned"],
-    do: "work_package_terminal"
-
   defp expected_guidance_denial_reason(_status), do: "work_package_not_worker_active"
 
   defp create_worker_session_for_package(repo, %WorkPackage{} = package, claimed_by) do
@@ -789,8 +786,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
   end
 
   defp create_guidance_request(repo, worker_session, attrs) do
-    response = mcp_tool(repo, worker_session, "create_guidance_request", attrs)
-    get_in(response, ["result", "structuredContent", "guidance_request", "id"])
+    assert {:ok, guidance_request} =
+             GuidanceRequestService.create_for_assignment(repo, worker_session.assignment, attrs)
+
+    guidance_request.id
+  end
+
+  defp create_guidance_request_fixture(repo, worker_session, attrs) do
+    case GuidanceRequestService.create_for_assignment(repo, worker_session.assignment, attrs) do
+      {:ok, guidance_request} ->
+        payload =
+          guidance_request
+          |> Map.from_struct()
+          |> Map.new(fn {key, value} -> {Atom.to_string(key), value} end)
+
+        %{"result" => %{"structuredContent" => %{"guidance_request" => payload}}}
+
+      {:error, reason} ->
+        %{"error" => %{"data" => %{"reason" => if(is_atom(reason), do: Atom.to_string(reason), else: inspect(reason))}}}
+    end
   end
 
   defp work_package_attrs(overrides) do

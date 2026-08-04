@@ -50,7 +50,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     "append_finding",
     "append_progress",
     "set_status",
-    "report_blocker",
     "request_scope_expansion",
     "attach_branch",
     "attach_pr",
@@ -113,29 +112,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
          {:ok, expected_status} <- required_argument(arguments, "expected_status"),
          {:ok, reason} <- optional_reason(arguments),
          :ok <- reject_ready_status(status),
-         {:ok, blocker_closeout_plan} <- maybe_prepare_work_package_status_blocker_closeout(config.repo, session, status, arguments),
-         {:ok, {work_package, blocker_closeout}} <- set_status_transaction(config.repo, session, expected_status, status, reason, blocker_closeout_plan) do
-      {:ok, ToolResult.tool_result(%{"work_package" => work_package_payload(work_package), "blocker_closeout" => blocker_closeout})}
+         {:ok, blocker_closeout_plan} <- maybe_prepare_work_package_status_blocker_closeout(config.repo, session, status),
+         {:ok, work_package} <- set_status_transaction(config.repo, session, expected_status, status, reason, blocker_closeout_plan) do
+      {:ok, ToolResult.tool_result(%{"work_package" => work_package_payload(work_package)})}
     else
       {:tool_error, reason} -> invalid_params_error("set_status", reason)
       {:error, _code, _message, _data} = error -> error
       {:error, reason} -> worker_error(reason, "set_status")
-    end
-  end
-
-  def call("report_blocker", %Config{} = config, session, arguments) do
-    case optional_blocker_id(arguments) do
-      {:ok, blocker_id} ->
-        append_scoped_progress(config.repo, session, arguments, "report_blocker", %{
-          "type" => "blocker",
-          "source_tool" => "report_blocker",
-          "blocker_id" => blocker_id,
-          "active" => true
-        })
-        |> expose_blocker_id(blocker_id)
-
-      {:error, reason} ->
-        worker_error(reason, "report_blocker")
     end
   end
 
@@ -209,15 +192,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     end
   end
 
-  def call("mark_ready", %Config{} = config, session, arguments) do
+  def call("mark_ready", %Config{} = config, session, _arguments) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          :ok <- require_worker_assignment(session.assignment),
-         {:ok, blocker_closeout_plan} <- ArchitectDeliveryTools.prepare_scoped_blocker_closeout(config.repo, session, [Session.work_package_id(session)], arguments, "mark_ready"),
-         {:ok, {work_package, blocker_closeout, warnings}} <-
+         {:ok, blocker_closeout_plan} <- ArchitectDeliveryTools.prepare_scoped_blocker_closeout(config.repo, session, [Session.work_package_id(session)], %{}, "mark_ready"),
+         {:ok, {work_package, _blocker_closeout, warnings}} <-
            ReviewReadiness.mark_ready(config.repo, session, blocker_closeout_plan, &ArchitectDeliveryTools.apply_prepared_blocker_closeout/3) do
       {:ok,
        ToolResult.tool_result(
-         %{"work_package" => work_package_payload(work_package), "ready" => true, "blocker_closeout" => blocker_closeout}
+         %{"work_package" => work_package_payload(work_package), "ready" => true}
          |> ReviewReadiness.maybe_put_readiness_warnings(warnings)
        )}
     else
@@ -289,18 +272,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp normalize_update_task_plan_result({:error, reason}), do: worker_error(reason, "update_task_plan")
   defp normalize_update_task_plan_result(result), do: result
 
-  defp maybe_prepare_work_package_status_blocker_closeout(repo, %Session{} = session, status, arguments)
+  defp maybe_prepare_work_package_status_blocker_closeout(repo, %Session{} = session, status)
        when status in @terminal_work_package_statuses do
     ArchitectDeliveryTools.prepare_scoped_blocker_closeout(
       repo,
       session,
       [Session.work_package_id(session)],
-      arguments,
+      %{},
       "set_status"
     )
   end
 
-  defp maybe_prepare_work_package_status_blocker_closeout(_repo, %Session{}, _status, _arguments), do: {:ok, :not_needed}
+  defp maybe_prepare_work_package_status_blocker_closeout(_repo, %Session{}, _status), do: {:ok, :not_needed}
 
   defp append_pr_metadata(repo, %Session{} = session, arguments, tool, status, payload) do
     with {:ok, idempotency_key, attrs} <- ProgressEvents.metadata_attrs(session, arguments, tool, status, payload),
@@ -383,9 +366,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
              :ok <- reject_architect_controlled_child(state.work_package, status),
              {:ok, _event} <- append_status_reason_event(repo, session, expected_status, status, reason),
              {:ok, work_package} <- LifecycleService.transition(repo, state.work_package, status, actor(session)),
-             {:ok, blocker_closeout} <-
+             {:ok, _blocker_closeout} <-
                ArchitectDeliveryTools.apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan) do
-          {:ok, {work_package, blocker_closeout}}
+          {:ok, work_package}
         end
       end)
 
@@ -671,7 +654,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp require_assignment_introspection(%{grant_role: grant_role}) when grant_role in ["worker", "architect"], do: :ok
   defp require_assignment_introspection(_assignment), do: {:error, :worker_grant_required}
 
-  defp progress_tool_policy("report_blocker"), do: {:blocker_report, :blocker}
   defp progress_tool_policy("set_status"), do: {:work_package_update, :work_package}
   defp progress_tool_policy(_tool), do: {:progress_append, :progress}
 
@@ -733,25 +715,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     end
   end
 
-  defp optional_blocker_id(arguments) do
-    default = Map.get(arguments, "idempotency_key")
-
-    case Map.get(arguments, "blocker_id") do
-      value when is_binary(value) -> {:ok, if(String.trim(value) == "", do: normalize_blocker_id(default), else: String.trim(value))}
-      nil -> {:ok, normalize_blocker_id(default)}
-      _value -> {:error, :invalid_blocker_id}
-    end
-  end
-
-  defp normalize_blocker_id(value) when is_binary(value), do: String.trim(value)
-  defp normalize_blocker_id(value), do: value
-
-  defp expose_blocker_id({:ok, %{"structuredContent" => structured_content}}, blocker_id) do
-    {:ok, structured_content |> Map.put("blocker_id", blocker_id) |> ToolResult.agent_tool_result()}
-  end
-
-  defp expose_blocker_id(result, _blocker_id), do: result
-
   defp normalize_optional_value(value) when is_binary(value) do
     case String.trim(value) do
       "" -> nil
@@ -790,19 +753,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
        "tool" => tool,
        "reason" => "blocker_closeout_required",
        "reason_code" => "blocker_closeout_required",
-       "message" => "Active blockers exist in this finish scope. Pass blocker_closeout with decision resolved or still_active.",
+       "message" => "Active blockers must be resolved by the architect or trusted local operator before this finish transition.",
        "active_blockers" => blockers
-     }}
-  end
-
-  defp invalid_params_error(tool, {:blocker_closeout_scope_mismatch, active_ids, requested_ids}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "blocker_closeout_scope_mismatch",
-       "reason_code" => "blocker_closeout_scope_mismatch",
-       "active_blocker_ids" => active_ids,
-       "requested_blocker_ids" => requested_ids
      }}
   end
 

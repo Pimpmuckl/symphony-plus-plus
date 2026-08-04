@@ -30,9 +30,9 @@ Before coding:
 5. Update the virtual task plan with `update_task_plan(patch, expected_version)`.
 6. Stop and ask the architecture agent if dependency evidence, permission
    grants, or source context are missing.
-7. If you need guidance, make the request human-answerable: state the blocked
-   decision, evidence checked, impact, and candidate options with pros/cons when
-   you can supply them.
+7. If you need guidance, ask the parent or architect through ordinary agent
+   messaging. State the decision, evidence checked, impact, and candidate
+   options with pros/cons when you can supply them.
 
 During coding:
 1. Keep changes tightly scoped to this package.
@@ -42,11 +42,11 @@ During coding:
 2. Append meaningful discoveries with `append_finding(finding, idempotency_key)`.
 3. Append implementation and validation events with
    `append_progress(event, idempotency_key)`.
-4. Use `report_blocker(summary, idempotency_key, blocker_id?)` and
-   `resolve_blocker(blocker_id, resolution, summary, idempotency_key)` for blockers.
-5. Use the worker-scoped MCP comment tools `add_comment`, `list_comments`, and
+4. Use the worker-scoped MCP comment tools `add_comment`, `list_comments`, and
    `resolve_comment` when package-scoped implementation comments should stay
    visible in the cockpit.
+5. Use comments for ordinary parent-agent coordination. Workers do not create
+   or resolve durable human blockers or guidance.
 6. Use `request_scope_expansion(summary, idempotency_key, payload)` instead of
    silently expanding scope.
 7. Do not create local planning files as the WorkPackage source of truth.
@@ -74,9 +74,9 @@ Before ready:
    exact head and call `complete_review(reference?, note?)`.
 7. Call `mark_ready()` only after acceptance criteria, tests, required review,
    progress, findings, branch/PR evidence, and blockers are settled. Do not add
-   lifecycle calls only to restate existing evidence. If active blockers must
-   be resolved or kept active during the finish transition, pass
-   `blocker_closeout`.
+   lifecycle calls only to restate existing evidence. Active blockers must be
+   resolved by the architect or trusted local operator before worker finish
+   transitions.
 
 Final output:
 - PR URL and final head SHA.

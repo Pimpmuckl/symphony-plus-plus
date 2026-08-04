@@ -40,15 +40,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
 
     assert get_in(block_response, ["result", "structuredContent", "work_package", "status"]) == "blocked"
 
-    blocker_response =
-      mcp_tool(repo, worker_session, "report_blocker", %{
-        "summary" => "Phase merge conflict",
-        "body" => "Architect approval happened, but the child needs worker follow-up before merge.",
-        "idempotency_key" => "p7-003-post-approval-blocker"
-      })
+    blocker_id = "p7-003-post-approval-blocker"
 
-    blocker_payload = response_progress_payload(repo, blocker_response)
-    assert blocker_payload["active"] == true
+    assert {:ok, _blocker} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: child_id,
+               summary: "Phase merge conflict",
+               body: "Architect approval happened, but the child needs follow-up before merge.",
+               status: "blocked",
+               payload: %{"type" => "blocker", "source_tool" => "report_blocker", "blocker_id" => blocker_id, "active" => true}
+             })
 
     renewed_architect_session = renew_phase_architect_session(repo, anchor, architect_capabilities)
 
@@ -64,17 +65,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
     assert get_in(approval_replay_response, ["result", "structuredContent", "approval", "id"]) ==
              get_in(approval_response, ["result", "structuredContent", "approval", "id"])
 
-    blocker_id = blocker_payload["blocker_id"]
-
-    resolve_response =
-      mcp_tool(repo, worker_session, "resolve_blocker", %{
-        "blocker_id" => blocker_id,
-        "resolution" => "merge blocker resolved",
-        "summary" => "Phase merge conflict resolved",
-        "idempotency_key" => "p7-003-post-approval-blocker-resolved"
-      })
-
-    assert response_progress_payload(repo, resolve_response)["active"] == false
+    assert {:ok, _resolution} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: child_id,
+               summary: "Phase merge conflict resolved",
+               status: "resolved",
+               payload: %{
+                 "type" => "blocker",
+                 "source_tool" => "resolve_blocker",
+                 "blocker_id" => blocker_id,
+                 "resolution" => "merge blocker resolved",
+                 "active" => false
+               }
+             })
 
     [
       {"blocked", "implementing"},

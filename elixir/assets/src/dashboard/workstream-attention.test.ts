@@ -112,25 +112,47 @@ describe("WorkRequest attention badge targets", () => {
     });
   });
 
-  it("deduplicates linked status-only blocker projections", () => {
-    const slice = requestSlice("slice-blocked", "blocked", "wp-blocked");
-    const detail = requestDetail([slice]);
+  it("keeps top-bar attention limited to explicit human-action records", () => {
+    const blocked = requestSlice("slice-blocked", "blocked", "wp-blocked");
+    const reviewFailed = requestSlice("slice-review", "reviewing", "wp-review");
+    reviewFailed.review_signal = { status: "failed" };
+    const ciFailed = requestSlice("slice-ci", "ci_waiting", "wp-ci");
+    ciFailed.pr_signal = { status: "open", number: 42, url: "https://example.test/pull/42", checks: { status: "failing" } };
+    const guidanceStatus = requestSlice("slice-guidance", "human_info_needed", "wp-guidance");
+    const detail = requestDetail([blocked, reviewFailed, ciFailed, guidanceStatus]);
     const pkg: WorkPackageCard = { id: "wp-blocked", status: "blocked", active_blocker_count: 1 };
+    const edge: ActiveBlockingEdge = {
+      id: "edge-explicit",
+      blocker_id: "blocker-explicit",
+      from: { kind: "work_package", id: "wp-source" },
+      to: { kind: "work_package", id: pkg.id },
+    };
     const blocker: BlockerItem = {
-      id: pkg.id,
-      title: "Blocked package",
+      id: edge.id,
+      title: "Explicit blocker",
       repo: "fixture/repo",
       blockerCount: 1,
-      detail: "No blocker record is attached.",
-      selection: { kind: "slice", detail, slice, pkg },
+      detail: "A human can act on this blocker.",
+      selection: { kind: "blocker", blocker: edge, detail, slice: blocked, pkg },
+    };
+    const guidance: GuidanceItem = {
+      source: "guidance",
+      id: "guidance-explicit",
+      repo: "fixture/repo",
+      repoKey: "fixture/repo",
+      title: "Choose a path",
+      packageId: guidanceStatus.id,
+      detail: "A human decision is required.",
+      guidance: { id: "guidance-explicit", work_package_id: guidanceStatus.id },
     };
 
-    expect(dashboardAttentionItems([detail], new Map([[pkg.id, pkg]]), [], [], [blocker])).toMatchObject([
-      { kind: "status", key: "status:blocked:package:wp-blocked" },
-    ]);
+    const items = dashboardAttentionItems([detail], new Map([[pkg.id, pkg]]), [edge], [guidance], [blocker]);
+
+    expect(items.map((item) => item.kind).sort()).toEqual(["blocker", "guidance"]);
+    expect(items.map((item) => item.key).sort()).toEqual(["blocker:edge-explicit", "guidance:guidance:guidance-explicit"]);
   });
 
-  it("keeps the pre-run Clarifying state out of top-bar human guidance", () => {
+  it("keeps generic lifecycle states out of top-bar human guidance", () => {
     const clarifying = requestDetail([]);
     clarifying.work_request = {
       ...clarifying.work_request,
@@ -149,10 +171,7 @@ describe("WorkRequest attention badge targets", () => {
 
     const items = dashboardAttentionItems([clarifying, readyForClarification, humanInfo, completed], new Map(), [], [], []);
 
-    expect(items.map((item) => item.label)).toContain("Human Info Needed");
-    expect(items.map((item) => item.label)).not.toContain("Clarifying");
-    expect(items.some((item) => item.kind === "status" && item.selection.detail?.work_request.id === "wr-ready-for-clarification")).toBe(false);
-    expect(items.some((item) => item.kind === "status" && item.selection.detail?.work_request.id === "wr-completed")).toBe(false);
+    expect(items).toEqual([]);
   });
 
   it("drops stale projected attention attached to a completed WorkRequest", () => {
