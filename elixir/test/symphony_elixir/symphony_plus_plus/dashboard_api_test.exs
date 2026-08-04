@@ -50,6 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSessionEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
@@ -4663,7 +4664,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert get_in(slice, ["operational_state", "raw_status"]) == "ready_for_worker"
       assert get_in(slice, ["operational_state", "work_package_status"]) == "ready_for_worker"
       assert get_in(slice, ["delivery", "outcome"]) == "pr_merged"
-      assert "work_package_status_stale_after_delivery" in slice["attention_reason_codes"]
+      assert slice["attention_reason_codes"] == []
+      assert get_in(slice, ["operational_state", "attention_items"]) == []
     end)
   end
 
@@ -5250,6 +5252,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       repeated_payload = local_operator_dashboard_payload()
       assert Enum.map(repeated_payload["active_blocking_edges"], & &1["id"]) == Enum.map(edges, & &1["id"])
+
+      assert {:ok, _outbound_blocker} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: unlinked_package.id,
+                 summary: "Linked package is blocked",
+                 status: "blocked",
+                 idempotency_key: "blocker-unlinked-owner",
+                 payload: %{
+                   type: "blocker",
+                   source_tool: "report_blocker",
+                   blocker_id: "blocker-unlinked-owner",
+                   active: true,
+                   blocked_by: %{kind: "work_package", id: unlinked_package.id},
+                   blocked_item: %{kind: "work_package", id: linked_package.id}
+                 }
+               })
+
+      assert {:ok, %{active_blocking_edges: scoped_edges}} =
+               Dashboard.operator_work_package_signals(repo, [linked_package.id], [])
+
+      assert Enum.any?(scoped_edges, fn edge ->
+               edge.blocker_id == "blocker-unlinked-owner" and
+                 edge.work_package_id == unlinked_package.id and
+                 edge.to == %{kind: "work_package", id: linked_package.id}
+             end)
     end)
   end
 
@@ -6463,6 +6490,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", work_package.id)
 
+      append_blocker_event!(repo, work_package.id, "local-no-pr-closeout", true, [])
+
       payload =
         local_operator_csrf_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/state", %{
@@ -6478,6 +6507,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert {:ok, persisted_package} = WorkPackageRepository.get(repo, work_package.id)
       assert persisted_package.status == "closed"
+      refute WorkPackageActivity.context(repo, work_package.id).blocker_state.active?
 
       refute Map.has_key?(payload, "dashboard")
 
@@ -6760,7 +6790,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert {:ok, persisted_guidance} = GuidanceRequestRepository.get(repo, guidance_request.id)
       assert persisted_guidance.status == "answered"
-      assert persisted_guidance.answered_by == "work-request-completion"
+      assert persisted_guidance.answered_by == "terminal-cleanup"
 
       assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
       refute Enum.any?(BlockerProjection.blockers(progress_events), & &1.active)

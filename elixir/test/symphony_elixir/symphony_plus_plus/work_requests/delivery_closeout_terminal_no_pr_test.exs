@@ -12,6 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
@@ -44,7 +45,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
     :ok
   end
 
-  test "active blockers still prevent normal no-PR closeout", %{repo: repo} do
+  test "normal no-PR closeout resolves active blockers", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "reviewing")
 
     assert {:ok, _blocker} =
@@ -56,7 +57,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
                payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "closeout", active: true}
              })
 
-    assert {:error, :active_blocker} =
+    assert {:ok, delivery} =
              Service.record_work_package_delivery(
                repo,
                work_request.id,
@@ -68,11 +69,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
                })
              )
 
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-    assert repo.get!(WorkPackage, linked_package.id).status == "reviewing"
+    assert delivery.outcome == "completed_no_pr"
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
+    assert repo.get!(WorkPackage, linked_package.id).status == "closed"
+    refute WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
   end
 
-  test "superseded closeout closes stale package while preserving active blocker evidence", %{repo: repo} do
+  test "superseded closeout closes stale package and resolves active blockers", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "implementing")
     successor_slice = create_work_package!(repo, work_request, id: "WRS-DELIVERY-BLOCKED-SUCCESSOR")
 
@@ -103,18 +106,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
 
     events = repo.all(ProgressEvent)
     assert Enum.find(events, &(&1.id == blocker_event.id)).payload["active"] == true
+    assert Enum.any?(events, &(get_in(&1.payload, ["source_tool"]) == "resolve_blocker"))
     closeout_event = Enum.find(events, &(&1.payload["type"] == "work_request_delivery_closeout"))
-    assert closeout_event.summary =~ "active blockers preserved"
+    assert closeout_event.summary =~ "active blockers cleared"
     assert closeout_event.payload["active_blocker_ids"] == ["spec-md-review-scope"]
     assert closeout_event.payload["blocker_reason_codes"] == ["active_blocker"]
 
     assert {:ok, %{counts: %{"superseded" => 1}, work_packages: [slice, _successor]}} = DeliveryBoard.project(repo, work_request.id)
     assert slice.operational_state.key == "superseded"
     assert slice.work_package.raw_status == "closed"
-    assert "work_package_blocked_after_delivery" in slice.attention_reason_codes
+    assert slice.attention_reason_codes == []
   end
 
-  test "abandoned no-code closeout closes cleaned package while preserving active blocker evidence", %{repo: repo} do
+  test "abandoned no-code closeout closes cleaned package and resolves active blockers", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_worker")
 
     assert {:ok, _blocker_event} =
@@ -145,8 +149,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
       repo.all(ProgressEvent)
       |> Enum.find(&(&1.payload["type"] == "work_request_delivery_closeout"))
 
-    assert closeout_event.summary =~ "active blockers preserved"
+    assert closeout_event.summary =~ "active blockers cleared"
     assert closeout_event.payload["active_blocker_ids"] == ["worker-dependency"]
+    refute WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
   end
 
   test "superseded closeout retires active worker authority", %{repo: repo} do

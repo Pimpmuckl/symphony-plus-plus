@@ -236,8 +236,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
     assert merged_slice.operational_state.work_package_status == "ready_for_worker"
     assert merged_slice.operational_state.has_started == true
     assert merged_slice.operational_state.is_stale == true
-    assert Enum.any?(merged_slice.operational_state.attention_items, &(&1.key == "ready_for_worker_with_activity"))
-    assert "work_package_status_stale_after_delivery" in merged_slice.attention_reason_codes
+    assert merged_slice.operational_state.attention_items == []
+    assert merged_slice.attention_reason_codes == []
 
     assert Map.fetch!(work_packages_by_id, "WRS-DASH-SUPERSEDED").operational_state.key == "superseded"
     assert get_in(Map.fetch!(work_packages_by_id, "WRS-DASH-SUPERSEDED"), [:successor, "work_package", "id"]) == successor_package.id

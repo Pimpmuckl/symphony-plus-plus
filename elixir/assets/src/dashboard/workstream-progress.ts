@@ -1,6 +1,7 @@
 import type { ActiveBlockingEdge, WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
 import type { ProductTreeCompletionMark, ProductTreeNode } from "@/types/product-tree";
 import { isFinishedBoardStatus, sliceLane } from "@/lib/operational-state";
+import { terminalWorkPackageIds, workRequestIsTerminal } from "./workstream-row-state";
 
 export type ActiveBlockerEntityCounts = {
   requests: Map<string, number>;
@@ -55,14 +56,20 @@ export function productTreeCounts(detail: WorkRequestDetail, activeBlockerCount:
   };
 }
 
-export function activeBlockerEntityCounts(edges: ActiveBlockingEdge[], requestDetails: WorkRequestDetail[] = []): ActiveBlockerEntityCounts {
+export function activeBlockerEntityCounts(
+  edges: ActiveBlockingEdge[],
+  requestDetails: WorkRequestDetail[] = [],
+  packageById = new Map<string, WorkPackageCard>(),
+): ActiveBlockerEntityCounts {
   const requestIndex = blockerRequestIndex(requestDetails);
-  const blockerKeys = edges.reduce<ActiveBlockerEntityKeySets>((keys, edge) => {
+  const terminalPackageIds = terminalWorkPackageIds(requestDetails, packageById);
+  const terminalRequestIds = new Set(requestDetails.filter(workRequestIsTerminal).map((detail) => detail.work_request.id));
+  const blockerKeys = edges.filter((edge) => !edgeTargetsTerminalPackage(edge, terminalPackageIds)).reduce<ActiveBlockerEntityKeySets>((keys, edge) => {
     const blockerKey = activeBlockerKey(edge);
 
-    addBlockerKeys(keys.requests, activeBlockerRequestIds(edge, requestIndex), blockerKey);
-    addBlockerKeys(keys.slices, activeBlockerSliceIds(edge, requestIndex), blockerKey);
-    addBlockerKeys(keys.packages, activeBlockerPackageIds(edge), blockerKey);
+    addBlockerKeys(keys.requests, [...activeBlockerRequestIds(edge, requestIndex)].filter((id) => !terminalRequestIds.has(id)), blockerKey);
+    addBlockerKeys(keys.slices, [...activeBlockerSliceIds(edge, requestIndex)].filter((id) => !terminalPackageIds.has(id)), blockerKey);
+    addBlockerKeys(keys.packages, [...activeBlockerPackageIds(edge)].filter((id) => !terminalPackageIds.has(id)), blockerKey);
 
     return keys;
   }, { requests: new Map(), slices: new Map(), packages: new Map() });
@@ -73,6 +80,11 @@ export function activeBlockerEntityCounts(edges: ActiveBlockingEdge[], requestDe
     packages: blockerKeyCounts(blockerKeys.packages),
     sliceBlockerKeys: blockerKeys.slices,
   };
+}
+
+function edgeTargetsTerminalPackage(edge: ActiveBlockingEdge, terminalPackageIds: Set<string>) {
+  const targetId = edge.to.kind === "work_package" && edge.to.id ? edge.to.id : edge.work_package_id;
+  return Boolean(targetId && terminalPackageIds.has(targetId));
 }
 
 export function activeBlockerEdgesForRequest(edges: ActiveBlockingEdge[], detail: WorkRequestDetail) {

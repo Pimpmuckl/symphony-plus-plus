@@ -501,9 +501,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     end
   end
 
-  defp delivery_closeout_opts(attrs) when is_map(attrs) do
-    [allow_active_blockers?: map_value(attrs, :allow_active_blocker_closeout) == true]
-  end
+  defp delivery_closeout_opts(_attrs), do: [allow_active_blockers?: true]
 
   defp require_abandonable_no_code_status(_repo, %{status: status}, _context)
        when status in @abandonable_no_code_statuses, do: :ok
@@ -846,7 +844,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp closeout_progress_summary(%WorkPackageDelivery{} = delivery, closeout_context) do
     if closeout_context.active_blocker_ids != [] do
-      "Recorded WorkRequest delivery closeout: #{delivery.outcome} (active blockers preserved)"
+      "Recorded WorkRequest delivery closeout: #{delivery.outcome} (active blockers cleared)"
     else
       "Recorded WorkRequest delivery closeout: #{delivery.outcome}"
     end

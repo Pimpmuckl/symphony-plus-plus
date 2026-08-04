@@ -379,8 +379,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           ),
         "idempotency_key" => described_string_schema("Stable caller-provided key for replay. Reusing the same key and evidence returns the existing delivery; conflicting evidence is rejected."),
         "recorded_by" => described_string_schema("Optional closeout actor. Defaults to the claimed architect identity."),
-        "evidence" => work_package_delivery_evidence_schema(),
-        "blocker_closeout" => blocker_closeout_schema()
+        "evidence" => work_package_delivery_evidence_schema()
       },
       ["work_package_id", "outcome", "idempotency_key", "evidence"]
     )

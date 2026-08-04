@@ -5,12 +5,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.WorkKey
+  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
+  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Repository, as: GuidanceRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.WorkPackageFactory
 
   setup_all do
@@ -25,6 +30,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
   end
 
   setup %{repo: repo} do
+    repo.delete_all(GuidanceRequest)
+    repo.delete_all(ProgressEvent)
     repo.delete_all(AccessGrant)
     repo.delete_all(WorkPackage)
     :ok
@@ -223,6 +230,73 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert {:error, :invalid_transition} = Service.transition(repo, package.id, "closed", architect_actor!(repo, package))
   end
 
+  test "terminal transition clears only the package's human-action residue and replays idempotently", %{repo: repo} do
+    assert {:ok, package} =
+             Repository.create(repo, WorkPackageFactory.attrs(kind: "hotfix", status: "ready_for_merge"))
+
+    assert {:ok, sibling} = Repository.create(repo, WorkPackageFactory.attrs(kind: "hotfix", status: "reviewing"))
+    actor = architect_actor!(repo, package)
+
+    assert {:ok, guidance} =
+             GuidanceRequestRepository.create(repo, %{
+               work_package_id: package.id,
+               requester_grant_id: actor.grant_id,
+               requested_by: "architect-1",
+               idempotency_key: "terminal-guidance",
+               summary: "Need a decision",
+               question: "Which closeout path should be used?",
+               context: "Terminal cleanup regression"
+             })
+
+    append_active_blocker!(repo, package.id, "terminal-blocker")
+    append_active_blocker!(repo, sibling.id, "nonterminal-blocker")
+
+    assert {:ok, _targeted_blocker} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: sibling.id,
+               summary: "Terminal package is blocked",
+               status: "blocked",
+               idempotency_key: "report:terminal-target-blocker",
+               payload: %{
+                 type: "blocker",
+                 source_tool: "report_blocker",
+                 blocker_id: "terminal-target-blocker",
+                 active: true,
+                 blocked_item: %{kind: "work_package", id: package.id}
+               }
+             })
+
+    assert {:ok, _outbound_blocker} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: package.id,
+               summary: "Sibling package is blocked",
+               status: "blocked",
+               idempotency_key: "report:sibling-target-blocker",
+               payload: %{
+                 type: "blocker",
+                 source_tool: "report_blocker",
+                 blocker_id: "sibling-target-blocker",
+                 active: true,
+                 blocked_item: %{kind: "work_package", id: sibling.id}
+               }
+             })
+
+    assert {:ok, terminal} = Service.transition(repo, package.id, "merged", actor)
+    assert repo.get!(GuidanceRequest, guidance.id).status == "answered"
+
+    terminal_blocker_state = WorkPackageActivity.context(repo, package.id).blocker_state
+    assert terminal_blocker_state.active?
+    assert terminal_blocker_state.active_ids == ["sibling-target-blocker"]
+
+    sibling_blocker_state = WorkPackageActivity.context(repo, sibling.id).blocker_state
+    assert sibling_blocker_state.active?
+    assert sibling_blocker_state.active_ids == ["nonterminal-blocker"]
+
+    terminal_event_count = repo.aggregate(ProgressEvent, :count, :id)
+    assert :ok = Repository.clear_terminal_attention(repo, terminal)
+    assert repo.aggregate(ProgressEvent, :count, :id) == terminal_event_count
+  end
+
   test "transition rejects phase child corrupted to worker package merged status", %{repo: repo} do
     package = insert_raw_package!(repo, kind: "phase_child", status: "merged", parent_id: "phase-1")
 
@@ -407,6 +481,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
 
     Map.from_struct(assignment)
+  end
+
+  defp append_active_blocker!(repo, work_package_id, blocker_id) do
+    assert {:ok, _event} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: work_package_id,
+               summary: "Blocked by #{blocker_id}",
+               status: "blocked",
+               idempotency_key: "report:#{blocker_id}",
+               payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: blocker_id, active: true}
+             })
   end
 
   defp architect_actor!(repo, package) do

@@ -847,21 +847,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     {key, status_label(key), "neutral", "Package status: #{key}.", []}
   end
 
-  defp terminal_delivery_attention_codes(%WorkPackageDelivery{} = delivery, work_package) do
-    [
-      if(work_package && active_blocker?(work_package), do: "work_package_blocked_after_delivery"),
-      if(work_package && active_runtime?(work_package), do: "work_package_active_after_delivery"),
-      if(is_map(work_package) and not package_reconciled_with_delivery?(work_package.raw_status, delivery.outcome),
-        do: "work_package_status_stale_after_delivery"
-      )
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
-  end
+  defp terminal_delivery_attention_codes(%WorkPackageDelivery{}, :hidden), do: []
 
-  defp package_reconciled_with_delivery?(status, outcome) do
-    is_nil(WorkPackageDelivery.terminal_status_for_outcome(outcome)) or
-      WorkPackageDelivery.terminal_status_matches_outcome?(status, outcome)
+  defp terminal_delivery_attention_codes(%WorkPackageDelivery{}, work_package) do
+    if active_runtime?(work_package), do: ["work_package_active_after_delivery"], else: []
   end
 
   defp state(key, label, tone, reason, raw_status, delivery_outcome, work_package, attention_reason_codes) do
@@ -893,11 +882,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     }
   end
 
-  defp active_blocker?(work_package) when is_map(work_package), do: get_in(work_package, [:blocker_state, :active?]) == true
-  defp active_blocker?(_work_package), do: false
+  defp active_blocker?(work_package), do: get_in(work_package, [:blocker_state, :active?]) == true
 
-  defp active_runtime?(work_package) when is_map(work_package), do: get_in(work_package, [:runtime_state, :active?]) == true
-  defp active_runtime?(_work_package), do: false
+  defp active_runtime?(work_package), do: get_in(work_package, [:runtime_state, :active?]) == true
 
   defp terminal_package_status?(status), do: status in @terminal_package_statuses
 

@@ -25,11 +25,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
   alias SymphonyElixir.SymphonyPlusPlus.CreateWork
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.Planning.{Artifact, Finding, PlanNode, ProgressEvent}
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
@@ -219,8 +221,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     assert {:ok, %{work_packages: [first, second]}} =
              Repository.slice_work_request(repo, work_request.id, [first_attrs, second_attrs])
 
+    assert {:ok, _blocker} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: first.id,
+               summary: "Skip this blocked package",
+               status: "blocked",
+               idempotency_key: "skip-package-blocker",
+               payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "skip-blocker", active: true}
+             })
+
     assert {:ok, skipped} = Repository.skip_work_package(repo, work_request.id, first.id, "planned")
     assert skipped.status == "skipped"
+    refute WorkPackageActivity.context(repo, first.id).blocker_state.active?
     assert {:error, :stale_status} = Repository.skip_work_package(repo, work_request.id, first.id, "planned")
     assert {:error, :last_active_work_package} = Repository.skip_work_package(repo, work_request.id, second.id, "planned")
     assert {:ok, %{status: "planned"}} = WorkPackageRepository.get(repo, second.id)
