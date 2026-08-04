@@ -301,17 +301,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
     end
   end
 
-  @spec terminal_delivery?(repo(), String.t()) :: boolean()
-  def terminal_delivery?(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
-    not is_nil(
-      repo.one(
-        from(delivery in WorkPackageDelivery,
-          where: delivery.work_package_id == ^work_package_id,
-          select: 1,
-          limit: 1
-        )
-      )
-    )
+  @spec work_package_authority_state(repo(), String.t()) ::
+          {:ok, %{status: String.t(), delivered?: boolean()}} | {:error, :not_found}
+  def work_package_authority_state(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
+    case repo.one(
+           from(work_package in WorkPackage,
+             left_join: delivery in WorkPackageDelivery,
+             on: delivery.work_package_id == work_package.id,
+             where: work_package.id == ^work_package_id,
+             select: %{status: work_package.status, delivered?: not is_nil(delivery.id)},
+             limit: 1
+           )
+         ) do
+      nil -> {:error, :not_found}
+      state -> {:ok, state}
+    end
   end
 
   @spec validate_phase(repo(), String.t()) :: :ok | {:error, error()}
@@ -420,9 +424,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   defp terminal_work_package?(_repo, _work_package_id, []), do: false
 
   defp terminal_work_package?(repo, work_package_id, terminal_statuses) do
-    case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, %{status: status}} -> status in terminal_statuses or terminal_delivery?(repo, work_package_id)
-      {:error, _reason} -> false
+    case work_package_authority_state(repo, work_package_id) do
+      {:ok, %{status: status, delivered?: delivered?}} -> delivered? or status in terminal_statuses
+      {:error, :not_found} -> false
     end
   end
 

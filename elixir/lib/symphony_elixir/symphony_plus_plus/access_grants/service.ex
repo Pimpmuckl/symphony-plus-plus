@@ -208,15 +208,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
   def require_live_package_authority(_repo, %AccessGrant{}), do: {:error, :missing_work_package_id}
 
   defp require_claimable_worker_package(repo, work_package_id) do
-    case WorkPackageRepository.get(repo, work_package_id) do
+    case Repository.work_package_authority_state(repo, work_package_id) do
+      {:ok, %{delivered?: true}} ->
+        {:error, :work_package_terminal}
+
       {:ok, %{status: status}} when status in @pre_dispatch_work_package_statuses ->
         {:error, :work_package_not_dispatched}
 
       {:ok, %{status: status}} when status in @terminal_work_package_statuses ->
         {:error, :work_package_terminal}
 
-      {:ok, _work_package} ->
-        if Repository.terminal_delivery?(repo, work_package_id), do: {:error, :work_package_terminal}, else: :ok
+      {:ok, _state} ->
+        :ok
 
       {:error, reason} ->
         {:error, reason}
