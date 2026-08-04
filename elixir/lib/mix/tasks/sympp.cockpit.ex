@@ -199,6 +199,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
       stop_owned_endpoint(Process.delete(:sympp_cockpit_endpoint_pid))
       stop_owned_endpoint(Process.delete(:sympp_cockpit_repo_pid))
       stop_owned_processes(Process.delete(:sympp_cockpit_pubsub_pids))
+      stop_owned_endpoint(Process.delete(:sympp_cockpit_task_supervisor_pid))
     end
   end
 
@@ -348,8 +349,29 @@ defmodule Mix.Tasks.Sympp.Cockpit do
          {:ok, _started} <- Application.ensure_all_started(:phoenix_live_view),
          {:ok, _started} <- Application.ensure_all_started(:bandit),
          {:ok, _started} <- Application.ensure_all_started(:ecto_sql),
-         {:ok, _started} <- ensure_pubsub_started() do
+         {:ok, _started} <- ensure_pubsub_started(),
+         {:ok, _started} <- ensure_task_supervisor_started() do
       {:ok, []}
+    end
+  end
+
+  defp ensure_task_supervisor_started do
+    case Process.whereis(SymphonyElixir.TaskSupervisor) do
+      pid when is_pid(pid) ->
+        {:ok, []}
+
+      nil ->
+        case Task.Supervisor.start_link(name: SymphonyElixir.TaskSupervisor) do
+          {:ok, pid} ->
+            Process.put(:sympp_cockpit_task_supervisor_pid, pid)
+            {:ok, [Task.Supervisor]}
+
+          {:error, {:already_started, _pid}} ->
+            {:ok, []}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 

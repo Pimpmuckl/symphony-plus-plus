@@ -413,6 +413,38 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
     end
   end
 
+  test "starts and stops only its own task supervisor" do
+    database_path = WorkPackageFactory.database_path()
+    application_supervisor = Process.whereis(SymphonyElixir.TaskSupervisor)
+
+    {child_id, ^application_supervisor, _type, _modules} =
+      Enum.find(Supervisor.which_children(SymphonyElixir.Supervisor), fn {_id, pid, _type, _modules} ->
+        pid == application_supervisor
+      end)
+
+    try do
+      assert is_pid(application_supervisor)
+      assert {:ok, opts} = CockpitTask.parse_args_for_test(["--database", database_path, "--port", "0"])
+
+      CockpitTask.run_cockpit_for_test(opts, fn ->
+        assert Process.whereis(SymphonyElixir.TaskSupervisor) == application_supervisor
+      end)
+
+      assert Process.whereis(SymphonyElixir.TaskSupervisor) == application_supervisor
+      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, child_id)
+      refute Process.whereis(SymphonyElixir.TaskSupervisor)
+
+      CockpitTask.run_cockpit_for_test(opts, fn ->
+        assert is_pid(Process.whereis(SymphonyElixir.TaskSupervisor))
+      end)
+
+      refute Process.whereis(SymphonyElixir.TaskSupervisor)
+    after
+      Supervisor.restart_child(SymphonyElixir.Supervisor, child_id)
+      File.rm(database_path)
+    end
+  end
+
   defp wait_for_bound_port do
     Enum.reduce_while(1..500, nil, fn _attempt, _port ->
       case SymphonyElixir.HttpServer.bound_port() do
