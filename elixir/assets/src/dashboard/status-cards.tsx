@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { DashboardConnectionIssue, isLocalOperatorAuthRequiredMessage } from "./runtime";
+import { DashboardConnectionIssue } from "./runtime";
 
 export function LiveLedgerBadge({
   error,
@@ -12,10 +12,9 @@ export function LiveLedgerBadge({
   databasePath?: string | null;
 }) {
   const reconnecting = Boolean(connectionIssue && !error);
-  const authRequired = isLocalOperatorAuthRequiredMessage(error);
-  const label = authRequired ? "Auth required" : error ? "API unavailable" : reconnecting ? "Reconnecting..." : "Live ledger";
+  const label = error ? "API unavailable" : reconnecting ? "Reconnecting..." : "Live ledger";
   const variant = error ? "danger" : reconnecting ? "warning" : "success";
-  const heading = authRequired ? "Local operator" : error || reconnecting ? "Status" : "Database";
+  const heading = error || reconnecting ? "Status" : "Database";
   const tooltip = error
     ? error
     : reconnecting

@@ -509,7 +509,7 @@ defmodule SymphonyElixirWeb.SymppDetailLive do
           x_headers: get_connect_info(socket, :x_headers)
         })
       else
-        SymppDashboardApiController.local_operator_enabled?()
+        true
       end
   end
 

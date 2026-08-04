@@ -1,9 +1,8 @@
-import { AlertTriangle, Archive, CheckCircle2, Copy, Loader2, MessageSquareText, Trash2 } from "lucide-react";
+import { Archive, CheckCircle2, Copy, Loader2, MessageSquareText, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { CopyArchitectHandoff, GuidanceItem, WorkRequestDetail } from "@/types/dashboard";
 import { DetailDisclosure, DetailFacts, DetailHeader, DetailList, DetailLoadError, DetailSection, DetailSummaryBar, JsonDetail } from "@/components/dashboard/detail-layout";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { MarkdownBlock } from "@/components/dashboard/markdown-block";
 import { architectHandoffEligibleRequest, isFinishedBoardStatus, operationalBadgeVariant, operationalLabel } from "@/lib/operational-state";
 import { cn } from "@/lib/utils";
@@ -25,10 +24,8 @@ export function RequestDetailContent({
   onArchiveWorkRequest,
   onChangeWorkRequestState,
   onDeleteWorkRequest,
-  canMutateOperatorActions,
   onSubmitComment,
   onResolveComment,
-  canMutateComments,
   detailError,
 }: {
   detail: WorkRequestDetail;
@@ -37,18 +34,15 @@ export function RequestDetailContent({
   onArchiveWorkRequest: WorkRequestMutation;
   onChangeWorkRequestState: WorkRequestStateMutation;
   onDeleteWorkRequest: WorkRequestMutation;
-  canMutateOperatorActions: boolean;
   onSubmitComment: SubmitContextComment;
   onResolveComment: ResolveContextComment;
-  canMutateComments: boolean;
   detailError?: string | null;
 }) {
   const request = detail.work_request;
   const [requestComments, setRequestComments] = useSyncedComments(detail.comments || []);
   const [uiState, dispatchUiState] = useReducer(requestDetailUiReducer, initialRequestDetailUiState);
-  const { archiveError, archivePending, commentsOpen, deleteError, deletePending, deliverConfirmOpen, stateError, statePending } = uiState;
+  const { archiveError, archivePending, commentsOpen, deleteError, deletePending, stateError, statePending } = uiState;
   const setCommentsOpen = useCallback((open: boolean) => dispatchUiState({ type: "commentsOpen", open }), []);
-  const setDeliverConfirmOpen = useCallback((open: boolean) => dispatchUiState({ type: "deliverConfirmOpen", open }), []);
   const commentTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const operational = request.operational_state || null;
   const detailFinished = [operational?.key, request.status].some(isFinishedBoardStatus);
@@ -56,12 +50,11 @@ export function RequestDetailContent({
   const sliceCounts = requestSliceCounts(detail);
   const currentCommentStats = requestCommentStats(detail, requestComments);
   const requestOnlyCommentStats = commentStats(requestComments);
-  const handoffEligible = canMutateOperatorActions && !detailFinished && architectHandoffEligibleRequest(request);
+  const handoffEligible = !detailFinished && architectHandoffEligibleRequest(request);
   const handoffHasOpenQuestions = (openQuestions.length || request.open_question_count || 0) > 0;
   const handoffIdentity = `${handoffHasOpenQuestions}:${request.id}:${request.status || ""}:${request.updated_at || ""}`;
-  const canManualArchive = canMutateOperatorActions && canArchiveWorkRequest(request);
-  const canMarkDelivered = canMutateOperatorActions && !detailFinished;
-  const canDelete = canMutateOperatorActions;
+  const canManualArchive = canArchiveWorkRequest(request);
+  const canMarkDelivered = !detailFinished;
   const {
     cachedHandoff,
     error: handoffError,
@@ -126,7 +119,6 @@ export function RequestDetailContent({
 
     try {
       await onChangeWorkRequestState(request.id, "completed");
-      setDeliverConfirmOpen(false);
     } catch (caught) {
       dispatchUiState({ type: "stateError", error: caught instanceof Error ? caught.message : "WorkRequest state was not changed" });
     } finally {
@@ -145,8 +137,7 @@ export function RequestDetailContent({
       />
       <div className="detail-modal-reveal-body grid gap-4">
         <DetailLoadError error={detailError} />
-        {handoffEligible || canMutateComments || canMarkDelivered || canManualArchive || canDelete ? (
-          <div className={cn("detail-primary-actions", handoffHasOpenQuestions && "detail-primary-actions-muted")} data-guidance-section style={{ animationDelay: "58ms" }}>
+        <div className={cn("detail-primary-actions", handoffHasOpenQuestions && "detail-primary-actions-muted")} data-guidance-section style={{ animationDelay: "58ms" }}>
             <div className="detail-primary-actions-row">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 {handoffEligible ? (
@@ -155,16 +146,14 @@ export function RequestDetailContent({
                     {handoffCopyState === "copied" ? "Copied" : handoffButtonLabel}
                   </Button>
                 ) : null}
-                {canMutateComments ? (
-                  <Button type="button" size="sm" variant="outline" onClick={openCommentComposer}>
-                    <MessageSquareText className="size-4" />
-                    Add Comment
-                  </Button>
-                ) : null}
+                <Button type="button" size="sm" variant="outline" onClick={openCommentComposer}>
+                  <MessageSquareText className="size-4" />
+                  Add Comment
+                </Button>
               </div>
               <RequestDangerActions
                 canArchive={canManualArchive}
-                canDelete={canDelete}
+                canDelete
                 canMarkDelivered={canMarkDelivered}
                 archiveError={archiveError}
                 archivePending={archivePending}
@@ -174,12 +163,11 @@ export function RequestDetailContent({
                 statePending={statePending}
                 onArchive={() => void archiveRequest()}
                 onDelete={() => void deleteRequest()}
-                onMarkDelivered={() => setDeliverConfirmOpen(true)}
+                onMarkDelivered={() => void markDelivered()}
               />
             </div>
             {handoffError ? <p className="text-xs text-destructive">{handoffError}</p> : null}
-          </div>
-        ) : null}
+        </div>
         <DetailSummaryBar items={requestDetailSummary(detail, openQuestions.length, sliceCounts.total, currentCommentStats)} />
         <DetailSection title="Product Intent">
           <MarkdownBlock value={request.human_description} empty="No operator-facing description has been recorded yet." />
@@ -220,7 +208,7 @@ export function RequestDetailContent({
             onCommentsChange={setRequestComments}
             onSubmitComment={onSubmitComment}
             onResolveComment={onResolveComment}
-            canMutate={canMutateComments}
+            canMutate
             textareaRef={commentTextareaRef}
           />
         </DetailDisclosure>
@@ -242,15 +230,6 @@ export function RequestDetailContent({
           <JsonDetail label="Constraints" value={request.constraints} />
         </DetailDisclosure>
       </div>
-      <DangerousStateConfirmationDialog
-        open={deliverConfirmOpen}
-        onOpenChange={setDeliverConfirmOpen}
-        title="Mark WorkRequest Delivered?"
-        description="This manually marks the request Delivered for the local dashboard even if unfinished plan nodes, WorkPackages, or open questions still exist."
-        confirmLabel="Mark Delivered"
-        pending={statePending}
-        onConfirm={() => void markDelivered()}
-      />
     </>
   );
 }
@@ -333,45 +312,4 @@ function requestDetailSummary(
 export function canArchiveWorkRequest(request: WorkRequestDetail["work_request"]) {
   const finishedState = request.operational_state?.key || request.status;
   return Boolean(!request.archived_at && (request.completed_at || isFinishedBoardStatus(finishedState)));
-}
-
-export function DangerousStateConfirmationDialog({
-  open,
-  onOpenChange,
-  title,
-  description,
-  confirmLabel,
-  pending,
-  onConfirm,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  title: string;
-  description: string;
-  confirmLabel: string;
-  pending: boolean;
-  onConfirm: () => void;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={(nextOpen) => (!pending ? onOpenChange(nextOpen) : undefined)}>
-      <DialogContent className="dashboard-dialog-content sm:max-w-[420px]">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <AlertTriangle className="size-4 text-destructive" />
-            {title}
-          </DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
-        <div className="flex justify-end gap-2">
-          <Button type="button" variant="outline" disabled={pending} onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button type="button" variant="destructive" disabled={pending} onClick={onConfirm}>
-            {pending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-            {confirmLabel}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
 }

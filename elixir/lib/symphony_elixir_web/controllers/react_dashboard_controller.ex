@@ -6,21 +6,9 @@ defmodule SymphonyElixirWeb.ReactDashboardController do
   use Phoenix.Controller, formats: [:html]
 
   alias Plug.Conn
-  alias SymphonyElixirWeb.SymppDashboardApiController
-
   @spec index(Conn.t(), map()) :: Conn.t()
   def index(conn, _params) do
-    conn
-    |> maybe_put_local_operator_session()
-    |> serve_dashboard_shell()
-  end
-
-  defp maybe_put_local_operator_session(conn) do
-    if SymppDashboardApiController.local_operator_browser?(conn) do
-      SymppDashboardApiController.put_local_operator_session(conn)
-    else
-      conn
-    end
+    serve_dashboard_shell(conn)
   end
 
   defp serve_dashboard_shell(conn) do
@@ -79,22 +67,13 @@ defmodule SymphonyElixirWeb.ReactDashboardController do
       %{
         "apiBase" => prefixed_path(conn, "/api/v1/sympp/operator"),
         "basePath" => script_name_prefix(conn),
-        "logoUrl" => prefixed_path(conn, "/splusplus-logo.png"),
-        "operatorMode" => SymppDashboardApiController.local_operator_browser?(conn)
+        "logoUrl" => prefixed_path(conn, "/splusplus-logo.png")
       }
-      |> maybe_put_operator_csrf_token(conn)
+      |> Map.put("csrfToken", Plug.CSRFProtection.get_csrf_token())
 
     script = ~s(<script>window.SYMPP_DASHBOARD_CONFIG = #{Jason.encode!(config)};</script>)
 
     String.replace(body, "</head>", "    #{script}\n  </head>", global: false)
-  end
-
-  defp maybe_put_operator_csrf_token(config, conn) do
-    if SymppDashboardApiController.local_operator_session?(conn.private.plug_session) do
-      Map.put(config, "csrfToken", Plug.CSRFProtection.get_csrf_token())
-    else
-      config
-    end
   end
 
   defp prefixed_path(%Conn{} = conn, path) when is_binary(path) do

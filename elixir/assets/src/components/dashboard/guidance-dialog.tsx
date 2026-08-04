@@ -87,14 +87,12 @@ function initialGuidanceDialogStateWithChoice(selectedChoice: string): GuidanceD
 }
 
 export function GuidanceDialog({
-  canSubmitAnswer,
   item,
   location,
   onJumpToAttention,
   onOpenChange,
   onSubmitAnswer,
 }: {
-  canSubmitAnswer: boolean;
   item: GuidanceItem | null;
   location?: AttentionLocation;
   onJumpToAttention?: (destination: AttentionJumpDestination) => void;
@@ -107,7 +105,6 @@ export function GuidanceDialog({
         {item ? (
           <GuidanceDialogBody
             key={guidanceDialogStateKey(item)}
-            canSubmitAnswer={canSubmitAnswer}
             item={item}
             location={location}
             onJumpToAttention={onJumpToAttention}
@@ -121,14 +118,12 @@ export function GuidanceDialog({
 }
 
 export function GuidanceDialogBody({
-  canSubmitAnswer,
   item,
   location,
   onJumpToAttention,
   onOpenChange,
   onSubmitAnswer,
 }: {
-  canSubmitAnswer: boolean;
   item: GuidanceItem;
   location?: AttentionLocation;
   onJumpToAttention?: (destination: AttentionJumpDestination) => void;
@@ -276,20 +271,12 @@ export function GuidanceDialogBody({
         <Button variant="outline" onClick={() => onOpenChange(false)}>
           Cancel
         </Button>
-        <GuidanceSubmitButton canSubmitAnswer={canSubmitAnswer} state={state} onSubmit={submitAnswer} />
+        <Button onClick={submitAnswer} disabled={state.submitting || (state.selectedChoice === CUSTOM_CHOICE && !state.notes[state.selectedChoice]?.trim())}>
+          {state.submitting ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+          Answer
+        </Button>
       </DialogFooter>
     </>
-  );
-}
-
-function GuidanceSubmitButton({ canSubmitAnswer, state, onSubmit }: { canSubmitAnswer: boolean; state: GuidanceDialogState; onSubmit: () => void }) {
-  if (!canSubmitAnswer) return null;
-
-  return (
-    <Button onClick={onSubmit} disabled={state.submitting || (state.selectedChoice === CUSTOM_CHOICE && !state.notes[state.selectedChoice]?.trim())}>
-      {state.submitting ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-      Answer
-    </Button>
   );
 }
 

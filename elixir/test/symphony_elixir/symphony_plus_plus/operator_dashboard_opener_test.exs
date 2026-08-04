@@ -10,7 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpenerTest do
     previous_endpoint_config = Application.get_env(:symphony_elixir, Endpoint, [])
 
     System.delete_env("SYMPP_DASHBOARD_ORIGIN")
-    Application.put_env(:symphony_elixir, Endpoint, Keyword.delete(previous_endpoint_config, :sympp_local_operator_bootstrap_token))
+    Application.put_env(:symphony_elixir, Endpoint, previous_endpoint_config)
 
     on_exit(fn ->
       if is_nil(previous),
@@ -74,14 +74,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpenerTest do
     assert_receive {:opened, "http://127.0.0.1:54321/sympp/board"}
   end
 
-  test "enabled settings preserve the cockpit bootstrap token" do
+  test "enabled settings preserve the configured dashboard origin" do
     System.delete_env("SYMPP_OPEN_DASHBOARD")
     parent = self()
 
     endpoint_config =
       Application.get_env(:symphony_elixir, Endpoint, [])
       |> Keyword.put(:sympp_dashboard_origin, "http://127.0.0.1:5174")
-      |> Keyword.put(:sympp_local_operator_bootstrap_token, "test-bootstrap-token")
 
     Application.put_env(:symphony_elixir, Endpoint, endpoint_config)
 
@@ -92,7 +91,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpenerTest do
                opener: fn url -> send(parent, {:opened, url}) end
              )
 
-    assert_receive {:opened, "http://127.0.0.1:5174/sympp/board?operator_bootstrap=test-bootstrap-token"}
+    assert_receive {:opened, "http://127.0.0.1:5174/sympp/board"}
   end
 
   test "direct runtimes start one shared opener" do
