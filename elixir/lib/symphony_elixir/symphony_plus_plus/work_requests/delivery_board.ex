@@ -847,6 +847,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     {key, status_label(key), "neutral", "Package status: #{key}.", []}
   end
 
+  defp terminal_delivery_attention_codes(%WorkPackageDelivery{}, :hidden), do: []
+
   defp terminal_delivery_attention_codes(%WorkPackageDelivery{}, work_package) do
     if active_runtime?(work_package), do: ["work_package_active_after_delivery"], else: []
   end
@@ -880,11 +882,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     }
   end
 
-  defp active_blocker?(work_package) when is_map(work_package), do: get_in(work_package, [:blocker_state, :active?]) == true
-  defp active_blocker?(_work_package), do: false
+  defp active_blocker?(work_package), do: get_in(work_package, [:blocker_state, :active?]) == true
 
-  defp active_runtime?(work_package) when is_map(work_package), do: get_in(work_package, [:runtime_state, :active?]) == true
-  defp active_runtime?(_work_package), do: false
+  defp active_runtime?(work_package), do: get_in(work_package, [:runtime_state, :active?]) == true
 
   defp terminal_package_status?(status), do: status in @terminal_package_statuses
 

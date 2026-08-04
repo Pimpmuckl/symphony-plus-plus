@@ -593,7 +593,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   test "scoped projection treats filtered linked packages as hidden instead of missing", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-HIDDEN-PACKAGE")
 
-    {_work_package, _linked_package} =
+    {work_package, _linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-HIDDEN-PACKAGE",
         work_package_id: "WP-BOARD-HIDDEN-PACKAGE",
@@ -605,6 +605,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     assert slice.work_package_hidden? == true
     assert slice.operational_state.key == "dispatched"
     assert slice.attention_reason_codes == []
+
+    assert {:ok, _delivery} =
+             Repository.record_work_package_delivery(
+               repo,
+               work_request.id,
+               work_package.id,
+               delivery_attrs(%{
+                 outcome: "completed_no_pr",
+                 idempotency_key: "delivery-board-hidden-package",
+                 no_pr_evidence: "The hidden package was completed without a pull request."
+               })
+             )
+
+    assert {:ok, %{work_packages: [delivered_slice]}} =
+             DeliveryBoard.project(repo, work_request.id, visible_work_package_ids: [])
+
+    assert delivered_slice.work_package == nil
+    assert delivered_slice.work_package_hidden? == true
+    assert delivered_slice.operational_state.key == "completed_no_pr"
+    assert delivered_slice.attention_reason_codes == []
   end
 
   test "keeps skipped WorkPackages visible on the delivery board", %{repo: repo} do
