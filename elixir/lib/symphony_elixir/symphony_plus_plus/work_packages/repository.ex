@@ -97,20 +97,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
 
   @spec update(repo(), String.t(), map()) :: {:ok, WorkPackage.t()} | {:error, error()}
   def update(repo, id, attrs) when is_atom(repo) and is_binary(id) and is_map(attrs) do
+    result =
+      if terminal_status_update?(attrs) do
+        update_with_terminal_cleanup(repo, id, attrs)
+      else
+        update_directly(repo, id, attrs)
+      end
+
+    notify_dashboard(result, repo)
+  rescue
+    error in Ecto.ConstraintError -> normalize_constraint_error(error)
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  defp update_with_terminal_cleanup(repo, id, attrs) do
     repo.transaction(fn ->
       with {:ok, work_package} <- get(repo, id),
            {:ok, updated} <- work_package |> WorkPackage.update_changeset(attrs) |> repo.update(),
-           :ok <- maybe_clear_terminal_attention(repo, updated) do
+           :ok <- clear_terminal_attention(repo, updated) do
         updated
       else
         {:error, reason} -> repo.rollback(reason)
       end
     end)
     |> normalize_transaction_result()
-    |> notify_dashboard(repo)
-  rescue
-    error in Ecto.ConstraintError -> normalize_constraint_error(error)
-    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  defp update_directly(repo, id, attrs) do
+    with {:ok, work_package} <- get(repo, id) do
+      work_package
+      |> WorkPackage.update_changeset(attrs)
+      |> repo.update()
+    end
   end
 
   @spec update_status(repo(), String.t(), String.t(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
@@ -395,11 +413,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp maybe_clear_terminal_attention(repo, %WorkPackage{status: status} = work_package)
-       when status in @terminal_statuses,
-       do: clear_terminal_attention(repo, work_package)
-
-  defp maybe_clear_terminal_attention(_repo, %WorkPackage{}), do: :ok
+  defp terminal_status_update?(attrs), do: (Map.get(attrs, :status) || Map.get(attrs, "status")) in @terminal_statuses
 
   defp normalize_transaction_result({:ok, result}), do: {:ok, result}
   defp normalize_transaction_result({:error, reason}), do: {:error, reason}
