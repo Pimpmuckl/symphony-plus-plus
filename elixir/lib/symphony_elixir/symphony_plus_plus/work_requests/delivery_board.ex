@@ -847,7 +847,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     {key, status_label(key), "neutral", "Package status: #{key}.", []}
   end
 
-  defp terminal_delivery_attention_codes(%WorkPackageDelivery{}, _work_package), do: []
+  defp terminal_delivery_attention_codes(%WorkPackageDelivery{}, work_package) do
+    if active_runtime?(work_package), do: ["work_package_active_after_delivery"], else: []
+  end
 
   defp state(key, label, tone, reason, raw_status, delivery_outcome, work_package, attention_reason_codes) do
     work_package = if is_map(work_package), do: work_package
