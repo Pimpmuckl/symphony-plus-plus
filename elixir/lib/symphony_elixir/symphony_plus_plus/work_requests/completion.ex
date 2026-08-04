@@ -182,9 +182,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     with {:ok, work_request} <- Repository.get(repo, work_request_id),
          {:ok, question_state} <- question_state(repo, work_request_id),
          {:ok, work_packages} <- Repository.list_work_packages(repo, work_request_id),
-         :ok <- clear_terminal_work_package_attention(repo, work_packages),
-         {:ok, contexts} <- work_package_contexts(repo, work_packages),
-         {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_packages) do
+         {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_packages),
+         :ok <- clear_terminal_work_package_attention(repo, work_packages, deliveries_by_slice_id),
+         {:ok, contexts} <- work_package_contexts(repo, work_packages) do
       state = state(work_request, question_state, work_packages, contexts, deliveries_by_slice_id)
       persist_state(repo, work_request, state, work_packages)
     end
@@ -347,9 +347,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     end)
   end
 
-  defp clear_terminal_work_package_attention(repo, work_packages) do
+  defp clear_terminal_work_package_attention(repo, work_packages, deliveries_by_slice_id) do
     work_packages
-    |> Enum.filter(&(&1.status in @terminal_work_package_statuses))
+    |> Enum.filter(fn work_package ->
+      work_package.status in @terminal_work_package_statuses or
+        terminal_delivery?(Map.get(deliveries_by_slice_id, work_package.id))
+    end)
     |> Enum.reduce_while(:ok, fn work_package, :ok ->
       case WorkPackageRepository.clear_terminal_attention(repo, work_package) do
         :ok -> {:cont, :ok}

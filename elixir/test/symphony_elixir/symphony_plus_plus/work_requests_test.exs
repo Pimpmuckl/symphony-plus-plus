@@ -17,6 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
@@ -1013,6 +1014,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, _completed_run} = AgentRunRepository.mark_completed(repo, run.id, "done")
     assert {:ok, without_runtime} = Service.refresh_completion(repo, runtime_request.id)
     assert %DateTime{} = without_runtime.completed_at
+  end
+
+  test "completion refresh clears residue for a delivery-backed nonterminal package", %{repo: repo} do
+    assert {:ok, request} = Repository.create(repo, attrs(id: "WR-COMPLETE-DELIVERY-RESIDUE", status: "ready_for_slicing"))
+
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
+               repo,
+               request.id,
+               work_package_attrs(id: "WRS-COMPLETE-DELIVERY-RESIDUE")
+             )
+
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
+
+    append_blocker_event!(repo, work_package.id, "blocker-delivery-residue", true)
+
+    assert {:ok, _delivery} =
+             %{
+               work_request_id: request.id,
+               work_package_id: work_package.id,
+               outcome: "completed_no_pr",
+               idempotency_key: "delivery-residue",
+               recorded_by: "legacy-import",
+               no_pr_evidence: "Legacy delivery was recorded without lifecycle cleanup."
+             }
+             |> WorkPackageDelivery.create_changeset()
+             |> repo.insert()
+
+    assert repo.get!(WorkPackage, work_package.id).status == "planned"
+    assert WorkPackageActivity.context(repo, work_package.id).blocker_state.active?
+
+    assert {:ok, completed} = Service.refresh_completion(repo, request.id)
+    assert %DateTime{} = completed.completed_at
+    refute WorkPackageActivity.context(repo, work_package.id).blocker_state.active?
   end
 
   test "visible completion treats terminal package cards as terminal" do
