@@ -153,7 +153,7 @@ export function GuidanceDialogBody({
   }
 
   async function submitAnswer() {
-    if (!item || !state.selectedChoice) return;
+    if (!state.selectedChoice) return;
 
     dispatch({ type: "submitting", submitting: true });
 
@@ -184,7 +184,7 @@ export function GuidanceDialogBody({
           </div>
         </div>
       </DialogHeader>
-      {location ? <AttentionLocationBar location={location} onJump={onJumpToAttention} /> : null}
+      <GuidanceLocation location={location} onJumpToAttention={onJumpToAttention} />
       <div className="grid gap-4">
         <section className="rounded-lg border bg-muted/40 p-4" data-guidance-section style={{ animationDelay: "70ms" }}>
           <p className="text-sm font-medium">TL;DR</p>
@@ -278,6 +278,16 @@ export function GuidanceDialogBody({
       </DialogFooter>
     </>
   );
+}
+
+function GuidanceLocation({
+  location,
+  onJumpToAttention,
+}: {
+  location?: AttentionLocation;
+  onJumpToAttention?: (destination: AttentionJumpDestination) => void;
+}) {
+  return location ? <AttentionLocationBar location={location} onJump={onJumpToAttention} /> : null;
 }
 
 function guidanceDialogStateKey(item: GuidanceItem) {
