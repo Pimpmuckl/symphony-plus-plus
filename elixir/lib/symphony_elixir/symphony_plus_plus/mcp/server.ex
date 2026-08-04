@@ -1320,9 +1320,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp worker_tool(name, arguments, %__MODULE__{config: config, session: session}) when name in @worker_tool_module_tools,
     do: WorkerTools.call(name, config, session, arguments)
 
-  defp worker_tool("resolve_blocker", arguments, %__MODULE__{config: config, session: session}),
-    do: GuidanceTools.call("resolve_blocker", config, session, arguments)
-
   defp worker_tool(name, arguments, %__MODULE__{config: config, session: session})
        when name in ["add_comment", "list_comments", "resolve_comment"] do
     with {:ok, session} <- scoped_session(config.repo, session, arguments),
@@ -1334,9 +1331,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:error, reason} -> worker_error(reason, name)
     end
   end
-
-  defp worker_tool("create_guidance_request", arguments, %__MODULE__{config: config, session: session}),
-    do: GuidanceTools.call("create_guidance_request", config, session, arguments)
 
   defp approve_scope_expansion_transaction(
          repo,

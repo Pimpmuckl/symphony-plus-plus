@@ -113,7 +113,7 @@ export function dashboardAttentionItems(
   const workstream = details
     .filter((detail) => !workRequestIsTerminal(detail))
     .flatMap((detail) => requestAllAttentionItems(detail, packageById, activeBlockingEdges, guidanceItems));
-  return uniqueAttentionItems([...projected, ...workstream]).filter((item) => item.kind !== "status" || !item.preRun);
+  return uniqueAttentionItems([...projected, ...workstream]).filter((item) => item.kind !== "status");
 }
 
 function attentionBelongsToTerminalRequest(

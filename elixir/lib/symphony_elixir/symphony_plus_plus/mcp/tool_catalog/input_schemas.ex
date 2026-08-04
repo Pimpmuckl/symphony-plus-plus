@@ -120,7 +120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   end
 
   def worker_tool_input_schema("mark_ready") do
-    schema(%{"blocker_closeout" => blocker_closeout_schema()}, [])
+    schema(%{}, [])
   end
 
   def worker_tool_input_schema("update_task_plan") do
@@ -163,25 +163,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(progress_properties(), ["summary", "idempotency_key"])
   end
 
-  def worker_tool_input_schema("report_blocker") do
-    schema(
-      Map.put(
-        progress_properties(),
-        "blocker_id",
-        described_string_schema("Optional stable blocker id returned in structured output; defaults to idempotency_key.")
-      ),
-      ["summary", "idempotency_key"]
-    )
-  end
-
-  def worker_tool_input_schema("resolve_blocker") do
-    schema(
-      progress_properties()
-      |> Map.merge(%{"blocker_id" => string_schema(), "resolution" => string_schema()}),
-      ["blocker_id", "resolution", "summary", "idempotency_key"]
-    )
-  end
-
   def worker_tool_input_schema("add_comment") do
     schema(
       session_scoped_properties(%{
@@ -212,18 +193,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "resolution_note" => markdown_string_schema("Optional Markdown resolution note.") |> Map.put("maxLength", Comment.max_resolution_note_length())
       }),
       ["comment_id"]
-    )
-  end
-
-  def worker_tool_input_schema("create_guidance_request") do
-    schema(
-      session_scoped_properties(%{
-        "summary" => string_schema(),
-        "question" => markdown_string_schema("Human-facing guidance question in Markdown."),
-        "context" => markdown_string_schema("Human-facing guidance context in Markdown."),
-        "idempotency_key" => string_schema()
-      }),
-      ["summary", "question", "context", "idempotency_key"]
     )
   end
 
@@ -288,8 +257,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     %{
       "status" => string_schema(),
       "expected_status" => string_schema(),
-      "reason" => nullable_string_schema(),
-      "blocker_closeout" => blocker_closeout_schema()
+      "reason" => nullable_string_schema()
     }
   end
 
@@ -935,25 +903,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       ["dependent", "prerequisite"]
     )
     |> always_validate(%{"anyOf" => [%{"required" => ["reason"]}, %{"required" => ["decision_ref"]}]})
-  end
-
-  defp blocker_closeout_schema do
-    %{
-      "type" => "object",
-      "additionalProperties" => false,
-      "properties" => %{
-        "decision" =>
-          ToolCatalog.blocker_closeout_decisions()
-          |> string_enum_schema()
-          |> Map.put("description", "Use resolved when the active blockers are no longer true, or still_active when they must remain active after this finish transition."),
-        "blocker_ids" =>
-          string_array_schema()
-          |> Map.put("description", "Optional explicit active blocker ids. Omit to apply the decision to every active blocker in scope."),
-        "resolution" => markdown_string_schema("Required when decision is resolved. Human-facing note explaining why the blocker is clear."),
-        "summary" => described_string_schema("Optional short audit summary for the blocker closeout decision.")
-      },
-      "required" => ["decision"]
-    }
   end
 
   defp decision_prompt_schema do
