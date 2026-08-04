@@ -139,7 +139,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
              "record_work_package_delivery"
            ),
          :ok <- require_work_package_delivery_scope(config.repo, work_request, work_package, attrs, filters),
-         {:ok, attrs} <- allow_terminal_delivery_blocker_cleanup(config.repo, work_package, attrs),
          {:ok, delivery} <-
            mutate_product_tree(
              config.repo,
@@ -413,14 +412,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp work_package_delivery_evidence_field(evidence, field, :positive_integer),
     do: optional_positive_integer_argument(evidence, field)
-
-  defp allow_terminal_delivery_blocker_cleanup(repo, %WorkPackage{id: work_package_id}, attrs) do
-    case active_blockers_for_work_packages(repo, [work_package_id]) do
-      {:ok, []} -> {:ok, attrs}
-      {:ok, _active_blockers} -> {:ok, Map.put(attrs, "allow_active_blocker_closeout", true)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
 
   defp prepare_active_blocker_closeout(active_blockers, closeout, tool) do
     with :ok <- require_blocker_closeout_covers_active_blockers(active_blockers, closeout.blocker_ids) do

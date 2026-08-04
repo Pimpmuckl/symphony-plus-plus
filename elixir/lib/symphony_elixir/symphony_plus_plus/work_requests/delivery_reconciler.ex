@@ -8,7 +8,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
@@ -255,7 +254,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
          opts
        ) do
     action_payload = action_payload(work_request, work_package, action)
-    delivery_attrs = delivery_attrs(repo, work_package, action)
+    delivery_attrs = action.attrs
 
     case record_work_package_delivery(repo, work_request, work_package, delivery_attrs, opts) do
       {:ok, delivery} ->
@@ -472,20 +471,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
         }
       }
     }
-  end
-
-  defp active_blocker_ids(repo, work_package_id) do
-    repo
-    |> WorkPackageActivity.context(work_package_id)
-    |> get_in([:blocker_state, :active_ids])
-    |> List.wrap()
-  end
-
-  defp delivery_attrs(repo, %WorkPackage{} = work_package, action) do
-    case active_blocker_ids(repo, work_package.id) do
-      [] -> action.attrs
-      _blocker_ids -> Map.put(action.attrs, "allow_active_blocker_closeout", true)
-    end
   end
 
   defp record_work_package_delivery(

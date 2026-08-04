@@ -351,7 +351,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert callback_work_request_id == work_request.id
     assert callback_work_package_id == work_package.id
     assert attrs.outcome == "pr_merged"
-    assert attrs["allow_active_blocker_closeout"] == true
+    refute Map.has_key?(attrs, "allow_active_blocker_closeout")
 
     assert result.applied_count == 0
     assert result.error_count == 1
