@@ -48,7 +48,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
                capabilities: capabilities,
                expires_at: truncate_expires_at(expires_at)
              },
-             terminal_work_package_statuses: @terminal_work_package_statuses
+             terminal_work_package_statuses: @non_claimable_work_package_statuses
            ) do
       {:ok, %{grant: grant, work_key: work_key}}
     end

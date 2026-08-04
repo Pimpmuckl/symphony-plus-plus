@@ -51,11 +51,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     case canonical_delivery_closeout(repo, work_package_id) do
       {:ok, {delivery, _event}} ->
         opts = cleanup_env_opts()
-        schedule_worktree_cleanup(fn -> cleanup_terminal_agent_run_worktree(repo, work_package_id, delivery, opts) end)
+        cleanup_terminal_agent_run_worktree(repo, work_package_id, delivery, opts)
+        :ok
 
       {:error, _reason} ->
         :ok
     end
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
   end
 
   @spec blocker_event_payload?(map()) :: boolean()

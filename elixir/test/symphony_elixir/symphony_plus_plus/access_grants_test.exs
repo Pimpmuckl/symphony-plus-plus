@@ -90,7 +90,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
 
           Repo.update_all(
             from(work_package in WorkPackage, where: work_package.id == ^work_package_id),
-            set: [status: "merged", updated_at: DateTime.utc_now(:microsecond)]
+            set: [status: "skipped", updated_at: DateTime.utc_now(:microsecond)]
           )
 
         _race ->
@@ -828,7 +828,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert grant.claimed_by == nil
   end
 
-  test "terminal work package mint race rejects atomically without creating worker authority", %{repo: repo} do
+  test "skipped work package mint race rejects atomically without creating worker authority", %{repo: repo} do
     assert {:ok, work_package} =
              WorkPackageRepository.create(repo, WorkPackageFactory.attrs(status: "ready_for_worker"))
 
@@ -841,7 +841,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
       TerminalMintRaceRepo.disarm()
     end
 
-    assert repo.get!(WorkPackage, work_package.id).status == "merged"
+    assert repo.get!(WorkPackage, work_package.id).status == "skipped"
     assert repo.aggregate(AccessGrant, :count, :id) == 0
   end
 
