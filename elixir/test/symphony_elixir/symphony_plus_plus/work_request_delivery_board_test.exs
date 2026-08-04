@@ -175,7 +175,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     refute WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
   end
 
-  test "terminal delivery retains live runtime attention", %{repo: repo} do
+  test "terminal delivery retains pre-existing live runtime attention", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-LIVE-RUNTIME")
 
     {work_package, linked_package} =
@@ -184,6 +184,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
         work_package_id: "WP-BOARD-LIVE-RUNTIME",
         status: "ready_for_merge"
       )
+
+    assert {:ok, _run} =
+             AgentRunRepository.start_run(repo, %{
+               work_package_id: linked_package.id,
+               status: "running",
+               attempt: 1,
+               worker_task_handle: "pre-delivery-runtime",
+               started_at: DateTime.utc_now(:microsecond),
+               last_seen_at: DateTime.utc_now(:microsecond)
+             })
 
     assert {:ok, _delivery} =
              Repository.record_work_package_delivery(
@@ -196,16 +206,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                  no_pr_evidence: "The package was completed without a pull request."
                })
              )
-
-    assert {:ok, _run} =
-             AgentRunRepository.start_run(repo, %{
-               work_package_id: linked_package.id,
-               status: "running",
-               attempt: 1,
-               worker_task_handle: "post-delivery-runtime",
-               started_at: DateTime.utc_now(:microsecond),
-               last_seen_at: DateTime.utc_now(:microsecond)
-             })
 
     assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
     assert slice.operational_state.key == "completed_no_pr"
