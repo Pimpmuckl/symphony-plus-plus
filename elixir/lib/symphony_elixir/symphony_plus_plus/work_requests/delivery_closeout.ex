@@ -2,7 +2,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository, as: ClaimLeaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -77,12 +76,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              delivery,
              delivery_closeout_opts(attrs)
            ),
-         {:ok, delivery} <-
+         {:ok, {delivery, closeout_context}} <-
            repo.transaction(fn ->
              record_in_transaction(repo, work_request_id, work_package_id, attrs)
            end)
            |> normalize_transaction_result() do
-      best_effort_cleanup_linked_worktree(repo, work_package, delivery)
+      best_effort_cleanup_linked_worktree(repo, work_package, delivery, closeout_context)
       {:ok, delivery}
     end
   rescue
@@ -102,9 +101,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              attrs
            ),
          closeout_opts = delivery_closeout_opts(attrs),
-         {:ok, delivery} <-
+         {:ok, {delivery, closeout_context}} <-
            complete_closeout(repo, work_request, work_package, delivery, closeout_opts) do
-      delivery
+      {delivery, closeout_context}
     else
       {:error, reason} -> repo.rollback(reason)
     end
@@ -278,35 +277,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
        ) do
     context = WorkPackageActivity.context(repo, work_package_id)
 
-    case recovery_closeout_mode(delivery) do
-      :pr_merged -> validate_pr_merged_closeout_preconditions(context, opts)
-      :superseded -> validate_superseded_closeout_preconditions(repo, work_package_id, context)
-      :abandoned -> validate_abandoned_closeout_preconditions(repo, work_package_id, context)
-      :normal -> validate_no_pr_closeout_context(context, opts)
+    validate_closeout_context(repo, work_package_id, delivery, context, opts)
+  end
+
+  defp validate_closeout_context(repo, work_package_id, delivery, context, opts) do
+    with :ok <- maybe_reject_active_blocker_context(context, allow_active_blockers?(delivery, opts)) do
+      maybe_require_abandonable_package(repo, work_package_id, delivery, context)
     end
   end
 
-  defp validate_pr_merged_closeout_preconditions(context, opts) do
-    allow_active_blockers? = Keyword.get(opts, :allow_active_blockers?, false)
+  defp allow_active_blockers?(%WorkPackageDelivery{outcome: outcome}, _opts)
+       when outcome in ["superseded", "abandoned"],
+       do: true
 
-    with :ok <- maybe_reject_active_blocker_context(context, allow_active_blockers?) do
-      reject_non_recoverable_pr_runtime_context(context)
+  defp allow_active_blockers?(%WorkPackageDelivery{}, opts),
+    do: Keyword.get(opts, :allow_active_blockers?, false)
+
+  defp maybe_require_abandonable_package(
+         repo,
+         work_package_id,
+         %WorkPackageDelivery{outcome: "abandoned"},
+         context
+       ) do
+    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
+      require_abandonable_no_code_status(repo, work_package, context)
     end
   end
 
-  defp validate_superseded_closeout_preconditions(repo, work_package_id, context) do
-    with :ok <- reject_non_recoverable_superseded_runtime_context(context) do
-      reject_claimed_live_worker_grants(repo, work_package_id)
-    end
-  end
-
-  defp validate_abandoned_closeout_preconditions(repo, work_package_id, context) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         :ok <- require_abandonable_no_code_status(repo, work_package, context),
-         :ok <- reject_non_recoverable_abandoned_runtime_context(context) do
-      reject_claimed_live_worker_grants(repo, work_package_id)
-    end
-  end
+  defp maybe_require_abandonable_package(_repo, _work_package_id, %WorkPackageDelivery{}, _context), do: :ok
 
   defp validate_terminal_evidence(
          %WorkPackage{id: work_package_id},
@@ -352,9 +350,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
          %WorkRequest{} = work_request,
          %WorkPackageDelivery{} = delivery
        ) do
-    with {:ok, _refreshed} <- Completion.refresh_in_transaction(repo, work_request.id) do
-      {:ok, delivery}
+    context = WorkPackageActivity.context(repo, delivery.work_package_id)
+
+    with {:ok, event} <-
+           PlanningRepository.get_progress_event_by_idempotency_key(
+             repo,
+             delivery.work_package_id,
+             closeout_idempotency_key(delivery)
+           ),
+         {:ok, _refreshed} <- Completion.refresh_in_transaction(repo, work_request.id) do
+      {:ok, {delivery, replay_closeout_context(context, event)}}
     end
+  end
+
+  defp replay_closeout_context(context, event) do
+    current = closeout_context(context, [], [], allow_active_blockers?: false)
+    recorded_reasons = List.wrap(map_value(event.payload, :runtime_reason_codes_before_closeout))
+
+    current
+    |> Map.update!(:runtime_reason_codes, &Enum.uniq(recorded_reasons ++ &1))
+    |> Map.put(:defer_worktree_cleanup?, current.defer_worktree_cleanup? or Enum.any?(recorded_reasons, &live_runtime_reason?/1))
   end
 
   defp perform_closeout(
@@ -384,7 +399,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              closeout_context
            ),
          {:ok, _refreshed} <- Completion.refresh_in_transaction(repo, work_request.id) do
-      {:ok, delivery}
+      {:ok, {delivery, closeout_context}}
     end
   end
 
@@ -400,7 +415,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
       work_request,
       work_package,
       terminal_status_for_outcome(delivery.outcome),
-      allow_active_blockers?: Map.get(closeout_context, :allow_active_blockers?, false)
+      allow_active_blockers?: Map.get(closeout_context, :allow_active_blockers?, false),
+      allow_active_runtime?: true
     )
   end
 
@@ -458,69 +474,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
          %WorkPackageDelivery{} = delivery,
          opts
        ) do
-    context_observed_at = DateTime.utc_now(:microsecond)
     context = WorkPackageActivity.context(repo, work_package_id)
+    allow_active_blockers? = allow_active_blockers?(delivery, opts)
 
-    case recovery_closeout_mode(delivery) do
-      :pr_merged ->
-        prepare_pr_merged_closeout_context(repo, work_package_id, context, opts)
-
-      :superseded ->
-        prepare_superseded_closeout_context(repo, work_package_id, context)
-
-      :abandoned ->
-        prepare_abandoned_closeout_context(repo, work_package_id, context)
-
-      :normal ->
-        prepare_no_pr_closeout_context(repo, work_package_id, context, opts, context_observed_at)
-    end
-  end
-
-  defp prepare_pr_merged_closeout_context(repo, work_package_id, context, opts) do
-    allow_active_blockers? = Keyword.get(opts, :allow_active_blockers?, false)
-
-    with :ok <- maybe_reject_active_blocker_context(context, allow_active_blockers?),
-         :ok <- reject_non_recoverable_pr_runtime_context(context),
+    with :ok <- validate_closeout_context(repo, work_package_id, delivery, context, opts),
          {:ok, retired_worker_grant_ids} <- retire_live_worker_grants(repo, work_package_id),
-         {:ok, retired_claim_lease_ids} <- retire_current_claim_leases(repo, work_package_id) do
-      {:ok,
-       closeout_context(
-         context,
-         retired_worker_grant_ids,
-         retired_claim_lease_ids,
-         allow_active_blockers?: allow_active_blockers?
-       )}
-    end
-  end
-
-  defp validate_no_pr_closeout_context(context, opts) do
-    allow_active_blockers? = Keyword.get(opts, :allow_active_blockers?, false)
-
-    with :ok <- maybe_reject_active_blocker_context(context, allow_active_blockers?) do
-      reject_non_recoverable_no_pr_runtime_context(context)
-    end
-  end
-
-  defp prepare_no_pr_closeout_context(
-         repo,
-         work_package_id,
-         context,
-         opts,
-         %DateTime{} = context_observed_at
-       ) do
-    allow_active_blockers? = Keyword.get(opts, :allow_active_blockers?, false)
-
-    with :ok <- maybe_reject_active_blocker_context(context, allow_active_blockers?),
-         :ok <- reject_non_recoverable_no_pr_runtime_context(context),
-         {:ok, retired_worker_grant_ids} <-
-           retire_no_pr_worker_grants(repo, work_package_id, context_observed_at),
          {:ok, retired_claim_lease_ids} <-
-           retire_stale_current_claim_leases(
-             repo,
-             work_package_id,
-             "completed_no_pr_delivery_closeout"
-           ),
-         :ok <- reject_post_cleanup_no_pr_runtime_context(repo, work_package_id) do
+           retire_current_claim_leases(repo, work_package_id, "#{delivery.outcome}_delivery_closeout") do
       {:ok,
        closeout_context(
          context,
@@ -543,67 +503,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp delivery_closeout_opts(attrs) when is_map(attrs) do
     [allow_active_blockers?: map_value(attrs, :allow_active_blocker_closeout) == true]
-  end
-
-  defp reject_non_recoverable_pr_runtime_context(context) do
-    reason_codes = List.wrap(get_in(context, [:runtime_state, :reason_codes]))
-    active? = get_in(context, [:runtime_state, :active?]) == true
-    paused? = get_in(context, [:runtime_state, :paused?]) == true
-
-    blocking_reason_codes =
-      reason_codes --
-        [
-          "worker_grant_active",
-          "claim_lease_active",
-          "claim_lease_stale",
-          "agent_run_stale",
-          "worker_recycled",
-          "package_terminal"
-        ]
-
-    cond do
-      paused? -> {:error, :active_runtime}
-      active? and blocking_reason_codes != [] -> {:error, :active_runtime}
-      true -> :ok
-    end
-  end
-
-  defp prepare_superseded_closeout_context(repo, work_package_id, context) do
-    with :ok <- reject_non_recoverable_superseded_runtime_context(context),
-         :ok <- reject_claimed_live_worker_grants(repo, work_package_id),
-         {:ok, retired_worker_grant_ids} <- retire_unclaimed_worker_grants(repo, work_package_id),
-         {:ok, retired_claim_lease_ids} <-
-           retire_stale_current_claim_leases(
-             repo,
-             work_package_id,
-             "superseded_delivery_closeout"
-           ) do
-      {:ok,
-       closeout_context(
-         context,
-         retired_worker_grant_ids,
-         retired_claim_lease_ids,
-         allow_active_blockers?: true
-       )}
-    end
-  end
-
-  defp prepare_abandoned_closeout_context(repo, work_package_id, context) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         :ok <- require_abandonable_no_code_status(repo, work_package, context),
-         :ok <- reject_non_recoverable_abandoned_runtime_context(context),
-         :ok <- reject_claimed_live_worker_grants(repo, work_package_id),
-         {:ok, retired_worker_grant_ids} <- retire_unclaimed_worker_grants(repo, work_package_id),
-         {:ok, retired_claim_lease_ids} <-
-           retire_stale_current_claim_leases(repo, work_package_id, "abandoned_delivery_closeout") do
-      {:ok,
-       closeout_context(
-         context,
-         retired_worker_grant_ids,
-         retired_claim_lease_ids,
-         allow_active_blockers?: true
-       )}
-    end
   end
 
   defp require_abandonable_no_code_status(_repo, %{status: status}, _context)
@@ -674,15 +573,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   defp progress_history_statuses(%{status: status}) when is_binary(status), do: [status]
   defp progress_history_statuses(_event), do: []
 
-  defp best_effort_cleanup_linked_worktree(_repo, %WorkPackage{id: work_package_id}, %WorkPackageDelivery{})
+  defp best_effort_cleanup_linked_worktree(
+         _repo,
+         %WorkPackage{},
+         %WorkPackageDelivery{},
+         %{defer_worktree_cleanup?: true}
+       ),
+       do: :ok
+
+  defp best_effort_cleanup_linked_worktree(_repo, %WorkPackage{id: work_package_id}, %WorkPackageDelivery{}, _closeout_context)
        when not is_binary(work_package_id), do: :ok
 
-  defp best_effort_cleanup_linked_worktree(_repo, %WorkPackage{id: ""}, %WorkPackageDelivery{}), do: :ok
+  defp best_effort_cleanup_linked_worktree(_repo, %WorkPackage{id: ""}, %WorkPackageDelivery{}, _closeout_context), do: :ok
 
   defp best_effort_cleanup_linked_worktree(
          repo,
          %WorkPackage{id: work_package_id},
-         %WorkPackageDelivery{} = delivery
+         %WorkPackageDelivery{} = delivery,
+         _closeout_context
        ) do
     case WorkPackageService.cleanup_worktree(repo, work_package_id) do
       {:ok, _cleanup} -> :ok
@@ -715,90 +623,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   defp closeout_worktree_cleanup_error(%Ecto.Changeset{} = reason), do: reason
   defp closeout_worktree_cleanup_error(reason), do: reason
 
-  defp reject_non_recoverable_abandoned_runtime_context(context) do
-    reject_non_recoverable_runtime_context(context, recoverable_recut_runtime_reason_codes())
-  end
-
-  defp reject_non_recoverable_superseded_runtime_context(context) do
-    reject_non_recoverable_runtime_context(context, recoverable_recut_runtime_reason_codes())
-  end
-
-  defp reject_non_recoverable_no_pr_runtime_context(context) do
-    reject_non_recoverable_runtime_context(context, recoverable_no_pr_runtime_reason_codes())
-  end
-
-  defp recoverable_recut_runtime_reason_codes,
-    do: [
-      "worker_grant_active",
-      "claim_lease_stale",
-      "agent_run_stale",
-      "worker_recycled",
-      "package_terminal"
-    ]
-
-  defp recoverable_no_pr_runtime_reason_codes,
-    do: [
-      "worker_grant_active",
-      "claim_lease_stale",
-      "agent_run_stale",
-      "worker_recycled",
-      "package_terminal"
-    ]
-
-  defp reject_post_cleanup_no_pr_runtime_context(repo, work_package_id) do
-    repo
-    |> WorkPackageActivity.context(work_package_id)
-    |> reject_non_recoverable_runtime_context(post_cleanup_no_pr_runtime_reason_codes())
-  end
-
-  defp post_cleanup_no_pr_runtime_reason_codes,
-    do: [
-      "agent_run_stale",
-      "worker_recycled",
-      "package_terminal"
-    ]
-
-  defp reject_non_recoverable_runtime_context(context, allowed_reason_codes) do
-    reason_codes = List.wrap(get_in(context, [:runtime_state, :reason_codes]))
-    active? = get_in(context, [:runtime_state, :active?]) == true
-    paused? = get_in(context, [:runtime_state, :paused?]) == true
-
-    blocking_reason_codes = reason_codes -- allowed_reason_codes
-
-    cond do
-      paused? -> {:error, :active_runtime}
-      active? and reason_codes == [] -> {:error, :active_runtime}
-      blocking_reason_codes != [] -> {:error, :active_runtime}
-      true -> :ok
-    end
-  end
-
-  defp recovery_closeout_mode(%WorkPackageDelivery{outcome: "pr_merged"}), do: :pr_merged
-  defp recovery_closeout_mode(%WorkPackageDelivery{outcome: "superseded"}), do: :superseded
-  defp recovery_closeout_mode(%WorkPackageDelivery{outcome: "abandoned"}), do: :abandoned
-  defp recovery_closeout_mode(%WorkPackageDelivery{}), do: :normal
-
   defp empty_closeout_context do
     closeout_context(WorkPackageActivity.empty_context(), [], [], allow_active_blockers?: false)
   end
 
   defp closeout_context(context, retired_worker_grant_ids, retired_claim_lease_ids, opts) do
+    runtime_reason_codes = List.wrap(get_in(context, [:runtime_state, :reason_codes]))
+
     %{
       active_blocker_ids: List.wrap(get_in(context, [:blocker_state, :active_ids])),
       blocker_reason_codes: List.wrap(get_in(context, [:blocker_state, :reason_codes])),
-      runtime_reason_codes: List.wrap(get_in(context, [:runtime_state, :reason_codes])),
+      runtime_reason_codes: runtime_reason_codes,
       ignored_stale_agent_run_ids: List.wrap(get_in(context, [:runtime_state, :stale_agent_run_ids])),
       retired_worker_grant_ids: retired_worker_grant_ids,
       retired_claim_lease_ids: retired_claim_lease_ids,
+      defer_worktree_cleanup?: Enum.any?(runtime_reason_codes, &live_runtime_reason?/1),
       allow_active_blockers?: Keyword.get(opts, :allow_active_blockers?, false)
     }
   end
 
-  defp retire_current_claim_leases(repo, work_package_id) do
+  defp live_runtime_reason?(reason),
+    do:
+      reason in [
+        "claim_lease_paused",
+        "claim_lease_active",
+        "agent_run_active",
+        "worker_grant_active",
+        "architect_grant_active"
+      ]
+
+  defp retire_current_claim_leases(repo, work_package_id, reason) do
     case ClaimLeaseRepository.retire_current_for_work_package(
            repo,
            work_package_id,
-           "merged_pr_delivery_closeout"
+           reason
          ) do
       {:ok, claim_leases} -> {:ok, Enum.map(claim_leases, & &1.id)}
       {:error, reason} -> {:error, reason}
@@ -810,61 +668,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
       live_worker_grants(repo, work_package_id, DateTime.utc_now(:microsecond)),
       repo
     )
-  end
-
-  defp retire_unclaimed_worker_grants(repo, work_package_id) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo
-    |> live_worker_grants(work_package_id, now)
-    |> Enum.filter(&unclaimed_worker_grant?/1)
-    |> Enum.reduce_while({:ok, []}, fn %AccessGrant{} = grant, {:ok, grant_ids} ->
-      case revoke_unclaimed_worker_grant(repo, grant, now) do
-        {:ok, nil} -> {:cont, {:ok, grant_ids}}
-        {:ok, grant_id} -> {:cont, {:ok, [grant_id | grant_ids]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, grant_ids} -> {:ok, Enum.reverse(grant_ids)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp retire_no_pr_worker_grants(repo, work_package_id, %DateTime{} = context_observed_at) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo
-    |> live_worker_grants(work_package_id, now)
-    |> Enum.reduce_while({:ok, []}, fn %AccessGrant{} = grant, {:ok, grant_ids} ->
-      case revoke_no_pr_worker_grant(repo, grant, now, context_observed_at) do
-        {:ok, nil} -> {:cont, {:ok, grant_ids}}
-        {:ok, grant_id} -> {:cont, {:ok, [grant_id | grant_ids]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, grant_ids} -> {:ok, Enum.reverse(grant_ids)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp revoke_no_pr_worker_grant(
-         repo,
-         %AccessGrant{} = grant,
-         %DateTime{} = now,
-         %DateTime{} = context_observed_at
-       ) do
-    cond do
-      not claimed_worker_grant?(grant) ->
-        revoke_unclaimed_worker_grant(repo, grant, now)
-
-      worker_grant_claim_conflicts_with_observation?(grant, context_observed_at) ->
-        {:error, :active_runtime}
-
-      true ->
-        revoke_worker_grant(repo, grant, now)
-    end
   end
 
   defp revoke_worker_grants(grants, repo) do
@@ -883,147 +686,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     end
   end
 
-  defp revoke_worker_grant(repo, %AccessGrant{} = grant, %DateTime{} = now) do
-    case grant |> AccessGrant.revoke_changeset(now) |> repo.update() do
-      {:ok, %AccessGrant{} = revoked_grant} -> {:ok, revoked_grant.id}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp reject_claimed_live_worker_grants(repo, work_package_id) do
-    case live_worker_grants(repo, work_package_id) |> Enum.filter(&claimed_worker_grant?/1) do
-      [] -> :ok
-      _claimed_grants -> {:error, :active_runtime}
-    end
-  end
-
-  defp revoke_unclaimed_worker_grant(repo, %AccessGrant{} = grant, %DateTime{} = now) do
-    query =
-      from(stored in AccessGrant,
-        where: stored.id == ^grant.id,
-        where: stored.grant_role == "worker",
-        where: is_nil(stored.revoked_at),
-        where: is_nil(stored.claimed_at),
-        where: is_nil(stored.claimed_by) or fragment("trim(?) = ''", stored.claimed_by),
-        where: is_nil(stored.expires_at) or stored.expires_at > ^now
-      )
-
-    case repo.update_all(query, set: [revoked_at: now, updated_at: now]) do
-      {1, _rows} -> {:ok, grant.id}
-      {0, _rows} -> revoked_unclaimed_worker_grant_miss(repo, grant.id, now)
-    end
-  end
-
-  defp revoked_unclaimed_worker_grant_miss(repo, grant_id, %DateTime{} = now) do
-    case repo.get(AccessGrant, grant_id) do
-      %AccessGrant{} = current_grant -> resolved_unclaimed_worker_grant_miss(current_grant, now)
-      nil -> {:ok, nil}
-    end
-  end
-
-  defp resolved_unclaimed_worker_grant_miss(%AccessGrant{} = grant, %DateTime{} = now) do
-    if live_worker_grant?(grant, now) and claimed_worker_grant?(grant) do
-      {:error, :active_runtime}
-    else
-      {:ok, nil}
-    end
-  end
-
-  defp retire_stale_current_claim_leases(repo, work_package_id, release_reason) do
-    now = DateTime.utc_now(:microsecond)
-
-    stale_claim_leases =
-      repo.all(
-        from(claim_lease in ClaimLease,
-          where: claim_lease.work_package_id == ^work_package_id,
-          where: claim_lease.status == "active",
-          order_by: [asc: claim_lease.inserted_at, asc: claim_lease.id]
-        )
-      )
-      |> Enum.filter(&ClaimLease.stale?(&1, now))
-
-    stale_claim_leases
-    |> Enum.reduce_while({:ok, []}, fn %ClaimLease{} = claim_lease, {:ok, claim_lease_ids} ->
-      case release_stale_claim_lease(repo, claim_lease, now, release_reason) do
-        {:ok, nil} -> {:cont, {:ok, claim_lease_ids}}
-        {:ok, claim_lease_id} -> {:cont, {:ok, [claim_lease_id | claim_lease_ids]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, claim_lease_ids} -> {:ok, Enum.reverse(claim_lease_ids)}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp release_stale_claim_lease(
-         repo,
-         %ClaimLease{} = claim_lease,
-         %DateTime{} = now,
-         release_reason
-       ) do
-    query = observed_active_claim_lease_query(claim_lease)
-
-    case repo.update_all(query,
-           set: [
-             status: "released",
-             released_at: now,
-             release_reason: release_reason,
-             last_seen_at: now,
-             updated_at: now
-           ]
-         ) do
-      {1, _rows} -> {:ok, claim_lease.id}
-      {0, _rows} -> release_stale_claim_lease_miss(repo, claim_lease.id, now)
-    end
-  end
-
-  defp release_stale_claim_lease_miss(repo, claim_lease_id, %DateTime{} = now) do
-    case repo.get(ClaimLease, claim_lease_id) do
-      %ClaimLease{status: "active"} = current_claim_lease ->
-        resolved_active_claim_lease_miss(current_claim_lease, now)
-
-      %ClaimLease{status: "paused"} ->
-        {:error, :active_runtime}
-
-      %ClaimLease{} ->
-        {:ok, nil}
-
-      nil ->
-        {:ok, nil}
-    end
-  end
-
-  defp resolved_active_claim_lease_miss(%ClaimLease{} = claim_lease, %DateTime{} = now) do
-    if ClaimLease.stale?(claim_lease, now) do
-      {:error, :claim_not_current}
-    else
-      {:error, :active_runtime}
-    end
-  end
-
-  defp observed_active_claim_lease_query(%ClaimLease{} = claim_lease) do
-    query =
-      from(stored in ClaimLease,
-        where: stored.id == ^claim_lease.id,
-        where: stored.status == "active"
-      )
-
-    Enum.reduce([:last_seen_at, :lease_expires_at, :stale_after_ms], query, fn field_name, query ->
-      where_observed(query, field_name, Map.get(claim_lease, field_name))
-    end)
-  end
-
-  defp where_observed(query, field_name, nil),
-    do: from(stored in query, where: is_nil(field(stored, ^field_name)))
-
-  defp where_observed(query, field_name, value),
-    do: from(stored in query, where: field(stored, ^field_name) == ^value)
-
-  defp live_worker_grants(repo, work_package_id) do
-    live_worker_grants(repo, work_package_id, DateTime.utc_now(:microsecond))
-  end
-
   defp live_worker_grants(repo, work_package_id, %DateTime{} = now) do
     repo.all(
       from(grant in AccessGrant,
@@ -1035,53 +697,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
       )
     )
   end
-
-  defp live_worker_grant?(
-         %AccessGrant{grant_role: "worker", revoked_at: nil, expires_at: nil},
-         %DateTime{}
-       ),
-       do: true
-
-  defp live_worker_grant?(
-         %AccessGrant{
-           grant_role: "worker",
-           revoked_at: nil,
-           expires_at: %DateTime{} = expires_at
-         },
-         %DateTime{} = now
-       ) do
-    DateTime.compare(expires_at, now) == :gt
-  end
-
-  defp live_worker_grant?(%AccessGrant{}, %DateTime{}), do: false
-
-  defp claimed_worker_grant?(%AccessGrant{claimed_at: %DateTime{}}), do: true
-
-  defp claimed_worker_grant?(%AccessGrant{claimed_by: claimed_by}) when is_binary(claimed_by),
-    do: String.trim(claimed_by) != ""
-
-  defp claimed_worker_grant?(%AccessGrant{}), do: false
-
-  @doc false
-  @spec worker_grant_claim_conflicts_with_observation?(AccessGrant.t(), DateTime.t()) :: boolean()
-  def worker_grant_claim_conflicts_with_observation?(
-        %AccessGrant{claimed_at: %DateTime{} = claimed_at},
-        %DateTime{} = observed_at
-      ) do
-    DateTime.compare(claimed_at, observed_at) in [:eq, :gt]
-  end
-
-  def worker_grant_claim_conflicts_with_observation?(
-        %AccessGrant{claimed_by: claimed_by, updated_at: %DateTime{} = updated_at},
-        %DateTime{} = observed_at
-      )
-      when is_binary(claimed_by) do
-    String.trim(claimed_by) != "" and DateTime.compare(updated_at, observed_at) in [:eq, :gt]
-  end
-
-  def worker_grant_claim_conflicts_with_observation?(%AccessGrant{}, %DateTime{}), do: false
-
-  defp unclaimed_worker_grant?(%AccessGrant{} = grant), do: not claimed_worker_grant?(grant)
 
   defp closeout_progress_replay?(
          repo,

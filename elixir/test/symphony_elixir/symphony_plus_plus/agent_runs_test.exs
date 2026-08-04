@@ -33,6 +33,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
     def update_all(_query, _updates), do: raise(%Exqlite.Error{message: "database is locked"})
   end
 
+  defmodule TerminalStartRaceRepo do
+    import Ecto.Query, only: [from: 2]
+
+    alias SymphonyElixir.SymphonyPlusPlus.Repo
+    alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+
+    @race_key :sympp_terminal_agent_run_start_race
+
+    def arm(work_package_id), do: Process.put(@race_key, work_package_id)
+    def disarm, do: Process.delete(@race_key)
+
+    def all(query), do: Repo.all(query)
+    def get(schema, id), do: Repo.get(schema, id)
+    def rollback(reason), do: Repo.rollback(reason)
+    def update_all(query, updates), do: Repo.update_all(query, updates)
+
+    def transaction(fun) do
+      case Process.get(@race_key) do
+        work_package_id when is_binary(work_package_id) ->
+          Process.delete(@race_key)
+
+          Repo.update_all(
+            from(work_package in WorkPackage, where: work_package.id == ^work_package_id),
+            set: [status: "merged", updated_at: DateTime.utc_now(:microsecond)]
+          )
+
+        _race ->
+          :ok
+      end
+
+      Repo.transaction(fun)
+    end
+  end
+
   setup_all do
     database_path = WorkPackageFactory.database_path()
 
@@ -124,6 +158,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
     assert first.status == "running"
 
     assert {:error, :active_run_exists} = Service.start_dispatch(repo, issue(work_package.id), attempt: 1)
+  end
+
+  test "terminal work package start race rejects atomically and retires the previous retry reservation", %{repo: repo} do
+    assert {:ok, work_package} =
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-TERMINAL-RACE", status: "ready_for_worker"))
+
+    assert {:ok, previous} =
+             Repository.start_run(repo, %{
+               work_package_id: work_package.id,
+               status: "retrying",
+               attempt: 1,
+               worker_task_handle: "terminal-race-previous"
+             })
+
+    try do
+      TerminalStartRaceRepo.arm(work_package.id)
+
+      assert {:error, :work_package_terminal} =
+               Repository.start_run(
+                 TerminalStartRaceRepo,
+                 %{
+                   work_package_id: work_package.id,
+                   status: "running",
+                   attempt: 2,
+                   worker_task_handle: "terminal-race-replacement"
+                 },
+                 replace_agent_run_id: previous.id
+               )
+    after
+      TerminalStartRaceRepo.disarm()
+    end
+
+    assert repo.get!(WorkPackage, work_package.id).status == "merged"
+    assert %AgentRun{status: "failed", reason: "work package became terminal before retry dispatch"} = repo.get!(AgentRun, previous.id)
+    assert repo.aggregate(AgentRun, :count, :id) == 1
   end
 
   test "start run rolls back when completion clearing fails", %{repo: repo} do

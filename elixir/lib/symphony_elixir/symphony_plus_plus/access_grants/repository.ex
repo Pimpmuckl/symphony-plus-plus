@@ -50,12 +50,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
     error -> {:error, {:migration_failed, error}}
   end
 
-  @spec create(repo(), map()) :: {:ok, AccessGrant.t()} | {:error, error()}
-  def create(repo, attrs) when is_atom(repo) and is_map(attrs) do
+  @spec create(repo(), map(), keyword()) :: {:ok, AccessGrant.t()} | {:error, error()}
+  def create(repo, attrs, opts \\ []) when is_atom(repo) and is_map(attrs) and is_list(opts) do
     changeset = AccessGrant.create_changeset(attrs)
 
     with {:ok, changeset} <- validate_architect_phase_anchor(repo, changeset) do
-      repo.transaction(fn -> insert_grant_with_scopes(repo, changeset, attrs) end)
+      repo.transaction(fn -> create_in_transaction(repo, changeset, attrs, opts) end)
       |> normalize_transaction_result()
     end
   rescue
@@ -70,6 +70,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
     else
       {:error, reason} -> repo.rollback(reason)
     end
+  end
+
+  defp create_in_transaction(repo, changeset, attrs, opts) do
+    case reject_terminal_worker_package(repo, changeset, opts) do
+      :ok -> insert_grant_with_scopes(repo, changeset, attrs)
+      {:error, reason} -> repo.rollback(reason)
+    end
+  end
+
+  defp reject_terminal_worker_package(repo, changeset, opts) do
+    terminal_statuses = Keyword.get(opts, :terminal_work_package_statuses, [])
+    work_package_id = Changeset.get_field(changeset, :work_package_id)
+    grant_role = Changeset.get_field(changeset, :grant_role)
+
+    reject_terminal_worker_package(repo, grant_role, work_package_id, terminal_statuses)
+  end
+
+  defp reject_terminal_worker_package(repo, "worker", work_package_id, [_status | _statuses] = terminal_statuses)
+       when is_binary(work_package_id) do
+    case repo.get(WorkPackage, work_package_id) do
+      %WorkPackage{status: status} -> terminal_worker_package_status(status, terminal_statuses)
+      nil -> {:error, :not_found}
+    end
+  end
+
+  defp reject_terminal_worker_package(_repo, _grant_role, _work_package_id, _terminal_statuses), do: :ok
+
+  defp terminal_worker_package_status(status, terminal_statuses) do
+    if status in terminal_statuses, do: {:error, :work_package_terminal}, else: :ok
   end
 
   @spec get(repo(), String.t()) :: {:ok, AccessGrant.t()} | {:error, error()}

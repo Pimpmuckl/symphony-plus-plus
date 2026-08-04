@@ -197,8 +197,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     def arm(actor_overrides \\ %{}), do: Process.put(@race_key, actor_overrides)
     def disarm, do: Process.delete(@race_key)
 
-    def transaction(fun), do: Repo.transaction(fun)
-    def rollback(value), do: Repo.rollback(value)
+    def transaction(fun) do
+      {:ok, fun.()}
+    catch
+      {:rollback, value} -> {:error, value}
+    end
+
+    def rollback(value), do: throw({:rollback, value})
     def database_path, do: Repo.database_path()
     def get(schema, id), do: Repo.get(schema, id)
     def one(query), do: Repo.one(query)

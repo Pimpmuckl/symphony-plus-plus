@@ -37,15 +37,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
     with :ok <- Repository.validate_work_package(repo, work_package_id),
          :ok <- require_claimable_worker_package(repo, work_package_id),
          {:ok, grant} <-
-           Repository.create(repo, %{
-             work_package_id: work_package_id,
-             display_key: work_key.display_key,
-             secret_hash: WorkKey.secret_hash(work_key.secret),
-             grant_role: "worker",
-             provenance: provenance,
-             capabilities: capabilities,
-             expires_at: truncate_expires_at(expires_at)
-           }) do
+           Repository.create(
+             repo,
+             %{
+               work_package_id: work_package_id,
+               display_key: work_key.display_key,
+               secret_hash: WorkKey.secret_hash(work_key.secret),
+               grant_role: "worker",
+               provenance: provenance,
+               capabilities: capabilities,
+               expires_at: truncate_expires_at(expires_at)
+             },
+             terminal_work_package_statuses: @terminal_work_package_statuses
+           ) do
       {:ok, %{grant: grant, work_key: work_key}}
     end
   end

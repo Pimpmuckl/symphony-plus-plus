@@ -1493,6 +1493,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.TrackerAdapterTest do
     assert error =~ "failed to create AgentRun"
   end
 
+  test "orchestrator stops retrying when AgentRun dispatch observes a terminal package" do
+    issue = %Issue{id: "SYMPP-TERMINAL-DISPATCH", identifier: "SYMPP-TERMINAL-DISPATCH", state: "ready_for_worker"}
+
+    state = %Orchestrator.State{
+      claimed: MapSet.new([issue.id]),
+      retry_attempts: %{issue.id => %{attempt: 3, error: "retry pending"}}
+    }
+
+    next_state = Orchestrator.stop_terminal_package_dispatch_for_test(state, issue)
+
+    assert MapSet.member?(next_state.completed, issue.id)
+    refute MapSet.member?(next_state.claimed, issue.id)
+    refute Map.has_key?(next_state.retry_attempts, issue.id)
+  end
+
   test "restart reconciliation reattaches live persisted running AgentRun worker", %{repo: repo} do
     assert {:ok, work_package} =
              Repository.create(

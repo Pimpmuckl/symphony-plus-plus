@@ -68,10 +68,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
 
     closeout_args = superseded_args(work_request, work_package, successor_slice.id)
 
-    active_response = mcp_tool(repo, session, "record_work_package_delivery", closeout_args)
-    assert get_in(active_response, ["error", "data", "reason"]) == "active_runtime"
-    assert get_in(active_response, ["error", "data", "next_action"]) == "release_worker_or_retry_after_stale"
-
     revoke_response =
       mcp_tool(repo, session, "revoke_work_package_worker_key", %{
         "work_request_id" => work_request.id,
@@ -132,10 +128,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
     other_binding = insert_recoverable_session_binding!(repo, "WP-OUTSIDE-RUNTIME-CLEANUP", minted.grant.id, claim_lease)
 
     closeout_args = superseded_args(work_request, work_package, successor_slice.id)
-
-    active_response = mcp_tool(repo, session, "record_work_package_delivery", closeout_args)
-    assert get_in(active_response, ["error", "data", "reason"]) == "active_runtime"
-    assert get_in(active_response, ["error", "data", "next_action"]) == "release_worker_or_retry_after_stale"
 
     cleanup_response =
       mcp_tool(repo, session, "cleanup_work_request_work_package_runtime", cleanup_args(work_request, work_package, successor_slice.id))

@@ -204,11 +204,11 @@ Record other terminal outcomes with `record_work_package_delivery`:
 
 Do not infer delivery from prose decisions or chat. Phase-child PRs remain phase
 controlled; call `merge_child_into_phase` before `pr_merged` closeout when
-required. Use `cleanup_work_request_work_package_runtime` to recycle
-worker grants, non-paused claim leases, and recoverable worker MCP session bindings
-before final closeout when superseded or abandoned delivery truth is established;
-pass the flat superseded or abandoned evidence fields that authorize cleanup,
-then use the matching typed `evidence` object for final closeout.
+required. A successful terminal closeout revokes live worker grants and releases
+current claim leases, including paused leases; do not require a separate worker
+or runtime-cleanup step first. Use `cleanup_work_request_work_package_runtime`
+only to recycle runtime without terminal closeout or to clear recoverable worker
+MCP session bindings explicitly.
 If package evidence is missing or ambiguous, do not record WorkRequest delivery
 closeout; repair evidence first.
 

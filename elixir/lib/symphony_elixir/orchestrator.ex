@@ -420,6 +420,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc false
+  @spec stop_terminal_package_dispatch_for_test(term(), Issue.t()) :: term()
+  def stop_terminal_package_dispatch_for_test(%State{} = state, %Issue{} = issue) do
+    stop_terminal_package_dispatch(state, issue)
+  end
+
+  @doc false
   @spec reconcile_persisted_active_agent_runs_for_test(term()) :: term()
   def reconcile_persisted_active_agent_runs_for_test(%State{} = state), do: reconcile_persisted_active_agent_runs(state)
 
@@ -873,6 +879,10 @@ defmodule SymphonyElixir.Orchestrator do
         })
         |> claim_issue(issue.id)
 
+      {:error, :work_package_terminal} ->
+        Logger.info("Stopping dispatch; WorkPackage became terminal for #{issue_context(issue)}")
+        stop_terminal_package_dispatch(state, issue)
+
       {:error, reason} ->
         Logger.warning("Skipping dispatch; failed to create AgentRun for #{issue_context(issue)}: #{inspect(reason)}")
         next_attempt = if is_integer(attempt), do: attempt + 1, else: nil
@@ -885,6 +895,12 @@ defmodule SymphonyElixir.Orchestrator do
         })
         |> claim_issue(issue.id)
     end
+  end
+
+  defp stop_terminal_package_dispatch(%State{} = state, %Issue{id: issue_id}) do
+    state
+    |> complete_issue(issue_id)
+    |> release_issue_claim(issue_id)
   end
 
   defp do_spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host, agent_run_id) do

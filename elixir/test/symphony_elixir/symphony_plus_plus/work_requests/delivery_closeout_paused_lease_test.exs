@@ -16,10 +16,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
+  alias SymphonyElixir.TestSupport
   alias SymphonyElixir.WorkPackageFactory
 
   setup_all do
@@ -50,27 +52,59 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
     :ok
   end
 
-  test "service delivery closeout rejects a paused current claim lease", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, work_request_id: "WR-DELIVERY-PAUSED-LEASE")
-    claim_lease = pause_claim_lease!(repo, linked_package)
-    assert {:ok, _closed} = WorkPackageRepository.update_status(repo, linked_package.id, "ready_for_merge", "closed")
+  test "service delivery closeout releases a paused current claim lease", %{repo: repo} do
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-closeout-paused-lease")
+    codex_home = Path.join(fixture.root, "codex-home")
+    previous_codex_home = System.get_env("CODEX_HOME")
 
-    attrs =
-      no_pr_attrs(%{
-        idempotency_key: "delivery-paused-claim-lease",
-        no_pr_evidence: "The package status is terminal, but the paused claim lease still gates closeout."
-      })
+    try do
+      System.put_env("CODEX_HOME", codex_home)
+      {work_request, work_package, linked_package} = linked_slice!(repo, work_request_id: "WR-DELIVERY-PAUSED-LEASE")
 
-    assert {:error, :active_runtime} = WorkRequestService.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
+      assert {:ok, prepared} =
+               WorktreeLifecycle.prepare(
+                 repo,
+                 linked_package.id,
+                 %{
+                   "repo_root" => fixture.repo_root,
+                   "base_branch" => linked_package.base_branch,
+                   "branch" => "feat/closeout-paused-lease"
+                 },
+                 codex_home: codex_home
+               )
 
-    assert {:ok, _released_lease} = ClaimLeaseService.release(repo, claim_lease.id, reason: "operator resumed closeout")
-    assert {:ok, delivery} = WorkRequestService.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    assert delivery.outcome == "completed_no_pr"
-    assert repo.get!(WorkPackage, linked_package.id).status == "closed"
+      claim_lease = pause_claim_lease!(repo, linked_package)
+      assert {:ok, _closed} = WorkPackageRepository.update_status(repo, linked_package.id, "ready_for_merge", "closed")
+
+      attrs =
+        no_pr_attrs(%{
+          idempotency_key: "delivery-paused-claim-lease",
+          no_pr_evidence: "The package is terminal and the architect is retiring the paused claim lease."
+        })
+
+      assert {:ok, delivery} = WorkRequestService.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+      assert delivery.outcome == "completed_no_pr"
+      assert repo.get!(WorkPackage, linked_package.id).status == "closed"
+
+      assert %ClaimLease{status: "released", release_reason: "completed_no_pr_delivery_closeout"} =
+               repo.get!(ClaimLease, claim_lease.id)
+
+      assert {:ok, replay} = WorkRequestService.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+      assert replay.id == delivery.id
+      assert File.dir?(prepared.worktree_path)
+
+      assert {:ok, _archived} = WorkRequestService.archive(repo, work_request.id)
+      Process.sleep(100)
+      assert File.dir?(prepared.worktree_path)
+
+      assert {:ok, _cleaned} = WorktreeLifecycle.cleanup(repo, linked_package.id, codex_home: codex_home)
+      refute File.exists?(prepared.worktree_path)
+    after
+      restore_env("CODEX_HOME", previous_codex_home)
+    end
   end
 
-  test "MCP record_work_package_delivery cannot bypass a paused current claim lease", %{repo: repo} do
+  test "MCP record_work_package_delivery releases a paused current claim lease", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, work_request_id: "WR-MCP-DELIVERY-PAUSED-LEASE")
     session = create_work_request_architect_session(repo, work_request)
     claim_lease = pause_claim_lease!(repo, linked_package)
@@ -81,20 +115,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
         work_request,
         work_package,
         "delivery-mcp-paused-claim-lease",
-        "The linked package has a paused current claim lease and must not be closed out."
+        "The architect is recording terminal delivery and retiring the paused claim lease."
       )
 
     response = record_delivery(repo, session, args)
 
-    assert get_in(response, ["error", "code"]) == -32_009
-    assert get_in(response, ["error", "data", "reason"]) == "active_runtime"
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-
-    assert {:ok, _released_lease} = ClaimLeaseService.release(repo, claim_lease.id, reason: "operator resumed closeout")
-    closeout_response = record_delivery(repo, session, args)
-
-    assert get_in(closeout_response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "completed_no_pr"
+    assert get_in(response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "completed_no_pr"
     assert repo.get!(WorkPackage, linked_package.id).status == "closed"
+
+    assert %ClaimLease{status: "released", release_reason: "completed_no_pr_delivery_closeout"} =
+             repo.get!(ClaimLease, claim_lease.id)
   end
 
   defp pause_claim_lease!(repo, %WorkPackage{} = work_package) do
@@ -254,4 +284,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
   defp test_repo_root do
     Path.expand("../../../../..", __DIR__)
   end
+
+  defp restore_env(key, nil), do: System.delete_env(key)
+  defp restore_env(key, value), do: System.put_env(key, value)
 end

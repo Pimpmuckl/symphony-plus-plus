@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @type repo :: module()
   @type error ::
@@ -22,6 +23,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
     "sympp_claim_leases_id_unique_index"
   ]
   @sqlite_primary_key_message "unique constraint failed: sympp_claim_leases.id"
+  @terminal_work_package_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
 
   @spec migrate(repo()) :: :ok | {:error, error()}
   def migrate(repo) when is_atom(repo) do
@@ -33,8 +35,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
 
   @spec claim(repo(), map(), keyword()) :: {:ok, ClaimLease.t()} | {:error, error()}
   def claim(repo, attrs, opts \\ []) when is_atom(repo) and is_map(attrs) and is_list(opts) do
-    with {:ok, changeset} <- claim_changeset(repo, attrs, opts) do
-      insert_claim(repo, changeset)
+    repo.transaction(fn ->
+      with {:ok, changeset} <- claim_changeset(repo, attrs, opts),
+           {:ok, claim_lease} <- insert_claim(repo, changeset) do
+        claim_lease
+      else
+        {:error, reason} -> repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, claim_lease} -> {:ok, claim_lease}
+      {:error, reason} -> {:error, reason}
     end
   rescue
     error in Ecto.ConstraintError -> normalize_constraint_error(error)
@@ -148,7 +159,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
     current_query =
       from(claim_lease in ClaimLease,
         where: claim_lease.work_package_id == ^work_package_id,
-        where: claim_lease.status == "active",
+        where: claim_lease.status in ^ClaimLease.active_statuses(),
         order_by: [asc: claim_lease.inserted_at, asc: claim_lease.id]
       )
 
@@ -161,7 +172,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
       update_query =
         from(claim_lease in ClaimLease,
           where: claim_lease.id in ^ids,
-          where: claim_lease.status == "active"
+          where: claim_lease.status in ^ClaimLease.active_statuses()
         )
 
       case repo.update_all(update_query,
@@ -411,7 +422,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
   defp claim_changeset(repo, attrs, opts) do
     changeset = ClaimLease.create_changeset(attrs, now: now(opts), lineage: Keyword.get(opts, :lineage))
 
-    validate_access_grant_scope(repo, changeset)
+    with {:ok, changeset} <- validate_access_grant_scope(repo, changeset),
+         :ok <- require_live_work_package(repo, Changeset.get_field(changeset, :work_package_id)) do
+      {:ok, changeset}
+    end
+  end
+
+  defp require_live_work_package(repo, work_package_id) do
+    case repo.get(WorkPackage, work_package_id) do
+      %WorkPackage{status: status} when status in @terminal_work_package_statuses -> {:error, :work_package_terminal}
+      %WorkPackage{} -> :ok
+      nil -> {:error, :not_found}
+    end
   end
 
   defp insert_claim(repo, %Changeset{} = changeset) do
