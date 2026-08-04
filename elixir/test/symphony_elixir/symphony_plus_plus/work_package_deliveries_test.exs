@@ -19,6 +19,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackageDeliveriesTest d
     end
 
     def exists?(_query), do: true
+    def all(_query), do: []
+    def update_all(_query, _updates), do: {0, nil}
+
+    def get(WorkPackage, "WRS-RACE") do
+      %WorkPackage{id: "WRS-RACE", work_request_id: "WR-RACE", status: "closed"}
+    end
 
     def one(_query) do
       if Process.get(:delivery_unique_conflict_insert_attempted) do

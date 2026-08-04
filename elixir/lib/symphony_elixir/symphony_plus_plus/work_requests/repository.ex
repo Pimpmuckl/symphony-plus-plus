@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   alias Ecto.Changeset
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope
@@ -367,8 +368,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   def record_work_package_delivery(repo, work_request_id, work_package_id, attrs)
       when is_atom(repo) and is_binary(work_request_id) and is_binary(work_package_id) and is_map(attrs) do
     repo.transaction(fn ->
-      case record_work_package_delivery_in_transaction(repo, work_request_id, work_package_id, attrs) do
-        {:ok, delivery} -> delivery
+      with {:ok, delivery} <-
+             record_work_package_delivery_in_transaction(
+               repo,
+               work_request_id,
+               work_package_id,
+               attrs
+             ),
+           {:ok, work_package} <- get_work_package(repo, work_request_id, work_package_id),
+           :ok <- WorkPackageRepository.clear_terminal_attention(repo, work_package) do
+        delivery
+      else
         {:error, reason} -> repo.rollback(reason)
       end
     end)
@@ -992,8 +1002,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> repo.update_all(set: [status: next_status, updated_at: now])
 
     case result do
-      {1, _rows} -> repo.get!(WorkPackage, id)
-      {0, _rows} -> repo.rollback(work_package_status_error(repo, work_request_id, id, current_status, next_status))
+      {1, _rows} ->
+        work_package = repo.get!(WorkPackage, id)
+
+        case WorkPackageRepository.clear_terminal_attention(repo, work_package) do
+          :ok -> work_package
+          {:error, reason} -> repo.rollback(reason)
+        end
+
+      {0, _rows} ->
+        repo.rollback(work_package_status_error(repo, work_request_id, id, current_status, next_status))
     end
   end
 

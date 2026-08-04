@@ -59,7 +59,8 @@ export function WorkstreamBoard({
   const sortedDetails = useMemo(() => sortWorkRequestDetails(renderDetails), [renderDetails]);
   const sortedActiveDetails = useMemo(() => sortWorkRequestDetails(repoDetails), [repoDetails]);
   const packageById = useMemo(() => new Map(packages.map((pkg) => [pkg.id, pkg])), [packages]);
-  const blockerCounts = useMemo(() => activeBlockerEntityCounts(activeBlockingEdges, repoDetails), [activeBlockingEdges, repoDetails]);
+  const blockerCounts = useMemo(() => activeBlockerEntityCounts(activeBlockingEdges, repoDetails, packageById),
+    [activeBlockingEdges, packageById, repoDetails]);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const contextSignature = useMemo(() => workstreamContextSignature(sortedActiveDetails), [sortedActiveDetails]);
   useRepositoryAttentionJump(boardRef, jumpTarget, repoDetails, onSetFinishedRequestChildrenOpen);

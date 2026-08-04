@@ -180,6 +180,34 @@ describe("workstream progress", () => {
     expect(counts.packages.get("pkg-blocked")).toBe(1);
   });
 
+  it("does not count stale blocker edges targeting terminal packages", () => {
+    const delivered = plannedSlice("slice-delivered", "blocked", "pkg-delivered");
+    delivered.operational_state = { key: "blocked", delivery_outcome: "pr_merged" };
+    const active = plannedSlice("slice-active", "blocked", "pkg-active");
+    const detail = workRequestDetail([delivered, active]);
+
+    const counts = activeBlockerEntityCounts(
+      [
+        blockingEdge("stale-terminal", { kind: "work_package", id: "source" }, { kind: "work_package", id: "pkg-delivered" }),
+        blockingEdge("active", { kind: "work_package", id: "source" }, { kind: "work_package", id: "pkg-active" }),
+        blockingEdge(
+          "active-owned-by-terminal",
+          { kind: "work_package", id: "pkg-delivered" },
+          { kind: "work_package", id: "pkg-active" },
+          undefined,
+          { work_package_id: "pkg-delivered" },
+        ),
+      ],
+      [detail],
+    );
+
+    expect(counts.requests.get("wr-progress")).toBe(2);
+    expect(counts.slices.get("slice-delivered")).toBeUndefined();
+    expect(counts.packages.get("pkg-delivered")).toBeUndefined();
+    expect(counts.slices.get("slice-active")).toBe(2);
+    expect(counts.packages.get("pkg-active")).toBe(2);
+  });
+
   it("finds blocker edges that target a request through its package", () => {
     const detail = workRequestDetail([plannedSlice("slice-blocked", "blocked", "pkg-blocked")]);
     const matching = blockingEdge(

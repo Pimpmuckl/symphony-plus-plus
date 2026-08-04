@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveBlockingEdge, GuidanceItem, WorkPackageCard, WorkRequestDetail, WorkRequestPackage } from "@/types/dashboard";
 import type { BlockerItem } from "./dashboard-state";
+import { activeBlockerItems } from "./dashboard-data";
 import {
   attentionLocationForSelection,
   attentionJumpDestination,
@@ -34,6 +35,32 @@ describe("WorkRequest attention badge targets", () => {
     expect(requestAttentionTarget(detail, new Map([[pkg.id, pkg]]), [blocker], "blocked")).toMatchObject({
       items: [{ kind: "blocker", selection: { kind: "blocker", blocker, detail, slice, pkg } }],
     });
+  });
+
+  it("routes a blocker by its active target when its event owner is terminal", () => {
+    const deliveredSlice = requestSlice("slice-delivered", "blocked", "wp-delivered");
+    deliveredSlice.operational_state = { key: "blocked", delivery_outcome: "pr_merged" };
+    const activeSlice = requestSlice("slice-active", "blocked", "wp-active");
+    const detail = requestDetail([deliveredSlice, activeSlice]);
+    const deliveredPackage: WorkPackageCard = { id: "wp-delivered", status: "blocked" };
+    const activePackage: WorkPackageCard = { id: "wp-active", status: "blocked" };
+    const packages = new Map([[deliveredPackage.id, deliveredPackage], [activePackage.id, activePackage]]);
+    const blocker: ActiveBlockingEdge = {
+      id: "edge-terminal-owner",
+      blocker_id: "blocker-terminal-owner",
+      work_package_id: deliveredPackage.id,
+      from: { kind: "work_package", id: deliveredPackage.id },
+      to: { kind: "work_package", id: activePackage.id },
+    };
+
+    expect(requestAttentionTarget(detail, packages, [blocker], "blocked")).toMatchObject({
+      items: [{ kind: "blocker", selection: { blocker, slice: activeSlice, pkg: activePackage } }],
+    });
+    const blockerItems = activeBlockerItems([deliveredPackage, activePackage], new Map(), [blocker]);
+    expect(blockerItems.find((item) => item.id === blocker.id)?.selection).toMatchObject({ blocker, pkg: activePackage });
+    expect(dashboardAttentionItems([detail], packages, [blocker], [], blockerItems)).toMatchObject([
+      { kind: "blocker", selection: { blocker, slice: activeSlice, pkg: activePackage } },
+    ]);
   });
 
   it("opens package guidance and embedded blocker records when projections are absent", () => {
@@ -153,6 +180,38 @@ describe("WorkRequest attention badge targets", () => {
     };
 
     expect(dashboardAttentionItems([completed], new Map([[pkg.id, pkg]]), [], [guidance], [blocker])).toEqual([]);
+  });
+
+  it("drops stale blocker and guidance attention attached to a delivered WorkPackage", () => {
+    const slice = requestSlice("slice-delivered", "blocked", "wp-delivered");
+    slice.operational_state = { key: "blocked", delivery_outcome: "pr_merged" };
+    const detail = requestDetail([slice]);
+    const pkg: WorkPackageCard = {
+      id: "wp-delivered",
+      status: "blocked",
+      active_blockers: [{ id: "stale-blocker", active: true }],
+    };
+    const guidance: GuidanceItem = {
+      source: "guidance",
+      id: "stale-guidance",
+      repo: "fixture/repo",
+      repoKey: "fixture/repo",
+      title: "Stale guidance",
+      packageId: pkg.id,
+      detail: "Already delivered.",
+      guidance: { id: "stale-guidance", work_package_id: pkg.id },
+    };
+    const blocker: BlockerItem = {
+      id: "stale-blocker",
+      title: "Stale blocker",
+      repo: "fixture/repo",
+      blockerCount: 1,
+      detail: "Already delivered.",
+      selection: { kind: "slice", detail, slice, pkg },
+    };
+
+    expect(workPackageDirectAttention(detail, slice, pkg, [], [guidance])).toBeNull();
+    expect(dashboardAttentionItems([detail], new Map([[pkg.id, pkg]]), [], [guidance], [blocker])).toEqual([]);
   });
 
   it("opens every attention item under a Group with blockers first", () => {

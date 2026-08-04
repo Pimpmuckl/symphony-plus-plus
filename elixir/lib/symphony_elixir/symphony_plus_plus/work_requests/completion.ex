@@ -2,10 +2,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
@@ -184,8 +182,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     with {:ok, work_request} <- Repository.get(repo, work_request_id),
          {:ok, question_state} <- question_state(repo, work_request_id),
          {:ok, work_packages} <- Repository.list_work_packages(repo, work_request_id),
-         {:ok, contexts} <- work_package_contexts(repo, work_packages),
-         {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_packages) do
+         {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_packages),
+         :ok <- clear_terminal_work_package_attention(repo, work_packages, deliveries_by_slice_id),
+         {:ok, contexts} <- work_package_contexts(repo, work_packages) do
       state = state(work_request, question_state, work_packages, contexts, deliveries_by_slice_id)
       persist_state(repo, work_request, state, work_packages)
     end
@@ -332,7 +331,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   defp clear_completed_attention(repo, work_request_id, work_packages) do
     now = DateTime.utc_now(:microsecond)
-    work_package_ids = Enum.map(work_packages, & &1.id)
 
     repo.update_all(
       from(question in ClarificationQuestion,
@@ -341,55 +339,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
       set: [status: "closed", updated_at: now]
     )
 
-    repo.update_all(
-      from(request in GuidanceRequest,
-        where: request.work_package_id in ^work_package_ids,
-        where: request.status in ["open", "human_info_needed"]
-      ),
-      set: [
-        status: "answered",
-        answer: "Cleared because the WorkRequest reached a terminal state.",
-        answered_by: "work-request-completion",
-        answered_at: now,
-        updated_at: now
-      ]
-    )
-
     Enum.reduce_while(work_packages, :ok, fn work_package, :ok ->
-      case resolve_active_blockers(repo, work_request_id, work_package.id) do
+      case WorkPackageRepository.clear_terminal_attention(repo, work_package) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp resolve_active_blockers(repo, work_request_id, work_package_id) do
-    with {:ok, events} <- PlanningRepository.list_progress_events(repo, work_package_id) do
-      events
-      |> BlockerProjection.blockers()
-      |> Enum.filter(& &1.active)
-      |> Enum.reduce_while(:ok, &resolve_active_blocker(repo, work_request_id, work_package_id, &1, &2))
-    end
-  end
-
-  defp resolve_active_blocker(repo, work_request_id, work_package_id, blocker, :ok) do
-    case PlanningRepository.append_progress_event(repo, %{
-           work_package_id: work_package_id,
-           summary: "Cleared blocker after WorkRequest completion: #{blocker.summary || blocker.id}",
-           body: "WorkRequest #{work_request_id} reached a terminal state.",
-           status: "resolved",
-           idempotency_key: "work-request-completion:#{work_request_id}:#{work_package_id}:#{blocker.id}",
-           payload: %{
-             type: "blocker",
-             source_tool: "resolve_blocker",
-             blocker_id: blocker.id,
-             resolution: "WorkRequest reached a terminal state.",
-             active: false
-           }
-         }) do
-      {:ok, _event} -> {:cont, :ok}
-      {:error, reason} -> {:halt, {:error, reason}}
-    end
+  defp clear_terminal_work_package_attention(repo, work_packages, deliveries_by_slice_id) do
+    work_packages
+    |> Enum.filter(fn work_package ->
+      work_package.status in @terminal_work_package_statuses or
+        terminal_delivery?(Map.get(deliveries_by_slice_id, work_package.id))
+    end)
+    |> Enum.reduce_while(:ok, fn work_package, :ok ->
+      case WorkPackageRepository.clear_terminal_attention(repo, work_package) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   defp operator_completed?(%WorkRequest{completed_at: %DateTime{}, completion_source: @operator_completion_source}), do: true

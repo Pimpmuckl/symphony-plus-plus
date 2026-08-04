@@ -38,6 +38,27 @@ export function statusBadgeWidthForRequestDetails(details: WorkRequestDetail[], 
   return statusBadgeWidthForLabels(details.flatMap((detail) => requestStatusLabels(detail, packageById)));
 }
 
+export function workRequestIsTerminal(detail: WorkRequestDetail) {
+  const request = detail.work_request;
+  return Boolean(request.completed_at || request.archived_at || [request.status, request.operational_state?.key].includes("completed"));
+}
+
+export function workPackageIsTerminal(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
+  const operational = slice.operational_state ?? pkg?.operational_state;
+  return Boolean(slice.delivery?.outcome || operational?.delivery_outcome)
+    || isFinishedBoardStatus(operational?.key || slice.work_package_status || pkg?.status || slice.status);
+}
+
+export function terminalWorkPackageIds(details: WorkRequestDetail[], packageById: Map<string, WorkPackageCard>) {
+  const detailIds = details.flatMap((detail) => (detail.work_packages ?? [])
+    .filter((slice) => workRequestIsTerminal(detail) || workPackageIsTerminal(slice, packageById.get(slice.work_package_id || slice.id)))
+    .flatMap((slice) => [slice.id, slice.work_package_id].filter((id): id is string => Boolean(id))));
+  const packageIds = [...packageById.values()]
+    .filter((pkg) => Boolean(pkg.operational_state?.delivery_outcome) || isFinishedBoardStatus(pkg.operational_state?.key || pkg.status))
+    .map((pkg) => pkg.id);
+  return new Set([...detailIds, ...packageIds]);
+}
+
 export function requestBoardState(
   detail: WorkRequestDetail,
   packageById: Map<string, WorkPackageCard>,

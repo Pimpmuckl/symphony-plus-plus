@@ -22,12 +22,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.TestSupport
   alias SymphonyElixir.WorkPackageFactory
@@ -242,7 +242,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
   end
 
-  test "MCP reconcile_work_request dry-run action preserves active blockers when replayed", %{repo: repo} do
+  test "MCP reconcile_work_request dry-run action clears active blockers when replayed", %{repo: repo} do
     {work_request, _work_package, linked_package} =
       linked_slice!(
         repo,
@@ -257,22 +257,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
 
     response = mcp_tool(repo, session, "reconcile_work_request", %{"work_request_id" => work_request.id})
     assert [result] = get_in(response, ["result", "structuredContent", "reconciliation", "results"])
-    assert get_in(result, ["action", "blocker_closeout", "decision"]) == "still_active"
-    assert get_in(result, ["action", "blocker_closeout", "blocker_ids"]) == ["replay-blocker"]
+    refute Map.has_key?(result["action"], "allow_active_blocker_closeout")
 
     record_response = mcp_tool(repo, session, "record_work_package_delivery", result["action"])
     assert get_in(record_response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "pr_merged"
-    assert get_in(record_response, ["result", "structuredContent", "blocker_closeout", "decision"]) == "still_active"
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
+    refute WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
 
     assert {:ok, replay} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply)
 
     assert replay.applied_count == 0
     assert [%{status: "skipped", reason: "already_closeout", delivery_outcome: "pr_merged"}] = replay.results
-    assert reconcile_blocker_closeout_events(repo, linked_package.id) == []
   end
 
-  test "MCP reconcile_work_request apply preserves active blockers", %{repo: repo} do
+  test "MCP reconcile_work_request apply clears active blockers", %{repo: repo} do
     {work_request, _work_package, linked_package} =
       linked_slice!(
         repo,
@@ -291,19 +289,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert payload["applied_count"] == 1
     assert [result] = payload["results"]
     assert result["status"] == "applied"
-    assert get_in(result, ["action", "blocker_closeout", "decision"]) == "still_active"
-    assert get_in(result, ["action", "blocker_closeout", "blocker_ids"]) == ["apply-blocker"]
-    assert [event_id] = result["blocker_closeout_event_ids"]
+    refute Map.has_key?(result["action"], "allow_active_blocker_closeout")
+    refute Map.has_key?(result, "blocker_closeout_event_ids")
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
-
-    blocker_closeout_event = repo.get!(ProgressEvent, event_id)
-    assert blocker_closeout_event.work_package_id == linked_package.id
-    assert blocker_closeout_event.payload["type"] == "blocker_closeout_decision"
-    assert blocker_closeout_event.payload["source_tool"] == "reconcile_work_request"
-    assert blocker_closeout_event.payload["blocker_id"] == "apply-blocker"
-    assert blocker_closeout_event.payload["decision"] == "still_active"
-    assert blocker_closeout_event.actor_id == session.assignment.claimed_by
-    assert blocker_closeout_event.access_grant_id == session.assignment.grant_id
+    refute WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
     assert revision_count(repo, work_request.id) == 1
 
     replay_response = mcp_tool(repo, session, "reconcile_work_request", %{"work_request_id" => work_request.id, "apply" => true})
@@ -320,7 +309,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert revision_count(repo, work_request.id) == 1
   end
 
-  test "apply does not append blocker preservation events when delivery recording fails", %{repo: repo} do
+  test "apply leaves active blockers unchanged when delivery recording fails", %{repo: repo} do
     {work_request, work_package, linked_package} =
       linked_slice!(
         repo,
@@ -362,303 +351,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert callback_work_request_id == work_request.id
     assert callback_work_package_id == work_package.id
     assert attrs.outcome == "pr_merged"
-    assert attrs["allow_active_blocker_closeout"] == true
+    refute Map.has_key?(attrs, "allow_active_blocker_closeout")
 
     assert result.applied_count == 0
     assert result.error_count == 1
     assert [%{status: "error", reason: "concurrent_closeout", action: action}] = result.results
-    assert action.blocker_closeout.blocker_ids == ["delivery-failure-blocker"]
+    refute Map.has_key?(action, :allow_active_blocker_closeout)
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-
-    refute Enum.any?(repo.all(ProgressEvent), fn event ->
-             event.work_package_id == linked_package.id and
-               event.payload["type"] == "blocker_closeout_decision" and
-               event.payload["source_tool"] == "reconcile_work_request"
-           end)
+    assert WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
 
     assert {:error, {:delivery_reconciliation_failed, "concurrent_closeout"}} =
              DeliveryReconciler.reconcile_work_package(repo, linked_package.id, record_work_package_delivery: record_delivery)
-  end
-
-  test "apply defers blocker preservation repair when append fails after delivery records", %{repo: repo} do
-    {work_request, _work_package, linked_package} =
-      linked_slice!(
-        repo,
-        work_request_id: "WR-RECONCILE-BLOCKER-APPEND-FAILS",
-        work_package_id: "WP-RECONCILE-BLOCKER-APPEND-FAILS",
-        status: "ready_for_merge"
-      )
-
-    append_merged_pr_evidence!(repo, linked_package, 921, "head-921")
-    append_active_blocker!(repo, linked_package.id, "append-failure-blocker")
-
-    failing_appender = fn _repo, _work_package_id, _attrs -> {:error, :audit_revoked} end
-
-    assert {:ok, result} =
-             DeliveryReconciler.reconcile(repo, work_request.id,
-               mode: :apply,
-               append_blocker_closeout_event: failing_appender
-             )
-
-    assert result.applied_count == 1
-    assert result.error_count == 0
-
-    assert [
-             %{
-               status: "applied",
-               reason: "github_pr_merged",
-               blocker_closeout_repair: %{status: "deferred", reason: "audit_revoked"}
-             }
-           ] = result.results
-
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
-    assert reconcile_blocker_closeout_events(repo, linked_package.id) == []
-
-    assert {:ok, retry} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply)
-
-    assert retry.applied_count == 1
-
-    assert [
-             %{
-               status: "applied",
-               reason: "already_closeout_blocker_closeout_repaired",
-               blocker_closeout_event_ids: [event_id]
-             }
-           ] = retry.results
-
-    blocker_closeout_event = repo.get!(ProgressEvent, event_id)
-    assert blocker_closeout_event.payload["blocker_id"] == "append-failure-blocker"
-    assert blocker_closeout_event.payload["decision"] == "still_active"
-  end
-
-  test "apply repairs missing blocker preservation events for already closed deliveries", %{repo: repo} do
-    {work_request, work_package, linked_package} =
-      linked_slice!(
-        repo,
-        work_request_id: "WR-RECONCILE-BLOCKER-REPAIR",
-        work_package_id: "WP-RECONCILE-BLOCKER-REPAIR",
-        status: "ready_for_merge"
-      )
-
-    append_merged_pr_evidence!(repo, linked_package, 920, "head-920")
-    append_active_blocker!(repo, linked_package.id, "repair-blocker")
-
-    assert {:ok, _delivery} =
-             WorkRequestService.record_work_package_delivery(
-               repo,
-               work_request.id,
-               work_package.id,
-               merged_pr_delivery_attrs(920, %{"allow_active_blocker_closeout" => true})
-             )
-
-    assert reconcile_blocker_closeout_events(repo, linked_package.id) == []
-    append_blocker_resolution!(repo, linked_package.id, "repair-blocker")
-
-    assert {:ok, scoped_dry_run} =
-             DeliveryReconciler.reconcile(repo, work_request.id, visible_work_package_ids: [])
-
-    assert scoped_dry_run.proposed_count == 0
-    assert [%{status: "skipped", reason: "already_closeout", delivery_outcome: "pr_merged"} = scoped_result] = scoped_dry_run.results
-    assert scoped_result.work_package_status == "merged"
-
-    assert {:ok, dry_run} = DeliveryReconciler.reconcile(repo, work_request.id)
-    assert dry_run.proposed_count == 1
-
-    assert [
-             %{
-               status: "proposed",
-               reason: "already_closeout_blocker_closeout_repair",
-               delivery_outcome: "pr_merged",
-               action: dry_run_action
-             }
-           ] = dry_run.results
-
-    assert dry_run_action.blocker_closeout.blocker_ids == ["repair-blocker"]
-    assert dry_run_action.blocker_closeout.summary == "Preserve active blockers while repairing merged PR delivery closeout."
-    assert reconcile_blocker_closeout_events(repo, linked_package.id) == []
-
-    assert {:ok, result} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply)
-
-    assert result.applied_count == 1
-
-    assert [
-             %{
-               status: "applied",
-               reason: "already_closeout_blocker_closeout_repaired",
-               delivery_outcome: "pr_merged",
-               blocker_closeout_event_ids: [event_id]
-             }
-           ] = result.results
-
-    blocker_closeout_event = repo.get!(ProgressEvent, event_id)
-    assert blocker_closeout_event.payload["blocker_id"] == "repair-blocker"
-    assert blocker_closeout_event.payload["decision"] == "still_active"
-
-    assert {:ok, replay} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply)
-    assert replay.applied_count == 0
-    assert [%{status: "skipped", reason: "already_closeout", delivery_outcome: "pr_merged"}] = replay.results
-    assert length(reconcile_blocker_closeout_events(repo, linked_package.id)) == 1
-  end
-
-  test "already closed blocker repair summary names non-PR delivery outcomes", %{repo: repo} do
-    {work_request, work_package, linked_package} =
-      linked_slice!(
-        repo,
-        work_request_id: "WR-RECONCILE-NO-PR-BLOCKER-REPAIR",
-        work_package_id: "WP-RECONCILE-NO-PR-BLOCKER-REPAIR",
-        status: "reviewing"
-      )
-
-    append_active_blocker!(repo, linked_package.id, "no-pr-repair-blocker")
-
-    assert {:ok, _delivery} =
-             WorkRequestService.record_work_package_delivery(
-               repo,
-               work_request.id,
-               work_package.id,
-               no_pr_delivery_attrs("no-pr-repair", %{"allow_active_blocker_closeout" => true})
-             )
-
-    append_blocker_resolution!(repo, linked_package.id, "no-pr-repair-blocker")
-
-    assert {:ok, dry_run} = DeliveryReconciler.reconcile(repo, work_request.id)
-
-    assert [
-             %{
-               status: "proposed",
-               reason: "already_closeout_blocker_closeout_repair",
-               delivery_outcome: "completed_no_pr",
-               action: dry_run_action
-             }
-           ] = dry_run.results
-
-    expected_summary = "Preserve active blockers while repairing completed no pr delivery closeout."
-    assert dry_run_action.blocker_closeout.summary == expected_summary
-
-    assert {:ok, result} = DeliveryReconciler.reconcile(repo, work_request.id, mode: :apply)
-    assert [%{blocker_closeout_event_ids: [event_id]}] = result.results
-
-    blocker_closeout_event = repo.get!(ProgressEvent, event_id)
-    assert blocker_closeout_event.summary == expected_summary
-  end
-
-  test "already closed repair defers remaining blocker events after partial append", %{repo: repo} do
-    {work_request, work_package, linked_package} =
-      linked_slice!(
-        repo,
-        work_request_id: "WR-RECONCILE-BLOCKER-PARTIAL-REPAIR",
-        work_package_id: "WP-RECONCILE-BLOCKER-PARTIAL-REPAIR",
-        status: "ready_for_merge"
-      )
-
-    append_merged_pr_evidence!(repo, linked_package, 922, "head-922")
-    append_active_blocker!(repo, linked_package.id, "partial-repair-a")
-    append_active_blocker!(repo, linked_package.id, "partial-repair-b")
-
-    assert {:ok, _delivery} =
-             WorkRequestService.record_work_package_delivery(
-               repo,
-               work_request.id,
-               work_package.id,
-               merged_pr_delivery_attrs(922, %{"allow_active_blocker_closeout" => true})
-             )
-
-    Process.put(:partial_repair_append_count, 0)
-
-    failing_second_appender = fn callback_repo, _work_package_id, attrs ->
-      count = Process.get(:partial_repair_append_count, 0) + 1
-      Process.put(:partial_repair_append_count, count)
-
-      case count do
-        1 -> PlanningRepository.append_progress_event(callback_repo, attrs)
-        _count -> {:error, :audit_revoked}
-      end
-    end
-
-    assert {:ok, result} =
-             DeliveryReconciler.reconcile(repo, work_request.id,
-               mode: :apply,
-               append_blocker_closeout_event: failing_second_appender
-             )
-
-    assert result.applied_count == 1
-    assert result.error_count == 0
-
-    assert [
-             %{
-               status: "applied",
-               reason: "already_closeout_blocker_closeout_repaired",
-               blocker_closeout_event_ids: [_event_id],
-               blocker_closeout_repair: %{status: "deferred", reason: "audit_revoked"}
-             }
-           ] = result.results
-
-    assert length(reconcile_blocker_closeout_events(repo, linked_package.id)) == 1
-  end
-
-  test "MCP reconcile_work_request apply keys blocker preservation by active blocker event", %{repo: repo} do
-    {work_request, _work_package, linked_package} =
-      linked_slice!(
-        repo,
-        work_request_id: "WR-RECONCILE-MCP-RERAISED-BLOCKER",
-        work_package_id: "WP-RECONCILE-MCP-RERAISED-BLOCKER",
-        status: "ready_for_merge"
-      )
-
-    append_merged_pr_evidence!(repo, linked_package, 918, "head-918")
-    append_active_blocker!(repo, linked_package.id, "reraised-blocker", idempotency_key: "reraised-blocker:first")
-
-    assert {:ok, old_closeout_event} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: linked_package.id,
-               summary: "Preserved prior active blocker",
-               status: "blocked",
-               idempotency_key:
-                 [
-                   "blocker_closeout",
-                   "reconcile_work_request",
-                   linked_package.id,
-                   "reraised-blocker",
-                   "still_active"
-                 ]
-                 |> Enum.join(":"),
-               payload: %{
-                 type: "blocker_closeout_decision",
-                 source_tool: "reconcile_work_request",
-                 blocker_id: "reraised-blocker",
-                 decision: "still_active"
-               }
-             })
-
-    append_blocker_resolution!(repo, linked_package.id, "reraised-blocker")
-
-    reraised_blocker =
-      append_active_blocker!(repo, linked_package.id, "reraised-blocker", idempotency_key: "reraised-blocker:second")
-
-    session = create_work_request_architect_session(repo, work_request, ["read:work_request", "write:work_request"])
-
-    response = mcp_tool(repo, session, "reconcile_work_request", %{"work_request_id" => work_request.id, "apply" => true})
-    payload = get_in(response, ["result", "structuredContent", "reconciliation"])
-
-    assert [result] = payload["results"]
-    assert [event_id] = result["blocker_closeout_event_ids"]
-    refute event_id == old_closeout_event.id
-
-    blocker_closeout_event = repo.get!(ProgressEvent, event_id)
-
-    assert blocker_closeout_event.idempotency_key ==
-             [
-               "blocker_closeout",
-               "reconcile_work_request",
-               linked_package.id,
-               "reraised-blocker",
-               reraised_blocker.id,
-               "still_active"
-             ]
-             |> Enum.join(":")
-
-    assert blocker_closeout_event.payload["blocker_id"] == "reraised-blocker"
-    assert blocker_closeout_event.payload["decision"] == "still_active"
   end
 
   test "MCP reconcile_work_request apply returns fresh post-closeout delivery board", %{repo: repo} do
@@ -1185,36 +888,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     event
   end
 
-  defp append_blocker_resolution!(repo, work_package_id, blocker_id) do
-    assert {:ok, event} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: work_package_id,
-               summary: "Review scope blocker resolved",
-               status: "resolved",
-               idempotency_key: "#{blocker_id}:resolved",
-               payload: %{
-                 type: "blocker",
-                 source_tool: "resolve_blocker",
-                 blocker_id: blocker_id,
-                 active: false
-               }
-             })
-
-    event
-  end
-
-  defp reconcile_blocker_closeout_events(repo, work_package_id) do
-    repo.all(
-      from(event in ProgressEvent,
-        where: event.work_package_id == ^work_package_id,
-        order_by: [asc: event.sequence]
-      )
-    )
-    |> Enum.filter(fn event ->
-      event.payload["type"] == "blocker_closeout_decision" and event.payload["source_tool"] == "reconcile_work_request"
-    end)
-  end
-
   defp closeout_event!(repo) do
     closeout_events =
       repo.all(ProgressEvent)
@@ -1228,34 +901,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     Revision
     |> repo.all()
     |> Enum.count(&(&1.work_request_id == work_request_id))
-  end
-
-  defp merged_pr_delivery_attrs(number, overrides) do
-    Map.merge(
-      %{
-        outcome: "pr_merged",
-        idempotency_key: "delivery-reconciler-test:#{number}",
-        recorded_by: "reconciler-test",
-        pr_url: "https://github.com/nextide/repo/pull/#{number}",
-        pr_number: number,
-        pr_repository: "nextide/repo",
-        pr_merged_at: ~U[2026-05-24 12:00:00Z],
-        merge_commit_sha: "merge-sha-#{number}"
-      },
-      overrides
-    )
-  end
-
-  defp no_pr_delivery_attrs(suffix, overrides) do
-    Map.merge(
-      %{
-        outcome: "completed_no_pr",
-        idempotency_key: "delivery-reconciler-test:no-pr:#{suffix}",
-        recorded_by: "reconciler-test",
-        no_pr_evidence: "Operator confirmed this slice completed without a PR."
-      },
-      overrides
-    )
   end
 
   defp work_request_attrs(overrides) do

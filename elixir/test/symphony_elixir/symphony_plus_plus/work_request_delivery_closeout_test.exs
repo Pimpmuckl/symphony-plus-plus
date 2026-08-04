@@ -12,6 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
@@ -306,7 +307,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     assert %ClaimLease{status: "paused"} = repo.get!(ClaimLease, claim_lease.id)
   end
 
-  test "PR merged recovery closeout still rejects active blockers", %{repo: repo} do
+  test "PR merged recovery closeout clears active blockers", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_worker")
 
     assert {:ok, _blocker} =
@@ -329,9 +330,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
         merge_commit_sha: "abc126"
       })
 
-    assert {:error, :active_blocker} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-    assert repo.get!(WorkPackage, linked_package.id).status == "ready_for_worker"
+    assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+    assert delivery.outcome == "pr_merged"
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
+    assert repo.get!(WorkPackage, linked_package.id).status == "merged"
+    refute WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
   end
 
   test "completed_no_pr superseded and abandoned close compatible linked packages to terminal states", %{repo: repo} do

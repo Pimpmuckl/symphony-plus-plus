@@ -26,7 +26,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   @started_package_statuses ["claimed", "planning", "implementing"]
   @prepared_worktree_statuses ["prepared", "already_prepared"]
   @merged_package_statuses ["merged", "merged_into_phase"]
-  @closed_package_statuses ["closed", "abandoned"]
+  @closed_package_statuses ["closed", "abandoned", "skipped"]
   @scope_guard_gate "scope_guard"
 
   @type repo :: module()
@@ -283,6 +283,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
   defp blocking_or_terminal_operational_state(status, active_blocker_count, metadata) do
     cond do
+      status in @merged_package_statuses ->
+        operational_state("merged", "Merged", "success", "Raw lifecycle status indicates merged delivery.", status)
+
+      status in @closed_package_statuses ->
+        operational_state(status, status_label(status), "neutral", "Raw lifecycle status is #{status}.", status)
+
       active_blocker_count > 0 ->
         operational_state("blocked", "Blocked", "critical", blocker_detail(active_blocker_count), status)
 
@@ -291,12 +297,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
       pr_merged?(metadata) and open_package_status?(status) ->
         operational_state("merged", "Merged", "success", "PR metadata reports a merged pull request while raw status is #{status}.", status)
-
-      status in @merged_package_statuses ->
-        operational_state("merged", "Merged", "success", "Raw lifecycle status indicates merged delivery.", status)
-
-      status in @closed_package_statuses ->
-        operational_state(status, status_label(status), "neutral", "Raw lifecycle status is #{status}.", status)
 
       true ->
         nil
@@ -397,8 +397,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   end
 
   defp merged_attention_items(base_state, delivery_state) do
-    (Map.get(base_state, :attention_items, []) ++ Map.get(delivery_state, :attention_items, []))
-    |> Enum.uniq_by(&Map.get(&1, :key))
+    if Map.get(delivery_state, :delivery_outcome) do
+      Map.get(delivery_state, :attention_items, [])
+    else
+      (Map.get(base_state, :attention_items, []) ++ Map.get(delivery_state, :attention_items, []))
+      |> Enum.uniq_by(&Map.get(&1, :key))
+    end
   end
 
   defp base_work_package_operational_state(%WorkPackage{} = work_package, nil) do
@@ -498,6 +502,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   end
 
   defp promoted_context_operational_state?(_state), do: false
+
+  defp work_package_attention_items(%WorkPackage{status: status}, _blockers, _context)
+       when status in @merged_package_statuses or status in @closed_package_statuses,
+       do: []
 
   defp work_package_attention_items(%WorkPackage{} = work_package, blockers, context) do
     missing_readiness = Map.fetch!(context, :missing_readiness)

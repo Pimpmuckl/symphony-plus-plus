@@ -10,6 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository, as: ProductTreeRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
@@ -96,14 +97,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     assert superseded.work_package.raw_status == "implementing"
     assert superseded.operational_state.key == "superseded"
     assert superseded.operational_state.raw_status == "implementing"
-    assert "work_package_status_stale_after_delivery" in superseded.attention_reason_codes
+    assert superseded.attention_reason_codes == []
     assert superseded.successor.work_package.id == successor_slice.id
     assert superseded.successor.work_package.id == successor_package.id
     assert successor.work_package.kind == "docs"
     assert successor.delivery_outcome == nil
   end
 
-  test "terminal delivery outcome overrides stale blocked package truth while preserving raw detail", %{repo: repo} do
+  test "terminal delivery outcome suppresses stale blocked attention while preserving raw detail", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-STALE")
 
     {work_package, linked_package} =
@@ -169,8 +170,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
              checks: %{status: "passing", current: 3, total: 3}
            } = slice.work_package.pr_signal
 
-    assert "work_package_blocked_after_delivery" in slice.attention_reason_codes
-    assert "work_package_status_stale_after_delivery" in slice.attention_reason_codes
+    assert slice.attention_reason_codes == []
+    assert slice.operational_state.attention_items == []
+    refute WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
+  end
+
+  test "terminal delivery retains live runtime attention", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-BOARD-LIVE-RUNTIME")
+
+    {work_package, linked_package} =
+      linked_slice!(repo, work_request,
+        id: "WRS-BOARD-LIVE-RUNTIME",
+        work_package_id: "WP-BOARD-LIVE-RUNTIME",
+        status: "ready_for_merge"
+      )
+
+    assert {:ok, _delivery} =
+             Repository.record_work_package_delivery(
+               repo,
+               work_request.id,
+               work_package.id,
+               delivery_attrs(%{
+                 outcome: "completed_no_pr",
+                 idempotency_key: "delivery-board-live-runtime",
+                 no_pr_evidence: "The package was completed without a pull request."
+               })
+             )
+
+    assert {:ok, _run} =
+             AgentRunRepository.start_run(repo, %{
+               work_package_id: linked_package.id,
+               status: "running",
+               attempt: 1,
+               worker_task_handle: "post-delivery-runtime",
+               started_at: DateTime.utc_now(:microsecond),
+               last_seen_at: DateTime.utc_now(:microsecond)
+             })
+
+    assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
+    assert slice.operational_state.key == "completed_no_pr"
+    assert slice.attention_reason_codes == ["work_package_active_after_delivery"]
   end
 
   test "merged PR metadata without delivery outcome projects as needs closeout", %{repo: repo} do
@@ -554,7 +593,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   test "scoped projection treats filtered linked packages as hidden instead of missing", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-HIDDEN-PACKAGE")
 
-    {_work_package, _linked_package} =
+    {work_package, _linked_package} =
       linked_slice!(repo, work_request,
         id: "WRS-BOARD-HIDDEN-PACKAGE",
         work_package_id: "WP-BOARD-HIDDEN-PACKAGE",
@@ -566,6 +605,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     assert slice.work_package_hidden? == true
     assert slice.operational_state.key == "dispatched"
     assert slice.attention_reason_codes == []
+
+    assert {:ok, _delivery} =
+             Repository.record_work_package_delivery(
+               repo,
+               work_request.id,
+               work_package.id,
+               delivery_attrs(%{
+                 outcome: "completed_no_pr",
+                 idempotency_key: "delivery-board-hidden-package",
+                 no_pr_evidence: "The hidden package was completed without a pull request."
+               })
+             )
+
+    assert {:ok, %{work_packages: [delivered_slice]}} =
+             DeliveryBoard.project(repo, work_request.id, visible_work_package_ids: [])
+
+    assert delivered_slice.work_package == nil
+    assert delivered_slice.work_package_hidden? == true
+    assert delivered_slice.operational_state.key == "completed_no_pr"
+    assert delivered_slice.attention_reason_codes == []
   end
 
   test "keeps skipped WorkPackages visible on the delivery board", %{repo: repo} do

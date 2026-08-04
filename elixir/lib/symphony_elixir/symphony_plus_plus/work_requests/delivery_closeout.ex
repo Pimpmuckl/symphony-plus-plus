@@ -541,9 +541,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     end
   end
 
-  defp delivery_closeout_opts(attrs) when is_map(attrs) do
-    [allow_active_blockers?: map_value(attrs, :allow_active_blocker_closeout) == true]
-  end
+  defp delivery_closeout_opts(_attrs), do: [allow_active_blockers?: true]
 
   defp reject_non_recoverable_pr_runtime_context(context) do
     reason_codes = List.wrap(get_in(context, [:runtime_state, :reason_codes]))
@@ -1231,7 +1229,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp closeout_progress_summary(%WorkPackageDelivery{} = delivery, closeout_context) do
     if closeout_context.active_blocker_ids != [] do
-      "Recorded WorkRequest delivery closeout: #{delivery.outcome} (active blockers preserved)"
+      "Recorded WorkRequest delivery closeout: #{delivery.outcome} (active blockers cleared)"
     else
       "Recorded WorkRequest delivery closeout: #{delivery.outcome}"
     end

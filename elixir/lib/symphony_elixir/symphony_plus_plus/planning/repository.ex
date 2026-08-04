@@ -322,6 +322,39 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     end)
   end
 
+  @spec list_progress_events_for_blockers_targeting_work_package(repo(), String.t()) ::
+          {:ok, [ProgressEvent.t()]} | {:error, error()}
+  def list_progress_events_for_blockers_targeting_work_package(repo, work_package_id)
+      when is_atom(repo) and is_binary(work_package_id) do
+    list_progress_events_for_blockers_targeting_work_packages(repo, [work_package_id])
+  end
+
+  @spec list_progress_events_for_blockers_targeting_work_packages(repo(), [String.t()]) ::
+          {:ok, [ProgressEvent.t()]} | {:error, error()}
+  def list_progress_events_for_blockers_targeting_work_packages(_repo, []), do: {:ok, []}
+
+  def list_progress_events_for_blockers_targeting_work_packages(repo, work_package_ids)
+      when is_atom(repo) and is_list(work_package_ids) do
+    work_package_ids = Enum.uniq(work_package_ids)
+
+    with {:ok, owner_ids} <-
+           safe_all(repo, fn ->
+             from(progress_event in ProgressEvent,
+               where: fragment("json_extract(?, '$.blocked_item.kind') = ?", progress_event.payload, "work_package"),
+               where: fragment("json_extract(?, '$.blocked_item.id')", progress_event.payload) in ^work_package_ids,
+               select: progress_event.work_package_id,
+               distinct: true
+             )
+           end) do
+      safe_all(repo, fn ->
+        from(progress_event in ProgressEvent,
+          where: progress_event.work_package_id in ^owner_ids,
+          order_by: [asc: progress_event.work_package_id, asc: progress_event.sequence, asc: progress_event.id]
+        )
+      end)
+    end
+  end
+
   @spec get_progress_event_by_idempotency_key(repo(), String.t(), String.t()) ::
           {:ok, ProgressEvent.t()} | {:error, error()}
   def get_progress_event_by_idempotency_key(repo, work_package_id, idempotency_key)

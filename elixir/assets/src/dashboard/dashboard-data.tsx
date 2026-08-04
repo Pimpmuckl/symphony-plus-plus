@@ -129,10 +129,8 @@ export function activeBlockerItems(
 }
 
 function activeBlockerPackageIds(edge: ActiveBlockingEdge) {
-  return [...new Set([
-    edge.work_package_id,
-    edge.to.kind === "work_package" ? edge.to.id : null,
-  ].filter((id): id is string => Boolean(id)))];
+  const targetId = edge.to.kind === "work_package" && edge.to.id ? edge.to.id : edge.work_package_id;
+  return targetId ? [targetId] : [];
 }
 
 function activeBlockerItemsForPackage(pkg: WorkPackageCard, packageSelections: ReadonlyMap<string, CardDetailSelection>, edgesByPackageId: ReadonlyMap<string, ActiveBlockingEdge[]>): BlockerItem[] {
