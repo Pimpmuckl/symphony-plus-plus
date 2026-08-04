@@ -493,10 +493,6 @@ function Test-ArtifactBackendProvidesDashboard($RuntimeState, $BackendPlan, [str
     return $true
   }
 
-  if ($BackendPlan.reused -eq $true -and $BackendPlan.should_start -ne $true) {
-    return $true
-  }
-
   return $null -ne $RuntimeState -and
     $RuntimeState.PSObject.Properties["runtime_kind"] -and
     [System.StringComparer]::OrdinalIgnoreCase.Equals([string]$RuntimeState.runtime_kind, "artifact") -and

@@ -201,6 +201,13 @@ function Initialize-BetaWorktree($Config) {
   $remote = @(Invoke-BetaGit $Config.worktree @("config", "--get", "branch.beta.remote")) | Select-Object -First 1
   $merge = @(Invoke-BetaGit $Config.worktree @("config", "--get", "branch.beta.merge")) | Select-Object -First 1
   if ($remote -ne "origin" -or $merge -ne "refs/heads/beta") { throw "Beta branch is not tracking origin/beta." }
+
+  if (@(Invoke-BetaGit $Config.worktree @("status", "--porcelain")).Count -gt 0) {
+    throw "Refusing to update dirty beta worktree: $($Config.worktree)"
+  }
+  $counts = ((@(Invoke-BetaGit $Config.worktree @("rev-list", "--left-right", "--count", "HEAD...origin/beta")) | Select-Object -First 1) -split "\s+")
+  if ([int]$counts[0] -gt 0) { throw "Refusing to update beta because local commits are not on origin/beta." }
+  if ([int]$counts[1] -gt 0) { [void](Invoke-BetaGit $Config.worktree @("merge", "--ff-only", "origin/beta")) }
 }
 
 function Get-BetaEnvironment($Config, [switch]$Package) {
@@ -273,6 +280,13 @@ function Get-BetaProcessCommandLine([int]$ProcessId) {
     try { return ([System.IO.File]::ReadAllText($path) -replace [char]0, " ").Trim() } catch { }
   }
   return $null
+}
+
+function Test-BetaRuntimeProcessRunning($Entry) {
+  $processId = 0
+  return $null -ne $Entry -and $Entry.managed -eq $true -and
+    [int]::TryParse([string]$Entry.pid, [ref]$processId) -and $processId -gt 0 -and
+    $null -ne (Get-Process -Id $processId -ErrorAction SilentlyContinue)
 }
 
 function Stop-BetaRuntimeEntry([string]$Role, $Entry) {
@@ -351,8 +365,8 @@ function Get-BetaStatus($Config) {
     branch = if (Test-Path -LiteralPath $Config.worktree) { (@(Invoke-BetaGit $Config.worktree @("branch", "--show-current")) | Select-Object -First 1) } else { $null }
     ledger_mode = $Config.ledger_mode
     environment = Get-BetaEnvironment $Config
-    backend_running = $null -ne $state -and $null -ne (Get-Process -Id ([int]$state.backend.pid) -ErrorAction SilentlyContinue)
-    frontend_running = $null -ne $state -and $null -ne (Get-Process -Id ([int]$state.frontend.pid) -ErrorAction SilentlyContinue)
+    backend_running = $null -ne $state -and (Test-BetaRuntimeProcessRunning $state.backend)
+    frontend_running = $null -ne $state -and (Test-BetaRuntimeProcessRunning $state.frontend)
     runtime_file = $Config.runtime_file
   }
 }
