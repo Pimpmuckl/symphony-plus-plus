@@ -109,7 +109,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
                  "actor_kind" => "agent",
                  "actor_id" => "local:delivery-residue",
                  "actor_display_name" => "delivery-residue"
-               }, stale_after_ms: 60_000)
+               },
+               stale_after_ms: 60_000
+             )
   end
 
   test "PR merged recovery closeout merges stale linked package and retires worker grant", %{repo: repo} do
