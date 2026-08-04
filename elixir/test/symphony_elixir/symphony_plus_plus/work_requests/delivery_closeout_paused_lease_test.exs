@@ -89,15 +89,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
       assert %ClaimLease{status: "released", release_reason: "completed_no_pr_delivery_closeout"} =
                repo.get!(ClaimLease, claim_lease.id)
 
+      assert File.dir?(prepared.worktree_path)
       assert {:ok, replay} = WorkRequestService.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
       assert replay.id == delivery.id
-      assert File.dir?(prepared.worktree_path)
+      refute File.exists?(prepared.worktree_path)
+      assert repo.get!(WorkPackage, linked_package.id).worktree_path == nil
 
       assert {:ok, _archived} = WorkRequestService.archive(repo, work_request.id)
       Process.sleep(100)
-      assert File.dir?(prepared.worktree_path)
-
-      assert {:ok, _cleaned} = WorktreeLifecycle.cleanup(repo, linked_package.id, codex_home: codex_home)
       refute File.exists?(prepared.worktree_path)
     after
       restore_env("CODEX_HOME", previous_codex_home)
