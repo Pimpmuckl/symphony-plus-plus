@@ -12,7 +12,7 @@ export function LiveLedgerBadge({
   databasePath?: string | null;
 }) {
   const reconnecting = Boolean(connectionIssue && !error);
-  const label = error ? "API unavailable" : reconnecting ? "Reconnecting..." : "Live ledger";
+  const label = error ? "API unavailable" : reconnecting ? "Reconnecting..." : "Ledger connected";
   const variant = error ? "danger" : reconnecting ? "warning" : "success";
   const heading = error || reconnecting ? "Status" : "Database";
   const tooltip = error
