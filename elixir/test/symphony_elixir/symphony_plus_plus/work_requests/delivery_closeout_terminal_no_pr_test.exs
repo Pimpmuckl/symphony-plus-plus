@@ -45,7 +45,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
     :ok
   end
 
-  test "active blockers still prevent normal no-PR closeout", %{repo: repo} do
+  test "normal no-PR closeout resolves active blockers", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "reviewing")
 
     assert {:ok, _blocker} =
@@ -57,7 +57,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
                payload: %{type: "blocker", source_tool: "report_blocker", blocker_id: "closeout", active: true}
              })
 
-    assert {:error, :active_blocker} =
+    assert {:ok, delivery} =
              Service.record_work_package_delivery(
                repo,
                work_request.id,
@@ -69,8 +69,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
                })
              )
 
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-    assert repo.get!(WorkPackage, linked_package.id).status == "reviewing"
+    assert delivery.outcome == "completed_no_pr"
+    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
+    assert repo.get!(WorkPackage, linked_package.id).status == "closed"
+    refute WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
   end
 
   test "superseded closeout closes stale package and resolves active blockers", %{repo: repo} do
