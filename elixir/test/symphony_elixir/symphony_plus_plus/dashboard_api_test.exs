@@ -4395,7 +4395,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert recovery_detail.product_tree.summary.blocker_count == 1
 
       architect_anchor =
-        Repo.get!(WorkPackage, "WP-RECOVERY-OLD")
+        Repo.get!(WorkPackage, "WP-RECOVERY-VALIDATE")
         |> Ecto.Changeset.change(kind: "delegation")
         |> Repo.update!()
 
