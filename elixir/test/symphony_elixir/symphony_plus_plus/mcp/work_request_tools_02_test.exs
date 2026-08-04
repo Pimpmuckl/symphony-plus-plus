@@ -262,7 +262,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute Map.has_key?(product_tree, "nodes")
   end
 
-  test "record_work_package_delivery requires active blocker closeout and can preserve blockers", %{repo: repo} do
+  test "record_work_package_delivery clears active blocker residue", %{repo: repo} do
     {work_request, work_package, work_package} =
       linked_delivery_slice!(repo,
         id_suffix: "PRESERVE",
@@ -278,7 +278,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
 
     append_active_blocker!(repo, work_package.id, "preserve-blocker")
 
-    missing_closeout_response =
+    response =
       mcp_tool(repo, session, "record_work_package_delivery", %{
         "work_request_id" => work_request.id,
         "work_package_id" => work_package.id,
@@ -295,78 +295,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
         }
       })
 
-    assert get_in(missing_closeout_response, ["error", "data", "reason_code"]) == "blocker_closeout_required"
-    assert [%{"blocker_id" => "preserve-blocker", "work_package_id" => blocker_work_package_id}] = get_in(missing_closeout_response, ["error", "data", "active_blockers"])
-    assert blocker_work_package_id == work_package.id
-
-    preserve_response =
-      mcp_tool(repo, session, "record_work_package_delivery", %{
-        "work_package_id" => work_package.id,
-        "outcome" => "pr_merged",
-        "idempotency_key" => "delivery-preserve-with-closeout",
-        "evidence" => %{
-          "pr_merged" => %{
-            "pr_url" => "https://github.com/nextide/symphony-plus-plus/pull/201",
-            "pr_number" => 201,
-            "pr_repository" => "nextide/symphony-plus-plus",
-            "pr_merged_at" => "2026-06-07T10:00:00Z",
-            "merge_commit_sha" => "abc201"
-          }
-        },
-        "blocker_closeout" => %{
-          "decision" => "still_active",
-          "blocker_ids" => ["preserve-blocker"],
-          "summary" => "Blocker is intentionally preserved after merge"
-        }
-      })
-
-    assert get_in(preserve_response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "pr_merged"
-    assert get_in(preserve_response, ["result", "structuredContent", "blocker_closeout", "decision"]) == "still_active"
+    assert get_in(response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "pr_merged"
+    refute get_in(response, ["result", "structuredContent"]) |> Map.has_key?("blocker_closeout")
     assert repo.get!(WorkPackage, work_package.id).status == "merged"
 
     assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
-    assert [%{active: true, id: "preserve-blocker"}] = progress_events |> BlockerProjection.blockers() |> Enum.filter(& &1.active)
-  end
-
-  test "record_work_package_delivery can resolve active blockers before closeout", %{repo: repo} do
-    {work_request, work_package, work_package} =
-      linked_delivery_slice!(repo,
-        id_suffix: "RESOLVE",
-        package_status: "reviewing"
-      )
-
-    {_anchor, session, _grant} =
-      create_work_request_handoff_architect_session(repo, work_request, [
-        "read:work_request",
-        "write:work_request",
-        "dispatch:work_request"
-      ])
-
-    append_active_blocker!(repo, work_package.id, "resolve-blocker")
-
-    response =
-      mcp_tool(repo, session, "record_work_package_delivery", %{
-        "work_request_id" => work_request.id,
-        "work_package_id" => work_package.id,
-        "outcome" => "completed_no_pr",
-        "idempotency_key" => "delivery-resolve-with-closeout",
-        "evidence" => %{
-          "completed_no_pr" => %{"no_pr_evidence" => "Operator confirmed this landed directly."}
-        },
-        "blocker_closeout" => %{
-          "decision" => "resolved",
-          "blocker_ids" => ["resolve-blocker"],
-          "resolution" => "The review-scope blocker was handled before closeout."
-        }
-      })
-
-    assert get_in(response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "completed_no_pr"
-    assert get_in(response, ["result", "structuredContent", "blocker_closeout", "decision"]) == "resolved"
-    assert repo.get!(WorkPackage, work_package.id).status == "closed"
-
-    assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
     refute Enum.any?(BlockerProjection.blockers(progress_events), & &1.active)
-    assert Enum.any?(progress_events, &(get_in(&1.payload, ["source_tool"]) == "resolve_blocker" and get_in(&1.payload, ["blocker_id"]) == "resolve-blocker"))
+    assert Enum.any?(progress_events, &(get_in(&1.payload, ["source_tool"]) == "resolve_blocker" and get_in(&1.payload, ["blocker_id"]) == "preserve-blocker"))
   end
 
   test "deleting a Group ungroups its direct contents and removes its dependencies", %{repo: repo} do

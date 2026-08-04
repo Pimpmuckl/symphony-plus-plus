@@ -155,6 +155,38 @@ describe("WorkRequest attention badge targets", () => {
     expect(dashboardAttentionItems([completed], new Map([[pkg.id, pkg]]), [], [guidance], [blocker])).toEqual([]);
   });
 
+  it("drops stale blocker and guidance attention attached to a delivered WorkPackage", () => {
+    const slice = requestSlice("slice-delivered", "blocked", "wp-delivered");
+    slice.operational_state = { key: "blocked", delivery_outcome: "pr_merged" };
+    const detail = requestDetail([slice]);
+    const pkg: WorkPackageCard = {
+      id: "wp-delivered",
+      status: "blocked",
+      active_blockers: [{ id: "stale-blocker", active: true }],
+    };
+    const guidance: GuidanceItem = {
+      source: "guidance",
+      id: "stale-guidance",
+      repo: "fixture/repo",
+      repoKey: "fixture/repo",
+      title: "Stale guidance",
+      packageId: pkg.id,
+      detail: "Already delivered.",
+      guidance: { id: "stale-guidance", work_package_id: pkg.id },
+    };
+    const blocker: BlockerItem = {
+      id: "stale-blocker",
+      title: "Stale blocker",
+      repo: "fixture/repo",
+      blockerCount: 1,
+      detail: "Already delivered.",
+      selection: { kind: "slice", detail, slice, pkg },
+    };
+
+    expect(workPackageDirectAttention(detail, slice, pkg, [], [guidance])).toBeNull();
+    expect(dashboardAttentionItems([detail], new Map([[pkg.id, pkg]]), [], [guidance], [blocker])).toEqual([]);
+  });
+
   it("opens every attention item under a Group with blockers first", () => {
     const slice = requestSlice("slice-blocked", "blocked", "wp-blocked");
     slice.product_tree_node_id = "group-blocked";

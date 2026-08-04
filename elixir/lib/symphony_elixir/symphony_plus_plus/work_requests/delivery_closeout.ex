@@ -1231,7 +1231,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp closeout_progress_summary(%WorkPackageDelivery{} = delivery, closeout_context) do
     if closeout_context.active_blocker_ids != [] do
-      "Recorded WorkRequest delivery closeout: #{delivery.outcome} (active blockers preserved)"
+      "Recorded WorkRequest delivery closeout: #{delivery.outcome} (active blockers cleared)"
     else
       "Recorded WorkRequest delivery closeout: #{delivery.outcome}"
     end

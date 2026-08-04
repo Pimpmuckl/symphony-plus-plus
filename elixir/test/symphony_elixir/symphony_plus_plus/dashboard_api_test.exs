@@ -4663,7 +4663,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert get_in(slice, ["operational_state", "raw_status"]) == "ready_for_worker"
       assert get_in(slice, ["operational_state", "work_package_status"]) == "ready_for_worker"
       assert get_in(slice, ["delivery", "outcome"]) == "pr_merged"
-      assert "work_package_status_stale_after_delivery" in slice["attention_reason_codes"]
+      assert slice["attention_reason_codes"] == []
+      assert get_in(slice, ["operational_state", "attention_items"]) == []
     end)
   end
 
@@ -6815,7 +6816,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert {:ok, persisted_guidance} = GuidanceRequestRepository.get(repo, guidance_request.id)
       assert persisted_guidance.status == "answered"
-      assert persisted_guidance.answered_by == "work-request-completion"
+      assert persisted_guidance.answered_by == "terminal-cleanup"
 
       assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
       refute Enum.any?(BlockerProjection.blockers(progress_events), & &1.active)

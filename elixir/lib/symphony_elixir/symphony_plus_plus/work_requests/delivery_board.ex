@@ -847,22 +847,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     {key, status_label(key), "neutral", "Package status: #{key}.", []}
   end
 
-  defp terminal_delivery_attention_codes(%WorkPackageDelivery{} = delivery, work_package) do
-    [
-      if(work_package && active_blocker?(work_package), do: "work_package_blocked_after_delivery"),
-      if(work_package && active_runtime?(work_package), do: "work_package_active_after_delivery"),
-      if(is_map(work_package) and not package_reconciled_with_delivery?(work_package.raw_status, delivery.outcome),
-        do: "work_package_status_stale_after_delivery"
-      )
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
-  end
-
-  defp package_reconciled_with_delivery?(status, outcome) do
-    is_nil(WorkPackageDelivery.terminal_status_for_outcome(outcome)) or
-      WorkPackageDelivery.terminal_status_matches_outcome?(status, outcome)
-  end
+  defp terminal_delivery_attention_codes(%WorkPackageDelivery{}, _work_package), do: []
 
   defp state(key, label, tone, reason, raw_status, delivery_outcome, work_package, attention_reason_codes) do
     work_package = if is_map(work_package), do: work_package

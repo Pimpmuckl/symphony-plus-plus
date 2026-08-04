@@ -10,6 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Repository, as: ProductTreeRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals
@@ -96,14 +97,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     assert superseded.work_package.raw_status == "implementing"
     assert superseded.operational_state.key == "superseded"
     assert superseded.operational_state.raw_status == "implementing"
-    assert "work_package_status_stale_after_delivery" in superseded.attention_reason_codes
+    assert superseded.attention_reason_codes == []
     assert superseded.successor.work_package.id == successor_slice.id
     assert superseded.successor.work_package.id == successor_package.id
     assert successor.work_package.kind == "docs"
     assert successor.delivery_outcome == nil
   end
 
-  test "terminal delivery outcome overrides stale blocked package truth while preserving raw detail", %{repo: repo} do
+  test "terminal delivery outcome suppresses stale blocked attention while preserving raw detail", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-STALE")
 
     {work_package, linked_package} =
@@ -169,8 +170,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
              checks: %{status: "passing", current: 3, total: 3}
            } = slice.work_package.pr_signal
 
-    assert "work_package_blocked_after_delivery" in slice.attention_reason_codes
-    assert "work_package_status_stale_after_delivery" in slice.attention_reason_codes
+    assert slice.attention_reason_codes == []
+    assert slice.operational_state.attention_items == []
+    refute WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
   end
 
   test "merged PR metadata without delivery outcome projects as needs closeout", %{repo: repo} do

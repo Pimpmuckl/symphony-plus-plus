@@ -2,14 +2,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   @moduledoc false
 
   alias Ecto.Changeset
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
+  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
-  @completion_terminal_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
+  @terminal_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
   @delivery_closeout_terminal_statuses ["merged", "closed", "abandoned"]
   @legacy_ready_status "ready_for_human_merge"
   @ready_status "ready_for_merge"
@@ -94,12 +97,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
 
   @spec update(repo(), String.t(), map()) :: {:ok, WorkPackage.t()} | {:error, error()}
   def update(repo, id, attrs) when is_atom(repo) and is_binary(id) and is_map(attrs) do
-    with {:ok, work_package} <- get(repo, id) do
-      work_package
-      |> WorkPackage.update_changeset(attrs)
-      |> repo.update()
-      |> notify_dashboard(repo)
-    end
+    repo.transaction(fn ->
+      with {:ok, work_package} <- get(repo, id),
+           {:ok, updated} <- work_package |> WorkPackage.update_changeset(attrs) |> repo.update(),
+           :ok <- maybe_clear_terminal_attention(repo, updated) do
+        updated
+      else
+        {:error, reason} -> repo.rollback(reason)
+      end
+    end)
+    |> normalize_transaction_result()
+    |> notify_dashboard(repo)
   rescue
     error in Ecto.ConstraintError -> normalize_constraint_error(error)
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -125,9 +133,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
           {:ok, map() | nil} | {:error, error()}
   def close_delivery_work_package(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, next_status, opts \\ [])
       when is_atom(repo) and is_binary(next_status) and is_list(opts) do
-    close_delivery_package(repo, work_request, work_package, next_status, opts)
+    repo.transaction(fn ->
+      with {:ok, closeout} <- close_delivery_package(repo, work_request, work_package, next_status, opts),
+           :ok <- clear_terminal_attention(repo, closeout.work_package) do
+        closeout
+      else
+        {:error, reason} -> repo.rollback(reason)
+      end
+    end)
+    |> normalize_transaction_result()
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  @doc false
+  @spec clear_terminal_attention(repo(), WorkPackage.t()) :: :ok | {:error, error()}
+  def clear_terminal_attention(repo, %WorkPackage{id: work_package_id})
+      when is_atom(repo) and is_binary(work_package_id) do
+    now = DateTime.utc_now(:microsecond)
+
+    repo.update_all(
+      from(request in GuidanceRequest,
+        where: request.work_package_id == ^work_package_id,
+        where: request.status in ["open", "human_info_needed"]
+      ),
+      set: [
+        status: "answered",
+        answer: "Cleared because the owning work reached a terminal state.",
+        answered_by: "terminal-cleanup",
+        answered_at: now,
+        updated_at: now
+      ]
+    )
+
+    resolve_active_blockers(repo, work_package_id)
   end
 
   defp close_delivery_package(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, next_status, opts) do
@@ -168,8 +207,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp return_status_updated_work_package_or_rollback(repo, id, next_status) when next_status in @completion_terminal_statuses do
-    repo.get!(WorkPackage, id)
+  defp return_status_updated_work_package_or_rollback(repo, id, next_status) when next_status in @terminal_statuses do
+    work_package = repo.get!(WorkPackage, id)
+
+    case clear_terminal_attention(repo, work_package) do
+      :ok -> work_package
+      {:error, reason} -> repo.rollback(reason)
+    end
   end
 
   defp return_status_updated_work_package_or_rollback(repo, id, _next_status) do
@@ -239,7 +283,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   defp validate_delivery_terminal_status_compatibility(%WorkPackage{kind: @phase_child_kind, status: "merged_into_phase"}, "merged"), do: :ok
 
   defp validate_delivery_terminal_status_compatibility(%WorkPackage{status: status}, next_status)
-       when status in @completion_terminal_statuses and status != next_status do
+       when status in @terminal_statuses and status != next_status do
     {:error, :stale_status}
   end
 
@@ -321,6 +365,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
       true -> :ok
     end
   end
+
+  defp resolve_active_blockers(repo, work_package_id) do
+    with {:ok, events} <- PlanningRepository.list_progress_events(repo, work_package_id) do
+      events
+      |> BlockerProjection.blockers()
+      |> Enum.filter(& &1.active)
+      |> Enum.reduce_while(:ok, &resolve_active_blocker(repo, work_package_id, &1, &2))
+    end
+  end
+
+  defp resolve_active_blocker(repo, work_package_id, blocker, :ok) do
+    case PlanningRepository.append_progress_event(repo, %{
+           work_package_id: work_package_id,
+           summary: "Cleared blocker after terminal transition: #{blocker.summary || blocker.id}",
+           body: "The WorkPackage or its owning WorkRequest reached a terminal state.",
+           status: "resolved",
+           idempotency_key: "terminal-cleanup:#{work_package_id}:#{blocker.id}:#{blocker.event_id}",
+           payload: %{
+             type: "blocker",
+             source_tool: "resolve_blocker",
+             blocker_id: blocker.id,
+             resolution: "Owning work reached a terminal state.",
+             active: false
+           }
+         }) do
+      {:ok, _event} -> {:cont, :ok}
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp maybe_clear_terminal_attention(repo, %WorkPackage{status: status} = work_package)
+       when status in @terminal_statuses,
+       do: clear_terminal_attention(repo, work_package)
+
+  defp maybe_clear_terminal_attention(_repo, %WorkPackage{}), do: :ok
+
+  defp normalize_transaction_result({:ok, result}), do: {:ok, result}
+  defp normalize_transaction_result({:error, reason}), do: {:error, reason}
 
   defp normalize_insert_result({:ok, work_package}), do: {:ok, work_package}
 

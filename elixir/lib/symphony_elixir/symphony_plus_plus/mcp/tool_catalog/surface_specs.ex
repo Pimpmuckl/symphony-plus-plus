@@ -204,7 +204,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("reconcile_work_request"), do: "Dry-run or apply deterministic WorkRequest delivery closeout repairs from structured PR/GitHub evidence."
 
   defp architect_tool_description("record_work_package_delivery") do
-    "Record an idempotent work-package delivery closeout. Required evidence depends on outcome: pr_merged needs PR evidence, completed_no_pr needs direct evidence, superseded needs successor and reason, and abandoned needs rationale. Use abandoned for cleaned no-code failed dispatches that never reached implementation. If the WorkPackage has active blockers, answer blocker_closeout to say whether those blockers are resolved or intentionally still active."
+    "Record an idempotent work-package delivery closeout. Required evidence depends on outcome: pr_merged needs PR evidence, completed_no_pr needs direct evidence, superseded needs successor and reason, and abandoned needs rationale. Use abandoned for cleaned no-code failed dispatches that never reached implementation. Terminal delivery clears any active blocker residue."
   end
 
   defp architect_tool_description(tool) when tool in ["cleanup_work_request_work_package_runtime", "revoke_work_package_worker_key"],

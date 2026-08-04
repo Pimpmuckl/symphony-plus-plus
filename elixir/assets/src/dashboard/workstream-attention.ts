@@ -1,5 +1,5 @@
 import type { ActiveBlockingEdge, GuidanceItem, WorkPackageCard, WorkRequestDetail, WorkRequestPackage } from "@/types/dashboard";
-import type { BoardRowStateKind } from "./workstream-row-state";
+import { terminalWorkPackageIds, workPackageIsTerminal, workRequestIsTerminal, type BoardRowStateKind } from "./workstream-row-state";
 import type { CardDetailSelection } from "./runtime";
 import type { BlockerItem } from "./dashboard-state";
 import { clarificationGuidanceItem } from "./dashboard-data";
@@ -105,11 +105,7 @@ export function dashboardAttentionItems(
 ) {
   const terminalDetails = details.filter((detail) => workRequestIsTerminal(detail));
   const terminalRequestIds = new Set(terminalDetails.map((detail) => detail.work_request.id));
-  const terminalPackageIds = new Set(
-    terminalDetails.flatMap((detail) =>
-      (detail.work_packages ?? []).flatMap((pkg) => [pkg.id, pkg.work_package_id].filter((id): id is string => Boolean(id))),
-    ),
-  );
+  const terminalPackageIds = terminalWorkPackageIds(details, packageById);
   const projected = [
     ...blockerItems.map(attentionItemForBlocker),
     ...guidanceItems.map(attentionItemForGuidance),
@@ -118,11 +114,6 @@ export function dashboardAttentionItems(
     .filter((detail) => !workRequestIsTerminal(detail))
     .flatMap((detail) => requestAllAttentionItems(detail, packageById, activeBlockingEdges, guidanceItems));
   return uniqueAttentionItems([...projected, ...workstream]).filter((item) => item.kind !== "status" || !item.preRun);
-}
-
-function workRequestIsTerminal(detail: WorkRequestDetail) {
-  const request = detail.work_request;
-  return Boolean(request.completed_at || request.archived_at || [request.status, request.operational_state?.key].includes("completed"));
 }
 
 function attentionBelongsToTerminalRequest(
@@ -239,10 +230,12 @@ function requestBlockerAttentionItems(
   packageById: Map<string, WorkPackageCard>,
   activeBlockingEdges: ActiveBlockingEdge[],
 ) {
+  const terminalPackageIds = terminalWorkPackageIds([detail], packageById);
   const sliceItems = (detail.work_packages ?? []).flatMap((slice) =>
     blockerAttentionItemsForSlice(detail, slice, packageForSlice(slice, packageById), activeBlockingEdges),
   );
   const unmatchedEdges = activeBlockerEdgesForRequest(activeBlockingEdges, detail)
+    .filter((blocker) => ![blocker.work_package_id, blocker.to.id].some((id) => id && terminalPackageIds.has(id)))
     .map((blocker) => attentionItemForBlockerSelection({ kind: "blocker", blocker, detail }))
     .filter((item) => !sliceItems.some((candidate) => candidate.key === item.key));
   const items = uniqueAttentionItems([...sliceItems, ...unmatchedEdges]);
@@ -265,6 +258,7 @@ function guidanceAttentionItemsForSlice(
   pkg: WorkPackageCard | undefined,
   guidanceItems: GuidanceItem[],
 ) {
+  if (workPackageIsTerminal(slice, pkg)) return [];
   const ids = sliceIds(slice, pkg);
   const guidance = guidanceItems
     .filter((item) => item.source === "guidance" && ids.has(item.packageId))
@@ -279,6 +273,7 @@ function blockerAttentionItemsForSlice(
   pkg: WorkPackageCard | undefined,
   activeBlockingEdges: ActiveBlockingEdge[],
 ) {
+  if (workPackageIsTerminal(slice, pkg)) return [];
   const ids = sliceIds(slice, pkg);
   const edges = activeBlockerEdgesForRequest(activeBlockingEdges, detail)
     .filter((candidate) => [candidate.work_package_id, candidate.to.id].some((id) => id && ids.has(id)))

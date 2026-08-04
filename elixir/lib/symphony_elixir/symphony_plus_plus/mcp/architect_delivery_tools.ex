@@ -139,22 +139,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
              "record_work_package_delivery"
            ),
          :ok <- require_work_package_delivery_scope(config.repo, work_request, work_package, attrs, filters),
-         {:ok, attrs, blocker_closeout_plan} <-
-           maybe_prepare_slice_delivery_blocker_closeout(config.repo, live_session, work_package, arguments, attrs),
-         {:ok, {delivery, blocker_closeout}} <-
+         {:ok, attrs} <- allow_terminal_delivery_blocker_cleanup(config.repo, work_package, attrs),
+         {:ok, delivery} <-
            mutate_product_tree(
              config.repo,
              work_request_id,
              "record_work_package_delivery",
              recorded_by,
              fn ->
-               record_work_package_delivery_with_blocker_closeout(
+               WorkRequestService.record_work_package_delivery(
                  config.repo,
-                 live_session,
                  work_request_id,
                  work_package_id,
-                 attrs,
-                 blocker_closeout_plan
+                 attrs
                )
              end
            ),
@@ -165,7 +162,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
        ToolResult.tool_result(%{
          "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
          "work_package_delivery" => WorkRequestPayloads.work_package_delivery(delivery),
-         "blocker_closeout" => blocker_closeout,
          "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board),
          "scope" => scope
        })}
@@ -418,55 +414,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp work_package_delivery_evidence_field(evidence, field, :positive_integer),
     do: optional_positive_integer_argument(evidence, field)
 
-  defp maybe_prepare_slice_delivery_blocker_closeout(
-         repo,
-         %Session{} = session,
-         %WorkPackage{id: work_package_id},
-         arguments,
-         attrs
-       ) do
-    case prepare_scoped_blocker_closeout(
-           repo,
-           session,
-           [work_package_id],
-           arguments,
-           "record_work_package_delivery"
-         ) do
-      {:ok, closeout_plan} ->
-        attrs =
-          if blocker_closeout_decision(closeout_plan) == "still_active" do
-            Map.put(attrs, "allow_active_blocker_closeout", true)
-          else
-            attrs
-          end
-
-        {:ok, attrs, closeout_plan}
-
-      {:tool_error, reason} ->
-        {:tool_error, reason}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp record_work_package_delivery_with_blocker_closeout(
-         repo,
-         %Session{} = session,
-         work_request_id,
-         work_package_id,
-         attrs,
-         blocker_closeout_plan
-       ) do
-    with {:ok, blocker_closeout} <- apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan),
-         {:ok, delivery} <-
-           WorkRequestService.record_work_package_delivery(
-             repo,
-             work_request_id,
-             work_package_id,
-             attrs
-           ) do
-      {:ok, {delivery, blocker_closeout}}
+  defp allow_terminal_delivery_blocker_cleanup(repo, %WorkPackage{id: work_package_id}, attrs) do
+    case active_blockers_for_work_packages(repo, [work_package_id]) do
+      {:ok, []} -> {:ok, attrs}
+      {:ok, _active_blockers} -> {:ok, Map.put(attrs, "allow_active_blocker_closeout", true)}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -475,9 +427,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
       {:ok, %{active_blockers: active_blockers, closeout: closeout, tool: tool}}
     end
   end
-
-  defp blocker_closeout_decision(%{closeout: %{decision: decision}}), do: decision
-  defp blocker_closeout_decision(:not_needed), do: nil
 
   defp optional_blocker_closeout_argument(arguments) do
     with {:ok, closeout} <- optional_object_argument(arguments, "blocker_closeout") do
