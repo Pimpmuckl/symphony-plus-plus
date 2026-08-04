@@ -954,8 +954,8 @@ defmodule SymphonyElixir.Orchestrator do
             worker_task_handle
           )
 
-        with :ok <- start_agent_runner_task(pid),
-             :ok <- record_agent_run_running(agent_run_id, "worker task started") do
+        with :ok <- record_agent_run_running(agent_run_id, "worker task started"),
+             :ok <- start_agent_runner_task(pid) do
           state
         else
           {:error, reason} ->
@@ -974,16 +974,20 @@ defmodule SymphonyElixir.Orchestrator do
 
     record_agent_run_failed(agent_run_id, "failed to bind worker task: #{inspect(reason)}")
 
-    next_attempt = if is_integer(attempt), do: attempt + 1, else: nil
+    if reason == :work_package_terminal do
+      stop_terminal_package_dispatch(state, issue)
+    else
+      next_attempt = if is_integer(attempt), do: attempt + 1, else: nil
 
-    state
-    |> schedule_issue_retry(issue.id, next_attempt, %{
-      identifier: issue.identifier,
-      error: "failed to bind AgentRun worker task: #{inspect(reason)}",
-      worker_host: worker_host,
-      agent_run_id: agent_run_id
-    })
-    |> claim_issue(issue.id)
+      state
+      |> schedule_issue_retry(issue.id, next_attempt, %{
+        identifier: issue.identifier,
+        error: "failed to bind AgentRun worker task: #{inspect(reason)}",
+        worker_host: worker_host,
+        agent_run_id: agent_run_id
+      })
+      |> claim_issue(issue.id)
+    end
   end
 
   defp bind_running_issue(state, issue, attempt, worker_host, pid, ref, agent_run_id, worker_task_handle) do

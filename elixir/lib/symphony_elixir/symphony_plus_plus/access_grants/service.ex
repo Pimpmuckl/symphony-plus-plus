@@ -216,7 +216,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
         {:error, :work_package_terminal}
 
       {:ok, _work_package} ->
-        :ok
+        if Repository.terminal_delivery?(repo, work_package_id), do: {:error, :work_package_terminal}, else: :ok
 
       {:error, reason} ->
         {:error, reason}

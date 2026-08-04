@@ -14,6 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   # Mirrors ArchitectHandoff deterministic IDs without adding a reverse module dependency from AccessGrants.
@@ -90,8 +91,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   defp reject_terminal_worker_package(repo, "worker", work_package_id, [_status | _statuses] = terminal_statuses)
        when is_binary(work_package_id) do
     case repo.get(WorkPackage, work_package_id) do
-      %WorkPackage{status: status} -> terminal_worker_package_status(status, terminal_statuses)
-      nil -> {:error, :not_found}
+      %WorkPackage{status: status} ->
+        with :ok <- terminal_worker_package_status(status, terminal_statuses) do
+          reject_terminal_worker_delivery(repo, work_package_id)
+        end
+
+      nil ->
+        {:error, :not_found}
     end
   end
 
@@ -99,6 +105,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
 
   defp terminal_worker_package_status(status, terminal_statuses) do
     if status in terminal_statuses, do: {:error, :work_package_terminal}, else: :ok
+  end
+
+  defp reject_terminal_worker_delivery(repo, work_package_id) do
+    if repo.one(
+         from(delivery in WorkPackageDelivery,
+           where: delivery.work_package_id == ^work_package_id,
+           select: 1,
+           limit: 1
+         )
+       ) do
+      {:error, :work_package_terminal}
+    else
+      :ok
+    end
   end
 
   @spec get(repo(), String.t()) :: {:ok, AccessGrant.t()} | {:error, error()}
@@ -281,6 +301,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
     end
   end
 
+  @spec terminal_delivery?(repo(), String.t()) :: boolean()
+  def terminal_delivery?(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
+    not is_nil(
+      repo.one(
+        from(delivery in WorkPackageDelivery,
+          where: delivery.work_package_id == ^work_package_id,
+          select: 1,
+          limit: 1
+        )
+      )
+    )
+  end
+
   @spec validate_phase(repo(), String.t()) :: :ok | {:error, error()}
   def validate_phase(repo, phase_id) when is_atom(repo) and is_binary(phase_id) do
     case PhaseRepository.get(repo, phase_id) do
@@ -363,8 +396,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
         select: work_package.id
       )
 
+    delivered_package_ids =
+      from(delivery in WorkPackageDelivery,
+        select: delivery.work_package_id
+      )
+
     from(grant in query,
-      where: is_nil(grant.work_package_id) or grant.work_package_id not in subquery(terminal_package_ids)
+      where:
+        is_nil(grant.work_package_id) or
+          (grant.work_package_id not in subquery(terminal_package_ids) and
+             grant.work_package_id not in subquery(delivered_package_ids))
     )
   end
 
@@ -380,7 +421,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
 
   defp terminal_work_package?(repo, work_package_id, terminal_statuses) do
     case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, %{status: status}} -> status in terminal_statuses
+      {:ok, %{status: status}} -> status in terminal_statuses or terminal_delivery?(repo, work_package_id)
       {:error, _reason} -> false
     end
   end
@@ -648,16 +689,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
 
   defp package_authority_claim_error(repo, %AccessGrant{work_package_id: work_package_id}, terminal_statuses)
        when is_binary(work_package_id) do
-    case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, %{status: status}} ->
-        if Enum.member?(terminal_statuses, status) do
-          {:error, :work_package_terminal}
-        else
-          {:error, :already_claimed}
-        end
-
-      {:error, _reason} = error ->
-        error
+    if terminal_work_package?(repo, work_package_id, terminal_statuses) do
+      {:error, :work_package_terminal}
+    else
+      {:error, :already_claimed}
     end
   end
 

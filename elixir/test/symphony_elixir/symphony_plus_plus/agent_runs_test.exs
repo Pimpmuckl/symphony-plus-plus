@@ -46,6 +46,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
 
     def all(query), do: Repo.all(query)
     def get(schema, id), do: Repo.get(schema, id)
+    def one(query), do: Repo.one(query)
     def rollback(reason), do: Repo.rollback(reason)
     def update_all(query, updates), do: Repo.update_all(query, updates)
 
@@ -314,6 +315,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRunsTest do
     assert stopped.status == "stopped"
     assert stopped.reason == "package left active state"
     assert %DateTime{} = stopped.finished_at
+  end
+
+  test "running promotion revalidates terminal package state", %{repo: repo} do
+    assert {:ok, work_package} =
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-RUN-PROMOTE-TERMINAL", status: "ready_for_worker"))
+
+    assert {:ok, run} = Repository.start_run(repo, %{work_package_id: work_package.id, status: "starting"})
+    assert {:ok, _terminal} = WorkPackageRepository.update(repo, work_package.id, %{status: "merged"})
+
+    assert {:error, :work_package_terminal} = Service.mark_running(repo, run.id, "worker task started")
+    assert {:ok, %AgentRun{status: "starting"}} = Repository.get(repo, run.id)
   end
 
   test "unassigned AgentRun does not bind an arbitrary claimed worker grant", %{repo: repo} do

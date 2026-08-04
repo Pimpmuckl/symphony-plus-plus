@@ -48,11 +48,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   @spec schedule_terminal_agent_run_worktree_cleanup(module(), String.t()) :: :ok
   def schedule_terminal_agent_run_worktree_cleanup(repo, work_package_id)
       when is_atom(repo) and is_binary(work_package_id) do
-    if delivery_closeout_recorded?(repo, work_package_id) do
-      opts = cleanup_env_opts()
-      schedule_worktree_cleanup(fn -> cleanup_terminal_agent_run_worktree(repo, work_package_id, opts) end)
-    else
-      :ok
+    case canonical_delivery_closeout(repo, work_package_id) do
+      {:ok, {delivery, _event}} ->
+        opts = cleanup_env_opts()
+        schedule_worktree_cleanup(fn -> cleanup_terminal_agent_run_worktree(repo, work_package_id, delivery, opts) end)
+
+      {:error, _reason} ->
+        :ok
     end
   end
 
@@ -885,31 +887,80 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   defp active_worker_cleanup_owner?(%{worker_signal: %{status: status}}) when status in ["active", "paused"], do: true
   defp active_worker_cleanup_owner?(_context), do: false
 
-  defp cleanup_terminal_agent_run_worktree(repo, work_package_id, opts) do
+  defp cleanup_terminal_agent_run_worktree(repo, work_package_id, delivery, opts) do
     context = WorkPackageActivity.contexts(repo, [work_package_id]) |> Map.get(work_package_id)
 
     unless worktree_cleanup_deferred?(repo, work_package_id, context) do
-      WorkPackageService.cleanup_worktree(repo, work_package_id, opts)
+      case WorkPackageService.cleanup_worktree(repo, work_package_id, opts) do
+        {:ok, _cleanup} -> :ok
+        {:error, reason} -> audit_deferred_worktree_cleanup_failure(repo, work_package_id, delivery, reason)
+      end
     end
   end
 
-  defp delivery_closeout_recorded?(repo, work_package_id) do
-    case PlanningRepository.list_progress_events(repo, work_package_id) do
-      {:ok, events} ->
-        Enum.any?(events, fn event ->
-          payload = Map.get(event, :payload)
-          is_map(payload) and map_value(payload, :type) == "work_request_delivery_closeout"
-        end)
+  defp audit_deferred_worktree_cleanup_failure(repo, work_package_id, delivery, reason) do
+    PlanningRepository.append_progress_event(repo, %{
+      work_package_id: work_package_id,
+      status: "worktree_cleanup_failed",
+      summary: "Worktree cleanup failed: #{inspect(closeout_worktree_cleanup_error(reason))}",
+      idempotency_key: "#{closeout_idempotency_key(delivery)}:worktree_cleanup",
+      payload: %{
+        type: "work_request_delivery_worktree_cleanup",
+        source_tool: "record_work_package_delivery",
+        delivery_id: delivery.id,
+        outcome: delivery.outcome,
+        reason: inspect(closeout_worktree_cleanup_error(reason))
+      }
+    })
 
-      {:error, _reason} ->
-        false
+    :ok
+  end
+
+  defp canonical_delivery_closeout(repo, work_package_id) do
+    delivery =
+      repo.one(
+        from(delivery in WorkPackageDelivery,
+          where: delivery.work_package_id == ^work_package_id,
+          limit: 1
+        )
+      )
+
+    case delivery do
+      %WorkPackageDelivery{} = delivery -> canonical_delivery_closeout_event(repo, delivery)
+      nil -> {:error, :not_found}
     end
+  end
+
+  defp canonical_delivery_closeout_event(repo, delivery) do
+    case PlanningRepository.get_progress_event_by_idempotency_key(
+           repo,
+           delivery.work_package_id,
+           closeout_idempotency_key(delivery)
+         ) do
+      {:ok, event} ->
+        if canonical_delivery_closeout_event?(event, delivery), do: {:ok, {delivery, event}}, else: {:error, :not_found}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp canonical_delivery_closeout_event?(event, delivery) do
+    payload = Map.get(event, :payload) || %{}
+
+    event.idempotency_key == closeout_idempotency_key(delivery) and
+      map_value(payload, :type) == "work_request_delivery_closeout" and
+      map_value(payload, :source_tool) == "record_work_package_delivery" and
+      map_value(payload, :work_request_id) == delivery.work_request_id and
+      map_value(payload, :work_package_id) == delivery.work_package_id and
+      map_value(payload, :delivery_id) == delivery.id and
+      map_value(payload, :outcome) == delivery.outcome
   end
 
   defp durable_closeout_cleanup_deferral?(repo, work_package_id, context) do
-    case PlanningRepository.list_progress_events(repo, work_package_id) do
-      {:ok, events} ->
-        reasons = latest_closeout_runtime_reasons(events)
+    case canonical_delivery_closeout(repo, work_package_id) do
+      {:ok, {_delivery, event}} ->
+        reasons = List.wrap(map_value(event.payload || %{}, :runtime_reason_codes_before_closeout))
 
         cond do
           "agent_run_active" in reasons -> not terminal_agent_run_observed?(context)
@@ -917,21 +968,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
           true -> false
         end
 
+      {:error, :not_found} ->
+        false
+
       {:error, _reason} ->
         true
     end
-  end
-
-  defp latest_closeout_runtime_reasons(events) do
-    Enum.reduce(events, [], fn event, reasons ->
-      payload = Map.get(event, :payload)
-
-      if is_map(payload) and map_value(payload, :type) == "work_request_delivery_closeout" do
-        List.wrap(map_value(payload, :runtime_reason_codes_before_closeout))
-      else
-        reasons
-      end
-    end)
   end
 
   defp terminal_agent_run_observed?(%{worker_signal: %{status: "idle"}}), do: true
@@ -961,6 +1003,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   defp closeout_worktree_cleanup_error({:storage_failed, _message} = reason), do: reason
   defp closeout_worktree_cleanup_error(%Ecto.Changeset{} = reason), do: reason
   defp closeout_worktree_cleanup_error(reason), do: reason
+
+  defp closeout_idempotency_key(delivery) do
+    Enum.join(
+      [
+        "work_request_delivery_closeout",
+        delivery.work_request_id,
+        delivery.work_package_id,
+        delivery.idempotency_key
+      ],
+      ":"
+    )
+  end
 
   defp maybe_skip_archived_cleanup_error(reason, deleted_ids) do
     if hard_archived_cleanup_error?(reason) do

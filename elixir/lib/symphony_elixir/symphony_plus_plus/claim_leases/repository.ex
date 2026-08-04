@@ -8,6 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
 
   @type repo :: module()
   @type error ::
@@ -431,8 +432,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
   defp require_live_work_package(repo, work_package_id) do
     case repo.get(WorkPackage, work_package_id) do
       %WorkPackage{status: status} when status in @terminal_work_package_statuses -> {:error, :work_package_terminal}
-      %WorkPackage{} -> :ok
+      %WorkPackage{} -> reject_terminal_delivery(repo, work_package_id)
       nil -> {:error, :not_found}
+    end
+  end
+
+  defp reject_terminal_delivery(repo, work_package_id) do
+    if repo.one(
+         from(delivery in WorkPackageDelivery,
+           where: delivery.work_package_id == ^work_package_id,
+           select: 1,
+           limit: 1
+         )
+       ) do
+      {:error, :work_package_terminal}
+    else
+      :ok
     end
   end
 

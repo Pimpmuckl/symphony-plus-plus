@@ -58,6 +58,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
     alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
     def get(WorkPackage, _id), do: %WorkPackage{status: "created"}
+    def one(_query), do: nil
 
     def transaction(fun) do
       {:ok, fun.()}

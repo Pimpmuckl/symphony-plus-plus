@@ -79,6 +79,39 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     assert repo.get!(WorkPackage, linked_package.id).status == "merged"
   end
 
+  test "delivery evidence remains terminal truth after package status drift", %{repo: repo} do
+    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_merge")
+
+    attrs =
+      delivery_attrs(%{
+        outcome: "pr_merged",
+        idempotency_key: "delivery-terminal-truth",
+        pr_url: "https://github.com/nextide/symphony-plus-plus/pull/130",
+        pr_number: 130,
+        pr_repository: "nextide/symphony-plus-plus",
+        pr_merged_at: ~U[2026-05-24 13:00:00.000000Z],
+        merge_commit_sha: "abc130"
+      })
+
+    assert {:ok, _delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+    assert {:ok, _drifted} = WorkPackageRepository.update(repo, linked_package.id, %{status: "ready_for_worker"})
+
+    assert {:error, :work_package_terminal} =
+             AgentRunRepository.start_run(repo, %{work_package_id: linked_package.id, status: "starting"})
+
+    assert {:error, :work_package_terminal} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
+
+    assert {:error, :work_package_terminal} =
+             ClaimLeaseService.claim(
+               repo,
+               linked_package.id,
+               %{
+                 "actor_kind" => "agent",
+                 "actor_id" => "local:delivery-residue",
+                 "actor_display_name" => "delivery-residue"
+               }, stale_after_ms: 60_000)
+  end
+
   test "PR merged recovery closeout merges stale linked package and retires worker grant", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_worker")
 
@@ -205,6 +238,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
       assert archived_at == archived.archived_at
       Process.sleep(100)
       assert File.dir?(prepared.worktree_path)
+      dirty_path = Path.join(prepared.worktree_path, "dirty.txt")
+      File.write!(dirty_path, "preserve cleanup failure")
 
       assert {:error, :work_package_terminal} =
                AgentRunRepository.start_run(
@@ -217,12 +252,60 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
                repo.get!(AgentRun, agent_run.id)
 
       assert_eventually(fn ->
+        assert File.dir?(prepared.worktree_path)
+
+        assert Enum.any?(repo.all(ProgressEvent), fn event ->
+                 event.payload["type"] == "work_request_delivery_worktree_cleanup" and
+                   event.payload["delivery_id"] == delivery.id
+               end)
+      end)
+
+      File.rm!(dirty_path)
+      assert {:ok, ^delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+
+      assert_eventually(fn ->
         refute File.exists?(prepared.worktree_path)
         assert repo.get!(WorkPackage, linked_package.id).worktree_path == nil
       end)
-
-      refute Enum.any?(repo.all(ProgressEvent), &(&1.payload["type"] == "work_request_delivery_worktree_cleanup"))
     after
+      restore_env("CODEX_HOME", previous_codex_home)
+    end
+  end
+
+  test "worker-authored closeout-shaped progress cannot schedule worktree cleanup", %{repo: repo} do
+    {_work_request, _work_package, linked_package} = linked_slice!(repo, status: "ready_for_worker")
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-closeout-spoofed-event")
+    codex_home = Path.join(fixture.root, "codex-home")
+    previous_codex_home = System.get_env("CODEX_HOME")
+
+    try do
+      System.put_env("CODEX_HOME", codex_home)
+
+      assert {:ok, prepared} =
+               WorktreeLifecycle.prepare(
+                 repo,
+                 linked_package.id,
+                 %{"repo_root" => fixture.repo_root, "base_branch" => linked_package.base_branch, "branch" => "feat/spoofed-closeout"},
+                 codex_home: codex_home
+               )
+
+      assert {:ok, run} = AgentRunRepository.start_run(repo, %{work_package_id: linked_package.id, status: "running"})
+
+      assert {:ok, _event} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: linked_package.id,
+                 status: "merged",
+                 summary: "Worker-authored closeout-shaped event",
+                 idempotency_key: "worker-closeout-spoof",
+                 payload: %{type: "work_request_delivery_closeout", source_tool: "record_work_package_delivery"}
+               })
+
+      assert {:ok, %AgentRun{status: "stopped"}} = AgentRunRepository.mark_stopped(repo, run.id, "worker exited")
+      Process.sleep(100)
+      assert File.dir?(prepared.worktree_path)
+    after
+      WorkPackageRepository.update(repo, linked_package.id, %{status: "closed"})
+      WorktreeLifecycle.cleanup(repo, linked_package.id, codex_home: codex_home)
       restore_env("CODEX_HOME", previous_codex_home)
     end
   end

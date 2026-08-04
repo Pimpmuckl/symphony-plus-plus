@@ -175,11 +175,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
   defp reject_terminal_work_package(repo, work_package_id) when is_binary(work_package_id) do
     case repo.get(WorkPackage, work_package_id) do
       %WorkPackage{status: status} when status in @terminal_work_package_statuses -> {:error, :work_package_terminal}
-      _work_package -> :ok
+      %WorkPackage{} -> reject_terminal_delivery(repo, work_package_id)
+      nil -> :ok
     end
   end
 
   defp reject_terminal_work_package(_repo, _work_package_id), do: :ok
+
+  defp reject_terminal_delivery(repo, work_package_id) do
+    if repo.one(
+         from(delivery in WorkPackageDelivery,
+           where: delivery.work_package_id == ^work_package_id,
+           select: 1,
+           limit: 1
+         )
+       ) do
+      {:error, :work_package_terminal}
+    else
+      :ok
+    end
+  end
 
   defp insert_run(repo, attrs) do
     attrs
@@ -421,10 +436,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
   defp update_run_transaction(repo, id, attrs) do
     with {:ok, agent_run} <- get(repo, id),
          :ok <- active_agent_run?(agent_run),
-         {:ok, changes} <- update_changes(agent_run, attrs) do
+         {:ok, changes} <- update_changes(agent_run, attrs),
+         :ok <- revalidate_running_transition(repo, agent_run, changes) do
       persist_active_update(repo, id, changes)
     end
   end
+
+  defp revalidate_running_transition(repo, %AgentRun{work_package_id: work_package_id}, %{status: "running"}) do
+    reject_terminal_work_package(repo, work_package_id)
+  end
+
+  defp revalidate_running_transition(_repo, %AgentRun{}, _changes), do: :ok
 
   defp update_changes(%AgentRun{} = agent_run, attrs) do
     changeset = AgentRun.update_changeset(agent_run, attrs)
