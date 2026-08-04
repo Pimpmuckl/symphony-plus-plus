@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveBlockingEdge, GuidanceItem, WorkPackageCard, WorkRequestDetail, WorkRequestPackage } from "@/types/dashboard";
 import type { BlockerItem } from "./dashboard-state";
+import { activeBlockerItems } from "./dashboard-data";
 import {
   attentionLocationForSelection,
   attentionJumpDestination,
@@ -55,7 +56,9 @@ describe("WorkRequest attention badge targets", () => {
     expect(requestAttentionTarget(detail, packages, [blocker], "blocked")).toMatchObject({
       items: [{ kind: "blocker", selection: { blocker, slice: activeSlice, pkg: activePackage } }],
     });
-    expect(dashboardAttentionItems([detail], packages, [blocker], [], [])).toMatchObject([
+    const blockerItems = activeBlockerItems([deliveredPackage, activePackage], new Map(), [blocker]);
+    expect(blockerItems.find((item) => item.id === blocker.id)?.selection).toMatchObject({ blocker, pkg: activePackage });
+    expect(dashboardAttentionItems([detail], packages, [blocker], [], blockerItems)).toMatchObject([
       { kind: "blocker", selection: { blocker, slice: activeSlice, pkg: activePackage } },
     ]);
   });

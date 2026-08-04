@@ -176,6 +176,24 @@ describe("dashboard data helpers", () => {
     expect(items.find((item) => item.selection.kind === "blocker" && item.selection.pkg?.id === blocked.id)?.id).toBe(edge.id);
   });
 
+  it("indexes an explicit target only once when the event owner is also visible", () => {
+    const owner: WorkPackageCard = { id: "pkg-terminal-owner", status: "merged", active_blocker_count: 1 };
+    const target: WorkPackageCard = { id: "pkg-active-target", status: "blocked", active_blocker_count: 0 };
+    const edge: ActiveBlockingEdge = {
+      id: "edge-terminal-owner",
+      blocker_id: "blocker-terminal-owner",
+      work_package_id: owner.id,
+      from: { kind: "work_package", id: owner.id },
+      to: { kind: "work_package", id: target.id },
+    };
+
+    const items = activeBlockerItems([owner, target], new Map(), [edge]);
+
+    expect(items).toHaveLength(2);
+    expect(items.find((item) => item.id === edge.id)?.selection).toMatchObject({ kind: "blocker", pkg: target });
+    expect(items.find((item) => item.id === owner.id)?.selection).toMatchObject({ kind: "package", pkg: owner });
+  });
+
   it("orders specific blocker edges before package-only blocker cards", () => {
     const source: WorkPackageCard = { id: "pkg-source", title: "Source", status: "blocked", active_blocker_count: 1 };
     const blocked: WorkPackageCard = { id: "pkg-blocked", title: "Blocked", status: "blocked", active_blocker_count: 1 };

@@ -1091,18 +1091,69 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   defp active_blocking_edges_from_card_contexts(_repo, []), do: {:ok, []}
 
-  defp active_blocking_edges_from_card_contexts(_repo, contexts) do
-    edges =
+  defp active_blocking_edges_from_card_contexts(repo, contexts) do
+    context_edges =
       contexts
       |> Enum.flat_map(fn %{work_package: work_package, blockers: blockers} ->
         blockers
         |> Enum.filter(& &1.active)
         |> Enum.map(&active_blocking_edge(&1, work_package))
       end)
-      |> sort_active_blocking_edges()
 
-    {:ok, edges}
+    with {:ok, targeted_edges} <- targeted_active_blocking_edges(repo, contexts) do
+      edges =
+        (context_edges ++ targeted_edges)
+        |> Enum.uniq_by(& &1.id)
+        |> sort_active_blocking_edges()
+
+      {:ok, edges}
+    end
   end
+
+  defp targeted_active_blocking_edges(repo, contexts) do
+    target_ids = Enum.map(contexts, & &1.work_package.id)
+
+    with {:ok, events} <-
+           PlanningRepository.list_progress_events_for_blockers_targeting_work_packages(
+             repo,
+             target_ids
+           ) do
+      targeted_active_blocking_edges(repo, events, MapSet.new(target_ids))
+    end
+  end
+
+  defp targeted_active_blocking_edges(_repo, [], _target_ids), do: {:ok, []}
+
+  defp targeted_active_blocking_edges(repo, events, target_ids) do
+    with {:ok, work_packages} <- WorkPackageRepository.list(repo) do
+      work_packages_by_id = Map.new(work_packages, &{&1.id, &1})
+
+      edges =
+        events
+        |> Enum.group_by(& &1.work_package_id)
+        |> Enum.flat_map(&targeted_edges_for_owner(&1, work_packages_by_id, target_ids))
+
+      {:ok, edges}
+    end
+  end
+
+  defp targeted_edges_for_owner({owner_id, events}, work_packages_by_id, target_ids) do
+    case Map.get(work_packages_by_id, owner_id) do
+      %WorkPackage{} = owner ->
+        events
+        |> BlockerProjection.blockers()
+        |> Enum.filter(&targeted_active_blocker?(&1, target_ids))
+        |> Enum.map(&active_blocking_edge(&1, owner))
+
+      nil ->
+        []
+    end
+  end
+
+  defp targeted_active_blocker?(%{active: true, blocked_item: %{kind: "work_package", id: target_id}}, target_ids),
+    do: MapSet.member?(target_ids, target_id)
+
+  defp targeted_active_blocker?(_blocker, _target_ids), do: false
 
   defp active_blocking_edge(blocker, %WorkPackage{} = work_package) do
     fallback_from = %{kind: "work_package", id: work_package.id}

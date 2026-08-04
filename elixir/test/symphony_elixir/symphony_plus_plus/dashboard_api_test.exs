@@ -5252,6 +5252,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       repeated_payload = local_operator_dashboard_payload()
       assert Enum.map(repeated_payload["active_blocking_edges"], & &1["id"]) == Enum.map(edges, & &1["id"])
+
+      assert {:ok, _outbound_blocker} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: unlinked_package.id,
+                 summary: "Linked package is blocked",
+                 status: "blocked",
+                 idempotency_key: "blocker-unlinked-owner",
+                 payload: %{
+                   type: "blocker",
+                   source_tool: "report_blocker",
+                   blocker_id: "blocker-unlinked-owner",
+                   active: true,
+                   blocked_by: %{kind: "work_package", id: unlinked_package.id},
+                   blocked_item: %{kind: "work_package", id: linked_package.id}
+                 }
+               })
+
+      assert {:ok, %{active_blocking_edges: scoped_edges}} =
+               Dashboard.operator_work_package_signals(repo, [linked_package.id], [])
+
+      assert Enum.any?(scoped_edges, fn edge ->
+               edge.blocker_id == "blocker-unlinked-owner" and
+                 edge.work_package_id == unlinked_package.id and
+                 edge.to == %{kind: "work_package", id: linked_package.id}
+             end)
     end)
   end
 
