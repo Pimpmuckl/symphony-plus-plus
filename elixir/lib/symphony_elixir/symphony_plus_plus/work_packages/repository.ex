@@ -376,10 +376,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   defp reject_active_delivery_closeout_context(repo, work_package_id, opts) do
     context = WorkPackageActivity.context(repo, work_package_id)
     allow_active_blockers? = Keyword.get(opts, :allow_active_blockers?, false)
+    allow_active_runtime? = Keyword.get(opts, :allow_active_runtime?, false)
 
     cond do
       get_in(context, [:blocker_state, :active?]) == true and not allow_active_blockers? -> {:error, :active_blocker}
-      get_in(context, [:runtime_state, :active?]) == true -> {:error, :active_runtime}
+      get_in(context, [:runtime_state, :active?]) == true and not allow_active_runtime? -> {:error, :active_runtime}
       true -> :ok
     end
   end

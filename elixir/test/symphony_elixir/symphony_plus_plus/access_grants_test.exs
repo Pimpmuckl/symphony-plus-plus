@@ -66,6 +66,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     end
   end
 
+  defmodule TerminalMintRaceRepo do
+    import Ecto.Query, only: [from: 2]
+
+    alias SymphonyElixir.SymphonyPlusPlus.Repo
+    alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+
+    @race_key :sympp_terminal_mint_race
+
+    def arm(work_package_id), do: Process.put(@race_key, work_package_id)
+    def disarm, do: Process.delete(@race_key)
+
+    def all(query), do: Repo.all(query)
+    def get(schema, id), do: Repo.get(schema, id)
+    def insert(changeset), do: Repo.insert(changeset)
+    def one(query), do: Repo.one(query)
+    def rollback(reason), do: Repo.rollback(reason)
+
+    def transaction(fun) do
+      case Process.get(@race_key) do
+        work_package_id when is_binary(work_package_id) ->
+          Process.delete(@race_key)
+
+          Repo.update_all(
+            from(work_package in WorkPackage, where: work_package.id == ^work_package_id),
+            set: [status: "skipped", updated_at: DateTime.utc_now(:microsecond)]
+          )
+
+        _race ->
+          :ok
+      end
+
+      Repo.transaction(fun)
+    end
+  end
+
   setup_all do
     database_path = WorkPackageFactory.database_path()
 
@@ -791,6 +826,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, grant} = Repository.get(repo, minted.grant.id)
     assert grant.claimed_at == nil
     assert grant.claimed_by == nil
+  end
+
+  test "skipped work package mint race rejects atomically without creating worker authority", %{repo: repo} do
+    assert {:ok, work_package} =
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(status: "ready_for_worker"))
+
+    try do
+      TerminalMintRaceRepo.arm(work_package.id)
+
+      assert {:error, :work_package_terminal} =
+               Service.mint_worker_grant(TerminalMintRaceRepo, work_package.id)
+    after
+      TerminalMintRaceRepo.disarm()
+    end
+
+    assert repo.get!(WorkPackage, work_package.id).status == "skipped"
+    assert repo.aggregate(AccessGrant, :count, :id) == 0
   end
 
   test "revoke is idempotent and preserves the first revocation timestamp", %{repo: repo} do

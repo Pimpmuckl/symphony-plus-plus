@@ -180,7 +180,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryReconcilerTest do
     assert delivery.outcome == "pr_merged"
     assert repo.get!(WorkPackage, linked_package.id).status == "merged"
     assert %AccessGrant{revoked_at: %DateTime{}} = repo.get!(AccessGrant, minted.grant.id)
-    assert %ClaimLease{status: "released", release_reason: "merged_pr_delivery_closeout"} = repo.get!(ClaimLease, claim_lease.id)
+    assert %ClaimLease{status: "released", release_reason: "pr_merged_delivery_closeout"} = repo.get!(ClaimLease, claim_lease.id)
   end
 
   test "MCP reconcile_work_request dry-run reports proposed closeout without write capability", %{repo: repo} do

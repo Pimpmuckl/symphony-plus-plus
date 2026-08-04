@@ -4395,7 +4395,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert recovery_detail.product_tree.summary.blocker_count == 1
 
       architect_anchor =
-        Repo.get!(WorkPackage, "WP-RECOVERY-OLD")
+        Repo.get!(WorkPackage, "WP-RECOVERY-VALIDATE")
         |> Ecto.Changeset.change(kind: "delegation")
         |> Repo.update!()
 
@@ -6518,7 +6518,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "local operator no-PR closeout reports active runtime errors specifically", %{repo: repo} do
+  test "local operator no-PR closeout retires active claim authority", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-LOCAL-NO-PR-ACTIVE-RUNTIME", status: "ready_for_slicing")
 
@@ -6535,7 +6535,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", work_package.id)
 
-      assert {:ok, _claim_lease} =
+      assert {:ok, claim_lease} =
                ClaimLeaseService.claim(
                  repo,
                  work_package.id,
@@ -6543,17 +6543,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  stale_after_ms: 60_000
                )
 
-      error =
+      payload =
         local_operator_csrf_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/state", %{
           "status" => "completed_no_pr",
-          "no_pr_evidence" => "Operator tried to close while worker runtime is active."
+          "no_pr_evidence" => "Operator closed the package while worker runtime was active."
         })
-        |> json_response(412)
+        |> json_response(200)
 
-      assert error["error"]["code"] == "active_runtime"
-      refute error["error"]["message"] == "Dashboard API unavailable"
-      assert [] = repo.all(WorkPackageDelivery)
+      assert payload["ok"] == true
+      assert [%WorkPackageDelivery{outcome: "completed_no_pr"}] = repo.all(WorkPackageDelivery)
+
+      assert %ClaimLease{status: "released", release_reason: "completed_no_pr_delivery_closeout"} =
+               repo.get!(ClaimLease, claim_lease.id)
     end)
   end
 

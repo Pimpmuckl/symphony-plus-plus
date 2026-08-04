@@ -197,29 +197,11 @@ defmodule SymphonyElixir.Orchestrator do
 
         case record_agent_run_running(agent_run_id, "worker task started") do
           :ok ->
+            send(pid, :launch_agent_runner)
             {:noreply, state}
 
           {:error, reason} ->
-            {running_entry, state} = pop_running_entry(state, issue_id)
-            terminate_task(pid)
-            Process.demonitor(Map.get(running_entry, :ref), [:flush])
-
-            retry_reason = "failed to promote AgentRun after worker start: #{inspect(reason)}"
-            record_agent_run_failed(agent_run_id, retry_reason)
-
-            state =
-              state
-              |> schedule_issue_retry(issue_id, next_retry_attempt_from_running(running_entry), %{
-                identifier: Map.get(running_entry, :identifier, issue_id),
-                error: retry_reason,
-                worker_host: Map.get(running_entry, :worker_host),
-                workspace_path: Map.get(running_entry, :workspace_path),
-                agent_run_id: agent_run_id
-              })
-              |> claim_issue(issue_id)
-
-            notify_dashboard()
-            {:noreply, state}
+            {:noreply, fail_agent_runner_promotion(state, issue_id, agent_run_id, pid, reason)}
         end
     end
   end
@@ -417,6 +399,12 @@ defmodule SymphonyElixir.Orchestrator do
   @spec dispatch_issue_for_test(term(), Issue.t(), term(), String.t() | nil, keyword()) :: term()
   def dispatch_issue_for_test(%State{} = state, %Issue{} = issue, attempt, preferred_worker_host, opts) when is_list(opts) do
     dispatch_issue(state, issue, attempt, preferred_worker_host, opts)
+  end
+
+  @doc false
+  @spec stop_terminal_package_dispatch_for_test(term(), Issue.t()) :: term()
+  def stop_terminal_package_dispatch_for_test(%State{} = state, %Issue{} = issue) do
+    stop_terminal_package_dispatch(state, issue)
   end
 
   @doc false
@@ -873,6 +861,10 @@ defmodule SymphonyElixir.Orchestrator do
         })
         |> claim_issue(issue.id)
 
+      {:error, :work_package_terminal} ->
+        Logger.info("Stopping dispatch; WorkPackage became terminal for #{issue_context(issue)}")
+        stop_terminal_package_dispatch(state, issue)
+
       {:error, reason} ->
         Logger.warning("Skipping dispatch; failed to create AgentRun for #{issue_context(issue)}: #{inspect(reason)}")
         next_attempt = if is_integer(attempt), do: attempt + 1, else: nil
@@ -887,19 +879,46 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  defp stop_terminal_package_dispatch(%State{} = state, %Issue{id: issue_id}) do
+    state
+    |> complete_issue(issue_id)
+    |> release_issue_claim(issue_id)
+  end
+
+  defp fail_agent_runner_promotion(state, issue_id, agent_run_id, pid, reason) do
+    {running_entry, state} = pop_running_entry(state, issue_id)
+    terminate_task(pid)
+    Process.demonitor(Map.get(running_entry, :ref), [:flush])
+
+    retry_reason = "failed to promote AgentRun before worker launch: #{inspect(reason)}"
+    record_agent_run_failed(agent_run_id, retry_reason)
+
+    state =
+      if reason == :work_package_terminal do
+        stop_terminal_package_dispatch(state, %Issue{id: issue_id})
+      else
+        state
+        |> schedule_issue_retry(issue_id, next_retry_attempt_from_running(running_entry), %{
+          identifier: Map.get(running_entry, :identifier, issue_id),
+          error: retry_reason,
+          worker_host: Map.get(running_entry, :worker_host),
+          workspace_path: Map.get(running_entry, :workspace_path),
+          agent_run_id: agent_run_id
+        })
+        |> claim_issue(issue_id)
+      end
+
+    notify_dashboard()
+    state
+  end
+
   defp do_spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host, agent_run_id) do
     worker_task_token = worker_task_token()
 
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
            Process.put(:sympp_worker_task_token, worker_task_token)
            Process.put(:sympp_worker_task_state, :waiting)
-
-           receive do
-             {:start_agent_runner, starter} ->
-               Process.put(:sympp_worker_task_state, :running)
-               send(starter, {:agent_runner_started, self()})
-               AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
-           end
+           await_agent_runner_start(issue, recipient, attempt, worker_host)
          end) do
       {:ok, pid} ->
         handle_spawned_worker(state, issue, attempt, worker_host, agent_run_id, pid, worker_task_token)
@@ -918,17 +937,35 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  defp await_agent_runner_start(issue, recipient, attempt, worker_host) do
+    receive do
+      {:start_agent_runner, starter} ->
+        send(starter, {:agent_runner_started, self()})
+        await_agent_runner_launch(issue, recipient, attempt, worker_host)
+    end
+  end
+
+  defp await_agent_runner_launch(issue, recipient, attempt, worker_host) do
+    receive do
+      :launch_agent_runner ->
+        Process.put(:sympp_worker_task_state, :running)
+        AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
+
+      {:start_agent_runner, starter} ->
+        send(starter, {:agent_runner_started, self()})
+        await_agent_runner_launch(issue, recipient, attempt, worker_host)
+    end
+  end
+
   defp handle_spawned_worker(state, issue, attempt, worker_host, agent_run_id, pid, worker_task_token) do
     ref = Process.monitor(pid)
     worker_task_handle = worker_task_handle(pid, worker_task_token)
 
     case record_agent_run_heartbeat(agent_run_id, %{worker_task_handle: worker_task_handle}) do
       :ok ->
-        original_state = state
-
         state =
           bind_running_issue(
-            original_state,
+            state,
             issue,
             attempt,
             worker_host,
@@ -938,13 +975,8 @@ defmodule SymphonyElixir.Orchestrator do
             worker_task_handle
           )
 
-        with :ok <- start_agent_runner_task(pid),
-             :ok <- record_agent_run_running(agent_run_id, "worker task started") do
-          state
-        else
-          {:error, reason} ->
-            fail_spawned_worker_bind(original_state, issue, attempt, worker_host, agent_run_id, pid, ref, reason)
-        end
+        start_agent_runner_task(pid)
+        state
 
       {:error, reason} ->
         fail_spawned_worker_bind(state, issue, attempt, worker_host, agent_run_id, pid, ref, reason)
@@ -958,16 +990,20 @@ defmodule SymphonyElixir.Orchestrator do
 
     record_agent_run_failed(agent_run_id, "failed to bind worker task: #{inspect(reason)}")
 
-    next_attempt = if is_integer(attempt), do: attempt + 1, else: nil
+    if reason == :work_package_terminal do
+      stop_terminal_package_dispatch(state, issue)
+    else
+      next_attempt = if is_integer(attempt), do: attempt + 1, else: nil
 
-    state
-    |> schedule_issue_retry(issue.id, next_attempt, %{
-      identifier: issue.identifier,
-      error: "failed to bind AgentRun worker task: #{inspect(reason)}",
-      worker_host: worker_host,
-      agent_run_id: agent_run_id
-    })
-    |> claim_issue(issue.id)
+      state
+      |> schedule_issue_retry(issue.id, next_attempt, %{
+        identifier: issue.identifier,
+        error: "failed to bind AgentRun worker task: #{inspect(reason)}",
+        worker_host: worker_host,
+        agent_run_id: agent_run_id
+      })
+      |> claim_issue(issue.id)
+    end
   end
 
   defp bind_running_issue(state, issue, attempt, worker_host, pid, ref, agent_run_id, worker_task_handle) do

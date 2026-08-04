@@ -55,6 +55,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
 
   defmodule PrimaryKeyCollisionRepo do
     alias Ecto.Changeset
+    alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+
+    def get(WorkPackage, _id), do: %WorkPackage{status: "created"}
+    def one(_query), do: nil
+
+    def transaction(fun) do
+      {:ok, fun.()}
+    catch
+      {:rollback, reason} -> {:error, reason}
+    end
+
+    def rollback(reason), do: throw({:rollback, reason})
 
     def insert(%Changeset{}) do
       raise %Ecto.ConstraintError{
@@ -291,6 +303,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
     assert second.work_package_id == work_package.id
     assert second.claim_group_id == second.id
     assert second.previous_claim_id == nil
+  end
+
+  test "terminal packages reject new claim leases", %{repo: repo} do
+    for status <- ["skipped", "merged", "merged_into_phase", "closed", "abandoned"] do
+      assert {:ok, work_package} =
+               WorkPackageRepository.create(
+                 repo,
+                 WorkPackageFactory.attrs(id: "SYMPP-CLAIM-TERMINAL-#{status}", status: status)
+               )
+
+      assert {:error, :work_package_terminal} =
+               Service.claim(
+                 repo,
+                 work_package.id,
+                 %{actor_kind: "agent", actor_id: "agent-terminal"},
+                 stale_after_ms: 1_000
+               )
+
+      assert {:error, :not_found} = Service.current_for_work_package(repo, work_package.id)
+    end
   end
 
   test "duplicate caller-provided ids return stable primary key errors", %{repo: repo} do
