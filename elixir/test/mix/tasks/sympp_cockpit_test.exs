@@ -211,7 +211,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
     end
   end
 
-  test "runs WorkRequest retention before serving the local operator cockpit" do
+  test "serves the local operator cockpit before WorkRequest retention runs" do
     database_path = WorkPackageFactory.database_path()
     original_dynamic_repo = Repo.get_dynamic_repo()
 
@@ -256,9 +256,10 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
 
       refute_received {:operator_dashboard_opened, _url}
       assert_received {:retention_payload, 200, 200, payload}
-      assert payload["work_requests"]["work_requests"] == []
+      assert [%{"id" => request_id}] = payload["work_requests"]["work_requests"]
+      assert request_id == request.id
 
-      assert %WorkRequest{archived_at: %DateTime{}} = Repo.get!(WorkRequest, request.id)
+      assert %WorkRequest{archived_at: nil} = Repo.get!(WorkRequest, request.id)
       assert [_slice] = Repo.all(WorkPackage)
     after
       Repo.put_dynamic_repo(original_dynamic_repo)
