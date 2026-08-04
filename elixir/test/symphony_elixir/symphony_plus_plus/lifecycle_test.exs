@@ -251,10 +251,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     append_active_blocker!(repo, package.id, "terminal-blocker")
     append_active_blocker!(repo, sibling.id, "nonterminal-blocker")
 
+    assert {:ok, _targeted_blocker} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: sibling.id,
+               summary: "Terminal package is blocked",
+               status: "blocked",
+               idempotency_key: "report:terminal-target-blocker",
+               payload: %{
+                 type: "blocker",
+                 source_tool: "report_blocker",
+                 blocker_id: "terminal-target-blocker",
+                 active: true,
+                 blocked_item: %{kind: "work_package", id: package.id}
+               }
+             })
+
     assert {:ok, terminal} = Service.transition(repo, package.id, "merged", actor)
     assert repo.get!(GuidanceRequest, guidance.id).status == "answered"
     refute WorkPackageActivity.context(repo, package.id).blocker_state.active?
-    assert WorkPackageActivity.context(repo, sibling.id).blocker_state.active?
+
+    sibling_blocker_state = WorkPackageActivity.context(repo, sibling.id).blocker_state
+    assert sibling_blocker_state.active?
+    assert sibling_blocker_state.active_ids == ["nonterminal-blocker"]
 
     terminal_event_count = repo.aggregate(ProgressEvent, :count, :id)
     assert :ok = Repository.clear_terminal_attention(repo, terminal)

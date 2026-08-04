@@ -385,12 +385,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   end
 
   defp resolve_active_blockers(repo, work_package_id) do
-    with {:ok, events} <- PlanningRepository.list_progress_events(repo, work_package_id) do
-      events
-      |> BlockerProjection.blockers()
-      |> Enum.filter(& &1.active)
-      |> Enum.reduce_while(:ok, &resolve_active_blocker(repo, work_package_id, &1, &2))
+    with {:ok, owned_events} <- PlanningRepository.list_progress_events(repo, work_package_id),
+         {:ok, targeting_events} <-
+           PlanningRepository.list_progress_events_for_blockers_targeting_work_package(
+             repo,
+             work_package_id
+           ) do
+      (owned_events ++ targeting_events)
+      |> Enum.uniq_by(& &1.id)
+      |> Enum.group_by(& &1.work_package_id)
+      |> Enum.sort_by(fn {owner_id, _events} -> owner_id end)
+      |> Enum.reduce_while(:ok, &resolve_targeted_blocker_group(repo, work_package_id, &1, &2))
     end
+  end
+
+  defp resolve_targeted_blocker_group(repo, terminal_work_package_id, {owner_id, events}, :ok) do
+    events
+    |> BlockerProjection.blockers()
+    |> Enum.filter(&terminal_cleanup_blocker?(&1, owner_id, terminal_work_package_id))
+    |> Enum.reduce_while(:ok, &resolve_active_blocker(repo, owner_id, &1, &2))
+    |> case do
+      :ok -> {:cont, :ok}
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp terminal_cleanup_blocker?(blocker, owner_id, terminal_work_package_id) do
+    blocker.active and
+      (owner_id == terminal_work_package_id or
+         blocker.blocked_item == %{kind: "work_package", id: terminal_work_package_id})
   end
 
   defp resolve_active_blocker(repo, work_package_id, blocker, :ok) do
