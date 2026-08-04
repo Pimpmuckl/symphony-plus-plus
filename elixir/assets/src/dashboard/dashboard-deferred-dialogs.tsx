@@ -21,8 +21,6 @@ const CardDetailDialog = lazy(loadCardDetailDialog);
 
 export function DashboardDeferredDialogs({
   activeBlockingEdges,
-  canMutateComments,
-  canMutateOperatorActions,
   changeWorkPackageState,
   changeWorkRequestState,
   copyArchitectHandoff,
@@ -41,8 +39,6 @@ export function DashboardDeferredDialogs({
   onSubmitGuidanceAnswer,
 }: {
   activeBlockingEdges: ActiveBlockingEdge[];
-  canMutateComments: boolean;
-  canMutateOperatorActions: boolean;
   changeWorkPackageState: WorkPackageStateMutation;
   changeWorkRequestState: WorkRequestStateMutation;
   copyArchitectHandoff: CopyArchitectHandoff;
@@ -68,7 +64,6 @@ export function DashboardDeferredDialogs({
     <>
       {dialogState.selectedAttention ? (
         <AttentionDialogWithFocusReturn
-          canMutateOperatorActions={canMutateOperatorActions}
           onChangeWorkPackageState={changeWorkPackageState}
           onChangeWorkRequestState={changeWorkRequestState}
           onClearWorkPackageBlocker={onClearWorkPackageBlocker}
@@ -99,11 +94,9 @@ export function DashboardDeferredDialogs({
           onChangeWorkPackageState={changeWorkPackageState}
           onArchiveWorkPackage={onArchiveWorkPackage}
           onClearWorkPackageBlocker={onClearWorkPackageBlocker}
-          canMutateOperatorActions={canMutateOperatorActions}
           linkedWorkPackageIds={linkedWorkPackageIds}
           onSubmitComment={onSubmitComment}
           onResolveComment={onResolveComment}
-          canMutateComments={canMutateComments}
         />
       ) : null}
     </>

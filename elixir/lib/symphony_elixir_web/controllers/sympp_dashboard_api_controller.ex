@@ -38,8 +38,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   @package_session_key "sympp_package_grant_ids"
   @package_session_order_key "sympp_package_grant_order"
   @operator_session_key "sympp_local_operator"
-  @operator_bootstrap_param "operator_bootstrap"
-  @operator_bootstrap_config_key :sympp_local_operator_bootstrap_token
   @max_package_sessions 8
   @local_operator_actor "local-operator"
 
@@ -168,9 +166,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   @spec local_operator_browser?(Conn.t()) :: boolean()
   def local_operator_browser?(%Conn{} = conn) do
-    local_operator_session_browser?(conn) and
-      same_origin_browser_request?(conn) and
-      local_operator_session_bootstrapped?(conn)
+    local_operator_request?(conn) and same_origin_browser_request?(conn)
   end
 
   @spec local_operator_live_connect_info?(map()) :: boolean()
@@ -179,27 +175,16 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     uri = Map.get(connect_info, :uri) || Map.get(connect_info, "uri")
     x_headers = Map.get(connect_info, :x_headers) || Map.get(connect_info, "x_headers") || []
 
-    local_operator_enabled?() and
-      loopback_request?(peer_address(peer_data)) and
+    loopback_request?(peer_address(peer_data)) and
       local_host?(uri_host(uri)) and
       no_forwarded_x_headers?(x_headers)
   end
 
   def local_operator_live_connect_info?(_connect_info), do: false
 
-  defp local_operator_session_browser?(%Conn{} = conn) do
-    local_operator_enabled?() and loopback_request?(conn.remote_ip) and local_host?(conn.host) and direct_local_request?(conn)
+  defp local_operator_request?(%Conn{} = conn) do
+    loopback_request?(conn.remote_ip) and local_host?(conn.host) and direct_local_request?(conn)
   end
-
-  @spec local_operator_enabled?() :: boolean()
-  def local_operator_enabled? do
-    endpoint_config = Application.get_env(:symphony_elixir, Endpoint, [])
-
-    truthy_config?(Keyword.get(endpoint_config, :sympp_local_operator)) or
-      truthy_config?(Application.get_env(:symphony_elixir, :sympp_local_operator))
-  end
-
-  defp truthy_config?(value), do: value in [true, :enabled, "enabled", "true", "1", 1]
 
   defp loopback_request?({127, _second, _third, _fourth}), do: true
   defp loopback_request?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
@@ -342,42 +327,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp normalize_origin_port("http", nil), do: 80
   defp normalize_origin_port("https", nil), do: 443
   defp normalize_origin_port(_scheme, port), do: port
-
-  defp local_operator_session_bootstrapped?(conn) do
-    fetched_active_local_operator_session?(conn) or
-      valid_local_operator_bootstrap?(conn) or
-      local_operator_config_request?(conn)
-  end
-
-  defp local_operator_config_request?(conn) do
-    conn.method == "GET" and
-      conn.request_path == prefixed_path(conn, "/api/v1/sympp/operator/config")
-  end
-
-  defp valid_local_operator_bootstrap?(conn) do
-    with expected when is_binary(expected) <- configured_operator_bootstrap_token(),
-         supplied when is_binary(supplied) <- request_param(conn, @operator_bootstrap_param),
-         true <- byte_size(supplied) == byte_size(expected) do
-      Plug.Crypto.secure_compare(supplied, expected)
-    else
-      _value -> false
-    end
-  end
-
-  defp configured_operator_bootstrap_token do
-    endpoint_config = Application.get_env(:symphony_elixir, Endpoint, [])
-
-    case Keyword.get(endpoint_config, @operator_bootstrap_config_key) do
-      token when is_binary(token) and token != "" -> token
-      _token -> nil
-    end
-  end
-
-  defp request_param(conn, key) do
-    conn
-    |> Conn.fetch_query_params()
-    |> then(&(Map.get(&1.params, key) || Map.get(&1.query_params, key)))
-  end
 
   defp active_local_operator_session?(conn), do: Conn.get_session(conn, @operator_session_key) == true
 
@@ -649,7 +598,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   @spec operator_dashboard_events(Conn.t(), map()) :: Conn.t()
   def operator_dashboard_events(conn, _params) do
-    with true <- local_operator_api_request?(conn),
+    with true <- local_operator_browser?(conn),
          {:ok, %Decision{}} <- authorize_local_operator_policy(conn, :dashboard_read, Target.new(:dashboard)),
          :ok <- OperatorDashboardOpener.ensure_started(),
          :ok <- DashboardPubSub.subscribe() do
@@ -675,10 +624,11 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   @spec operator_config(Conn.t(), map()) :: Conn.t()
   def operator_config(conn, _params) do
-    with {:ok, conn} <- ensure_local_operator_api_session(conn),
+    with true <- local_operator_browser?(conn),
          {:ok, %Decision{}} <- authorize_local_operator_policy(conn, :dashboard_read, Target.new(:dashboard)) do
       json(conn, operator_runtime_config(conn) |> maybe_put_dashboard_bootstrap())
     else
+      false -> error_response(conn, :unauthorized)
       {:error, reason} -> error_response(conn, reason)
     end
   end
@@ -1041,7 +991,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp send_local_operator_response(conn, action, %Target{} = target, tool_name, fun)
        when is_atom(action) and is_atom(tool_name) and is_function(fun, 1) do
-    if local_operator_api_request?(conn) do
+    if local_operator_browser?(conn) do
       Runtime.with_dashboard_repo(fn repo ->
         local_operator_response(repo, conn, action, target, tool_name, fun)
       end)
@@ -1185,25 +1135,12 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     Target.new(:comment, target_id)
   end
 
-  defp local_operator_api_request?(conn) do
-    local_operator_browser?(conn) and fetched_active_local_operator_session?(conn)
-  end
-
-  defp ensure_local_operator_api_session(conn) do
-    cond do
-      local_operator_api_request?(conn) -> {:ok, conn}
-      local_operator_browser?(conn) -> {:ok, put_local_operator_session(conn)}
-      true -> {:error, :unauthorized}
-    end
-  end
-
   defp operator_runtime_config(conn) do
     %{
       apiBase: prefixed_path(conn, "/api/v1/sympp/operator"),
       basePath: script_name_prefix(conn),
       csrfToken: Plug.CSRFProtection.get_csrf_token(),
-      logoUrl: prefixed_path(conn, "/splusplus-logo.png"),
-      operatorMode: local_operator_api_request?(conn)
+      logoUrl: prefixed_path(conn, "/splusplus-logo.png")
     }
   end
 
@@ -1222,12 +1159,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp script_name_prefix(%Conn{script_name: []}), do: ""
   defp script_name_prefix(%Conn{script_name: script_name}), do: "/" <> Enum.join(script_name, "/")
-
-  defp fetched_active_local_operator_session?(conn) do
-    conn
-    |> Conn.fetch_session()
-    |> active_local_operator_session?()
-  end
 
   defp authorize_package_session(conn, work_package_id) do
     package_result =

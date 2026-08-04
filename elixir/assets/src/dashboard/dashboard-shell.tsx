@@ -9,10 +9,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { architectHandoffEligibleRequest } from "@/lib/operational-state";
-import { cn } from "@/lib/utils";
 import { AppDialogState } from "./dashboard-state";
 import { ArchivedRequestsDialog, DashboardSettingsDialog, ThemeToggle } from "./dashboard-settings";
-import { CardDetailSelection, DASHBOARD_LOGO_URL, DashboardConnectionIssue, DashboardTheme, DashboardUpdateAnimations, LOCAL_OPERATOR_AUTH_REQUIRED_MESSAGE, ResolveContextComment, SubmitContextComment, TopPanelKey, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, isLocalOperatorAuthRequiredMessage } from "./runtime";
+import { CardDetailSelection, DASHBOARD_LOGO_URL, DashboardConnectionIssue, DashboardTheme, DashboardUpdateAnimations, ResolveContextComment, SubmitContextComment, TopPanelKey, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab } from "./runtime";
 import { DashboardDeferredDialogs } from "./dashboard-deferred-dialogs";
 import { LiveLedgerBadge } from "./status-cards";
 import { RepoSummary } from "./dashboard-data";
@@ -35,7 +34,6 @@ export function DashboardShell({
   archivedRequestsLoading,
   archivedRequests,
   attentionItems,
-  canMutateComments,
   captureFailedMcpCalls,
   changeWorkPackageState,
   changeWorkRequestState,
@@ -50,7 +48,6 @@ export function DashboardShell({
   hiddenWorkstreamCount,
   linkedWorkPackageIds,
   loading,
-  canMutateOperatorActions,
   onArchiveWorkPackage,
   onArchiveWorkRequest,
   onOpenArchivedRequests,
@@ -61,7 +58,6 @@ export function DashboardShell({
   onHideEmptyWorkstreamsChange,
   onJumpToAttention,
   onOpenDashboardOnBootChange,
-  onReconnectDashboard,
   onRefreshDashboard,
   onResolveComment,
   onRestoreWorkRequest,
@@ -93,7 +89,6 @@ export function DashboardShell({
   archivedRequestsLoading: boolean;
   archivedRequests: WorkRequestCard[];
   attentionItems: AttentionItem[];
-  canMutateComments: boolean;
   captureFailedMcpCalls: boolean;
   changeWorkPackageState: WorkPackageStateMutation;
   changeWorkRequestState: WorkRequestStateMutation;
@@ -108,7 +103,6 @@ export function DashboardShell({
   hiddenWorkstreamCount: number;
   linkedWorkPackageIds: Set<string>;
   loading: boolean;
-  canMutateOperatorActions: boolean;
   onArchiveWorkPackage: WorkPackageArchiveMutation;
   onArchiveWorkRequest: WorkRequestMutation;
   onOpenArchivedRequests: () => Promise<void>;
@@ -119,7 +113,6 @@ export function DashboardShell({
   onHideEmptyWorkstreamsChange: (hide: boolean) => void;
   onJumpToAttention: (destination: AttentionJumpDestination) => void;
   onOpenDashboardOnBootChange: (open: boolean) => Promise<void>;
-  onReconnectDashboard: () => Promise<void>;
   onRefreshDashboard: () => Promise<void>;
   onResolveComment: ResolveContextComment;
   onRestoreWorkRequest: WorkRequestMutation;
@@ -148,8 +141,7 @@ export function DashboardShell({
   workspaceTab: WorkspaceTab;
 }) {
   const { hideEmptyWorkstreams, showWorkstreamContextBar } = displayPreferences;
-  const localOperatorReconnectIssue = isLocalOperatorAuthRequiredMessage(error) || connectionIssue?.reconnectableLocalSession === true;
-  const dashboardAlertMessage = error || (localOperatorReconnectIssue ? connectionIssue?.message || LOCAL_OPERATOR_AUTH_REQUIRED_MESSAGE : null);
+  const dashboardAlertMessage = error;
   const guidanceCount = attentionItems.filter((item) => item.tone === "guidance").length;
   const blockerCount = attentionItems.filter((item) => item.tone === "blocked").length;
   const [visibleTopPanel, setOpenTopPanel] = useAutoClosingTopPanel(guidanceCount, blockerCount, dashboard !== null);
@@ -188,7 +180,6 @@ export function DashboardShell({
               <ThemeToggle theme={theme} onToggle={toggleTheme} />
               <DashboardSettingsDialog
                 archiveAfterDays={archiveAfterDays}
-                canUpdateRetentionSettings={canMutateOperatorActions}
                 captureFailedMcpCalls={captureFailedMcpCalls}
                 soloSessionDeleteAfterDays={soloSessionDeleteAfterDays}
                 openDashboardOnBoot={openDashboardOnBoot}
@@ -205,7 +196,6 @@ export function DashboardShell({
                 onShowWorkstreamContextBarChange={onShowWorkstreamContextBarChange}
               />
               <ArchivedRequestsDialog
-                canRestoreWorkRequest={canMutateOperatorActions}
                 loading={archivedRequestsLoading}
                 requests={archivedRequests}
                 onOpen={onOpenArchivedRequests}
@@ -216,16 +206,14 @@ export function DashboardShell({
                 {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
                 Refresh
               </Button>
-              {canMutateOperatorActions ? (
-                <NewRequestDialog
-                  canCopyArchitectHandoff={architectHandoffEligibleRequest}
-                  onCopyArchitectHandoff={copyArchitectHandoff}
-                  onCreateRequest={createWorkRequest}
-                  open={dialogState.newRequestOpen}
-                  onOpenChange={onSetNewRequestOpen}
-                  repos={repos}
-                />
-              ) : null}
+              <NewRequestDialog
+                canCopyArchitectHandoff={architectHandoffEligibleRequest}
+                onCopyArchitectHandoff={copyArchitectHandoff}
+                onCreateRequest={createWorkRequest}
+                open={dialogState.newRequestOpen}
+                onOpenChange={onSetNewRequestOpen}
+                repos={repos}
+              />
             </div>
           </div>
           <div className="dashboard-top-panel-shell mx-auto max-w-[1500px] px-4 sm:px-6 lg:px-8">
@@ -244,34 +232,20 @@ export function DashboardShell({
         <div className="mx-auto grid max-w-[1500px] gap-5 px-4 py-5 sm:px-6 lg:px-8">
           {dashboardAlertMessage ? (
             <Card
-              className={cn(
-                "dashboard-glass-surface motion-card",
-                localOperatorReconnectIssue
-                  ? "border-amber-200 bg-amber-50 dark:border-amber-700/70 dark:bg-amber-950/45"
-                  : "border-rose-200 bg-rose-50 dark:border-rose-700/70 dark:bg-rose-950/45",
-              )}
+              className="dashboard-glass-surface motion-card border-rose-200 bg-rose-50 dark:border-rose-700/70 dark:bg-rose-950/45"
             >
               <CardContent
-                className={cn(
-                  "flex flex-wrap items-start justify-between gap-3 p-4 text-sm",
-                  localOperatorReconnectIssue ? "text-amber-900 dark:text-amber-100" : "text-rose-800 dark:text-rose-200",
-                )}
+                className="flex flex-wrap items-start justify-between gap-3 p-4 text-sm text-rose-800 dark:text-rose-200"
               >
                 <div className="flex items-start gap-3">
                   <AlertCircle className="mt-0.5 size-4 shrink-0" />
                   <div className="grid gap-1">
                     <span className="font-medium">
-                      {localOperatorReconnectIssue ? "Local operator reconnect" : "Dashboard error"}
+                      Dashboard error
                     </span>
                     <span>{dashboardAlertMessage}</span>
                   </div>
                 </div>
-                {localOperatorReconnectIssue ? (
-                  <Button variant="outline" size="sm" onClick={() => void onReconnectDashboard()} disabled={refreshing} className="button-lift">
-                    {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                    Reconnect
-                  </Button>
-                ) : null}
               </CardContent>
             </Card>
           ) : null}
@@ -300,8 +274,6 @@ export function DashboardShell({
 
         <DashboardDeferredDialogs
           activeBlockingEdges={dashboardActiveBlockingEdges(dashboard)}
-          canMutateComments={canMutateComments}
-          canMutateOperatorActions={canMutateOperatorActions}
           changeWorkPackageState={changeWorkPackageState}
           changeWorkRequestState={changeWorkRequestState}
           copyArchitectHandoff={copyArchitectHandoff}

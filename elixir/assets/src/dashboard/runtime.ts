@@ -9,7 +9,6 @@ declare global {
       basePath?: string;
       csrfToken?: string;
       logoUrl?: string;
-      operatorMode?: boolean;
     };
   }
 }
@@ -36,10 +35,6 @@ export const TOP_PANEL_ORDER: TopPanelKey[] = ["guidance", "blockers"];
 
 const DEFAULT_DASHBOARD_API_BASE = "/api/v1/sympp/operator";
 
-const OPERATOR_BOOTSTRAP_PARAM = "operator_bootstrap";
-
-export const LOCAL_OPERATOR_AUTH_REQUIRED_MESSAGE = "Local operator session needs reconnect. Use Reconnect after Symphony++ is reachable.";
-
 export const COMMENT_BODY_MAX_LENGTH = 4000;
 
 export const MAX_UPDATE_MOTION_ENTRIES = 120;
@@ -50,7 +45,6 @@ export type DashboardRuntimeConfig = {
   csrfToken?: string;
   dashboard?: unknown;
   logoUrl?: string;
-  operatorMode?: boolean;
 };
 
 export type DashboardApiResponse = unknown;
@@ -60,12 +54,12 @@ export type DashboardResponseSelector = (payload: DashboardApiResponse) => Dashb
 export type LatestTaskQueue<T> = { active: Promise<void> | null; pending: T | null };
 
 class DashboardApiError extends Error {
-  readonly reconnectableLocalSession: boolean;
+  readonly refreshRuntimeConfig: boolean;
 
-  constructor(message: string, reconnectableLocalSession = false) {
+  constructor(message: string, refreshRuntimeConfig = false) {
     super(message);
     this.name = "DashboardApiError";
-    this.reconnectableLocalSession = reconnectableLocalSession;
+    this.refreshRuntimeConfig = refreshRuntimeConfig;
   }
 }
 
@@ -118,7 +112,6 @@ export type DashboardConnectionIssue = {
   firstFailedAt: number;
   lastFailedAt: number;
   message: string;
-  reconnectableLocalSession: boolean;
 };
 
 export const REPO_SUMMARY_PLATE_TONES: Record<RepoSummaryPlateTone, string> = {
@@ -167,7 +160,6 @@ export type RequestDetailUiState = {
   commentsOpen: boolean;
   deleteError: string | null;
   deletePending: boolean;
-  deliverConfirmOpen: boolean;
   stateError: string | null;
   statePending: boolean;
 };
@@ -178,31 +170,24 @@ export type RequestDetailUiAction =
   | { type: "commentsOpen"; open: boolean }
   | { type: "deleteError"; error: string | null }
   | { type: "deletePending"; pending: boolean }
-  | { type: "deliverConfirmOpen"; open: boolean }
   | { type: "stateError"; error: string | null }
   | { type: "statePending"; pending: boolean };
 
 export type PackageDetailUiState = {
-  archiveConfirmOpen: boolean;
   archiveError: string | null;
   archivePending: boolean;
   evidenceDialogOpen: boolean;
   noPrEvidence: string;
-  pendingStateAction: WorkPackageStateAction | null;
-  stateConfirmOpen: boolean;
   stateError: string | null;
   statePending: boolean;
 };
 
 export type PackageDetailUiAction =
-  | { type: "archiveConfirmOpen"; open: boolean }
   | { type: "archiveError"; error: string | null }
   | { type: "archivePending"; pending: boolean }
   | { type: "evidenceDialogOpen"; open: boolean }
   | { type: "noPrEvidence"; value: string }
-  | { type: "pendingStateAction"; action: WorkPackageStateAction | null }
   | { type: "stateClosed" }
-  | { type: "stateConfirmOpen"; open: boolean }
   | { type: "stateError"; error: string | null }
   | { type: "statePending"; pending: boolean };
 
@@ -246,39 +231,7 @@ export function dashboardEventsUrl() {
 export const dashboardRefreshPath = () => "/dashboard";
 
 function operatorConfigUrl() {
-  const url = operatorApiUrl("/config");
-  const token = currentOperatorBootstrapToken();
-
-  if (!token) return url;
-
-  const separator = url.includes("?") ? "&" : "?";
-  return `${url}${separator}${encodeURIComponent(OPERATOR_BOOTSTRAP_PARAM)}=${encodeURIComponent(token)}`;
-}
-
-function currentOperatorBootstrapToken() {
-  if (typeof window === "undefined") return null;
-
-  try {
-    const value = new URLSearchParams(window.location.search).get(OPERATOR_BOOTSTRAP_PARAM);
-    return value?.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-function scrubOperatorBootstrapFromUrl() {
-  if (typeof window === "undefined") return;
-
-  try {
-    const url = new URL(window.location.href);
-    if (!url.searchParams.has(OPERATOR_BOOTSTRAP_PARAM)) return;
-
-    url.searchParams.delete(OPERATOR_BOOTSTRAP_PARAM);
-    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
-    window.history.replaceState(window.history.state, document.title, nextUrl);
-  } catch {
-    // URL cleanup is best-effort; auth state must not depend on browser history mutation.
-  }
+  return operatorApiUrl("/config");
 }
 
 export function jsonHeaders({ csrf = false, content = false }: { csrf?: boolean; content?: boolean } = {}) {
@@ -329,16 +282,15 @@ function dashboardErrorMessage(payload: DashboardApiResponse) {
 function dashboardResponseError(response: Response, payload: DashboardApiResponse, fallbackMessage: string) {
   return new DashboardApiError(
     dashboardResponseErrorMessage(response, payload, fallbackMessage),
-    isLocalOperatorAuthResponse(response, payload),
+    shouldRefreshRuntimeConfig(response, payload),
   );
 }
 
 function dashboardResponseErrorMessage(response: Response, payload: DashboardApiResponse, fallbackMessage: string) {
-  if (isLocalOperatorAuthResponse(response, payload)) return LOCAL_OPERATOR_AUTH_REQUIRED_MESSAGE;
   return dashboardErrorMessage(payload) || fallbackMessage;
 }
 
-function isLocalOperatorAuthResponse(response: Response, payload: DashboardApiResponse) {
+function shouldRefreshRuntimeConfig(response: Response, payload: DashboardApiResponse) {
   if (response.status === 401) return true;
   if (response.status === 403 && !isRecord(payload)) return true;
 
@@ -347,19 +299,12 @@ function isLocalOperatorAuthResponse(response: Response, payload: DashboardApiRe
   return code === "unauthorized" || code === "forbidden" || code.toLowerCase().includes("csrf");
 }
 
-export function isLocalOperatorAuthRequiredMessage(message?: string | null) {
-  return message === LOCAL_OPERATOR_AUTH_REQUIRED_MESSAGE;
-}
-
 export function dashboardCaughtMessage(caught: unknown, fallbackMessage: string) {
   return caught instanceof Error ? caught.message : fallbackMessage;
 }
 
-export function isReconnectableLocalOperatorError(caught: unknown) {
-  return (
-    (caught instanceof DashboardApiError && caught.reconnectableLocalSession) ||
-    (caught instanceof Error && isLocalOperatorAuthRequiredMessage(caught.message))
-  );
+function shouldRetryWithFreshRuntimeConfig(caught: unknown) {
+  return caught instanceof DashboardApiError && caught.refreshRuntimeConfig;
 }
 
 export function dashboardFromEnvelope(payload: DashboardApiResponse) {
@@ -498,7 +443,7 @@ function upsertWorkRequestCard(cards: WorkRequestCard[], card: WorkRequestCard) 
   return cards.some((current) => current.id === card.id) ? cards.map((current) => (current.id === card.id ? { ...current, ...card } : current)) : [card, ...cards];
 }
 
-function invalidateDashboardRuntimeAuth() {
+function invalidateDashboardRuntimeConfig() {
   dashboardRuntimeConfigGeneration += 1;
   dashboardRuntimeConfigPromise = null;
   const currentConfig = dashboardRuntimeConfig ?? (typeof window === "undefined" ? undefined : window.SYMPP_DASHBOARD_CONFIG);
@@ -509,27 +454,26 @@ function invalidateDashboardRuntimeAuth() {
   }
 }
 
-export async function reconnectLocalOperatorSession() {
-  invalidateDashboardRuntimeAuth();
+export async function refreshDashboardRuntimeConfig() {
+  invalidateDashboardRuntimeConfig();
   return ensureDashboardRuntimeConfig();
 }
 
-export async function withLocalOperatorReconnect<T>(operation: () => Promise<T>): Promise<T> {
+export async function withRuntimeConfigRetry<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation();
   } catch (caught) {
-    if (!isReconnectableLocalOperatorError(caught)) {
+    if (!shouldRetryWithFreshRuntimeConfig(caught)) {
       throw caught;
     }
 
-    await reconnectLocalOperatorSession();
+    await refreshDashboardRuntimeConfig();
     return operation();
   }
 }
 
 export async function ensureDashboardRuntimeConfig() {
   if (dashboardRuntimeConfig?.csrfToken) {
-    scrubOperatorBootstrapFromUrl();
     return dashboardRuntimeConfig;
   }
 
@@ -545,7 +489,6 @@ export async function ensureDashboardRuntimeConfig() {
         }
 
         dashboardRuntimeConfig = nextConfig;
-        scrubOperatorBootstrapFromUrl();
         return dashboardRuntimeConfig;
       })
       .finally(() => {

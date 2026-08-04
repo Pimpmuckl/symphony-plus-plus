@@ -162,21 +162,11 @@ defmodule SymphonyElixirWeb.Router do
   end
 
   defp local_operator_cors_origin?(conn, origin) do
-    local_operator_enabled?() and
-      loopback_request?(conn.remote_ip) and
+    loopback_request?(conn.remote_ip) and
       local_host?(conn.host) and
       direct_local_request?(conn) and
       configured_dashboard_origin_matches?(origin)
   end
-
-  defp local_operator_enabled? do
-    endpoint_config = Application.get_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, [])
-
-    truthy_config?(Keyword.get(endpoint_config, :sympp_local_operator)) or
-      truthy_config?(Application.get_env(:symphony_elixir, :sympp_local_operator))
-  end
-
-  defp truthy_config?(value), do: value in [true, :enabled, "enabled", "true", "1", 1]
 
   defp loopback_request?({127, _second, _third, _fourth}), do: true
   defp loopback_request?({0, 0, 0, 0, 0, 0, 0, 1}), do: true

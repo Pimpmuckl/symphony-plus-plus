@@ -6,7 +6,7 @@ import { GuidanceDialogBody } from "./guidance-dialog";
 import type { GuidanceItem } from "@/types/dashboard";
 
 describe("GuidanceDialog", () => {
-  it("hides guidance answer submission outside local operator mode", () => {
+  it("always exposes guidance answer submission in the local cockpit", () => {
     const item: GuidanceItem = {
       source: "guidance",
       id: "gr-read-only",
@@ -23,13 +23,12 @@ describe("GuidanceDialog", () => {
         repo_key: "symphony-plus-plus",
       },
     };
-    const content = (canSubmitAnswer: boolean) => (
+    const content = (
       <Dialog open>
-        <GuidanceDialogBody canSubmitAnswer={canSubmitAnswer} item={item} onOpenChange={() => undefined} onSubmitAnswer={async () => undefined} />
+        <GuidanceDialogBody item={item} onOpenChange={() => undefined} onSubmitAnswer={async () => undefined} />
       </Dialog>
     );
 
-    expect(renderToStaticMarkup(content(false))).not.toContain(">Answer<");
-    expect(renderToStaticMarkup(content(true))).toContain(">Answer<");
+    expect(renderToStaticMarkup(content)).toContain(">Answer<");
   });
 });

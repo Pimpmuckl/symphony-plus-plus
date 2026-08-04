@@ -5269,14 +5269,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
   test "local operator config keeps runtime bootstrap usable when priority data is unavailable" do
     with_local_operator_endpoint(fn ->
-      Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint,
-        sympp_local_operator: true,
-        sympp_repo: BusyRepo
-      )
+      Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, sympp_repo: BusyRepo)
 
       payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/config"), 200)
 
-      assert payload["operatorMode"] == true
+      refute Map.has_key?(payload, "operatorMode")
       assert is_binary(payload["csrfToken"])
       refute Map.has_key?(payload, "dashboard")
     end)
@@ -5294,43 +5291,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "local operator dashboard shell grants same-origin API access without origin" do
+  test "ordinary local dashboard load injects CSRF and can mutate without operator mode or bootstrap", %{repo: repo} do
     with_local_operator_endpoint(fn ->
-      with_local_operator_bootstrap_token("test-bootstrap-token", fn ->
-        index = "<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>"
-
-        with_static_dashboard_file("index.html", index, fn ->
-          shell_conn =
-            build_conn(:get, "/sympp/board?operator_bootstrap=test-bootstrap-token")
-            |> Map.put(:host, "localhost")
-            |> Map.put(:remote_ip, {127, 0, 0, 1})
-            |> put_req_header("sec-fetch-site", "none")
-            |> put_req_header("sec-fetch-mode", "navigate")
-            |> Plug.Test.init_test_session(%{})
-            |> ReactDashboardController.index(%{})
-
-          assert html_response(shell_conn, 200) =~ "operatorMode"
-          assert SymppDashboardApiController.local_operator_session?(shell_conn.private.plug_session)
-
-          payload =
-            build_conn()
-            |> Map.put(:host, "localhost")
-            |> Map.put(:remote_ip, {127, 0, 0, 1})
-            |> put_req_header("sec-fetch-site", "same-origin")
-            |> put_req_header("sec-fetch-mode", "cors")
-            |> put_req_header("sec-fetch-dest", "empty")
-            |> Plug.Test.init_test_session(shell_conn.private.plug_session)
-            |> get("/api/v1/sympp/operator/config")
-            |> json_response(200)
-
-          assert %{"operatorMode" => true} = payload
-        end)
-      end)
-    end)
-  end
-
-  test "plain local dashboard config grants same-origin API session" do
-    with_local_operator_endpoint(fn ->
+      work_request = create_work_request!(repo, id: "WR-LOCAL-ORDINARY-MUTATION", status: "ready_for_slicing")
       index = "<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>"
 
       with_static_dashboard_file("index.html", index, fn ->
@@ -5340,30 +5303,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> Map.put(:remote_ip, {127, 0, 0, 1})
           |> put_req_header("sec-fetch-site", "none")
           |> put_req_header("sec-fetch-mode", "navigate")
-          |> Plug.Test.init_test_session(%{})
-          |> ReactDashboardController.index(%{})
+          |> get("/sympp/board")
 
-        assert html_response(shell_conn, 200) =~ "operatorMode"
-        refute html_response(shell_conn, 200) =~ "csrfToken"
-        refute SymppDashboardApiController.local_operator_session?(shell_conn.private.plug_session)
+        config = dashboard_shell_config(html_response(shell_conn, 200))
+        refute Map.has_key?(config, "operatorMode")
+        assert is_binary(config["csrfToken"])
 
-        conn =
-          build_conn()
-          |> Map.put(:host, "localhost")
-          |> Map.put(:remote_ip, {127, 0, 0, 1})
-          |> put_req_header("sec-fetch-site", "same-origin")
-          |> put_req_header("sec-fetch-mode", "cors")
-          |> put_req_header("sec-fetch-dest", "empty")
-          |> Plug.Test.init_test_session(shell_conn.private.plug_session)
-          |> get("/api/v1/sympp/operator/config")
+        payload =
+          shell_conn
+          |> recycle_local_operator_conn("http://localhost")
+          |> put_req_header("x-csrf-token", config["csrfToken"])
+          |> post("/api/v1/sympp/operator/work-requests/#{work_request.id}/state", %{"state" => "completed"})
+          |> json_response(200)
 
-        assert %{"operatorMode" => true} = json_response(conn, 200)
-        assert SymppDashboardApiController.local_operator_session?(conn.private.plug_session)
+        assert payload["work_request"]["operational_state"]["key"] == "completed"
+        assert is_binary(payload["work_request"]["completed_at"])
+
+        assert {:ok, %{completed_at: %DateTime{}, completion_source: "operator"}} =
+                 WorkRequestRepository.get(repo, work_request.id)
       end)
     end)
   end
 
-  test "local operator config recovers stale browser session state after backend restart", %{repo: repo} do
+  test "ordinary local requests ignore stale work-key session state", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       %{work_package: work_package} = create_dashboard_fixture(repo, id: "SYMPP-LOCAL-RECONNECT")
 
@@ -5381,8 +5343,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> Plug.Test.init_test_session(stale_session)
         |> get("/api/v1/sympp/operator/dashboard")
 
-      assert %{"error" => %{"code" => "unauthorized"}} = json_response(stale_conn, 401)
-      refute SymppDashboardApiController.local_operator_session?(stale_conn.private.plug_session)
+      assert %{"deferred" => %{"dashboard_sections" => true}} = json_response(stale_conn, 200)
 
       config_conn =
         build_conn()
@@ -5395,9 +5356,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> Plug.Test.init_test_session(stale_session)
         |> get("/api/v1/sympp/operator/config")
 
-      assert %{"operatorMode" => true, "csrfToken" => csrf_token} = json_response(config_conn, 200)
+      config = json_response(config_conn, 200)
+      refute Map.has_key?(config, "operatorMode")
+      csrf_token = config["csrfToken"]
       assert is_binary(csrf_token)
-      assert SymppDashboardApiController.local_operator_session?(config_conn.private.plug_session)
 
       payload =
         config_conn
@@ -5409,7 +5371,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "spp.localhost plain dashboard config grants local operator API session" do
+  test "spp.localhost dashboard origin can load local operator config" do
     with_local_operator_endpoint(fn ->
       with_local_operator_dashboard_origin("http://127.0.0.1:5174", fn ->
         index = "<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>"
@@ -5437,14 +5399,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
             |> Plug.Test.init_test_session(%{})
             |> get("/api/v1/sympp/operator/config")
 
-          assert %{"operatorMode" => true} = json_response(conn, 200)
-          assert SymppDashboardApiController.local_operator_session?(conn.private.plug_session)
+          payload = json_response(conn, 200)
+          refute Map.has_key?(payload, "operatorMode")
+          assert is_binary(payload["csrfToken"])
         end)
       end)
     end)
   end
 
-  test "same-origin local dashboard config establishes local operator session without bootstrap token" do
+  test "same-origin local dashboard config is available without bootstrap state" do
     with_local_operator_endpoint(fn ->
       conn =
         build_conn()
@@ -5456,8 +5419,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> Plug.Test.init_test_session(%{})
         |> get("/api/v1/sympp/operator/config")
 
-      assert %{"operatorMode" => true} = json_response(conn, 200)
-      assert SymppDashboardApiController.local_operator_session?(conn.private.plug_session)
+      payload = json_response(conn, 200)
+      refute Map.has_key?(payload, "operatorMode")
+      assert is_binary(payload["csrfToken"])
     end)
   end
 
@@ -5495,29 +5459,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "configured dashboard origin bootstrap establishes local operator API session" do
-    with_local_operator_endpoint(fn ->
-      with_local_operator_bootstrap_token("test-bootstrap-token", fn ->
-        with_local_operator_dashboard_origin("http://127.0.0.1:5174", fn ->
-          conn =
-            build_conn()
-            |> Map.put(:host, "127.0.0.1")
-            |> Map.put(:remote_ip, {127, 0, 0, 1})
-            |> put_req_header("origin", "http://127.0.0.1:5174")
-            |> put_req_header("sec-fetch-site", "same-site")
-            |> put_req_header("sec-fetch-mode", "cors")
-            |> put_req_header("sec-fetch-dest", "empty")
-            |> Plug.Test.init_test_session(%{})
-            |> get("/api/v1/sympp/operator/config?operator_bootstrap=test-bootstrap-token")
-
-          assert %{"operatorMode" => true} = json_response(conn, 200)
-          assert SymppDashboardApiController.local_operator_session?(conn.private.plug_session)
-        end)
-      end)
-    end)
-  end
-
-  test "configured dashboard origin can bootstrap local operator API session without token" do
+  test "configured dashboard origin can load local operator config" do
     with_local_operator_endpoint(fn ->
       with_local_operator_dashboard_origin("http://127.0.0.1:5174", fn ->
         conn =
@@ -5531,10 +5473,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> Plug.Test.init_test_session(%{})
           |> get("/api/v1/sympp/operator/config")
 
-        assert %{"operatorMode" => true} = json_response(conn, 200)
+        payload = json_response(conn, 200)
+        refute Map.has_key?(payload, "operatorMode")
+        assert is_binary(payload["csrfToken"])
         assert Plug.Conn.get_resp_header(conn, "access-control-allow-origin") == ["http://127.0.0.1:5174"]
         assert Plug.Conn.get_resp_header(conn, "access-control-allow-credentials") == ["true"]
-        assert SymppDashboardApiController.local_operator_session?(conn.private.plug_session)
       end)
     end)
   end
@@ -5560,7 +5503,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "configured dashboard origin accepts localhost aliases for local operator API session" do
+  test "configured dashboard origin accepts localhost aliases" do
     with_local_operator_endpoint(fn ->
       with_local_operator_dashboard_origin("http://127.0.0.1:5174", fn ->
         conn =
@@ -5574,13 +5517,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> Plug.Test.init_test_session(%{})
           |> get("/api/v1/sympp/operator/config")
 
-        assert %{"operatorMode" => true} = json_response(conn, 200)
-        assert SymppDashboardApiController.local_operator_session?(conn.private.plug_session)
+        payload = json_response(conn, 200)
+        refute Map.has_key?(payload, "operatorMode")
       end)
     end)
   end
 
-  test "local operator accepts configured dashboard origin for API calls with active session" do
+  test "local operator accepts configured dashboard origin without session state" do
     with_local_operator_endpoint(fn ->
       with_local_operator_dashboard_origin("http://127.0.0.1:5174", fn ->
         conn =
@@ -5592,9 +5535,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> put_req_header("sec-fetch-mode", "cors")
           |> put_req_header("sec-fetch-dest", "empty")
           |> Plug.Test.init_test_session(%{})
-          |> SymppDashboardApiController.put_local_operator_session()
 
-        assert %{"operatorMode" => true} = json_response(get(conn, "/api/v1/sympp/operator/config"), 200)
+        payload = json_response(get(conn, "/api/v1/sympp/operator/config"), 200)
+        refute Map.has_key?(payload, "operatorMode")
       end)
     end)
   end
@@ -7044,7 +6987,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert html =~ "window.SYMPP_DASHBOARD_CONFIG"
       assert html =~ ~s("apiBase":"/app/api/v1/sympp/operator")
       assert html =~ ~s("logoUrl":"/app/splusplus-logo.png")
-      refute html =~ ~s("csrfToken":)
+      assert is_binary(dashboard_shell_config(html)["csrfToken"])
     end)
   end
 
@@ -8230,7 +8173,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     |> Map.put(:remote_ip, {127, 0, 0, 1})
     |> put_req_header("origin", "http://localhost")
     |> Plug.Test.init_test_session(%{})
-    |> SymppDashboardApiController.put_local_operator_session()
   end
 
   defp local_operator_csrf_conn do
@@ -8246,6 +8188,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     |> Map.put(:host, "localhost")
     |> Map.put(:remote_ip, {127, 0, 0, 1})
     |> put_req_header("origin", origin)
+  end
+
+  defp dashboard_shell_config(html) do
+    [_, encoded] = Regex.run(~r/window\.SYMPP_DASHBOARD_CONFIG = (\{.*\});<\/script>/, html)
+    Jason.decode!(encoded)
   end
 
   defp with_operator_github_client(fun) when is_function(fun, 0) do
@@ -8339,28 +8286,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
   defp with_local_operator_endpoint(fun) when is_function(fun, 0) do
     endpoint_config = Application.get_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, [])
-
-    Application.put_env(
-      :symphony_elixir,
-      SymphonyElixirWeb.Endpoint,
-      Keyword.put(endpoint_config, :sympp_local_operator, true)
-    )
-
-    try do
-      fun.()
-    after
-      Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
-    end
-  end
-
-  defp with_local_operator_bootstrap_token(token, fun) when is_binary(token) and is_function(fun, 0) do
-    endpoint_config = Application.get_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, [])
-
-    Application.put_env(
-      :symphony_elixir,
-      SymphonyElixirWeb.Endpoint,
-      Keyword.put(endpoint_config, :sympp_local_operator_bootstrap_token, token)
-    )
 
     try do
       fun.()

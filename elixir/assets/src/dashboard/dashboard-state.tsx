@@ -137,7 +137,6 @@ export const initialRequestDetailUiState: RequestDetailUiState = {
   commentsOpen: false,
   deleteError: null,
   deletePending: false,
-  deliverConfirmOpen: false,
   stateError: null,
   statePending: false,
 };
@@ -154,8 +153,6 @@ export function requestDetailUiReducer(state: RequestDetailUiState, action: Requ
       return state.deleteError === action.error ? state : { ...state, deleteError: action.error };
     case "deletePending":
       return state.deletePending === action.pending ? state : { ...state, deletePending: action.pending };
-    case "deliverConfirmOpen":
-      return state.deliverConfirmOpen === action.open ? state : { ...state, deliverConfirmOpen: action.open };
     case "stateError":
       return state.stateError === action.error ? state : { ...state, stateError: action.error };
     case "statePending":
@@ -164,21 +161,16 @@ export function requestDetailUiReducer(state: RequestDetailUiState, action: Requ
 }
 
 export const initialPackageDetailUiState: PackageDetailUiState = {
-  archiveConfirmOpen: false,
   archiveError: null,
   archivePending: false,
   evidenceDialogOpen: false,
   noPrEvidence: "",
-  pendingStateAction: null,
-  stateConfirmOpen: false,
   stateError: null,
   statePending: false,
 };
 
 export function packageDetailUiReducer(state: PackageDetailUiState, action: PackageDetailUiAction): PackageDetailUiState {
   switch (action.type) {
-    case "archiveConfirmOpen":
-      return state.archiveConfirmOpen === action.open ? state : { ...state, archiveConfirmOpen: action.open };
     case "archiveError":
       return state.archiveError === action.error ? state : { ...state, archiveError: action.error };
     case "archivePending":
@@ -187,12 +179,8 @@ export function packageDetailUiReducer(state: PackageDetailUiState, action: Pack
       return state.evidenceDialogOpen === action.open ? state : { ...state, evidenceDialogOpen: action.open };
     case "noPrEvidence":
       return state.noPrEvidence === action.value ? state : { ...state, noPrEvidence: action.value };
-    case "pendingStateAction":
-      return state.pendingStateAction === action.action ? state : { ...state, pendingStateAction: action.action };
     case "stateClosed":
-      return { ...state, evidenceDialogOpen: false, noPrEvidence: "", pendingStateAction: null, stateConfirmOpen: false };
-    case "stateConfirmOpen":
-      return state.stateConfirmOpen === action.open ? state : { ...state, stateConfirmOpen: action.open };
+      return { ...state, evidenceDialogOpen: false, noPrEvidence: "" };
     case "stateError":
       return state.stateError === action.error ? state : { ...state, stateError: action.error };
     case "statePending":
