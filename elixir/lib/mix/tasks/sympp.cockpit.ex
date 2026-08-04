@@ -180,7 +180,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
       MCPConfig.source_revision()
       configure_cockpit(opts, original_endpoint_config)
       {:ok, _started} = ensure_runtime_started()
-      :ok = run_work_request_retention()
+      :ok = prepare_work_request_ledger()
       opts = put_open_dashboard_default(opts)
       :ok = start_http_server_or_raise(opts)
       port = wait_for_bound_port()
@@ -395,20 +395,20 @@ defmodule Mix.Tasks.Sympp.Cockpit do
     end
   end
 
-  defp run_work_request_retention do
+  defp prepare_work_request_ledger do
     case start_retention_repo() do
       {:ok, repo_pid} ->
         Process.put(:sympp_cockpit_repo_pid, repo_pid)
-        migrate_and_run_work_request_retention()
+        migrate_work_request_ledger()
 
       {:error, reason} ->
         Mix.raise("Symphony++ cockpit WorkRequest ledger open failed: #{inspect(reason)}")
     end
   end
 
-  defp migrate_and_run_work_request_retention do
+  defp migrate_work_request_ledger do
     case WorkRequestRepository.migrate(Repo) do
-      :ok -> run_work_request_retention_pass()
+      :ok -> :ok
       {:error, reason} -> Mix.raise("Symphony++ cockpit WorkRequest ledger migration failed: #{inspect(reason)}")
     end
   end
