@@ -257,7 +257,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
     action_payload = action_payload(work_request, work_package, action)
     delivery_attrs = delivery_attrs(repo, work_package, action)
 
-    case record_reconciled_delivery(repo, work_request, work_package, delivery_attrs, opts) do
+    case record_work_package_delivery(repo, work_request, work_package, delivery_attrs, opts) do
       {:ok, delivery} ->
         work_package
         |> base_result()
@@ -486,16 +486,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler do
       [] -> action.attrs
       _blocker_ids -> Map.put(action.attrs, "allow_active_blocker_closeout", true)
     end
-  end
-
-  defp record_reconciled_delivery(
-         repo,
-         %WorkRequest{} = work_request,
-         %WorkPackage{} = work_package,
-         delivery_attrs,
-         opts
-       ) do
-    record_work_package_delivery(repo, work_request, work_package, delivery_attrs, opts)
   end
 
   defp record_work_package_delivery(
