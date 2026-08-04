@@ -29,12 +29,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "append_finding",
     "append_progress",
     "set_status",
-    "report_blocker",
-    "resolve_blocker",
     "add_comment",
     "list_comments",
     "resolve_comment",
-    "create_guidance_request",
     "read_guidance_request",
     "request_scope_expansion",
     "attach_branch",
@@ -51,12 +48,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "append_finding",
     "append_progress",
     "set_status",
-    "report_blocker",
-    "resolve_blocker",
     "add_comment",
     "list_comments",
     "resolve_comment",
-    "create_guidance_request",
     "read_guidance_request",
     "request_scope_expansion",
     "attach_branch",
@@ -66,7 +60,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "complete_review",
     "mark_ready"
   ]
-  @shared_worker_architect_tools ["add_comment", "list_comments", "resolve_comment", "resolve_blocker", "read_guidance_request"]
+  @shared_worker_architect_tools ["add_comment", "list_comments", "resolve_comment", "read_guidance_request"]
   @architect_tools [
     "create_child_work_package",
     "mint_child_worker_key",

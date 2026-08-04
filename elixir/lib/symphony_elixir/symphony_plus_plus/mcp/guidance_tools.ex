@@ -78,21 +78,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
     end
   end
 
-  def call("resolve_blocker", %Config{} = config, %Session{} = session, arguments) do
-    with {:ok, blocker_id} <- required_argument(arguments, "blocker_id"),
-         {:ok, resolution} <- required_argument(arguments, "resolution") do
-      append_scoped_progress(config.repo, session, arguments, "resolve_blocker", %{
-        "type" => "blocker",
-        "source_tool" => "resolve_blocker",
-        "blocker_id" => blocker_id,
-        "resolution" => resolution,
-        "active" => false
-      })
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "resolve_blocker", "reason" => reason}}
-    end
-  end
-
   def call("list_guidance_requests", %Config{} = config, session, arguments) do
     with {:ok, session} <- architect_session(config.repo, session, "read:guidance_request"),
          {:ok, status} <- optional_guidance_request_status(arguments),
@@ -168,26 +153,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "escalate_guidance_request", "reason" => reason}}
       {:error, :not_found} -> not_found_error("escalate_guidance_request")
       {:error, reason} -> architect_error(reason, "escalate_guidance_request")
-    end
-  end
-
-  def call("create_guidance_request", %Config{} = config, session, arguments) do
-    with {:ok, session} <- scoped_session(config.repo, session, arguments),
-         {:ok, summary} <- required_argument(arguments, "summary"),
-         {:ok, question} <- required_argument(arguments, "question"),
-         {:ok, context} <- required_argument(arguments, "context"),
-         {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
-         {:ok, guidance_request} <-
-           GuidanceRequestService.create_for_assignment(config.repo, session.assignment, %{
-             "summary" => summary,
-             "question" => question,
-             "context" => context,
-             "idempotency_key" => idempotency_key
-           }) do
-      {:ok, ToolResult.read_tool_result(%{"guidance_request" => guidance_request_payload(guidance_request)})}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "create_guidance_request", "reason" => reason}}
-      {:error, reason} -> worker_error(reason, "create_guidance_request")
     end
   end
 
@@ -360,29 +325,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
 
   defp guidance_request_blocker_id(guidance_request_id), do: "guidance_request:#{guidance_request_id}"
 
-  defp append_scoped_progress(repo, session, arguments, tool, payload) do
-    with {:ok, session} <- scoped_session(repo, session, arguments),
-         :ok <- authorize_current_package_policy(repo, session, :blocker_resolve, :blocker),
-         {:ok, summary} <- required_argument(arguments, "summary"),
-         {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
-         {:ok, caller_payload} <- optional_payload(arguments) do
-      idempotency_key = ProgressEvents.scoped_idempotency_key(tool, String.trim(idempotency_key), session)
-
-      attrs = %{
-        "summary" => summary,
-        "body" => optional_argument(arguments, "body", nil),
-        "status" => optional_argument(arguments, "status", "recorded"),
-        "idempotency_key" => idempotency_key,
-        "payload" => ProgressEvents.merge_payload(tool, caller_payload, payload)
-      }
-
-      ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, tool)
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
-      {:error, reason} -> worker_error(reason, tool)
-    end
-  end
-
   defp scoped_session(repo, session, arguments) when is_map(arguments) do
     case Auth.require_session(session, repo) do
       {:ok, session} ->
@@ -398,17 +340,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
   defp require_argument_scope(session, nil), do: {:ok, session}
   defp require_argument_scope(session, work_package_id) when work_package_id == session.assignment.work_package_id, do: {:ok, session}
   defp require_argument_scope(_session, _work_package_id), do: {:error, :forbidden}
-
-  defp authorize_current_package_policy(repo, %Session{} = session, action, resource_type) do
-    work_package_id = Session.work_package_id(session)
-
-    with {:ok, actor} <- actor_for_package_resource(repo, session, resource_type, work_package_id) do
-      case PlanningService.authorize_package_action(repo, actor, action, work_package_id, resource_type) do
-        :ok -> :ok
-        {:error, reason} -> {:error, reason}
-      end
-    end
-  end
 
   defp actor_for_package_resource(repo, %Session{} = session, resource_type, work_package_id) do
     with {:ok, target} <- PlanningService.package_resource_target(repo, work_package_id, resource_type) do
@@ -516,7 +447,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
   defp worker_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
   defp worker_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp worker_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
-  defp worker_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp worker_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)

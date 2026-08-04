@@ -628,39 +628,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
            ]
   end
 
-  test "worker metadata tools preserve protected fields and reject non-map payloads", %{repo: repo} do
+  test "append_progress rejects non-map payloads", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-PAYLOAD", kind: "mcp"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    blocker_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "blocker",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "report_blocker",
-            "arguments" => %{
-              "summary" => "Blocked",
-              "idempotency_key" => "blocker-protected",
-              "payload" => %{"type" => "pr", "active" => false, "source_tool" => "attach_pr"}
-            }
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert event_id = get_in(blocker_response, ["result", "structuredContent", "progress_event", "id"])
-    assert get_in(blocker_response, ["result", "structuredContent", "blocker_id"]) == "blocker-protected"
-    assert {:ok, events} = PlanningRepository.list_progress_events(repo, package.id)
-    event = Enum.find(events, &(&1.id == event_id))
-    assert event.payload["type"] == "blocker"
-    assert event.payload["source_tool"] == "report_blocker"
-    assert event.payload["blocker_id"] == "blocker-protected"
-    assert event.payload["active"] == true
 
     invalid_response =
       MCPHarness.request(

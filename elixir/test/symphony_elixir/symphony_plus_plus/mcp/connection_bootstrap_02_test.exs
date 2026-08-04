@@ -203,8 +203,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
           "append_finding",
           "append_progress",
           "set_status",
-          "report_blocker",
-          "create_guidance_request",
           "request_scope_expansion",
           "attach_branch",
           "attach_pr",
@@ -368,6 +366,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
       |> get_in(["result", "tools"])
       |> Map.new(&{&1["name"], &1})
 
+    for tool <- ["report_blocker", "resolve_blocker", "create_guidance_request"] do
+      refute Map.has_key?(tools_by_name, tool)
+
+      denied_response =
+        Server.handle(
+          %{"jsonrpc" => "2.0", "id" => tool, "method" => "tools/call", "params" => %{"name" => tool, "arguments" => %{}}},
+          unbound_server
+        )
+
+      expected_code = if tool == "resolve_blocker", do: -32_001, else: -32_601
+      assert get_in(denied_response, ["error", "code"]) == expected_code
+    end
+
     assert get_in(tools_by_name, ["get_current_assignment", "inputSchema", "required"]) == []
     assert get_in(tools_by_name, ["release_current_assignment", "inputSchema", "required"]) == []
     assert get_in(tools_by_name, ["release_current_assignment", "inputSchema", "properties", "reason", "type"]) == "string"
@@ -404,9 +415,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
            ]
 
     assert get_in(tools_by_name, ["set_status", "inputSchema", "required"]) == ["status", "expected_status"]
-    assert get_in(tools_by_name, ["report_blocker", "inputSchema", "properties", "blocker_id", "type"]) == "string"
-    assert get_in(tools_by_name, ["report_blocker", "inputSchema", "properties", "blocker_id", "description"]) =~ "returned in structured output"
-    assert get_in(tools_by_name, ["resolve_blocker", "inputSchema", "required"]) == ["blocker_id", "resolution", "summary", "idempotency_key"]
+    refute Map.has_key?(get_in(tools_by_name, ["set_status", "inputSchema", "properties"]), "blocker_closeout")
+    assert get_in(tools_by_name, ["mark_ready", "inputSchema", "properties"]) == %{}
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "required"]) == ["body"]
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "properties", "target_kind", "enum"]) == ["work_request", "work_package"]
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "properties", "body", "maxLength"]) == Comment.max_body_length()

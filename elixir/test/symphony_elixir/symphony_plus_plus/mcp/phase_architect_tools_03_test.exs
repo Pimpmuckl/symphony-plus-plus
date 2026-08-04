@@ -508,15 +508,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools03Test do
 
     assert get_in(worker_progress_response, ["error", "data", "reason"]) == "child_under_architect_control"
 
-    worker_report_blocker_response =
-      mcp_tool(repo, worker_session, "report_blocker", %{
-        "summary" => "late blocker",
-        "body" => "worker cannot add blockers while architect owns the merge",
-        "idempotency_key" => "late-worker-blocker-after-architect-approval"
-      })
-
-    assert get_in(worker_report_blocker_response, ["error", "data", "reason"]) == "child_under_architect_control"
-
     worker_attach_pr_replay_response =
       mcp_tool(repo, worker_session, "attach_pr", %{
         "url" => "https://github.com/nextide/symphony-plus-plus/pull/7003",
@@ -581,15 +572,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools03Test do
     assert merge_event.actor_type == "architect"
     assert merge_event.access_grant_id == architect_session.assignment.grant_id
     assert merge_event.payload["source_tool"] == "merge_child_into_phase"
-
-    post_merge_worker_report_blocker_response =
-      mcp_tool(repo, worker_session, "report_blocker", %{
-        "summary" => "post-merge blocker",
-        "body" => "worker cannot add blockers after the child merged",
-        "idempotency_key" => "post-merge-worker-blocker"
-      })
-
-    assert get_in(post_merge_worker_report_blocker_response, ["error", "data", "reason"]) == "work_package_terminal"
 
     merge_replay_response =
       mcp_tool(repo, architect_session, "merge_child_into_phase", %{
