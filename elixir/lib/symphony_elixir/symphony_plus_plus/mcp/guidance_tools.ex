@@ -447,7 +447,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
   defp worker_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
   defp worker_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp worker_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
-  defp worker_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp worker_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
