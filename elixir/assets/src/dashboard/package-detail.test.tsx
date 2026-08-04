@@ -45,7 +45,7 @@ describe("package detail blocker modal", () => {
     expect(blockerDetailWorkPackageId(selection, null)).toBe("pkg-blocked");
   });
 
-  it("hides blocker clearing outside local operator mode", () => {
+  it("always exposes blocker clearing in the local cockpit", () => {
     const selection: Extract<CardDetailSelection, { kind: "blocker" }> = {
       kind: "blocker",
       pkg: { id: "pkg-selected", title: "Selected package", status: "blocked" },
@@ -59,7 +59,7 @@ describe("package detail blocker modal", () => {
         work_package_id: "pkg-selected",
       },
     };
-    const content = (canMutateOperatorActions: boolean) => (
+    const content = (
       <Dialog open>
         <BlockerDetailContent
           selection={selection}
@@ -67,16 +67,11 @@ describe("package detail blocker modal", () => {
           loading={false}
           error={null}
           onClearWorkPackageBlocker={async () => undefined}
-          canMutateOperatorActions={canMutateOperatorActions}
         />
       </Dialog>
     );
 
-    const readOnlyMarkup = renderToStaticMarkup(content(false));
-    const operatorMarkup = renderToStaticMarkup(content(true));
-
-    expect(readOnlyMarkup).not.toContain(">Clear<");
-    expect(operatorMarkup).toContain(">Clear<");
+    expect(renderToStaticMarkup(content)).toContain(">Clear<");
   });
 });
 
@@ -116,7 +111,6 @@ describe("linked WorkPackage blocker summary", () => {
           onSelectAttention={() => undefined}
           onSubmitComment={async () => ({ id: "comment" })}
           onResolveComment={async () => ({ id: "comment" })}
-          canMutateComments={false}
         />
       </Dialog>,
     );

@@ -2,7 +2,7 @@ import type { ArchitectHandoffPayload, ContextComment, CopyArchitectHandoff, Cre
 import type { NewRequestForm } from "@/components/dashboard/new-request-dialog";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, DashboardRuntimeConfig, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, createLatestTaskQueue, dashboardBootstrapFromRuntimeConfig, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, dashboardRuntimeConfig, enqueueLatestTask, ensureDashboardRuntimeConfig, isReconnectableLocalOperatorError, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, reconnectLocalOperatorSession, removeDashboardWorkRequest, withLocalOperatorReconnect } from "./runtime";
+import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, createLatestTaskQueue, dashboardBootstrapFromRuntimeConfig, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, enqueueLatestTask, ensureDashboardRuntimeConfig, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, removeDashboardWorkRequest, withRuntimeConfigRetry } from "./runtime";
 import { DashboardShell } from "./dashboard-shell";
 import { DashboardDebugTools } from "./dashboard-debug-tools";
 import { SoloSessions } from "./solo-sessions";
@@ -10,7 +10,6 @@ import { WorkstreamsPane } from "./workspace-tabs";
 import { activeBlockerItems, allGuidanceItems, allPackages, dashboardContentFingerprint, guidanceAnswerUrl, repoSummaries } from "./dashboard-data";
 import { appDialogReducer, appStateReducer, createInitialAppState, initialAppDialogState } from "./dashboard-state";
 import { applyDashboardTheme, repoWorkstreamHasWorkItems, shouldShowUpdateSimulationControls, writeDashboardUiStateValue, writeStoredTheme } from "./dashboard-persistence";
-import { canMutateDashboardComments, canMutateDashboardOperatorActions } from "./detail-utils";
 import { useDashboardOperatorSettings } from "./dashboard-operator-settings";
 import { filterWorkstreamsBySearch } from "./dashboard-search";
 import { dashboardWorkRequestDetails, packageSelectionIndex, requestDetailsByRepoKey } from "./workstream-data";
@@ -18,10 +17,7 @@ import { useDashboardUpdateAnimations } from "./update-animations";
 import { useDashboardSurfaceLoading } from "./dashboard-surface-loading";
 import { createDashboardEventRefresh, useBestEffortGithubSync } from "./dashboard-demand-loading";
 import { attentionTargetForGuidance, dashboardAttentionItems, type AttentionJumpDestination, type AttentionJumpTarget, type AttentionTarget } from "./workstream-attention";
-type DashboardLoadMode = "initial" | "refresh" | "silent" | "reconnect";
-function mergeDashboardLoadMode(pending: DashboardLoadMode, next: DashboardLoadMode) {
-  return pending === "reconnect" || next === "reconnect" ? "reconnect" : next;
-}
+type DashboardLoadMode = "initial" | "refresh" | "silent";
 export function DashboardApp() { return <><DashboardDebugTools /><DashboardShell {...useDashboardController()} /></>; }
 function useDashboardController() {
   const [appState, dispatchApp] = useReducer(appStateReducer, null, createInitialAppState);
@@ -33,8 +29,6 @@ function useDashboardController() {
   const [surfaceRefreshVersion, setSurfaceRefreshVersion] = useState(0);
   const [animationBaselineReady, setAnimationBaselineReady] = useState(false);
   const showUpdateSimulationControls = useMemo(() => shouldShowUpdateSimulationControls(), []);
-  const [runtimeConfig, setRuntimeConfig] = useState<DashboardRuntimeConfig | undefined>(() => dashboardRuntimeConfig);
-  const canMutateOperatorActions = canMutateDashboardOperatorActions(runtimeConfig);
   const dashboardRef = useRef<DashboardPayload | null>(dashboard);
   const initialDashboardFingerprint = useMemo(() => dashboardContentFingerprint(dashboard), [dashboard]);
   const dashboardFingerprintRef = useRef(initialDashboardFingerprint);
@@ -80,7 +74,7 @@ function useDashboardController() {
     connectionIssueRef.current = connectionIssue;
   }, [connectionIssue]);
   const recordConnectionFailure = useCallback(
-    (message: string, immediate = false, reconnectableLocalSession = false) => {
+    (message: string, immediate = false) => {
       failureVersionRef.current += 1;
       const now = Date.now();
       const canGrace = !immediate && Boolean(dashboardRef.current);
@@ -91,7 +85,7 @@ function useDashboardController() {
       }
       const currentIssue = connectionIssueRef.current;
       const firstFailedAt = currentIssue?.firstFailedAt ?? now;
-      const nextIssue = { firstFailedAt, lastFailedAt: now, message, reconnectableLocalSession };
+      const nextIssue = { firstFailedAt, lastFailedAt: now, message };
       setConnectionIssue(nextIssue);
       if (now - firstFailedAt >= DASHBOARD_RECONNECT_GRACE_MS) {
         setError(message);
@@ -101,15 +95,6 @@ function useDashboardController() {
     },
     [setError],
   );
-  useEffect(() => {
-    let cancelled = false;
-    void ensureDashboardRuntimeConfig().then((config) => {
-      if (!cancelled) setRuntimeConfig(config);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
   const applyDashboardResponse = useCallback(
     async (response: Response, fallbackMessage: string, selectDashboard: DashboardResponseSelector = (payload) => payload as DashboardPayload, loadMutationVersion = mutationVersionRef.current, shouldApply: () => boolean = () => true, failureVersion = failureVersionRef.current) => {
       const payload = await readDashboardApiResponse(response, fallbackMessage);
@@ -127,13 +112,13 @@ function useDashboardController() {
   );
   const recordDashboardLoadFailure = useCallback((loadSequence: number, caught: unknown, mode: DashboardLoadMode) => {
     if (loadSequence !== loadSequenceRef.current) return;
-    recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard API unavailable"), mode === "initial" || mode === "reconnect", isReconnectableLocalOperatorError(caught));
+    recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard API unavailable"), mode === "initial");
   }, [recordConnectionFailure]);
   const runDashboardLoad = useCallback(async (mode: DashboardLoadMode) => {
     const failureVersion = failureVersionRef.current;
     const loadMutationVersion = mutationVersionRef.current;
     const loadSequence = loadSequenceRef.current + 1;
-    const showsRefreshing = mode === "refresh" || mode === "reconnect";
+    const showsRefreshing = mode === "refresh";
     loadSequenceRef.current = loadSequence;
     if (mode === "initial") {
       setLoading(true);
@@ -142,9 +127,8 @@ function useDashboardController() {
       setRefreshing(true);
     }
     try {
-      await withLocalOperatorReconnect(async () => {
-        const config = mode === "reconnect" ? await reconnectLocalOperatorSession() : await ensureDashboardRuntimeConfig();
-        setRuntimeConfig(config);
+      await withRuntimeConfigRetry(async () => {
+        const config = await ensureDashboardRuntimeConfig();
         const bootstrap = mode === "initial" ? dashboardBootstrapFromRuntimeConfig(config) : null;
         if (bootstrap && loadSequence === loadSequenceRef.current && loadMutationVersion === mutationVersionRef.current) {
           setDashboard(mergeDashboardPayload(dashboardRef.current, bootstrap)); clearConnectionFailure(failureVersion); setSurfaceRefreshVersion((version) => version + 1); return;
@@ -168,7 +152,7 @@ function useDashboardController() {
   }, [applyDashboardResponse, clearConnectionFailure, recordDashboardLoadFailure, setDashboard, setLoading, setRefreshing]);
   const loadDashboard = useCallback(
     (mode: DashboardLoadMode = "refresh") =>
-      enqueueLatestTask(refreshQueueRef.current, mode, runDashboardLoad, mergeDashboardLoadMode),
+      enqueueLatestTask(refreshQueueRef.current, mode, runDashboardLoad),
     [runDashboardLoad],
     );
   const loadDashboardDeferred = useCallback(async () => {
@@ -178,7 +162,7 @@ function useDashboardController() {
     const loadSequence = deferredLoadSequenceRef.current + 1;
     deferredLoadSequenceRef.current = loadSequence;
     try {
-      await withLocalOperatorReconnect(async () => {
+      await withRuntimeConfigRetry(async () => {
         const response = await operatorFetch(operatorApiUrl("/dashboard/deferred"), { headers: jsonHeaders() });
         const payload = await readDashboardApiResponse(response, "Dashboard details unavailable");
         if (loadSequence !== deferredLoadSequenceRef.current || loadMutationVersion !== mutationVersionRef.current || dashboardRef.current !== baseDashboard) return;
@@ -188,7 +172,7 @@ function useDashboardController() {
       });
     } catch (caught) {
       if (loadSequence !== deferredLoadSequenceRef.current) return;
-      recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard details unavailable"), false, isReconnectableLocalOperatorError(caught));
+      recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard details unavailable"));
     }
   }, [clearConnectionFailure, recordConnectionFailure, setDashboard]);
   const { archivedLoading, loadArchived, soloLoading } = useDashboardSurfaceLoading({
@@ -212,10 +196,10 @@ function useDashboardController() {
     }
     await loadDashboard("refresh");
   }, [clearConnectionFailure, loadDashboard, setDashboard]);
-  useBestEffortGithubSync(canMutateOperatorActions && Boolean(dashboard && !dashboard.deferred?.dashboard_sections), refreshAfterMutation);
+  useBestEffortGithubSync(Boolean(dashboard && !dashboard.deferred?.dashboard_sections), refreshAfterMutation);
   const mutateWorkRequest = useCallback(
     async (workRequestId: string, action: "archive" | "delete" | "state", body: Record<string, unknown>, fallbackMessage: string, options: { archive?: boolean; remove?: boolean } = {}) => {
-      const payload = (await withLocalOperatorReconnect(async () => {
+      const payload = (await withRuntimeConfigRetry(async () => {
         const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/${action}`), {
           method: "POST",
           headers: await mutationHeaders(),
@@ -234,7 +218,7 @@ function useDashboardController() {
     [clearConnectionFailure, loadDashboard, setDashboard, setSelectedAttention, setSelectedCardDetail],
   );
   const submitGuidanceAnswer = useCallback(async (item: GuidanceItem, submission: GuidanceAnswerSubmission) => {
-    await withLocalOperatorReconnect(async () => {
+    await withRuntimeConfigRetry(async () => {
       const response = await operatorFetch(guidanceAnswerUrl(item), {
         method: "POST",
         headers: await mutationHeaders(),
@@ -246,7 +230,7 @@ function useDashboardController() {
     setSelectedAttention(null);
   }, [refreshAfterMutation, setSelectedAttention]);
   const createWorkRequest = useCallback(async (form: NewRequestForm) => {
-    const payload = (await withLocalOperatorReconnect(async () => {
+    const payload = (await withRuntimeConfigRetry(async () => {
       const response = await operatorFetch(operatorApiUrl("/work-requests"), {
         method: "POST",
         headers: await mutationHeaders(),
@@ -264,7 +248,7 @@ function useDashboardController() {
   }, [refreshAfterMutation]);
 
   const submitComment = useCallback<SubmitContextComment>(async (target, body) => {
-    const payload = (await withLocalOperatorReconnect(async () => {
+    const payload = (await withRuntimeConfigRetry(async () => {
       const response = await operatorFetch(operatorApiUrl("/comments"), {
         method: "POST",
         headers: await mutationHeaders(),
@@ -286,7 +270,7 @@ function useDashboardController() {
   }, [refreshAfterMutation]);
 
   const resolveComment = useCallback<ResolveContextComment>(async (commentId, resolutionNote) => {
-    const payload = (await withLocalOperatorReconnect(async () => {
+    const payload = (await withRuntimeConfigRetry(async () => {
       const response = await operatorFetch(operatorApiUrl(`/comments/${encodeURIComponent(commentId)}/resolve`), {
         method: "POST",
         headers: await mutationHeaders(),
@@ -310,7 +294,7 @@ function useDashboardController() {
     let refreshPayload: DashboardMutationPayload | undefined;
 
     if (!handoff) {
-      const payload = (await withLocalOperatorReconnect(async () => {
+      const payload = (await withRuntimeConfigRetry(async () => {
         const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/architect-handoff`), {
           method: "POST",
           headers: await mutationHeaders(),
@@ -352,7 +336,7 @@ function useDashboardController() {
   const deleteWorkRequest = useCallback<WorkRequestMutation>((workRequestId) => mutateWorkRequest(workRequestId, "delete", {}, "WorkRequest was not deleted", { remove: true }), [mutateWorkRequest]);
 
   const restoreWorkRequest = useCallback<WorkRequestMutation>(async (workRequestId) => {
-    await withLocalOperatorReconnect(async () => {
+    await withRuntimeConfigRetry(async () => {
       const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/restore`), {
         method: "POST",
         headers: await mutationHeaders(),
@@ -367,7 +351,7 @@ function useDashboardController() {
   const changeWorkRequestState = useCallback<WorkRequestStateMutation>((workRequestId, nextState) => mutateWorkRequest(workRequestId, "state", { state: nextState }, "WorkRequest state was not changed"), [mutateWorkRequest]);
 
   const changeWorkPackageState = useCallback<WorkPackageStateMutation>(async (workPackageId, action, options) => {
-    await withLocalOperatorReconnect(async () => {
+    await withRuntimeConfigRetry(async () => {
       const response = await operatorFetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/state`), {
         method: "POST",
         headers: await mutationHeaders(),
@@ -381,7 +365,7 @@ function useDashboardController() {
   }, [refreshAfterMutation, setSelectedAttention, setSelectedCardDetail]);
 
   const archiveWorkPackage = useCallback<WorkPackageArchiveMutation>(async (workPackageId) => {
-    await withLocalOperatorReconnect(async () => {
+    await withRuntimeConfigRetry(async () => {
       const response = await operatorFetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/archive`), {
         method: "POST",
         headers: await mutationHeaders(),
@@ -395,7 +379,7 @@ function useDashboardController() {
   }, [refreshAfterMutation, setSelectedAttention, setSelectedCardDetail]);
 
   const clearWorkPackageBlocker = useCallback<WorkPackageBlockerClearMutation>(async (workPackageId, blockerId) => {
-    await withLocalOperatorReconnect(async () => {
+    await withRuntimeConfigRetry(async () => {
       const response = await operatorFetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/blockers/${encodeURIComponent(blockerId)}/clear`), {
         method: "POST",
         headers: await mutationHeaders(),
@@ -501,7 +485,6 @@ function useDashboardController() {
     ready: animationBaselineReady,
     soloSessions,
   });
-  const reconnectDashboard = useCallback(() => loadDashboard("reconnect"), [loadDashboard]);
   const workspacePanes = useMemo<Record<WorkspaceTab, React.ReactNode>>(
     () => ({
       workstreams: (
@@ -544,8 +527,7 @@ function useDashboardController() {
     archivedRequestsLoading: archivedLoading,
     archivedRequests,
     attentionItems,
-    canMutateComments: canMutateDashboardComments(runtimeConfig),
-    captureFailedMcpCalls, canMutateOperatorActions,
+    captureFailedMcpCalls,
     changeWorkPackageState,
     changeWorkRequestState,
     connectionIssue,
@@ -569,7 +551,6 @@ function useDashboardController() {
     onHideEmptyWorkstreamsChange: setHideEmptyWorkstreams,
     onJumpToAttention: jumpToAttention,
     onOpenDashboardOnBootChange: updateOpenDashboardOnBoot,
-    onReconnectDashboard: reconnectDashboard,
     onRefreshDashboard: loadDashboard,
     onRestoreWorkRequest: restoreWorkRequest,
     onResolveComment: resolveComment,

@@ -71,10 +71,8 @@ describe("request detail actions", () => {
         onArchiveWorkRequest: async () => undefined,
         onChangeWorkRequestState: async () => undefined,
         onDeleteWorkRequest: async () => undefined,
-        canMutateOperatorActions: true,
         onSubmitComment: async () => ({ id: "comment-1", body: "" }),
         onResolveComment: async () => ({ id: "comment-1", body: "" }),
-        canMutateComments: true,
       }),
     ));
 
@@ -83,7 +81,35 @@ describe("request detail actions", () => {
     expect(html).toContain("Archive Request");
     expect(html).toContain("Delete Request");
     expect(html).not.toContain("Show WorkRequest status actions");
+    expect(html).not.toContain("Mark WorkRequest Delivered?");
     expect(html.indexOf("Add Comment")).toBeLessThan(html.indexOf("Archive Request"));
     expect(html.indexOf("Delete Request")).toBeLessThan(html.indexOf("WorkPackages"));
+  });
+
+  it("derives lifecycle controls only from the request status", () => {
+    const render = (status: string) => renderToStaticMarkup(createElement(
+      Dialog,
+      { open: true },
+      createElement(RequestDetailContent, {
+        detail: { work_request: { id: `wr-${status}`, status }, work_packages: [] },
+        onSelectGuidance: () => undefined,
+        onCopyArchitectHandoff: async () => ({ handoff: { prompt: "" }, copied: false }),
+        onArchiveWorkRequest: async () => undefined,
+        onChangeWorkRequestState: async () => undefined,
+        onDeleteWorkRequest: async () => undefined,
+        onSubmitComment: async () => ({ id: "comment-1", body: "" }),
+        onResolveComment: async () => ({ id: "comment-1", body: "" }),
+      }),
+    ));
+
+    const active = render("sliced");
+    expect(active).toContain("Mark Delivered");
+    expect(active).toContain("Delete Request");
+    expect(active).not.toContain("Archive Request");
+
+    const completed = render("completed");
+    expect(completed).not.toContain("Mark Delivered");
+    expect(completed).toContain("Archive Request");
+    expect(completed).toContain("Delete Request");
   });
 });

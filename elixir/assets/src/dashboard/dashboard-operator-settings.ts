@@ -1,7 +1,7 @@
 import type { DashboardMutationPayload, DashboardPayload } from "@/types/dashboard";
 import { useCallback } from "react";
 
-import { mutationHeaders, operatorApiUrl, operatorFetch, readDashboardApiResponse, withLocalOperatorReconnect } from "./runtime";
+import { mutationHeaders, operatorApiUrl, operatorFetch, readDashboardApiResponse, withRuntimeConfigRetry } from "./runtime";
 
 type OperatorSettingsPayload = {
   work_request_archive_after_days?: number;
@@ -27,7 +27,7 @@ export function useDashboardOperatorSettings({
 
   const updateOperatorSettings = useCallback(
     async (payload: OperatorSettingsPayload) => {
-      await withLocalOperatorReconnect(async () => {
+      await withRuntimeConfigRetry(async () => {
         const response = await operatorFetch(operatorApiUrl("/settings"), {
           method: "POST",
           headers: await mutationHeaders(),

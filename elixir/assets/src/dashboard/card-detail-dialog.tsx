@@ -3,7 +3,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import type * as React from "react";
 import { dashboardPrefersReducedMotion } from "@/components/dashboard/motion-utils";
 import { useEffect, useReducer, useState } from "react";
-import { CARD_DETAIL_HEIGHT_MS, CARD_DETAIL_LOADING_HOLD_MS, CARD_DETAIL_WIDTH_MS, CardDetailSelection, CardDetailStage, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, ensureDashboardRuntimeConfig, jsonHeaders, operatorApiUrl, operatorFetch, readDashboardApiResponse, withLocalOperatorReconnect } from "./runtime";
+import { CARD_DETAIL_HEIGHT_MS, CARD_DETAIL_LOADING_HOLD_MS, CARD_DETAIL_WIDTH_MS, CardDetailSelection, CardDetailStage, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, ensureDashboardRuntimeConfig, jsonHeaders, operatorApiUrl, operatorFetch, readDashboardApiResponse, withRuntimeConfigRetry } from "./runtime";
 import { CardDetailLoadingContent } from "./card-detail-loading";
 import { BlockerDetailContent, PackageDetailContent, SliceDetailContent } from "./package-detail";
 import { RequestDetailContent } from "./request-detail";
@@ -79,7 +79,7 @@ function cardDetailDialogReducer(state: CardDetailDialogState, action: CardDetai
 }
 
 async function loadOperatorPayload<T>(path: string, signal: AbortSignal, fallbackMessage: string): Promise<T> {
-  return withLocalOperatorReconnect(async () => {
+  return withRuntimeConfigRetry(async () => {
     await ensureDashboardRuntimeConfig();
     const response = await operatorFetch(operatorApiUrl(path), {
       headers: jsonHeaders(),
@@ -106,11 +106,9 @@ export function CardDetailDialog({
   onChangeWorkPackageState,
   onArchiveWorkPackage,
   onClearWorkPackageBlocker,
-  canMutateOperatorActions,
   linkedWorkPackageIds,
   onSubmitComment,
   onResolveComment,
-  canMutateComments,
 }: {
   selection: CardDetailSelection | null;
   activeBlockingEdges: ActiveBlockingEdge[];
@@ -127,11 +125,9 @@ export function CardDetailDialog({
   onChangeWorkPackageState: WorkPackageStateMutation;
   onArchiveWorkPackage: WorkPackageArchiveMutation;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
-  canMutateOperatorActions: boolean;
   linkedWorkPackageIds: Set<string>;
   onSubmitComment: SubmitContextComment;
   onResolveComment: ResolveContextComment;
-  canMutateComments: boolean;
 }) {
   const [state, dispatch] = useReducer(cardDetailDialogReducer, initialCardDetailDialogState);
   const packageId = cardDetailPackageId(selection);
@@ -305,11 +301,9 @@ export function CardDetailDialog({
               onChangeWorkPackageState={onChangeWorkPackageState}
               onArchiveWorkPackage={onArchiveWorkPackage}
               onClearWorkPackageBlocker={onClearWorkPackageBlocker}
-              canMutateOperatorActions={canMutateOperatorActions}
               linkedWorkPackageIds={linkedWorkPackageIds}
               onSubmitComment={onSubmitComment}
               onResolveComment={onResolveComment}
-              canMutateComments={canMutateComments}
             />
           ) : null}
         </NaturalDetailBody>
@@ -333,11 +327,9 @@ function CardDetailReadyContent({
   onChangeWorkPackageState,
   onArchiveWorkPackage,
   onClearWorkPackageBlocker,
-  canMutateOperatorActions,
   linkedWorkPackageIds,
   onSubmitComment,
   onResolveComment,
-  canMutateComments,
 }: {
   selection: CardDetailSelection | null;
   state: CardDetailDialogState;
@@ -353,11 +345,9 @@ function CardDetailReadyContent({
   onChangeWorkPackageState: WorkPackageStateMutation;
   onArchiveWorkPackage: WorkPackageArchiveMutation;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
-  canMutateOperatorActions: boolean;
   linkedWorkPackageIds: Set<string>;
   onSubmitComment: SubmitContextComment;
   onResolveComment: ResolveContextComment;
-  canMutateComments: boolean;
 }) {
   if (!selection) return null;
 
@@ -369,10 +359,8 @@ function CardDetailReadyContent({
         onArchiveWorkRequest,
         onChangeWorkRequestState,
         onDeleteWorkRequest,
-        canMutateOperatorActions,
         onSubmitComment,
         onResolveComment,
-        canMutateComments,
       });
     case "slice":
       return renderSliceDetailContent(selection, state, {
@@ -380,7 +368,6 @@ function CardDetailReadyContent({
         onSelectAttention,
         onSubmitComment,
         onResolveComment,
-        canMutateComments,
       });
     case "package":
       {
@@ -394,18 +381,16 @@ function CardDetailReadyContent({
           error={packageResource.error}
           onChangeWorkPackageState={onChangeWorkPackageState}
           onArchiveWorkPackage={onArchiveWorkPackage}
-          canMutateOperatorActions={canMutateOperatorActions}
           linkedWorkPackageIds={linkedWorkPackageIds}
           onSubmitComment={onSubmitComment}
           onResolveComment={onResolveComment}
-          canMutateComments={canMutateComments}
         />
       );
       }
     case "blocker":
       {
         const packageResource = matchingPackageResource(selection, state);
-        return <BlockerDetailContent selection={selection} detailPayload={packageResource.payload} loading={!packageResource.payload && !packageResource.error} error={packageResource.error} location={attentionLocation} onJumpToAttention={onJumpToAttention} onClearWorkPackageBlocker={onClearWorkPackageBlocker} canMutateOperatorActions={canMutateOperatorActions} />;
+        return <BlockerDetailContent selection={selection} detailPayload={packageResource.payload} loading={!packageResource.payload && !packageResource.error} error={packageResource.error} location={attentionLocation} onJumpToAttention={onJumpToAttention} onClearWorkPackageBlocker={onClearWorkPackageBlocker} />;
       }
     case "solo":
       return <SoloSessionDetailContent session={selection.session} detailPayload={state.solo.payload} loading={!state.solo.payload && !state.solo.error ? true : state.solo.loading} error={state.solo.error} />;
@@ -421,10 +406,8 @@ function renderRequestDetailContent(
     onArchiveWorkRequest: WorkRequestMutation;
     onChangeWorkRequestState: WorkRequestStateMutation;
     onDeleteWorkRequest: WorkRequestMutation;
-    canMutateOperatorActions: boolean;
     onSubmitComment: SubmitContextComment;
     onResolveComment: ResolveContextComment;
-    canMutateComments: boolean;
   },
 ) {
   const requestResource = matchingRequestResource(selection, state);
@@ -440,7 +423,6 @@ function renderSliceDetailContent(
     onSelectAttention: (target: AttentionTarget) => void;
     onSubmitComment: SubmitContextComment;
     onResolveComment: ResolveContextComment;
-    canMutateComments: boolean;
   },
 ) {
   const requestResource = matchingRequestResource(selection, state);
@@ -458,7 +440,6 @@ function renderSliceDetailContent(
       onSelectAttention={props.onSelectAttention}
       onSubmitComment={props.onSubmitComment}
       onResolveComment={props.onResolveComment}
-      canMutateComments={props.canMutateComments}
     />
   );
 }

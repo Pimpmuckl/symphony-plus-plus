@@ -13,9 +13,8 @@ import { packageReviewLabel } from "@/lib/review-signals";
 import { statusLabel } from "@/lib/status-labels";
 import type { Dispatch, SetStateAction } from "react";
 import { COMMENT_BODY_MAX_LENGTH } from "./runtime";
-import type { CardDetailSelection, PackageDetailUiAction, PackageDetailUiState, ResolveContextComment, SubmitContextComment, WorkPackageStateAction } from "./runtime";
+import type { CardDetailSelection, PackageDetailUiState, ResolveContextComment, SubmitContextComment, WorkPackageStateAction } from "./runtime";
 import { CommentsPanel } from "./comments-panel";
-import { DangerousStateConfirmationDialog } from "./request-detail";
 import { DetailActivityList, DetailAttentionList, LineageDisclosure, RecentDecisionsDisclosure } from "./detail-extras";
 import { activeAlertLabels, commentStatLabel, detailDate, latestPackageProgress, lineageHasSignal, packageOperationalFallbackText, packageRuntimeText, targetCommentStats } from "./detail-utils";
 import { repoDisplayName } from "./dashboard-persistence";
@@ -50,13 +49,9 @@ export type PackageDetailStatus = {
   loading: boolean;
 };
 export type PackageDetailDialogControls = {
-  archivePackage: () => Promise<void>;
   changePackageState: (action: WorkPackageStateAction, options?: { noPrEvidence?: string }) => Promise<void>;
-  dispatchUiState: Dispatch<PackageDetailUiAction>;
-  setArchiveConfirmOpen: (open: boolean) => void;
   setEvidenceDialogOpen: (open: boolean) => void;
   setNoPrEvidence: (value: string) => void;
-  setStateConfirmOpen: (open: boolean) => void;
 };
 
 export function PackageDetailBody({
@@ -391,24 +386,10 @@ export function PackageDetailDialogs({
   controls: PackageDetailDialogControls;
   uiState: PackageDetailUiState;
 }) {
-  const { archiveConfirmOpen, archivePending, evidenceDialogOpen, noPrEvidence, pendingStateAction, stateConfirmOpen, stateError, statePending } = uiState;
+  const { evidenceDialogOpen, noPrEvidence, stateError, statePending } = uiState;
 
   return (
     <>
-      <DangerousStateConfirmationDialog
-        open={stateConfirmOpen}
-        onOpenChange={(open) => {
-          controls.setStateConfirmOpen(open);
-          if (!open) controls.dispatchUiState({ type: "pendingStateAction", action: null });
-        }}
-        title={pendingStateAction === "closed_and_archive" ? "Close and Archive Execution Record?" : "Mark Execution Merged?"}
-        description={packageStateConfirmationDescription(pendingStateAction)}
-        confirmLabel={packageStateConfirmationLabel(pendingStateAction)}
-        pending={statePending}
-        onConfirm={() => {
-          if (pendingStateAction) void controls.changePackageState(pendingStateAction);
-        }}
-      />
       <Dialog open={evidenceDialogOpen} onOpenChange={controls.setEvidenceDialogOpen}>
         <DialogContent className="dashboard-dialog-content sm:max-w-lg">
           <DialogHeader>
@@ -442,33 +423,6 @@ export function PackageDetailDialogs({
           </div>
         </DialogContent>
       </Dialog>
-      <DangerousStateConfirmationDialog
-        open={archiveConfirmOpen}
-        onOpenChange={controls.setArchiveConfirmOpen}
-        title="Archive Unlinked Execution Record?"
-        description="This hides the delivered unlinked execution record from the active execution view. The package record stays in the local ledger."
-        confirmLabel="Archive Record"
-        pending={archivePending}
-        onConfirm={() => void controls.archivePackage()}
-      />
     </>
   );
-}
-
-function packageStateConfirmationDescription(action: WorkPackageStateAction | null) {
-  if (action === "merged_and_archive") {
-    return "This marks the unlinked execution record Merged and hides it from the active execution view. The package record stays in the local ledger.";
-  }
-
-  if (action === "closed_and_archive") {
-    return "This marks the unlinked execution record Closed and hides it from the active execution view. The package record stays in the local ledger.";
-  }
-
-  return "This manually marks the execution record Merged for the local dashboard. Use it only when the external merge or worker handoff was missed.";
-}
-
-function packageStateConfirmationLabel(action: WorkPackageStateAction | null) {
-  if (action === "merged_and_archive") return "Merged + Archive";
-  if (action === "closed_and_archive") return "Closed + Archive";
-  return "Mark Merged";
 }
