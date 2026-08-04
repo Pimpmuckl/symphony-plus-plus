@@ -369,13 +369,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
     current
     |> Map.update!(:runtime_reason_codes, &Enum.uniq(recorded_reasons ++ &1))
-    |> Map.put(:defer_worktree_cleanup?, replay_worktree_cleanup_deferred?(context, current, recorded_reasons))
-  end
-
-  defp replay_worktree_cleanup_deferred?(context, current, recorded_reasons) do
-    current.defer_worktree_cleanup? or
-      Enum.any?(recorded_reasons, &(&1 in ["claim_lease_paused", "claim_lease_active", "worker_grant_active", "architect_grant_active"])) or
-      ("agent_run_active" in recorded_reasons and get_in(context, [:worker_signal, :status]) != "idle")
+    |> Map.put(:defer_worktree_cleanup?, current.defer_worktree_cleanup?)
   end
 
   defp perform_closeout(

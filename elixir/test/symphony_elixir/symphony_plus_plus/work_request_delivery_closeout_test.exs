@@ -186,6 +186,54 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     assert slice.work_package.raw_status == "merged"
   end
 
+  test "delivery replay cleans the worktree after closeout retires worker authority", %{repo: repo} do
+    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_worker")
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-closeout-retired-authority")
+    codex_home = Path.join(fixture.root, "codex-home")
+    previous_codex_home = System.get_env("CODEX_HOME")
+
+    try do
+      System.put_env("CODEX_HOME", codex_home)
+
+      assert {:ok, prepared} =
+               WorktreeLifecycle.prepare(
+                 repo,
+                 linked_package.id,
+                 %{
+                   "repo_root" => fixture.repo_root,
+                   "base_branch" => linked_package.base_branch,
+                   "branch" => "feat/closeout-retired-authority"
+                 },
+                 codex_home: codex_home
+               )
+
+      assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, linked_package.id)
+      assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "retired-worker")
+
+      attrs =
+        delivery_attrs(%{
+          outcome: "pr_merged",
+          idempotency_key: "delivery-pr-merged-retired-authority",
+          pr_url: "https://github.com/nextide/symphony-plus-plus/pull/128",
+          pr_number: 128,
+          pr_repository: "nextide/symphony-plus-plus",
+          pr_merged_at: ~U[2026-05-24 12:50:00.000000Z],
+          merge_commit_sha: "abc128"
+        })
+
+      assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+      assert File.dir?(prepared.worktree_path)
+      assert %AccessGrant{revoked_at: %DateTime{}} = repo.get!(AccessGrant, minted.grant.id)
+
+      assert {:ok, ^delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+      refute File.exists?(prepared.worktree_path)
+      assert repo.get!(WorkPackage, linked_package.id).worktree_path == nil
+    after
+      WorktreeLifecycle.cleanup(repo, linked_package.id, codex_home: codex_home)
+      restore_env("CODEX_HOME", previous_codex_home)
+    end
+  end
+
   test "terminal dispatch retirement completes deferred delivery worktree cleanup", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_worker")
     fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-closeout-active-runner")

@@ -959,14 +959,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   defp durable_closeout_cleanup_deferral?(repo, work_package_id, context) do
     case canonical_delivery_closeout(repo, work_package_id) do
-      {:ok, {_delivery, event}} ->
-        reasons = List.wrap(map_value(event.payload || %{}, :runtime_reason_codes_before_closeout))
+      {:ok, {_delivery, _event}} ->
+        current_reasons = List.wrap(get_in(context, [:runtime_state, :reason_codes]))
 
-        cond do
-          "agent_run_active" in reasons -> not terminal_agent_run_observed?(context)
-          Enum.any?(reasons, &(&1 in @durable_cleanup_deferral_reasons)) -> true
-          true -> false
-        end
+        "agent_run_active" in current_reasons or
+          Enum.any?(current_reasons, &(&1 in @durable_cleanup_deferral_reasons))
 
       {:error, :not_found} ->
         false
@@ -975,9 +972,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
         true
     end
   end
-
-  defp terminal_agent_run_observed?(%{worker_signal: %{status: "idle"}}), do: true
-  defp terminal_agent_run_observed?(_context), do: false
 
   defp cleanup_env_opts do
     case System.get_env("CODEX_HOME") do
