@@ -58,7 +58,10 @@ export function FocusBoard({
   updateAnimations: DashboardUpdateAnimations;
 }) {
   const packageById = useMemo(() => new Map(packages.map((pkg) => [pkg.id, pkg])), [packages]);
-  const blockerCounts = useMemo(() => activeBlockerEntityCounts(activeBlockingEdges, details), [activeBlockingEdges, details]);
+  const blockerCounts = useMemo(
+    () => activeBlockerEntityCounts(activeBlockingEdges, details, packageById),
+    [activeBlockingEdges, details, packageById],
+  );
   const items = useMemo(() => buildFocusBoardItems(sortWorkRequestDetails(details), now, packageById, blockerCounts.requests), [blockerCounts.requests, details, now, packageById]);
   const needsAttention = items.filter((item) => item.lane === "attention");
   const moving = items.filter((item) => item.lane === "active" || item.lane === "next");
