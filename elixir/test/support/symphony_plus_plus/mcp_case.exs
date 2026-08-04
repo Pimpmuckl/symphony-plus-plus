@@ -144,6 +144,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
       }
     end
 
+    def one(%Ecto.Query{from: %{source: {"sympp_work_packages", _schema}}}),
+      do: %{status: "ci_waiting", delivered?: false}
+
     def one(_query), do: raise(%Exqlite.Error{message: "database is locked"})
     def all(_query), do: raise(%Exqlite.Error{message: "database is locked"})
   end

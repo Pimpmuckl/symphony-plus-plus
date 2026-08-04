@@ -416,19 +416,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   end
 
   defp local_worker_grant_missing_reason(repo, work_package_id, terminal_statuses) do
-    if terminal_work_package?(repo, work_package_id, terminal_statuses) do
-      {:error, :work_package_terminal}
-    else
-      {:error, inactive_worker_grant_reason(repo, work_package_id)}
+    case terminal_work_package?(repo, work_package_id, terminal_statuses) do
+      {:ok, true} -> {:error, :work_package_terminal}
+      {:ok, false} -> {:error, inactive_worker_grant_reason(repo, work_package_id)}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp terminal_work_package?(_repo, _work_package_id, []), do: false
+  defp terminal_work_package?(_repo, _work_package_id, []), do: {:ok, false}
 
   defp terminal_work_package?(repo, work_package_id, terminal_statuses) do
     case work_package_authority_state(repo, work_package_id) do
-      {:ok, %{status: status, delivered?: delivered?}} -> delivered? or status in terminal_statuses
-      {:error, _reason} -> false
+      {:ok, %{status: status, delivered?: delivered?}} -> {:ok, delivered? or status in terminal_statuses}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -655,10 +655,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   end
 
   defp local_architect_grant_missing_reason(repo, work_package_id, phase_id, scope_repo, scope_base_branch, terminal_statuses) do
-    if terminal_work_package?(repo, work_package_id, terminal_statuses) do
-      {:error, :work_package_terminal}
-    else
-      {:error, inactive_architect_grant_reason(repo, work_package_id, phase_id, scope_repo, scope_base_branch)}
+    case terminal_work_package?(repo, work_package_id, terminal_statuses) do
+      {:ok, true} ->
+        {:error, :work_package_terminal}
+
+      {:ok, false} ->
+        {:error, inactive_architect_grant_reason(repo, work_package_id, phase_id, scope_repo, scope_base_branch)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -695,10 +700,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
 
   defp package_authority_claim_error(repo, %AccessGrant{work_package_id: work_package_id}, terminal_statuses)
        when is_binary(work_package_id) do
-    if terminal_work_package?(repo, work_package_id, terminal_statuses) do
-      {:error, :work_package_terminal}
-    else
-      {:error, :already_claimed}
+    case terminal_work_package?(repo, work_package_id, terminal_statuses) do
+      {:ok, true} -> {:error, :work_package_terminal}
+      {:ok, false} -> {:error, :already_claimed}
+      {:error, reason} -> {:error, reason}
     end
   end
 
