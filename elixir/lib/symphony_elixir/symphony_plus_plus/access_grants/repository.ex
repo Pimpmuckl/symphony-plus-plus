@@ -302,7 +302,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   end
 
   @spec work_package_authority_state(repo(), String.t()) ::
-          {:ok, %{status: String.t(), delivered?: boolean()}} | {:error, :not_found}
+          {:ok, %{status: String.t(), delivered?: boolean()}} | {:error, error()}
   def work_package_authority_state(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
     case repo.one(
            from(work_package in WorkPackage,
@@ -316,6 +316,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
       nil -> {:error, :not_found}
       state -> {:ok, state}
     end
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
   @spec validate_phase(repo(), String.t()) :: :ok | {:error, error()}
@@ -426,7 +428,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   defp terminal_work_package?(repo, work_package_id, terminal_statuses) do
     case work_package_authority_state(repo, work_package_id) do
       {:ok, %{status: status, delivered?: delivered?}} -> delivered? or status in terminal_statuses
-      {:error, :not_found} -> false
+      {:error, _reason} -> false
     end
   end
 
