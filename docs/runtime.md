@@ -40,6 +40,56 @@ Developer builds write generated Mix output outside the installed plugin cache
 so a new source build cannot collide with native libraries loaded by an older
 backend.
 
+## Isolated Beta Development
+
+From the stable `main` checkout, this one command creates or reuses the fixed
+adjacent `symphony-plus-plus-beta` worktree, starts the isolated source runtime,
+and opens Codex with the normal authenticated Codex home:
+
+```powershell
+pwsh -NoProfile -File .\scripts\sympp-beta.ps1 -Action Codex
+```
+
+The source beta lane uses backend `20000`, Vite `20001`, and separate
+`SYMPP_HOME`, `SYMPP_RUNTIME_FILE`, `SYMPP_LOG_DIR`, `MIX_BUILD_ROOT`, and SQLite
+database paths. It keeps `CODEX_HOME` unchanged, so existing authentication and
+the normal installed bridge remain available. Stable ports `19998/19999`, the
+stable runtime state, and the default installed plugin cache are not control
+targets.
+
+Use the same command with `-Action Start`, `Restart`, `Status`, or `Stop` for
+beta-only runtime control. Vite owns frontend hot reload. `Restart` restarts
+only the source cockpit; the existing bridge reinitializes its MCP session when
+the backend returns. Open a fresh beta Codex thread when an MCP tool schema
+changes because tool discovery happens at thread startup.
+
+Run `-Action Validate` for the declared launcher and environment check without
+starting or stopping either runtime. `-Action Package` refreshes and validates
+skill, plugin manifest, launcher, or marketplace changes through a separate beta
+`CODEX_HOME`. The guarded repository refresh path makes repeated runs current
+and refuses the default Codex plugin cache.
+
+The default beta database is a sandbox ledger under the beta home. Pass
+`-Database <copied-ledger>` for destructive lifecycle validation against a
+copy. `-LiveLedger` alone selects the normal live ledger; the script rejects
+that path without the switch and rejects alternate paths with the switch. Do
+not run destructive lifecycle validation in live mode.
+
+Branch flow:
+
+- Feature PRs target `beta`.
+- Urgent fixes land on `main`, then merge `origin/main` forward into `beta`.
+- Promotion is a squash PR from `beta` to `main`.
+- After promotion, require a clean beta worktree, then recreate beta from main:
+
+```powershell
+git -C ..\symphony-plus-plus-beta fetch origin
+git -C ..\symphony-plus-plus-beta diff --quiet
+git -C ..\symphony-plus-plus-beta diff --cached --quiet
+git -C ..\symphony-plus-plus-beta reset --hard origin/main
+git -C ..\symphony-plus-plus-beta push --force-with-lease origin beta
+```
+
 ## Diagnosis
 
 When a fresh session cannot initialize:

@@ -20,6 +20,7 @@ $scriptPath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/start-
 $helperPath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-mcp-launcher-helpers.ps1"
 $runtimePath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-launcher-runtime.ps1"
 $artifactRuntimePath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-mcp-artifact-runtime.ps1"
+$betaPath = Join-Path $repoRoot "scripts/sympp-beta.ps1"
 . $runtimePath
 . $helperPath
 foreach ($name in @(
@@ -34,6 +35,9 @@ foreach ($name in @(
 }
 foreach ($name in @("Get-SymppArtifactDirectoryFingerprint", "Test-SymppArtifactDashboardReady", "Remove-SymppArtifactExtractionStaging", "Expand-SymppArtifactArchive")) {
   Import-ScriptFunction $artifactRuntimePath $name
+}
+foreach ($name in @("Test-SamePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Get-BetaGitWorktrees", "Initialize-BetaWorktree", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Assert-BetaRuntimeIdentity")) {
+  Import-ScriptFunction $betaPath $name
 }
 function Write-Diagnostic([string]$Message) { }
 function Write-CompatibleSourceMismatchDiagnostic { }
@@ -157,6 +161,84 @@ try {
 }
 Assert-True (-not (Test-BridgeLeaseActive $liveLease @{})) "Missing process must be stale"
 Assert-True ((Get-Content -LiteralPath $helperPath -Raw) -notmatch 'Get-CimInstance|Get-WmiObject') "Lease validation must not use CIM/WMI"
+
+$betaRoot = Join-Path $PSScriptRoot (".beta-bootstrap-" + [guid]::NewGuid().ToString("N"))
+try {
+  $betaSource = Get-Content -LiteralPath $betaPath -Raw
+  Assert-True ($betaSource.Contains('"Validate" { Test-BetaBootstrap $config }')) "Beta bootstrap must expose its declared validation action"
+  Assert-True ($betaSource -match '(?s)"Codex"\s*\{.*?Start-BetaRuntime \$config\s*Invoke-WithBetaEnvironment' -and $betaSource -notmatch '(?s)"Codex"\s*\{.*?Install-BetaPlugin') "Source Codex must start through normal authentication without package refresh"
+  $origin = Join-Path $betaRoot "origin.git"
+  $sourceRepo = Join-Path $betaRoot "source"
+  $betaWorktree = Join-Path $betaRoot "beta"
+  $betaHome = Join-Path $betaRoot "home"
+  New-Item -ItemType Directory -Path $betaRoot -Force | Out-Null
+  & git init --bare $origin | Out-Null
+  & git init -b main $sourceRepo | Out-Null
+  & git -C $sourceRepo config user.email "launcher-tests@example.invalid"
+  & git -C $sourceRepo config user.name "Launcher Tests"
+  Set-Content -LiteralPath (Join-Path $sourceRepo "README.md") -Value "fixture" -NoNewline
+  & git -C $sourceRepo add README.md
+  & git -C $sourceRepo commit -m fixture | Out-Null
+  & git -C $sourceRepo remote add origin $origin
+  & git -C $sourceRepo push -u origin main | Out-Null
+  & git -C $sourceRepo branch beta
+  & git -C $sourceRepo push origin beta | Out-Null
+
+  $betaConfig = Resolve-BetaConfiguration $sourceRepo $betaWorktree $betaHome $null $false 20000 20001
+  Initialize-BetaWorktree $betaConfig
+  Assert-True ((& git -C $betaWorktree branch --show-current) -eq "beta") "Beta bootstrap must create the fixed beta worktree"
+  Assert-True ((& git -C $betaWorktree rev-parse --abbrev-ref --symbolic-full-name '@{u}') -eq "origin/beta") "Beta worktree must track origin/beta"
+  Initialize-BetaWorktree $betaConfig
+
+  $environment = Get-BetaEnvironment $betaConfig
+  Assert-True ($environment.SYMPP_HOME -eq $betaConfig.sympp_home -and $environment.SYMPP_RUNTIME_FILE -eq $betaConfig.runtime_file -and $environment.SYMPP_LOG_DIR -eq $betaConfig.log_dir) "Beta runtime state and logs must use the isolated home"
+  Assert-True ($environment.MIX_BUILD_ROOT -eq $betaConfig.mix_build_root -and $environment.SYMPP_DATABASE -eq $betaConfig.database -and $environment.SYMPP_REPO_ROOT -eq $betaWorktree) "Beta source build and ledger must use isolated paths"
+  Assert-True (-not $environment.Contains("CODEX_HOME")) "Source beta Codex must inherit the normal authenticated Codex home"
+  Assert-True ($environment.SYMPP_BACKEND_PORT -eq "20000" -and $environment.SYMPP_DASHBOARD_PORT -eq "20001") "Beta ports must remain separate from stable"
+  Assert-True ($null -eq $environment.SYMPP_BACKEND_URL -and $null -eq $environment.SYMPP_DASHBOARD_ORIGIN -and $null -eq $environment.SYMPP_AUTOSTART_SERVERS) "Beta commands must clear inherited runtime overrides"
+  $previousCodexHome = $env:CODEX_HOME
+  $previousBackendUrl = $env:SYMPP_BACKEND_URL
+  try {
+    $env:CODEX_HOME = Join-Path $betaRoot "normal-codex"
+    $env:SYMPP_BACKEND_URL = "http://127.0.0.1:19998"
+    $sourceCodexHome = Invoke-WithBetaEnvironment $betaConfig { $env:CODEX_HOME }
+    $packageCodexHome = Invoke-WithBetaEnvironment $betaConfig { $env:CODEX_HOME } -Package
+    Assert-True ($sourceCodexHome -eq $env:CODEX_HOME) "Source Codex must retain normal authentication"
+    Assert-True ($packageCodexHome -eq $betaConfig.codex_home -and (Test-PathInside $packageCodexHome $betaHome)) "Package validation must use only the isolated Codex home"
+    Assert-True ($env:SYMPP_BACKEND_URL -eq "http://127.0.0.1:19998") "Beta environment must restore inherited process settings"
+  } finally {
+    $env:CODEX_HOME = $previousCodexHome
+    $env:SYMPP_BACKEND_URL = $previousBackendUrl
+  }
+
+  $liveDatabase = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)) ".agents/splusplus/symphony_plus_plus.sqlite3"
+  $liveRejected = $false
+  try { Resolve-BetaConfiguration $sourceRepo $betaWorktree $betaHome $liveDatabase $false 20000 20001 } catch { $liveRejected = $true }
+  Assert-True $liveRejected "The live ledger must require explicit -LiveLedger"
+  $alternateLiveRejected = $false
+  try { Resolve-BetaConfiguration $sourceRepo $betaWorktree $betaHome (Join-Path $betaHome "other.sqlite3") $true 20000 20001 } catch { $alternateLiveRejected = $true }
+  Assert-True $alternateLiveRejected "-LiveLedger must not accept an alternate database"
+
+  $state = [pscustomobject]@{
+    repo_root = $betaWorktree; plugin_root = Join-Path $betaWorktree "plugins/symphony-plus-plus-mcp"; runtime_mode = "source"
+    backend = [pscustomobject]@{ port = 20000; url = "http://127.0.0.1:20000" }
+    frontend = [pscustomobject]@{ port = 20001; origin = "http://127.0.0.1:20001" }
+  }
+  Assert-BetaRuntimeIdentity $betaConfig $state
+  $state.backend.port = 19998
+  $identityRejected = $false
+  try { Assert-BetaRuntimeIdentity $betaConfig $state } catch { $identityRejected = $true }
+  Assert-True $identityRejected "Beta controls must reject stable runtime identity"
+
+  $unrelated = Join-Path $betaRoot "unrelated"
+  New-Item -ItemType Directory -Path $unrelated | Out-Null
+  $unrelatedConfig = Resolve-BetaConfiguration $sourceRepo $unrelated $betaHome $null $false 20000 20001
+  $unrelatedRejected = $false
+  try { Initialize-BetaWorktree $unrelatedConfig } catch { $unrelatedRejected = $true }
+  Assert-True $unrelatedRejected "Beta bootstrap must refuse to overwrite an unrelated path"
+} finally {
+  Remove-Item -LiteralPath $betaRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 $generationRoot = Join-Path $PSScriptRoot (".generation-" + [guid]::NewGuid().ToString("N"))
 try {
