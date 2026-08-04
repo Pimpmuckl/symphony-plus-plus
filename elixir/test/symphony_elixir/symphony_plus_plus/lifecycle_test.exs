@@ -266,9 +266,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
                }
              })
 
+    assert {:ok, _outbound_blocker} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: package.id,
+               summary: "Sibling package is blocked",
+               status: "blocked",
+               idempotency_key: "report:sibling-target-blocker",
+               payload: %{
+                 type: "blocker",
+                 source_tool: "report_blocker",
+                 blocker_id: "sibling-target-blocker",
+                 active: true,
+                 blocked_item: %{kind: "work_package", id: sibling.id}
+               }
+             })
+
     assert {:ok, terminal} = Service.transition(repo, package.id, "merged", actor)
     assert repo.get!(GuidanceRequest, guidance.id).status == "answered"
-    refute WorkPackageActivity.context(repo, package.id).blocker_state.active?
+
+    terminal_blocker_state = WorkPackageActivity.context(repo, package.id).blocker_state
+    assert terminal_blocker_state.active?
+    assert terminal_blocker_state.active_ids == ["sibling-target-blocker"]
 
     sibling_blocker_state = WorkPackageActivity.context(repo, sibling.id).blocker_state
     assert sibling_blocker_state.active?

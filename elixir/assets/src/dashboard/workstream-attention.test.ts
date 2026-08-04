@@ -36,6 +36,30 @@ describe("WorkRequest attention badge targets", () => {
     });
   });
 
+  it("routes a blocker by its active target when its event owner is terminal", () => {
+    const deliveredSlice = requestSlice("slice-delivered", "blocked", "wp-delivered");
+    deliveredSlice.operational_state = { key: "blocked", delivery_outcome: "pr_merged" };
+    const activeSlice = requestSlice("slice-active", "blocked", "wp-active");
+    const detail = requestDetail([deliveredSlice, activeSlice]);
+    const deliveredPackage: WorkPackageCard = { id: "wp-delivered", status: "blocked" };
+    const activePackage: WorkPackageCard = { id: "wp-active", status: "blocked" };
+    const packages = new Map([[deliveredPackage.id, deliveredPackage], [activePackage.id, activePackage]]);
+    const blocker: ActiveBlockingEdge = {
+      id: "edge-terminal-owner",
+      blocker_id: "blocker-terminal-owner",
+      work_package_id: deliveredPackage.id,
+      from: { kind: "work_package", id: deliveredPackage.id },
+      to: { kind: "work_package", id: activePackage.id },
+    };
+
+    expect(requestAttentionTarget(detail, packages, [blocker], "blocked")).toMatchObject({
+      items: [{ kind: "blocker", selection: { blocker, slice: activeSlice, pkg: activePackage } }],
+    });
+    expect(dashboardAttentionItems([detail], packages, [blocker], [], [])).toMatchObject([
+      { kind: "blocker", selection: { blocker, slice: activeSlice, pkg: activePackage } },
+    ]);
+  });
+
   it("opens package guidance and embedded blocker records when projections are absent", () => {
     const slice = requestSlice("slice-attention", "human_info_needed", "wp-attention");
     const detail = requestDetail([slice]);

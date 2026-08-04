@@ -410,11 +410,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp terminal_cleanup_blocker?(blocker, owner_id, terminal_work_package_id) do
-    blocker.active and
-      (owner_id == terminal_work_package_id or
-         blocker.blocked_item == %{kind: "work_package", id: terminal_work_package_id})
-  end
+  defp terminal_cleanup_blocker?(%{active: true, blocked_item: %{kind: "work_package", id: target_id}}, _owner_id, terminal_work_package_id),
+    do: target_id == terminal_work_package_id
+
+  defp terminal_cleanup_blocker?(blocker, owner_id, terminal_work_package_id),
+    do: blocker.active and owner_id == terminal_work_package_id
 
   defp resolve_active_blocker(repo, work_package_id, blocker, :ok) do
     case PlanningRepository.append_progress_event(repo, %{

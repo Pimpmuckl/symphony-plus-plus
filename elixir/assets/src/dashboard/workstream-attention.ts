@@ -129,11 +129,14 @@ function attentionBelongsToTerminalRequest(
 
   const selection = item.selection;
   if (selection.kind === "request") return terminalRequestIds.has(selection.detail.work_request.id);
+  if (selection.kind === "blocker") {
+    const targetId = blockerTargetPackageId(selection.blocker);
+    return Boolean(targetId && terminalPackageIds.has(targetId));
+  }
   if (selection.detail && terminalRequestIds.has(selection.detail.work_request.id)) return true;
   if (selection.kind === "slice") return [...sliceIds(selection.slice, selection.pkg)].some((id) => terminalPackageIds.has(id));
   if (selection.kind === "package") return terminalPackageIds.has(selection.pkg.id);
-  return [selection.pkg?.id, selection.slice?.id, selection.slice?.work_package_id, selection.blocker.work_package_id, selection.blocker.to.id]
-    .some((id) => Boolean(id && terminalPackageIds.has(id)));
+  return false;
 }
 
 export function attentionTargetForGuidance(item: GuidanceItem): AttentionTarget {
@@ -235,7 +238,7 @@ function requestBlockerAttentionItems(
     blockerAttentionItemsForSlice(detail, slice, packageForSlice(slice, packageById), activeBlockingEdges),
   );
   const unmatchedEdges = activeBlockerEdgesForRequest(activeBlockingEdges, detail)
-    .filter((blocker) => ![blocker.work_package_id, blocker.to.id].some((id) => id && terminalPackageIds.has(id)))
+    .filter((blocker) => !terminalPackageIds.has(blockerTargetPackageId(blocker) ?? ""))
     .map((blocker) => attentionItemForBlockerSelection({ kind: "blocker", blocker, detail }))
     .filter((item) => !sliceItems.some((candidate) => candidate.key === item.key));
   const items = uniqueAttentionItems([...sliceItems, ...unmatchedEdges]);
@@ -276,7 +279,7 @@ function blockerAttentionItemsForSlice(
   if (workPackageIsTerminal(slice, pkg)) return [];
   const ids = sliceIds(slice, pkg);
   const edges = activeBlockerEdgesForRequest(activeBlockingEdges, detail)
-    .filter((candidate) => [candidate.work_package_id, candidate.to.id].some((id) => id && ids.has(id)))
+    .filter((candidate) => ids.has(blockerTargetPackageId(candidate) ?? ""))
     .map((blocker) => attentionItemForBlockerSelection({ kind: "blocker", blocker, detail, slice, pkg }));
   const edgeBlockerIds = new Set(edges.map((item) => item.selection.blocker.blocker_id).filter(Boolean));
   const embedded = pkg
@@ -294,6 +297,8 @@ function blockerAttentionItemsForSlice(
   if (items.length > 0) return items;
   return sliceNeedsBlockerAttention(slice, pkg) ? [statusAttentionItem(detail, slice, pkg, "blocked")] : [];
 }
+
+const blockerTargetPackageId = (blocker: ActiveBlockingEdge) => blocker.to.kind === "work_package" && blocker.to.id ? blocker.to.id : blocker.work_package_id;
 
 function requestStatusFallback(detail: WorkRequestDetail, items: AttentionItem[], tone: AttentionItem["tone"]) {
   if (items.some((item) => item.tone === tone)) return [];

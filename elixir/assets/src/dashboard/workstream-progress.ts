@@ -68,8 +68,8 @@ export function activeBlockerEntityCounts(
     const blockerKey = activeBlockerKey(edge);
 
     addBlockerKeys(keys.requests, [...activeBlockerRequestIds(edge, requestIndex)].filter((id) => !terminalRequestIds.has(id)), blockerKey);
-    addBlockerKeys(keys.slices, activeBlockerSliceIds(edge, requestIndex), blockerKey);
-    addBlockerKeys(keys.packages, activeBlockerPackageIds(edge), blockerKey);
+    addBlockerKeys(keys.slices, [...activeBlockerSliceIds(edge, requestIndex)].filter((id) => !terminalPackageIds.has(id)), blockerKey);
+    addBlockerKeys(keys.packages, [...activeBlockerPackageIds(edge)].filter((id) => !terminalPackageIds.has(id)), blockerKey);
 
     return keys;
   }, { requests: new Map(), slices: new Map(), packages: new Map() });
@@ -83,8 +83,8 @@ export function activeBlockerEntityCounts(
 }
 
 function edgeTargetsTerminalPackage(edge: ActiveBlockingEdge, terminalPackageIds: Set<string>) {
-  return [edge.work_package_id, edge.to.kind === "work_package" ? edge.to.id : undefined]
-    .some((id) => Boolean(id && terminalPackageIds.has(id)));
+  const targetId = edge.to.kind === "work_package" && edge.to.id ? edge.to.id : edge.work_package_id;
+  return Boolean(targetId && terminalPackageIds.has(targetId));
 }
 
 export function activeBlockerEdgesForRequest(edges: ActiveBlockingEdge[], detail: WorkRequestDetail) {

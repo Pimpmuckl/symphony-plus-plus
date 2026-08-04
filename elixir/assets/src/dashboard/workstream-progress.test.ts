@@ -190,14 +190,22 @@ describe("workstream progress", () => {
       [
         blockingEdge("stale-terminal", { kind: "work_package", id: "source" }, { kind: "work_package", id: "pkg-delivered" }),
         blockingEdge("active", { kind: "work_package", id: "source" }, { kind: "work_package", id: "pkg-active" }),
+        blockingEdge(
+          "active-owned-by-terminal",
+          { kind: "work_package", id: "pkg-delivered" },
+          { kind: "work_package", id: "pkg-active" },
+          undefined,
+          { work_package_id: "pkg-delivered" },
+        ),
       ],
       [detail],
     );
 
-    expect(counts.requests.get("wr-progress")).toBe(1);
+    expect(counts.requests.get("wr-progress")).toBe(2);
     expect(counts.slices.get("slice-delivered")).toBeUndefined();
     expect(counts.packages.get("pkg-delivered")).toBeUndefined();
-    expect(counts.slices.get("slice-active")).toBe(1);
+    expect(counts.slices.get("slice-active")).toBe(2);
+    expect(counts.packages.get("pkg-active")).toBe(2);
   });
 
   it("finds blocker edges that target a request through its package", () => {
