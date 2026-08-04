@@ -73,7 +73,8 @@ The default beta database is a sandbox ledger under the beta home. Pass
 `-Database <copied-ledger>` for destructive lifecycle validation against a
 copy. `-LiveLedger` alone selects the normal live ledger; the script rejects
 that path without the switch and rejects alternate paths with the switch. Do
-not run destructive lifecycle validation in live mode.
+not run destructive lifecycle validation in live mode. Existing database paths
+are compared by file identity, so aliases of the live ledger are also rejected.
 
 Branch flow:
 

@@ -36,7 +36,7 @@ foreach ($name in @(
 foreach ($name in @("Get-SymppArtifactDirectoryFingerprint", "Test-SymppArtifactDashboardReady", "Remove-SymppArtifactExtractionStaging", "Expand-SymppArtifactArchive")) {
   Import-ScriptFunction $artifactRuntimePath $name
 }
-foreach ($name in @("Test-SamePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Get-BetaGitWorktrees", "Initialize-BetaWorktree", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Assert-BetaRuntimeIdentity")) {
+foreach ($name in @("Get-PathIdentity", "Test-SamePath", "Test-SameDatabasePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Get-BetaGitWorktrees", "Initialize-BetaWorktree", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Assert-BetaRuntimeIdentity")) {
   Import-ScriptFunction $betaPath $name
 }
 function Write-Diagnostic([string]$Message) { }
@@ -166,6 +166,8 @@ $betaRoot = Join-Path $PSScriptRoot (".beta-bootstrap-" + [guid]::NewGuid().ToSt
 try {
   $betaSource = Get-Content -LiteralPath $betaPath -Raw
   Assert-True ($betaSource.Contains('"Validate" { Test-BetaBootstrap $config }')) "Beta bootstrap must expose its declared validation action"
+  Assert-True ($betaSource.Contains('"--dereference"') -and $betaSource.Contains('"-L" "-f"')) "Unix database identity checks must dereference symbolic links"
+  Assert-True ($betaSource.Contains('[void](Get-BetaRuntimeState $Config)')) "Beta start must validate existing runtime identity before preparation"
   Assert-True ($betaSource -match '(?s)"Codex"\s*\{.*?Start-BetaRuntime \$config\s*Invoke-WithBetaEnvironment' -and $betaSource -notmatch '(?s)"Codex"\s*\{.*?Install-BetaPlugin') "Source Codex must start through normal authentication without package refresh"
   $origin = Join-Path $betaRoot "origin.git"
   $sourceRepo = Join-Path $betaRoot "source"
@@ -185,6 +187,9 @@ try {
   & git -C $sourceRepo push origin beta | Out-Null
 
   $betaConfig = Resolve-BetaConfiguration $sourceRepo $betaWorktree $betaHome $null $false 20000 20001
+  $casePathsMatch = Test-SamePath (Join-Path $betaRoot "case") (Join-Path $betaRoot "CASE")
+  $runningOnWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+  Assert-True ($casePathsMatch -eq $runningOnWindows) "Beta path comparisons must follow platform case semantics"
   Initialize-BetaWorktree $betaConfig
   Assert-True ((& git -C $betaWorktree branch --show-current) -eq "beta") "Beta bootstrap must create the fixed beta worktree"
   Assert-True ((& git -C $betaWorktree rev-parse --abbrev-ref --symbolic-full-name '@{u}') -eq "origin/beta") "Beta worktree must track origin/beta"
@@ -218,6 +223,22 @@ try {
   $alternateLiveRejected = $false
   try { Resolve-BetaConfiguration $sourceRepo $betaWorktree $betaHome (Join-Path $betaHome "other.sqlite3") $true 20000 20001 } catch { $alternateLiveRejected = $true }
   Assert-True $alternateLiveRejected "-LiveLedger must not accept an alternate database"
+  $ledgerTarget = Join-Path $betaRoot "ledger-target.sqlite3"
+  $ledgerAlias = Join-Path $betaRoot "ledger-alias.sqlite3"
+  Set-Content -LiteralPath $ledgerTarget -Value "fixture" -NoNewline
+  New-Item -ItemType HardLink -Path $ledgerAlias -Target $ledgerTarget | Out-Null
+  Assert-True (Test-SamePath $ledgerAlias $ledgerTarget) "Existing database aliases must compare by file identity"
+  $ledgerDirectory = Join-Path $betaRoot "ledger-directory"
+  $ledgerDirectoryAlias = Join-Path $betaRoot "ledger-directory-alias"
+  New-Item -ItemType Directory -Path $ledgerDirectory | Out-Null
+  $directoryLinkType = if ($runningOnWindows) { "Junction" } else { "SymbolicLink" }
+  New-Item -ItemType $directoryLinkType -Path $ledgerDirectoryAlias -Target $ledgerDirectory | Out-Null
+  try {
+    Assert-True (Test-SameDatabasePath (Join-Path $ledgerDirectory "future.sqlite3") (Join-Path $ledgerDirectoryAlias "future.sqlite3")) "Future database paths must compare resolved parent identity"
+    if (-not $runningOnWindows) { Assert-True (-not (Test-SameDatabasePath (Join-Path $ledgerDirectory "future.sqlite3") (Join-Path $ledgerDirectory "FUTURE.sqlite3"))) "Future database identity must preserve case on Unix" }
+  } finally {
+    Remove-Item -LiteralPath $ledgerDirectoryAlias -Force
+  }
 
   $state = [pscustomobject]@{
     repo_root = $betaWorktree; plugin_root = Join-Path $betaWorktree "plugins/symphony-plus-plus-mcp"; runtime_mode = "source"
@@ -225,6 +246,9 @@ try {
     frontend = [pscustomobject]@{ port = 20001; origin = "http://127.0.0.1:20001" }
   }
   Assert-BetaRuntimeIdentity $betaConfig $state
+  $state.plugin_root = Join-Path $betaConfig.normal_codex_home "plugins/cache/symphony-plus-plus/symphony-plus-plus-mcp/0.1.9"
+  Assert-BetaRuntimeIdentity $betaConfig $state
+  $state.plugin_root = Join-Path $betaWorktree "plugins/symphony-plus-plus-mcp"
   $state.backend.port = 19998
   $identityRejected = $false
   try { Assert-BetaRuntimeIdentity $betaConfig $state } catch { $identityRejected = $true }

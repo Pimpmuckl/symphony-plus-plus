@@ -14,17 +14,83 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-PathIdentity([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) { return $null }
+  $fullPath = [System.IO.Path]::GetFullPath($Path)
+  if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+    $item = Get-Item -LiteralPath $fullPath -Force
+    if ($item.LinkType -in @("SymbolicLink", "Junction")) {
+      $target = $item.ResolveLinkTarget($true)
+      if ($target) { $fullPath = $target.FullName }
+    }
+    $output = @(& fsutil.exe file queryfileid $fullPath 2>$null)
+    $match = [regex]::Match(($output -join " "), "0x[0-9a-fA-F]+")
+    if ($LASTEXITCODE -eq 0 -and $match.Success) {
+      return ([System.IO.Path]::GetPathRoot($fullPath)).ToUpperInvariant() + $match.Value.ToLowerInvariant()
+    }
+    return $null
+  }
+  $stat = Get-Command stat -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $stat) { return $null }
+  $output = @(& $stat.Source "--dereference" "--printf=%d:%i" "--" $fullPath 2>$null)
+  if ($LASTEXITCODE -ne 0) { $output = @(& $stat.Source "-L" "-f" "%d:%i" $fullPath 2>$null) }
+  $identity = ($output -join "").Trim()
+  if ($LASTEXITCODE -eq 0 -and $identity -match "^[0-9]+:[0-9]+$") { return $identity }
+  return $null
+}
+
 function Test-SamePath([string]$Left, [string]$Right) {
   $leftPath = [System.IO.Path]::GetFullPath($Left).TrimEnd("\", "/")
   $rightPath = [System.IO.Path]::GetFullPath($Right).TrimEnd("\", "/")
-  return $leftPath.Equals($rightPath, [System.StringComparison]::OrdinalIgnoreCase)
+  $leftIdentity = Get-PathIdentity $leftPath
+  $rightIdentity = Get-PathIdentity $rightPath
+  if ($leftIdentity -and $rightIdentity) { return $leftIdentity -eq $rightIdentity }
+  $comparison = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+    [System.StringComparison]::OrdinalIgnoreCase
+  } else {
+    [System.StringComparison]::Ordinal
+  }
+  return $leftPath.Equals($rightPath, $comparison)
+}
+
+function Test-SameDatabasePath([string]$Left, [string]$Right) {
+  $identities = foreach ($path in @($Left, $Right)) {
+    $current = [System.IO.Path]::GetFullPath($path)
+    $suffix = @()
+    while (-not (Test-Path -LiteralPath $current)) {
+      $suffix = @((Split-Path -Leaf $current)) + $suffix
+      $parent = Split-Path -Parent $current
+      if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $current) { break }
+      $current = $parent
+    }
+    $identity = Get-PathIdentity $current
+    if (-not $identity) { throw "Could not resolve database file identity safely." }
+    $suffixPath = $suffix -join "/"
+    if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) { $suffixPath = $suffixPath.ToLowerInvariant() }
+    $identity + "|" + $suffixPath
+  }
+  return $identities[0] -eq $identities[1]
 }
 
 function Test-PathInside([string]$Path, [string]$Root) {
   $pathValue = [System.IO.Path]::GetFullPath($Path).TrimEnd("\", "/")
   $rootValue = [System.IO.Path]::GetFullPath($Root).TrimEnd("\", "/")
-  return $pathValue.Equals($rootValue, [System.StringComparison]::OrdinalIgnoreCase) -or
-    $pathValue.StartsWith($rootValue + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+  if ((Test-Path -LiteralPath $pathValue) -and (Test-Path -LiteralPath $rootValue)) {
+    $current = $pathValue
+    while (-not [string]::IsNullOrWhiteSpace($current)) {
+      if (Test-SamePath $current $rootValue) { return $true }
+      $parent = Split-Path -Parent $current
+      if ([string]::IsNullOrWhiteSpace($parent) -or (Test-SamePath $parent $current)) { return $false }
+      $current = $parent
+    }
+  }
+  $comparison = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+    [System.StringComparison]::OrdinalIgnoreCase
+  } else {
+    [System.StringComparison]::Ordinal
+  }
+  return $pathValue.Equals($rootValue, $comparison) -or
+    $pathValue.StartsWith($rootValue + [System.IO.Path]::DirectorySeparatorChar, $comparison)
 }
 
 function Resolve-BetaConfiguration(
@@ -60,11 +126,15 @@ function Resolve-BetaConfiguration(
   if ([string]::IsNullOrWhiteSpace($DatabasePath)) {
     $DatabasePath = if ($UseLiveLedger) { $liveDatabase } else { Join-Path $homePath "ledger/beta.sqlite3" }
   } else {
-    $resolvedDatabase = [System.IO.Path]::GetFullPath($DatabasePath)
-    if ((Test-SamePath $resolvedDatabase $liveDatabase) -ne $UseLiveLedger) {
-      throw "-LiveLedger must select the normal live ledger, and that ledger requires -LiveLedger."
-    }
-    $DatabasePath = $resolvedDatabase
+    $DatabasePath = [System.IO.Path]::GetFullPath($DatabasePath)
+  }
+  if ((Test-SameDatabasePath $DatabasePath $liveDatabase) -ne $UseLiveLedger) {
+    throw "-LiveLedger must select the normal live ledger, and that ledger requires -LiveLedger."
+  }
+  $normalCodexHome = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
+    Join-Path $profile ".codex"
+  } else {
+    $env:CODEX_HOME
   }
 
   return [pscustomobject]@{
@@ -75,6 +145,7 @@ function Resolve-BetaConfiguration(
     log_dir = Join-Path $homePath "logs"
     mix_build_root = Join-Path $homePath "build/source"
     codex_home = Join-Path $homePath "codex"
+    normal_codex_home = [System.IO.Path]::GetFullPath($normalCodexHome)
     database = [System.IO.Path]::GetFullPath($DatabasePath)
     ledger_mode = if ($UseLiveLedger) { "live" } else { "sandbox" }
     backend_port = $Backend
@@ -175,7 +246,9 @@ function Assert-BetaRuntimeIdentity($Config, $State) {
   if ($null -eq $State) { return }
   $sourcePlugin = Join-Path $Config.worktree "plugins/symphony-plus-plus-mcp"
   if (-not (Test-SamePath $State.repo_root $Config.worktree) -or
-      (-not (Test-PathInside $State.plugin_root $sourcePlugin) -and -not (Test-PathInside $State.plugin_root $Config.codex_home)) -or
+      (-not (Test-PathInside $State.plugin_root $sourcePlugin) -and
+        -not (Test-PathInside $State.plugin_root $Config.codex_home) -and
+        -not (Test-PathInside $State.plugin_root $Config.normal_codex_home)) -or
       [int]$State.backend.port -ne $Config.backend_port -or [int]$State.frontend.port -ne $Config.dashboard_port -or
       $State.backend.url -ne "http://127.0.0.1:$($Config.backend_port)" -or
       $State.frontend.origin -ne "http://127.0.0.1:$($Config.dashboard_port)" -or $State.runtime_mode -ne "source") {
@@ -227,6 +300,7 @@ function Stop-BetaRuntime($Config, [switch]$BackendOnly) {
 }
 
 function Start-BetaRuntime($Config) {
+  if (Test-Path -LiteralPath $Config.runtime_file -PathType Leaf) { [void](Get-BetaRuntimeState $Config) }
   $launcher = Join-Path $Config.worktree "plugins/symphony-plus-plus-mcp/scripts/start-sympp-mcp.ps1"
   if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) { throw "Beta MCP launcher is missing: $launcher" }
   Invoke-WithBetaEnvironment $Config {
@@ -312,7 +386,10 @@ switch ($Action) {
   "Codex" {
     Initialize-BetaWorktree $config
     Start-BetaRuntime $config
-    Invoke-WithBetaEnvironment $config { & codex -C $config.worktree }
+    Invoke-WithBetaEnvironment $config {
+      & codex -C $config.worktree
+      if ($LASTEXITCODE -ne 0) { throw "Beta Codex exited with code $LASTEXITCODE." }
+    }
   }
 }
 
