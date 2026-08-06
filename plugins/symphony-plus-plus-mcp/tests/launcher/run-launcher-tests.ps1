@@ -186,8 +186,11 @@ try {
   Assert-True ($betaSource.Contains('[void](Get-BetaRuntimeState $Config)')) "Beta start must validate existing runtime identity before preparation"
   Assert-True ($betaSource -match '(?s)"Codex"\s*\{.*?Start-BetaRuntime \$config\s*Invoke-WithBetaEnvironment' -and $betaSource -notmatch '(?s)"Codex"\s*\{.*?Install-BetaPlugin') "Source Codex must start through normal authentication without package refresh"
   $codexConfig = [pscustomobject]@{ worktree = "C:\beta" }
-  Assert-True ((@(Get-BetaCodexArguments $codexConfig $null) -join "|") -eq "-C|C:\beta") "Beta Codex must open a fresh thread directly in the beta worktree"
-  Assert-True ((@(Get-BetaCodexArguments $codexConfig "thread-id") -join "|") -eq "-C|C:\beta|resume|thread-id") "Beta Codex must resume directly inside the beta environment"
+  $freshCodexArguments = @(Get-BetaCodexArguments $codexConfig $null)
+  $resumeCodexArguments = @(Get-BetaCodexArguments $codexConfig "thread-id")
+  Assert-True (($freshCodexArguments[0] -eq "-c") -and $freshCodexArguments[1].Contains('cwd="C:/beta/plugins/symphony-plus-plus-mcp"') -and $freshCodexArguments[1].Contains('env_vars=["SYMPP_HOME","SYMPP_RUNTIME_FILE","SYMPP_LOG_DIR","MIX_BUILD_ROOT","SYMPP_REPO_ROOT","SYMPP_DATABASE","SYMPP_BACKEND_PORT","SYMPP_DASHBOARD_PORT"]')) "Beta Codex must bind its MCP bridge to the source checkout and beta environment"
+  Assert-True ((@($freshCodexArguments[2..3]) -join "|") -eq "-C|C:\beta") "Beta Codex must open a fresh thread directly in the beta worktree"
+  Assert-True ((@($resumeCodexArguments[2..5]) -join "|") -eq "-C|C:\beta|resume|thread-id") "Beta Codex must resume directly inside the beta environment"
   $origin = Join-Path $betaRoot "origin.git"
   $sourceRepo = Join-Path $betaRoot "source"
   $betaWorktree = Join-Path $betaRoot "beta"

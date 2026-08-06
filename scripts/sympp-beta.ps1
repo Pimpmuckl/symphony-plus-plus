@@ -258,7 +258,9 @@ function Invoke-WithBetaEnvironment($Config, [scriptblock]$Command, [switch]$Pac
 }
 
 function Get-BetaCodexArguments($Config, [string]$SessionId) {
-  $arguments = @("-C", $Config.worktree)
+  $pluginRoot = (Join-Path $Config.worktree "plugins/symphony-plus-plus-mcp").Replace("\", "/")
+  $mcpOverride = 'mcp_servers.symphony_plus_plus={command="cmd.exe",args=["/d","/s","/c","scripts\\start-sympp-mcp.cmd"],cwd="' + $pluginRoot + '",env_vars=["SYMPP_HOME","SYMPP_RUNTIME_FILE","SYMPP_LOG_DIR","MIX_BUILD_ROOT","SYMPP_REPO_ROOT","SYMPP_DATABASE","SYMPP_BACKEND_PORT","SYMPP_DASHBOARD_PORT"],startup_timeout_sec=360,tool_timeout_sec=300}'
+  $arguments = @("-c", $mcpOverride, "-C", $Config.worktree)
   if (-not [string]::IsNullOrWhiteSpace($SessionId)) { $arguments += @("resume", $SessionId) }
   return $arguments
 }
