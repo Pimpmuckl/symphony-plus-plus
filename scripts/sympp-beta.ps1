@@ -6,6 +6,7 @@ param(
   [string]$BetaWorktree,
   [string]$SymppHome,
   [string]$Database,
+  [string]$ResumeSessionId,
   [switch]$LiveLedger,
   [int]$BackendPort = 20000,
   [int]$DashboardPort = 20001,
@@ -249,6 +250,12 @@ function Invoke-WithBetaEnvironment($Config, [scriptblock]$Command, [switch]$Pac
   }
 }
 
+function Get-BetaCodexArguments($Config, [string]$SessionId) {
+  $arguments = @("-C", $Config.worktree)
+  if (-not [string]::IsNullOrWhiteSpace($SessionId)) { $arguments += @("resume", $SessionId) }
+  return $arguments
+}
+
 function Assert-BetaRuntimeIdentity($Config, $State) {
   if ($null -eq $State) { return }
   $sourcePlugin = Join-Path $Config.worktree "plugins/symphony-plus-plus-mcp"
@@ -401,7 +408,8 @@ switch ($Action) {
     Initialize-BetaWorktree $config
     Start-BetaRuntime $config
     Invoke-WithBetaEnvironment $config {
-      & codex -C $config.worktree
+      $codexArguments = @(Get-BetaCodexArguments $config $ResumeSessionId)
+      & codex @codexArguments
       if ($LASTEXITCODE -ne 0) { throw "Beta Codex exited with code $LASTEXITCODE." }
     }
   }

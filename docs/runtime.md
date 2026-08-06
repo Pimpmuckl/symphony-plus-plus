@@ -50,6 +50,14 @@ and opens Codex with the normal authenticated Codex home:
 pwsh -NoProfile -File .\scripts\sympp-beta.ps1 -Action Codex
 ```
 
+Resume an existing thread directly through the beta launcher. Do not open a
+fresh beta TUI and then use `/resume`; that can retain the thread's prior MCP
+attachment.
+
+```powershell
+pwsh -NoProfile -File .\scripts\sympp-beta.ps1 -Action Codex -ResumeSessionId <thread-id>
+```
+
 The source beta lane uses backend `20000`, Vite `20001`, and separate
 `SYMPP_HOME`, `SYMPP_RUNTIME_FILE`, `SYMPP_LOG_DIR`, `MIX_BUILD_ROOT`, and SQLite
 database paths. It keeps `CODEX_HOME` unchanged, so existing authentication and

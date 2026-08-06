@@ -36,7 +36,7 @@ foreach ($name in @(
 foreach ($name in @("Get-SymppArtifactDirectoryFingerprint", "Test-SymppArtifactDashboardReady", "Remove-SymppArtifactExtractionStaging", "Expand-SymppArtifactArchive", "Test-ArtifactBackendProvidesDashboard")) {
   Import-ScriptFunction $artifactRuntimePath $name
 }
-foreach ($name in @("Get-PathIdentity", "Test-SamePath", "Test-SameDatabasePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Get-BetaGitWorktrees", "Initialize-BetaWorktree", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Assert-BetaRuntimeIdentity", "Test-BetaRuntimeProcessRunning")) {
+foreach ($name in @("Get-PathIdentity", "Test-SamePath", "Test-SameDatabasePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Get-BetaGitWorktrees", "Initialize-BetaWorktree", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Get-BetaCodexArguments", "Assert-BetaRuntimeIdentity", "Test-BetaRuntimeProcessRunning")) {
   Import-ScriptFunction $betaPath $name
 }
 function Write-Diagnostic([string]$Message) { }
@@ -182,6 +182,9 @@ try {
   Assert-True ($betaSource.Contains('"--dereference"') -and $betaSource.Contains('"-L" "-f"')) "Unix database identity checks must dereference symbolic links"
   Assert-True ($betaSource.Contains('[void](Get-BetaRuntimeState $Config)')) "Beta start must validate existing runtime identity before preparation"
   Assert-True ($betaSource -match '(?s)"Codex"\s*\{.*?Start-BetaRuntime \$config\s*Invoke-WithBetaEnvironment' -and $betaSource -notmatch '(?s)"Codex"\s*\{.*?Install-BetaPlugin') "Source Codex must start through normal authentication without package refresh"
+  $codexConfig = [pscustomobject]@{ worktree = "C:\beta" }
+  Assert-True ((@(Get-BetaCodexArguments $codexConfig $null) -join "|") -eq "-C|C:\beta") "Beta Codex must open a fresh thread directly in the beta worktree"
+  Assert-True ((@(Get-BetaCodexArguments $codexConfig "thread-id") -join "|") -eq "-C|C:\beta|resume|thread-id") "Beta Codex must resume directly inside the beta environment"
   $origin = Join-Path $betaRoot "origin.git"
   $sourceRepo = Join-Path $betaRoot "source"
   $betaWorktree = Join-Path $betaRoot "beta"
