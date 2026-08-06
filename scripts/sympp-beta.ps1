@@ -155,8 +155,15 @@ function Resolve-BetaConfiguration(
 }
 
 function Invoke-BetaGit([string]$Root, [string[]]$Arguments) {
-  $output = @(& git -C $Root @Arguments 2>&1)
-  if ($LASTEXITCODE -ne 0) {
+  $previousErrorActionPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $output = @(& git -C $Root @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  if ($exitCode -ne 0) {
     throw "git -C '$Root' $($Arguments -join ' ') failed: $($output -join [Environment]::NewLine)"
   }
   return $output

@@ -39,6 +39,9 @@ foreach ($name in @("Get-SymppArtifactDirectoryFingerprint", "Test-SymppArtifact
 foreach ($name in @("Get-PathIdentity", "Test-SamePath", "Test-SameDatabasePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Get-BetaGitWorktrees", "Initialize-BetaWorktree", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Get-BetaCodexArguments", "Assert-BetaRuntimeIdentity", "Test-BetaRuntimeProcessRunning")) {
   Import-ScriptFunction $betaPath $name
 }
+function script:git { Write-Error "normal git progress"; $script:LASTEXITCODE = 0; "ok" }
+try { $gitOutput = @(Invoke-BetaGit $repoRoot @("fetch")) } finally { Remove-Item Function:git }
+Assert-True ($gitOutput -contains "ok") "Successful git stderr must not terminate the beta launcher"
 function Write-Diagnostic([string]$Message) { }
 function Write-CompatibleSourceMismatchDiagnostic { }
 $pluginRoot = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp"
