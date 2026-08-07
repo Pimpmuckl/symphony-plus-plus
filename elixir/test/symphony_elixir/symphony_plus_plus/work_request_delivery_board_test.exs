@@ -553,6 +553,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     refute Map.has_key?(slice.work_package.review.completion, :transcript)
   end
 
+  test "cold projection reads progress history once and replays blockers in order", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-BOARD-SHARED-HISTORY")
+
+    {_work_package, linked_package} =
+      linked_slice!(repo, work_request,
+        id: "WRS-BOARD-SHARED-HISTORY",
+        work_package_id: "WP-BOARD-SHARED-HISTORY",
+        status: "blocked"
+      )
+
+    for {source_tool, active?} <- [{"report_blocker", true}, {"resolve_blocker", false}] do
+      assert {:ok, _event} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: linked_package.id,
+                 summary: source_tool,
+                 status: "blocked",
+                 payload: %{type: "blocker", source_tool: source_tool, blocker_id: "shared-history", active: active?}
+               })
+    end
+
+    {{:ok, %{work_packages: [slice]}}, queries} = capture_queries(fn -> DeliveryBoard.project(repo, work_request.id) end)
+
+    refute slice.work_package.blocker_state.active?
+
+    assert Enum.count(queries, &String.contains?(&1, ~s(FROM "#{ProgressEvent.__schema__(:source)}"))) == 1
+  end
+
   test "empty preloaded metadata falls back to progress events", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-EMPTY-METADATA")
 
@@ -1001,6 +1028,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     }
 
     Enum.into(overrides, defaults)
+  end
+
+  defp capture_queries(fun) do
+    handler_id = {__MODULE__, self(), make_ref()}
+    event = Repo.config()[:telemetry_prefix] ++ [:query]
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn _event, _measurements, metadata, test_pid -> send(test_pid, {handler_id, to_string(metadata.query || "")}) end,
+        self()
+      )
+
+    try do
+      result = fun.()
+      {result, drain_queries(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_queries(handler_id, queries) do
+    receive do
+      {^handler_id, query} -> drain_queries(handler_id, [query | queries])
+    after
+      0 -> Enum.reverse(queries)
+    end
   end
 
   defp database_path do

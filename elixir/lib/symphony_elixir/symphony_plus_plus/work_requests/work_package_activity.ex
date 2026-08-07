@@ -22,15 +22,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   end
 
   @spec contexts(module(), [String.t()]) :: %{optional(String.t()) => map()}
-  def contexts(_repo, []), do: %{}
+  def contexts(repo, work_package_ids), do: contexts(repo, work_package_ids, %{})
 
-  def contexts(repo, work_package_ids) when is_atom(repo) and is_list(work_package_ids) do
+  @spec contexts(module(), [String.t()], %{optional(String.t()) => [ProgressEvent.t()]}) ::
+          %{optional(String.t()) => map()}
+  def contexts(_repo, [], _progress_events_by_id), do: %{}
+
+  def contexts(repo, work_package_ids, progress_events_by_id)
+      when is_atom(repo) and is_list(work_package_ids) and is_map(progress_events_by_id) do
     work_package_ids =
       work_package_ids
       |> Enum.filter(&filled_string?/1)
       |> Enum.uniq()
 
-    progress_events_by_id = grouped_progress_events(repo, work_package_ids)
+    progress_events_by_id =
+      repo
+      |> grouped_progress_events(Enum.reject(work_package_ids, &Map.has_key?(progress_events_by_id, &1)))
+      |> Map.merge(Map.take(progress_events_by_id, work_package_ids))
+
     grants_by_id = grouped_access_grants(repo, work_package_ids)
     agent_runs_by_id = grouped_agent_runs(repo, work_package_ids)
     claim_leases_by_id = grouped_claim_leases(repo, work_package_ids)
@@ -147,6 +156,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   end
 
   defp worker_linked?(_evidence, _worker_grant_ids, unlinked_worker?), do: unlinked_worker?
+
+  defp grouped_progress_events(_repo, []), do: %{}
 
   defp grouped_progress_events(repo, work_package_ids) do
     repo.all(
