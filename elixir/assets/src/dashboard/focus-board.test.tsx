@@ -33,7 +33,9 @@ describe("focus board", () => {
       request("wr-recent", "Just shipped", [slice("merged", "merged")], { completedAt: "2026-07-21T09:30:00Z" }),
       request("wr-delivery", "Delivery fallback", [slice("delivered", "merged", { recordedAt: "2026-07-21T09:00:00Z" })]),
       request("wr-old", "Old news", [slice("old", "merged")], { completedAt: "2026-07-19T10:00:00Z" }),
-    ], "2026-07-21T10:00:00Z");
+    ], "2026-07-21T10:00:00Z", new Map(), new Map([
+      ["wr-human", { blockerCount: 0, guidanceCount: 1 }],
+    ]));
 
     expect(items.map(({ id, lane }) => [id, lane])).toEqual([
       ["wr-human", "attention"],
@@ -49,22 +51,18 @@ describe("focus board", () => {
     expect(new Set(items.map((item) => item.id)).size).toBe(items.length);
   });
 
-  it("uses package runtime and active blocker context for request lanes", () => {
+  it("uses package runtime and explicit attention context for request lanes", () => {
     const detail = request("wr-runtime", "Runtime work", [slice("runtime", "planned", { packageId: "wp-runtime" })]);
     const packages = new Map<string, WorkPackageCard>([["wp-runtime", { id: "wp-runtime", status: "active" }]]);
     const dependencyBlocked = request("wr-package-blocker", "Package blocker", [slice("package-blocker", "blocked", {
       dependency: { satisfied: 0, required: 1, active: 0, blocked: 1, unmet_work_package_ids: ["upstream"], inputs: [] },
       packageId: "wp-package-blocker",
     })]);
-    const blockedPackages = new Map<string, WorkPackageCard>([["wp-package-blocker", {
-      active_blocker_count: 1,
-      id: "wp-package-blocker",
-      status: "blocked",
-    }]]);
+    const blockedPackages = new Map<string, WorkPackageCard>([["wp-package-blocker", { active_blocker_count: 1, id: "wp-package-blocker", status: "blocked" }]]);
 
     expect(buildFocusBoardItems([detail], Date.now(), packages)[0]?.lane).toBe("active");
-    expect(buildFocusBoardItems([detail], Date.now(), packages, new Map([["wr-runtime", 1]]))[0]?.lane).toBe("attention");
-    expect(buildFocusBoardItems([dependencyBlocked], Date.now(), blockedPackages)[0]?.lane).toBe("attention");
+    expect(buildFocusBoardItems([detail], Date.now(), packages, new Map([["wr-runtime", { blockerCount: 1, guidanceCount: 0 }]]))[0]?.lane).toBe("attention");
+    expect(buildFocusBoardItems([dependencyBlocked], Date.now(), blockedPackages)[0]?.lane).toBe("waiting");
   });
 
   it("shows the package targeted by an active blocker edge in the attention frontier", () => {
@@ -106,15 +104,21 @@ describe("focus board", () => {
       ],
       now: "2026-07-21T10:00:00Z",
       packages: [],
-      activeBlockingEdges: [],
+      activeBlockingEdges: [{
+        id: "edge-review",
+        blocker_id: "blocker-review",
+        from: { kind: "work_package", id: "review-owner" },
+        to: { kind: "work_package", id: "failed-review" },
+        work_request_id: "wr-active",
+      }],
       onSelectAttention: () => undefined,
       onSelectGuidance: () => undefined,
       onSelectCard: () => undefined,
       primaryBranchByRepo: new Map(),
       updateAnimations: { motionFor: () => undefined },
     }));
-    expect(html).toContain('aria-label="Needs you, 1"');
-    expect(html).toContain('aria-label="Moving now, 3"');
+    expect(html).toContain('aria-label="Needs you, 2"');
+    expect(html).toContain('aria-label="Moving now, 2"');
     expect(html).toContain("fixture/secondary");
     expect(html).toContain('class="focus-board__workbench"');
     expect(html).toContain('data-mode="frontier"');
@@ -130,7 +134,13 @@ describe("focus board", () => {
         slice("failed-review", "reviewing", { group: "Quality", review: { status: "failed" } }),
       ])],
       packages: [],
-      activeBlockingEdges: [],
+      activeBlockingEdges: [{
+        id: "edge-review",
+        blocker_id: "blocker-review",
+        from: { kind: "work_package", id: "review-owner" },
+        to: { kind: "work_package", id: "failed-review" },
+        work_request_id: "wr-active",
+      }],
       onSelectAttention: () => undefined,
       onSelectGuidance: () => undefined,
       onSelectCard: () => undefined,
@@ -170,6 +180,9 @@ function request(
       work_package_count: workPackages.length,
     },
     summary: { open_question_count: options.openQuestions, work_package_count: workPackages.length },
+    clarification_questions: options.openQuestions
+      ? Array.from({ length: options.openQuestions }, (_, index) => ({ id: `question-${id}-${index}`, work_request_id: id, status: "open" }))
+      : undefined,
     work_packages: workPackages,
     product_tree: {
       nodes: groupIds.map((groupId, position) => ({
