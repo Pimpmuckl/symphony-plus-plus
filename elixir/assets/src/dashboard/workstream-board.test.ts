@@ -169,13 +169,17 @@ describe("workstream board removal rendering", () => {
     expect(collapsed).not.toContain("v3-execution-graph");
   });
 
-  it("keeps Group and WorkPackage attention badges actionable in the stable list", () => {
+  it("keeps Group and WorkPackage badges actionable for an explicit blocker record", () => {
     const detail: WorkRequestDetail = {
       work_request: { id: "wr-attention", title: "Attention request", status: "blocked" },
-      work_packages: [{ id: "wp-blocked", work_request_id: "wr-attention", product_tree_node_id: "group-attention", title: "Blocked package", status: "blocked" }],
+      work_packages: [{ id: "wp-blocked", work_package_id: "wp-blocked", work_request_id: "wr-attention", product_tree_node_id: "group-attention", title: "Blocked package", status: "blocked" }],
       product_tree: { nodes: [{ id: "group-attention", title: "Attention group", work_package_ids: ["wp-blocked"] }] },
     };
-    const expanded = renderBoard(detail, { [finishedRequestChildrenStorageKey("repo", detail.work_request.id)]: true });
+    const expanded = renderBoard(
+      detail,
+      { [finishedRequestChildrenStorageKey("repo", detail.work_request.id)]: true },
+      [{ id: "wp-blocked", status: "blocked", active_blockers: [{ id: "blocker-1", active: true }] }],
+    );
 
     expect(expanded).toContain('aria-label="Open attention details for Attention group"');
     expect(expanded).toContain('aria-label="Open attention details for Blocked package"');
@@ -242,6 +246,7 @@ describe("workstream board removal rendering", () => {
     const linkedPackageActive = renderFocusRow(linkedDetail, [{ id: "wp-linked", status: "active" }]);
 
     expect(blocked).toContain('class="sr-only">Blocked</span>');
+    expect(blocked).not.toContain("border-rose-200");
     expect(blocked).not.toContain("data-first");
     expect(blocked).not.toContain('class="v3-request-frontier-activity">Blocked</span>');
     expect(active).toContain('class="sr-only">Active · 10m</span>');
@@ -400,8 +405,6 @@ function renderFocusRow(detail: WorkRequestDetail, packages: WorkPackageCard[] =
     activeBlockingEdges: [],
     guidanceItems: [],
     packageById: new Map(packages.map((pkg) => [pkg.id, pkg])),
-    activeBlockerCount: 0,
-    activeBlockerCountBySliceId: new Map(),
     expanded: false,
     focusSelected: false,
     index: 0,
