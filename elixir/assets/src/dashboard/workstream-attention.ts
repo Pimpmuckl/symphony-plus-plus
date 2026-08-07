@@ -28,6 +28,7 @@ export type AttentionItem =
 export type AttentionTarget = { items: AttentionItem[] };
 export type AttentionSelect = (target: AttentionTarget) => void;
 export type RequestAttentionTarget = AttentionTarget;
+export type ActionableAttentionCounts = { blockerCount: number; guidanceCount: number };
 
 export type DirectAttention = {
   label: string;
@@ -58,13 +59,37 @@ export function requestAttentionTarget(
   stateKind: BoardRowStateKind,
   guidanceItems: GuidanceItem[] = [],
 ): RequestAttentionTarget | null {
+  const items = requestActionableAttentionItems(detail, packageById, activeBlockingEdges, guidanceItems);
   if (stateKind === "guidance") {
-    return attentionTarget(requestGuidanceAttentionItems(detail, packageById, guidanceItems));
+    return attentionTarget(items.filter((item) => item.tone === "guidance"));
   }
   if (stateKind === "blocked") {
-    return attentionTarget(requestBlockerAttentionItems(detail, packageById, activeBlockingEdges));
+    return attentionTarget(items.filter((item) => item.tone === "blocked"));
   }
   return null;
+}
+
+export function requestActionableAttentionCounts(
+  detail: WorkRequestDetail,
+  packageById: Map<string, WorkPackageCard>,
+  activeBlockingEdges: ActiveBlockingEdge[],
+  guidanceItems: GuidanceItem[],
+): ActionableAttentionCounts {
+  const items = requestActionableAttentionItems(detail, packageById, activeBlockingEdges, guidanceItems);
+  return {
+    blockerCount: items.filter((item) => item.tone === "blocked").length,
+    guidanceCount: items.filter((item) => item.tone === "guidance").length,
+  };
+}
+
+export function requestActionableAttentionItems(
+  detail: WorkRequestDetail,
+  packageById: Map<string, WorkPackageCard>,
+  activeBlockingEdges: ActiveBlockingEdge[],
+  guidanceItems: GuidanceItem[],
+) {
+  if (workRequestIsTerminal(detail)) return [];
+  return requestAllAttentionItems(detail, packageById, activeBlockingEdges, guidanceItems);
 }
 
 export function workPackageDirectAttention(
@@ -76,7 +101,7 @@ export function workPackageDirectAttention(
 ): DirectAttention | null {
   return directAttention([
     ...blockerAttentionItemsForSlice(detail, slice, pkg, activeBlockingEdges),
-    ...guidanceAttentionItemsForSlice(detail, slice, pkg, guidanceItems),
+    ...guidanceAttentionItemsForSlice(slice, pkg, guidanceItems),
   ]);
 }
 
@@ -112,7 +137,7 @@ export function dashboardAttentionItems(
   ].filter((item) => !attentionBelongsToTerminalRequest(item, terminalRequestIds, terminalPackageIds));
   const workstream = details
     .filter((detail) => !workRequestIsTerminal(detail))
-    .flatMap((detail) => requestAllAttentionItems(detail, packageById, activeBlockingEdges, guidanceItems));
+    .flatMap((detail) => requestActionableAttentionItems(detail, packageById, activeBlockingEdges, guidanceItems));
   return uniqueAttentionItems([...projected, ...workstream]).filter((item) => item.kind !== "status");
 }
 
@@ -204,45 +229,17 @@ function requestAllAttentionItems(
     const pkg = packageForSlice(slice, packageById);
     return [
       ...blockerAttentionItemsForSlice(detail, slice, pkg, activeBlockingEdges),
-      ...guidanceAttentionItemsForSlice(detail, slice, pkg, guidanceItems),
+      ...guidanceAttentionItemsForSlice(slice, pkg, guidanceItems),
     ];
   });
   const clarificationItems = requestClarificationItems(detail, guidanceItems);
-  const requestStatuses = [
-    ...requestStatusFallback(detail, items, "blocked"),
-    ...requestStatusFallback(detail, [...items, ...clarificationItems], "guidance"),
-  ];
-  return uniqueAttentionItems([...items, ...clarificationItems, ...requestStatuses]);
-}
-
-function requestGuidanceAttentionItems(
-  detail: WorkRequestDetail,
-  packageById: Map<string, WorkPackageCard>,
-  guidanceItems: GuidanceItem[],
-) {
-  const clarificationItems = requestClarificationItems(detail, guidanceItems);
-  const packageItems = (detail.work_packages ?? []).flatMap((slice) =>
-    guidanceAttentionItemsForSlice(detail, slice, packageForSlice(slice, packageById), guidanceItems),
-  );
-  const items = uniqueAttentionItems([...clarificationItems, ...packageItems]);
-  return items.length > 0 ? items : [requestStatusAttentionItem(detail, "guidance")];
-}
-
-function requestBlockerAttentionItems(
-  detail: WorkRequestDetail,
-  packageById: Map<string, WorkPackageCard>,
-  activeBlockingEdges: ActiveBlockingEdge[],
-) {
   const terminalPackageIds = terminalWorkPackageIds([detail], packageById);
-  const sliceItems = (detail.work_packages ?? []).flatMap((slice) =>
-    blockerAttentionItemsForSlice(detail, slice, packageForSlice(slice, packageById), activeBlockingEdges),
-  );
   const unmatchedEdges = activeBlockerEdgesForRequest(activeBlockingEdges, detail)
+    .filter(blockerIsActionable)
     .filter((blocker) => !terminalPackageIds.has(blockerTargetPackageId(blocker) ?? ""))
     .map((blocker) => attentionItemForBlockerSelection({ kind: "blocker", blocker, detail }))
-    .filter((item) => !sliceItems.some((candidate) => candidate.key === item.key));
-  const items = uniqueAttentionItems([...sliceItems, ...unmatchedEdges]);
-  return items.length > 0 ? items : [requestStatusAttentionItem(detail, "blocked")];
+    .filter((item) => !items.some((candidate) => candidate.key === item.key));
+  return uniqueAttentionItems([...items, ...clarificationItems, ...unmatchedEdges]);
 }
 
 function requestClarificationItems(detail: WorkRequestDetail, guidanceItems: GuidanceItem[]) {
@@ -256,7 +253,6 @@ function requestClarificationItems(detail: WorkRequestDetail, guidanceItems: Gui
 }
 
 function guidanceAttentionItemsForSlice(
-  detail: WorkRequestDetail,
   slice: WorkRequestPackage,
   pkg: WorkPackageCard | undefined,
   guidanceItems: GuidanceItem[],
@@ -266,8 +262,7 @@ function guidanceAttentionItemsForSlice(
   const guidance = guidanceItems
     .filter((item) => item.source === "guidance" && ids.has(item.packageId))
     .map(attentionItemForGuidance);
-  if (guidance.length > 0) return guidance;
-  return sliceNeedsGuidance(slice, pkg) ? [statusAttentionItem(detail, slice, pkg, "guidance")] : [];
+  return guidance;
 }
 
 function blockerAttentionItemsForSlice(
@@ -279,12 +274,13 @@ function blockerAttentionItemsForSlice(
   if (workPackageIsTerminal(slice, pkg)) return [];
   const ids = sliceIds(slice, pkg);
   const edges = activeBlockerEdgesForRequest(activeBlockingEdges, detail)
+    .filter(blockerIsActionable)
     .filter((candidate) => ids.has(blockerTargetPackageId(candidate) ?? ""))
     .map((blocker) => attentionItemForBlockerSelection({ kind: "blocker", blocker, detail, slice, pkg }));
   const edgeBlockerIds = new Set(edges.map((item) => item.selection.blocker.blocker_id).filter(Boolean));
   const embedded = pkg
     ? activePackageBlockers(pkg)
-        .filter((blocker) => !blocker.id || !edgeBlockerIds.has(blocker.id))
+        .filter((blocker) => Boolean(blocker.id && !edgeBlockerIds.has(blocker.id)))
         .map((blocker) => attentionItemForBlockerSelection({
           kind: "blocker",
           blocker: packageBlockerEdge(blocker, pkg, { detail, slice }),
@@ -293,87 +289,13 @@ function blockerAttentionItemsForSlice(
           pkg,
         }))
     : [];
-  const items = uniqueAttentionItems([...edges, ...embedded]);
-  if (items.length > 0) return items;
-  return sliceNeedsBlockerAttention(slice, pkg) ? [statusAttentionItem(detail, slice, pkg, "blocked")] : [];
+  return uniqueAttentionItems([...edges, ...embedded]);
 }
 
 const blockerTargetPackageId = (blocker: ActiveBlockingEdge) => blocker.to.kind === "work_package" && blocker.to.id ? blocker.to.id : blocker.work_package_id;
 
-function requestStatusFallback(detail: WorkRequestDetail, items: AttentionItem[], tone: AttentionItem["tone"]) {
-  if (items.some((item) => item.tone === tone)) return [];
-  const operational = detail.work_request.operational_state;
-  const status = firstText(operational?.key, detail.work_request.status);
-  const needed = tone === "guidance" ? statusIsGuidance(status) : status === "blocked";
-  return needed ? [requestStatusAttentionItem(detail, tone)] : [];
-}
-
-function requestStatusAttentionItem(detail: WorkRequestDetail, tone: AttentionItem["tone"]): AttentionItem {
-  const operational = detail.work_request.operational_state;
-  const projected = projectedAttentionItem(operational, tone);
-  const label = operational?.label || (tone === "guidance" ? "Human Info Needed" : "Blocked");
-  return {
-    kind: "status",
-    key: `status:${tone}:request:${detail.work_request.id}`,
-    label,
-    tone,
-    title: detail.work_request.title || detail.work_request.id,
-    detail: operational?.reason || missingAttentionDetail(tone),
-    preRun: statusAttentionIsPreRun(tone, projected, operational?.key, detail.work_request.status),
-    since: operational?.last_activity_at || detail.work_request.updated_at,
-    selection: { kind: "request", detail },
-  };
-}
-
-function statusAttentionItem(
-  detail: WorkRequestDetail,
-  slice: WorkRequestPackage,
-  pkg: WorkPackageCard | undefined,
-  tone: AttentionItem["tone"],
-): AttentionItem {
-  const operational = slice.operational_state ?? pkg?.operational_state;
-  const projected = projectedAttentionItem(operational, tone);
-  const label = firstText(projected?.label, operational?.label, statusFallbackLabel(tone, slice));
-  return {
-    kind: "status",
-    key: `status:${tone}:package:${firstText(pkg?.id, slice.work_package_id, slice.id)}`,
-    label,
-    tone,
-    title: firstText(slice.title, pkg?.title, label),
-    detail: firstText(projected?.reason, operational?.reason, missingAttentionDetail(tone)),
-    preRun: statusPreRunForSlice(tone, projected, operational, slice, pkg),
-    since: firstText(operational?.last_activity_at, slice.updated_at, pkg?.updated_at),
-    selection: { kind: "slice", detail, slice, pkg },
-  };
-}
-
-function projectedAttentionItem(operational: WorkPackageCard["operational_state"] | undefined, tone: AttentionItem["tone"]) {
-  const predicate = tone === "guidance" ? attentionItemIsGuidance : attentionItemIsBlocker;
-  return operational?.attention_items?.find(predicate);
-}
-
-function statusFallbackLabel(tone: AttentionItem["tone"], slice: WorkRequestPackage) {
-  return tone === "guidance" ? "Human Info Needed" : failedAttentionLabel(slice);
-}
-
-function statusAttentionIsPreRun(
-  tone: AttentionItem["tone"],
-  projected: ReturnType<typeof projectedAttentionItem>,
-  ...statuses: Array<string | null | undefined>
-) {
-  return tone === "guidance"
-    && !projected
-    && ["clarifying", "ready_for_clarification"].includes(firstText(...statuses));
-}
-
-function statusPreRunForSlice(
-  tone: AttentionItem["tone"],
-  projected: ReturnType<typeof projectedAttentionItem>,
-  operational: WorkPackageCard["operational_state"] | undefined,
-  slice: WorkRequestPackage,
-  pkg: WorkPackageCard | undefined,
-) {
-  return statusAttentionIsPreRun(tone, projected, operational?.key, slice.work_package_status, slice.status, pkg?.status);
+function blockerIsActionable(blocker: ActiveBlockingEdge) {
+  return Boolean(blocker.blocker_id && blockerTargetPackageId(blocker));
 }
 
 function attentionItemForGuidance(item: GuidanceItem): AttentionItem {
@@ -381,7 +303,7 @@ function attentionItemForGuidance(item: GuidanceItem): AttentionItem {
 }
 
 function attentionItemForBlocker(item: BlockerItem): AttentionItem {
-  if (item.selection.kind === "blocker") {
+  if (item.selection.kind === "blocker" && blockerIsActionable(item.selection.blocker)) {
     return { ...attentionItemForBlockerSelection(item.selection), key: `blocker:${item.id}` };
   }
   return {
@@ -424,54 +346,6 @@ function uniqueAttentionItems(items: AttentionItem[]) {
 
 function sortAttentionItems(items: AttentionItem[]) {
   return [...items].sort((left, right) => Number(left.tone !== "blocked") - Number(right.tone !== "blocked"));
-}
-
-function missingAttentionDetail(tone: AttentionItem["tone"]) {
-  return tone === "guidance"
-    ? "This item needs human input, but no question is attached yet."
-    : "This item is blocked, but no blocker detail is attached yet.";
-}
-
-function firstText(...values: Array<string | null | undefined>) {
-  return values.find((value): value is string => Boolean(value)) ?? "";
-}
-
-function failedAttentionLabel(slice: WorkRequestPackage) {
-  if (slice.review_signal?.status === "failed") return "Review Failed";
-  if (slice.pr_signal?.checks?.status === "failing") return "CI Failed";
-  return "Blocked";
-}
-
-function sliceNeedsBlockerAttention(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
-  const operational = slice.operational_state ?? pkg?.operational_state;
-  const statuses = [operational?.key, slice.work_package_status, slice.status, pkg?.status];
-  return [
-    reviewFailed(slice),
-    ciFailed(slice),
-    packageHasActiveBlocker(pkg),
-    statuses.includes("blocked"),
-    operationalAttentionIncludesBlocker(operational),
-  ].some(Boolean);
-}
-
-function sliceNeedsGuidance(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
-  const operationalStates = [slice.operational_state, pkg?.operational_state];
-  const statuses = [slice.work_package_status, slice.status, pkg?.status, ...operationalStates.map((state) => state?.key)];
-  return statuses.some(statusIsGuidance) || operationalStates.some((state) => (state?.attention_items ?? []).some(attentionItemIsGuidance));
-}
-
-function attentionItemIsBlocker(item: NonNullable<NonNullable<WorkPackageCard["operational_state"]>["attention_items"]>[number]) {
-  const text = `${item.key || ""} ${item.label || ""}`.toLowerCase();
-  return text.includes("blocker") || (item.blocker_ids?.length ?? 0) > 0;
-}
-
-function attentionItemIsGuidance(item: NonNullable<NonNullable<WorkPackageCard["operational_state"]>["attention_items"]>[number]) {
-  const text = `${item.key || ""} ${item.label || ""}`.toLowerCase();
-  return ["guidance", "question", "human_info", "decision"].some((value) => text.includes(value));
-}
-
-function statusIsGuidance(status?: string | null) {
-  return ["human_info_needed", "ready_for_clarification", "clarifying"].includes(status || "");
 }
 
 function sliceIds(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
@@ -546,22 +420,6 @@ function blockerAttentionLocation(selection: Extract<CardDetailSelection, { kind
     : linkedAttentionContext(details, ids);
   const fallbackRepo = selection.pkg ? repoDisplayName(selection.pkg) : undefined;
   return attentionLocation(selection.detail ?? context?.detail, selection.slice ?? context?.slice, selection.pkg, fallbackRepo);
-}
-
-function reviewFailed(slice: WorkRequestPackage) {
-  return slice.review_signal?.status === "failed";
-}
-
-function ciFailed(slice: WorkRequestPackage) {
-  return slice.pr_signal?.checks?.status === "failing";
-}
-
-function packageHasActiveBlocker(pkg?: WorkPackageCard) {
-  return (pkg?.active_blocker_count ?? 0) > 0 || activePackageBlockers(pkg).length > 0;
-}
-
-function operationalAttentionIncludesBlocker(operational?: WorkPackageCard["operational_state"]) {
-  return (operational?.attention_items ?? []).some(attentionItemIsBlocker);
 }
 
 function attentionRepo(request: WorkRequestDetail["work_request"] | undefined, pkg: WorkPackageCard | undefined, fallback: string) {

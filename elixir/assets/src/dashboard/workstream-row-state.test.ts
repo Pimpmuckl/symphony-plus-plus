@@ -4,8 +4,6 @@ import type { WorkRequestPackage, WorkPackageCard, WorkRequestDetail } from "@/t
 import {
   requestBoardState,
   requestStatusLabels,
-  sliceBlockerCount,
-  sliceGuidanceCount,
   statusBadgeWidthForLabels,
   statusBadgeWidthForRequestDetails,
 } from "./workstream-row-state";
@@ -47,7 +45,7 @@ describe("workstream row state", () => {
     expect(statusBadgeWidthForRequestDetails([detail], packageById)).toBe("9.2rem");
   });
 
-  it("uses guidance color for clarifying request rows", () => {
+  it("keeps clarification status visible without treating it as human guidance", () => {
     const detail: WorkRequestDetail = {
       work_request: {
         id: "wr-clarifying",
@@ -60,8 +58,9 @@ describe("workstream row state", () => {
     const state = requestBoardState(detail, new Map(), { blockerCount: 0, guidanceCount: 0 }, 0);
 
     expect(state.label).toBe("Clarifying");
-    expect(state.badgeVariant).toBe("guidance");
-    expect(state.tone).toBe("guidance");
+    expect(state.kind).toBe("waiting");
+    expect(state.badgeVariant).toBe("secondary");
+    expect(state.tone).toBe("muted");
   });
 
   it("uses ready color for ready request rows", () => {
@@ -201,38 +200,26 @@ describe("workstream row state", () => {
     expect(state.badgeVariant).toBe("success");
   });
 
-  it("does not attribute package-level blocker edges to sibling slice rows", () => {
-    const siblingSlice = plannedSlice("slice-sibling", "pkg-shared", "ready_for_worker", "Ready For Worker");
-    const packageOnlyBlockerCounts = new Map([["pkg-shared", 1]]);
+  it("keeps failed gates and status-only blockers out of red attention state", () => {
+    const reviewFailed = plannedSlice("slice-review", "pkg-review", "reviewing", "Reviewing");
+    reviewFailed.review_signal = { status: "failed" };
+    const blocked = plannedSlice("slice-blocked", "pkg-blocked", "blocked", "Blocked");
 
-    expect(sliceBlockerCount(siblingSlice, { id: "pkg-shared", status: "active" }, new Map())).toBe(0);
-    expect(sliceBlockerCount(siblingSlice, { id: "pkg-shared", status: "active" }, packageOnlyBlockerCounts)).toBe(0);
-    expect(sliceBlockerCount(siblingSlice, { id: "pkg-shared", status: "active", active_blocker_count: 1 }, new Map())).toBe(1);
-  });
+    const recovery = requestBoardState(
+      { work_request: { id: "wr-review", status: "sliced" }, work_packages: [reviewFailed] },
+      new Map(),
+      { blockerCount: 0, guidanceCount: 0 },
+      50,
+    );
+    const waiting = requestBoardState(
+      { work_request: { id: "wr-blocked", status: "sliced" }, work_packages: [blocked] },
+      new Map(),
+      { blockerCount: 0, guidanceCount: 0 },
+      50,
+    );
 
-  it("does not show delivery-board attention reasons as human guidance on slice rows", () => {
-    const closeoutSlice = plannedSlice("slice-closeout", "pkg-closeout", "dispatched", "Needs Closeout");
-    closeoutSlice.attention_reason_codes = ["terminal_package_without_delivery_outcome"];
-    closeoutSlice.operational_state = {
-      key: "needs_closeout",
-      label: "Needs Closeout",
-      attention_reason_codes: ["terminal_package_without_delivery_outcome"],
-      attention_items: [{ key: "terminal_package_without_delivery_outcome", label: "Missing Delivery Closeout", tone: "warning" }],
-    };
-
-    expect(sliceGuidanceCount(closeoutSlice, undefined)).toBe(0);
-  });
-
-  it("shows slice guidance only for actual human guidance signals", () => {
-    const questionSlice = plannedSlice("slice-question", "pkg-question", "active", "Active");
-    questionSlice.operational_state = {
-      key: "active",
-      label: "Active",
-      attention_items: [{ key: "clarification_question", label: "Clarification question", tone: "warning" }],
-    };
-
-    expect(sliceGuidanceCount(plannedSlice("slice-human", "pkg-human", "human_info_needed", "Human Info Needed"), undefined)).toBe(1);
-    expect(sliceGuidanceCount(questionSlice, undefined)).toBe(1);
+    expect(recovery).toMatchObject({ kind: "recovery", badgeVariant: "warning", tone: "review" });
+    expect(waiting).toMatchObject({ kind: "waiting", badgeVariant: "secondary", tone: "muted" });
   });
 
 });

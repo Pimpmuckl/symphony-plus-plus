@@ -4,12 +4,11 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { flushSync } from "react-dom";
 
 import { dashboardPrefersReducedMotion } from "@/components/dashboard/motion-utils";
-import { activeBlockerEntityCounts } from "./workstream-progress";
 import { buildFocusBoardItems, requestHasExecutionBoard, scrollFocusLane, type FocusBoardItem } from "./focus-board-data";
 import type { FocusFrontierVariant } from "./execution-graph/adapter";
 import { repoDisplayName, repoIdentityKey } from "./dashboard-persistence";
 import type { CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
-import type { AttentionJumpTarget, AttentionSelect } from "./workstream-attention";
+import { requestActionableAttentionCounts, type AttentionJumpTarget, type AttentionSelect } from "./workstream-attention";
 import { ProductRequestRow } from "./workstream-board";
 import { sortWorkRequestDetails } from "./workstream-data";
 
@@ -58,11 +57,14 @@ export function FocusBoard({
   updateAnimations: DashboardUpdateAnimations;
 }) {
   const packageById = useMemo(() => new Map(packages.map((pkg) => [pkg.id, pkg])), [packages]);
-  const blockerCounts = useMemo(
-    () => activeBlockerEntityCounts(activeBlockingEdges, details, packageById),
-    [activeBlockingEdges, details, packageById],
+  const attentionCounts = useMemo(
+    () => new Map(details.map((detail) => [
+      detail.work_request.id,
+      requestActionableAttentionCounts(detail, packageById, activeBlockingEdges, guidanceItems),
+    ])),
+    [activeBlockingEdges, details, guidanceItems, packageById],
   );
-  const items = useMemo(() => buildFocusBoardItems(sortWorkRequestDetails(details), now, packageById, blockerCounts.requests), [blockerCounts.requests, details, now, packageById]);
+  const items = useMemo(() => buildFocusBoardItems(sortWorkRequestDetails(details), now, packageById, attentionCounts), [attentionCounts, details, now, packageById]);
   const needsAttention = items.filter((item) => item.lane === "attention");
   const moving = items.filter((item) => item.lane === "active" || item.lane === "next");
   const shelfItems = [...needsAttention, ...moving];
@@ -103,8 +105,6 @@ export function FocusBoard({
       activeBlockingEdges={activeBlockingEdges}
       guidanceItems={guidanceItems}
       packageById={packageById}
-      activeBlockerCount={blockerCounts.requests.get(item.id) ?? 0}
-      activeBlockerCountBySliceId={blockerCounts.slices}
       expanded={false}
       focusSelected={selectedItem?.id === item.id}
       index={itemIndexById.get(item.id) ?? 0}
