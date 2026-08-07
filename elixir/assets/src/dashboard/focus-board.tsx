@@ -24,10 +24,10 @@ type WorkbenchMode = "frontier" | "full";
 type FocusBoardTransition = "close" | "open" | "swap";
 let activeFocusBoardTransition: ViewTransition | null = null;
 
-export function FocusBoardLoading({ openCount }: { openCount: number }) {
+export function FocusBoardLoading() {
   return (
     <section className="focus-board rounded-lg border bg-card text-card-foreground shadow-sm" aria-busy="true" aria-labelledby="focus-board-loading-title">
-      <FocusBoardHeader id="focus-board-loading-title" openCount={openCount} />
+      <FocusBoardHeader id="focus-board-loading-title" />
     </section>
   );
 }
@@ -159,10 +159,10 @@ export function FocusBoard({
   );
 }
 
-function FocusBoardHeader({ id, openCount }: { id: string; openCount: number }) {
+function FocusBoardHeader({ id, openCount }: { id: string; openCount?: number }) {
   return (
     <header className="focus-board__header">
-      <div><h2 id={id}>Focus Board</h2><span>{openCount} open across repositories</span></div>
+      <div><h2 id={id}>Focus Board</h2><span>{openCount === undefined ? "Loading latest activity…" : `${openCount} open across repositories`}</span></div>
       <strong>Experimental</strong>
     </header>
   );
