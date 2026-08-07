@@ -10,9 +10,11 @@ const { spawnSync } = require("child_process");
 
 const WARM_MISS = 42;
 const POWERSHELL_FALLBACK = 43;
-const BOARD_PATH = "/sympp/board";
-const MAX_DASHBOARD_REDIRECTS = 3;
 const GENERATION_SETTLE_MS = 100;
+const HEALTH_CACHE_TTL_MS = 10000;
+const EXTERNAL_HEALTH_CACHE_TTL_MS = 2000;
+const HEALTH_PROBE_TIMEOUT_MS = 10000;
+const HEALTH_COALESCE_TIMEOUT_MS = 30000;
 const CLEANUP_SOURCE_CHANGED = Symbol("cleanup_source_changed");
 const synchronousWait = new Int32Array(new SharedArrayBuffer(4));
 const agent = new http.Agent({ keepAlive: true });
@@ -99,11 +101,12 @@ function livenessMatches(pid, pipe, token) {
   if (!pipe || !token || !processAlive(pid)) return false;
   if (Number(pid) === process.pid) return pipe === livenessPipe && token === livenessToken;
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    try { return fs.readFileSync(pipe, "utf8") === token; } catch (_) {
+    try { return fs.readFileSync(pipe, "utf8") === token; } catch (error) {
+      if (["ENOENT", "ENXIO"].includes(error.code)) return false;
       if (attempt < 4) Atomics.wait(synchronousWait, 0, 0, 10);
     }
   }
-  return false;
+  return true;
 }
 
 function closeLivenessProbe() {
@@ -122,6 +125,7 @@ function tryAcquireProcessLock(lockFile) {
     fs.fsyncSync(fd);
     return { fd, lockId };
   } catch (error) {
+    if (["EACCES", "EBUSY", "EPERM"].includes(error.code)) return null;
     if (error.code !== "EEXIST") throw error;
     const owner = readJson(lockFile);
     const ownerValid = owner && owner.lock_id && owner.owner_pipe && owner.owner_token && Number(owner.owner_pid) > 0;
@@ -313,8 +317,17 @@ function prepareCleanupScript(identity) {
       let marketplaceHash;
       try { marketplaceHash = sha256(fs.readFileSync(path.join(marketplaceScripts, name))); } catch (_) { return CLEANUP_SOURCE_CHANGED; }
       if (sourceHash !== marketplaceHash) return CLEANUP_SOURCE_CHANGED;
-      try { fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL); } catch (error) {
-        if (error.code !== "EEXIST") throw error;
+      if (!fs.existsSync(destination)) {
+        const temporary = `${destination}.${process.pid}.${crypto.randomUUID()}.tmp`;
+        try {
+          fs.copyFileSync(source, temporary, fs.constants.COPYFILE_EXCL);
+          if (sha256(fs.readFileSync(temporary)) !== sourceHash) return null;
+          try { fs.renameSync(temporary, destination); } catch (error) {
+            if (!["EACCES", "EEXIST", "EPERM"].includes(error.code)) throw error;
+          }
+        } finally {
+          try { fs.unlinkSync(temporary); } catch (_) { }
+        }
       }
       if (sha256(fs.readFileSync(destination)) !== sourceHash) return null;
     }
@@ -336,7 +349,6 @@ async function generationValidAtAttachment(identity) {
   await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
   const confirmed = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
   const valid = generationValidForAttachment(identity) && generation === identity.generationKey && confirmed === identity.generationKey;
-  closeGenerationWatchers();
   trace("generation_attach_full_validation");
   return valid;
 }
@@ -416,20 +428,6 @@ function request(urlString, method, body, headers, timeoutMs) {
   });
 }
 
-async function requestDashboard(urlString, redirects = 0, visited = new Set()) {
-  let url;
-  try { url = new URL(urlString); } catch (_) { return null; }
-  if (!loopbackOrigin(url.origin) || visited.has(url.href)) return null;
-  visited.add(url.href);
-  const response = await request(url, "GET", null, {}, 2000);
-  if (![301, 302, 303, 307, 308].includes(response.status)) return response;
-  if (redirects >= MAX_DASHBOARD_REDIRECTS || !response.headers.location) return null;
-  let target;
-  try { target = new URL(response.headers.location, url); } catch (_) { return null; }
-  if (target.username || target.password || !loopbackOrigin(target.origin)) return null;
-  return requestDashboard(target.href, redirects + 1, visited);
-}
-
 function responseLines(response) {
   const content = response.body.trim();
   if (!content) return [];
@@ -465,29 +463,28 @@ function protocolFrom(lines) {
   return null;
 }
 
-async function backendHealth(origin, requireDashboard = true) {
+async function backendHealth(origin) {
   try {
     const mcpUrl = `${trimOrigin(origin)}/mcp`;
-    const response = await request(`${trimOrigin(origin)}/mcp/readiness`, "GET", null, { Accept: "application/json" }, 2000);
+    const response = await request(`${trimOrigin(origin)}/mcp/readiness`, "GET", null, { Accept: "application/json" }, HEALTH_PROBE_TIMEOUT_MS);
     if (response.status === 404) return legacyBackendHealth(mcpUrl);
     if (response.status < 200 || response.status >= 300 || !response.body) return null;
     const readiness = JSON.parse(response.body);
     const contract = String((readiness.source && readiness.source.mcp_contract && readiness.source.mcp_contract.fingerprint) || "").toLowerCase();
-    const dashboardReady = readiness.dashboard && readiness.dashboard.ready === true;
-    const healthy = readiness.status === "ok" && readiness.ledger && readiness.ledger.reachable === true && (!requireDashboard || dashboardReady);
-    return { healthy, contract };
-  } catch (_) {
-    return null;
+    const healthy = readiness.status === "ok" && readiness.ledger && readiness.ledger.reachable === true;
+    return { healthy, contract, retryable: false };
+  } catch (error) {
+    return { healthy: false, contract: "", retryable: /timed out/i.test(String(error && error.message)) };
   }
 }
 
 async function legacyBackendHealth(mcpUrl) {
-  const initialized = await mcpPost(mcpUrl, initializeBody(), null, null, 2000);
+  const initialized = await mcpPost(mcpUrl, initializeBody(), null, null, HEALTH_PROBE_TIMEOUT_MS);
   const session = initialized.headers["mcp-session-id"];
   if (!initialized.ok || !session) return null;
   const protocol = protocolFrom(initialized.lines) || "2025-03-26";
   const body = JSON.stringify({ jsonrpc: "2.0", id: "sympp-plugin-launcher-health", method: "tools/call", params: { name: "sympp.health", arguments: {} } });
-  const health = await mcpPost(mcpUrl, body, session, protocol, 2000);
+  const health = await mcpPost(mcpUrl, body, session, protocol, HEALTH_PROBE_TIMEOUT_MS);
   if (!health.ok || !health.lines.length) return null;
   const payload = JSON.parse(health.lines[0]);
   const structured = payload.result && payload.result.structuredContent;
@@ -497,60 +494,57 @@ async function legacyBackendHealth(mcpUrl) {
 }
 
 function healthCacheMatches(cache, state, identity) {
+  const backendPid = Number(state.backend.pid);
+  const ttl = backendPid > 0 ? HEALTH_CACHE_TTL_MS : EXTERNAL_HEALTH_CACHE_TTL_MS;
   return !!cache && cache.runtime_key === identity.runtimeKey &&
-    Number(cache.backend_pid) === Number(state.backend.pid) && cache.contract === identity.contract &&
-    Date.now() - Number(cache.validated_at_ms) <= 2000;
+    Number(cache.backend_pid) === backendPid && cache.contract === identity.contract &&
+    Date.now() - Number(cache.validated_at_ms) <= ttl;
 }
 
-async function ensureRuntimeHealth(runtimeFile, state, identity) {
+async function ensureRuntimeHealth(runtimeFile, state, identity, clientId) {
   const cacheFile = path.join(path.dirname(runtimeFile), "codex-plugin-health.json");
   const lockFile = `${cacheFile}.lock`;
-  if (healthCacheMatches(readJson(cacheFile), state, identity)) return true;
-  const deadline = Date.now() + 15000;
+  if (healthCacheMatches(readJson(cacheFile), state, identity)) return { healthy: true, attachedResponse: null };
+  const deadline = Date.now() + HEALTH_COALESCE_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const lock = tryAcquireProcessLock(lockFile);
     if (lock !== null) {
+      let attachedResponse = null;
       try {
-        if (healthCacheMatches(readJson(cacheFile), state, identity)) return true;
-        const health = await backendHealth(identity.backend, !identity.headless);
-        if (!health || !health.healthy || health.contract !== identity.contract) return false;
-        const temporary = `${cacheFile}.${process.pid}.tmp`;
-        fs.writeFileSync(temporary, `${JSON.stringify({ runtime_key: identity.runtimeKey, backend_pid: Number(state.backend.pid), contract: identity.contract, validated_at_ms: Date.now() })}\n`);
-        try { fs.unlinkSync(cacheFile); } catch (_) { }
-        fs.renameSync(temporary, cacheFile);
-        return true;
+        if (healthCacheMatches(readJson(cacheFile), state, identity)) return { healthy: true, attachedResponse: null };
+        try {
+          attachedResponse = await clientLease(`${identity.backend}/mcp`, clientId, "attach", true);
+        } catch (_) {
+          return { healthy: false, attachedResponse: null };
+        }
+        while (Date.now() < deadline) {
+          const health = await backendHealth(identity.backend);
+          if (health && health.contract === identity.contract && health.healthy) {
+            const temporary = `${cacheFile}.${process.pid}.tmp`;
+            fs.writeFileSync(temporary, `${JSON.stringify({ runtime_key: identity.runtimeKey, backend_pid: Number(state.backend.pid), contract: identity.contract, validated_at_ms: Date.now() })}\n`);
+            try { fs.unlinkSync(cacheFile); } catch (_) { }
+            fs.renameSync(temporary, cacheFile);
+            return { healthy: true, attachedResponse };
+          }
+          if (!health || !health.retryable) return { healthy: false, attachedResponse };
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return { healthy: false, attachedResponse };
+      } catch (_) {
+        return { healthy: false, attachedResponse };
       } finally {
         releaseProcessLock(lockFile, lock);
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
-    if (healthCacheMatches(readJson(cacheFile), state, identity)) return true;
+    if (healthCacheMatches(readJson(cacheFile), state, identity)) return { healthy: true, attachedResponse: null };
   }
-  return false;
-}
-
-async function preflightRuntimeHealth(runtimeFile, state, identity) {
-  const cacheFile = path.join(path.dirname(runtimeFile), "codex-plugin-health.json");
-  if (healthCacheMatches(readJson(cacheFile), state, identity)) return true;
-  return ensureRuntimeHealth(runtimeFile, state, identity);
-}
-
-async function dashboardHealthy(identity) {
-  if (identity.headless) return true;
-  try {
-    const response = await requestDashboard(`${identity.dashboard}${BOARD_PATH}`);
-    if (!response || response.status < 200 || response.status >= 300 || !response.body.includes("Symphony++ Dashboard")) return false;
-    if (identity.dashboard === identity.backend) return true;
-    const health = await backendHealth(identity.dashboard);
-    return !!health && health.healthy && health.contract === identity.contract;
-  } catch (_) {
-    return false;
-  }
+  return { healthy: false, attachedResponse: null };
 }
 
 async function clientLease(mcpUrl, clientId, action, required) {
   try {
-    const response = await request(`${trimOrigin(mcpUrl)}/client-lease`, "POST", JSON.stringify({ client_id: clientId, action }), { "Content-Type": "application/json" }, 2000);
+    const response = await request(`${trimOrigin(mcpUrl)}/client-lease`, "POST", JSON.stringify({ client_id: clientId, action }), { "Content-Type": "application/json" }, required ? HEALTH_PROBE_TIMEOUT_MS : 2000);
     if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
     return response.body ? JSON.parse(response.body) : {};
   } catch (error) {
@@ -642,22 +636,17 @@ async function bridge(identity, state, runtimeFile) {
       return false;
     }
     localLease = createLocalLease(runtimeFile, state, identity);
-    let attachedResponse;
-    try {
-      attachedResponse = await clientLease(mcpUrl, clientId, "attach", true);
-      attached = true;
-    } catch (_) {
-      trace("warm_miss_backend");
-      return false;
-    }
-    if (!generationValidForAttachment(identity)) return false;
     const confirmedState = readJson(runtimeFile);
     const confirmed = resolveStateIdentity(confirmedState, path.resolve(__dirname, ".."), identity);
     if (!confirmed || confirmed.runtimeKey.toLowerCase() !== identity.runtimeKey.toLowerCase()) {
       trace("warm_miss_state");
       return false;
     }
-    if (!await preflightRuntimeHealth(runtimeFile, confirmedState, confirmed)) {
+    const preflight = await ensureRuntimeHealth(runtimeFile, confirmedState, confirmed, clientId);
+    if (preflight.attachedResponse) {
+      attached = true;
+    }
+    if (!preflight.healthy) {
       trace("warm_miss_health");
       return false;
     }
@@ -665,6 +654,18 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_generation");
       return false;
     }
+    let attachedResponse = preflight.attachedResponse;
+    if (!attachedResponse) {
+      try {
+        attachedResponse = await clientLease(mcpUrl, clientId, "attach", true);
+        attached = true;
+      } catch (_) {
+        trace("warm_miss_backend");
+        return false;
+      }
+    }
+    if (!generationValidForAttachment(identity)) return false;
+    closeGenerationWatchers();
     trace("generation_attach_handles_released");
     fs.closeSync(startupLock);
     startupLock = null;
@@ -673,7 +674,7 @@ async function bridge(identity, state, runtimeFile) {
     const heartbeatMs = stale > 1000 ? Math.min(requestedHeartbeat, Math.max(1000, stale - Math.min(60000, Math.max(1000, Math.floor(stale / 10))))) : requestedHeartbeat;
     heartbeat = setInterval(() => { clientLease(mcpUrl, clientId, "heartbeat", false); }, heartbeatMs);
     trace("node_bridge_selected");
-    diagnostic(`Symphony++ MCP bridge attached: backend=${confirmed.backend} dashboard=${confirmed.dashboard ? confirmed.dashboard + BOARD_PATH : "disabled"} runtime=${runtimeFile}`);
+    diagnostic(`Symphony++ MCP bridge attached: backend=${confirmed.backend} dashboard=${confirmed.dashboard ? confirmed.dashboard + "/sympp/board" : "disabled"} runtime=${runtimeFile}`);
 
     const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
     for await (const line of input) {
@@ -734,7 +735,6 @@ async function main() {
   const identity = resolveStateIdentity(state, pluginRoot, cachedIdentity);
   if (!identity) { trace("warm_miss_state"); process.exit(WARM_MISS); }
   trace("generation_identity_resolved");
-  if (!await dashboardHealthy(identity)) { trace("warm_miss_dashboard"); process.exit(WARM_MISS); }
   if (!await bridge(identity, state, runtimeFile)) process.exit(WARM_MISS);
 }
 
@@ -744,5 +744,5 @@ if (require.main === module) {
     process.exit(1);
   });
 } else {
-  module.exports = { dashboardHealthy, generationFromMarker, generationKey, resolveStateIdentity };
+  module.exports = { generationFromMarker, generationKey, resolveStateIdentity };
 }
