@@ -36,7 +36,7 @@ foreach ($name in @(
 foreach ($name in @("Get-SymppArtifactDirectoryFingerprint", "Test-SymppArtifactDashboardReady", "Remove-SymppArtifactExtractionStaging", "Expand-SymppArtifactArchive", "Test-ArtifactBackendProvidesDashboard")) {
   Import-ScriptFunction $artifactRuntimePath $name
 }
-foreach ($name in @("Get-PathIdentity", "Test-SamePath", "Test-SameDatabasePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Get-BetaGitWorktrees", "Initialize-BetaWorktree", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Get-BetaCodexArguments", "Assert-BetaRuntimeIdentity", "Test-BetaRuntimeProcessRunning")) {
+foreach ($name in @("Get-PathIdentity", "Test-SamePath", "Test-SameDatabasePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Invoke-BetaGitNullPaths", "Get-BetaGitWorktrees", "Assert-BetaWorktreeIdentity", "Initialize-BetaWorktree", "Assert-BetaPackageSource", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Get-BetaCodexArguments", "Assert-BetaRuntimeIdentity", "Test-BetaRuntimeProcessRunning")) {
   Import-ScriptFunction $betaPath $name
 }
 function script:git { Write-Error "normal git progress"; $script:LASTEXITCODE = 0; "ok" }
@@ -182,6 +182,8 @@ $betaRoot = Join-Path $PSScriptRoot (".beta-bootstrap-" + [guid]::NewGuid().ToSt
 try {
   $betaSource = Get-Content -LiteralPath $betaPath -Raw
   Assert-True ($betaSource.Contains('"Validate" { Test-BetaBootstrap $config }')) "Beta bootstrap must expose its declared validation action"
+  Assert-True ([regex]::Matches($betaSource, 'Initialize-BetaWorktree \$config').Count -eq 2) "Only explicit setup and package actions may fetch or update Git"
+  Assert-True ([regex]::Matches($betaSource, 'Assert-BetaWorktreeIdentity \$config').Count -eq 3) "Runtime actions must verify beta worktree identity"
   Assert-True ($betaSource.Contains('"--dereference"') -and $betaSource.Contains('"-L" "-f"')) "Unix database identity checks must dereference symbolic links"
   Assert-True ($betaSource.Contains('[void](Get-BetaRuntimeState $Config)')) "Beta start must validate existing runtime identity before preparation"
   Assert-True ($betaSource -match '(?s)"Codex"\s*\{.*?Start-BetaRuntime \$config\s*Invoke-WithBetaEnvironment' -and $betaSource -notmatch '(?s)"Codex"\s*\{.*?Install-BetaPlugin') "Source Codex must start through normal authentication without package refresh"
@@ -221,6 +223,44 @@ try {
   & git -C $sourceRepo push origin HEAD:beta | Out-Null
   Initialize-BetaWorktree $betaConfig
   Assert-True ((& git -C $betaWorktree rev-parse HEAD) -eq (& git -C $betaWorktree rev-parse origin/beta)) "Clean beta setup must fast-forward to origin/beta"
+  Set-Content -LiteralPath (Join-Path $betaWorktree "untracked.txt") -Value "preserve me" -NoNewline
+  Initialize-BetaWorktree $betaConfig
+  Assert-True ((Get-Content -LiteralPath (Join-Path $betaWorktree "untracked.txt") -Raw) -eq "preserve me") "Beta setup must preserve harmless untracked files"
+  $fixturePluginScripts = Join-Path $betaWorktree "plugins/symphony-plus-plus-mcp/scripts"
+  New-Item -ItemType Directory -Path $fixturePluginScripts -Force | Out-Null
+  Set-Content -LiteralPath (Join-Path $fixturePluginScripts "scratch.ps1") -Value "scratch" -NoNewline
+  $packageRejected = $false
+  try { Assert-BetaPackageSource $betaConfig } catch { $packageRejected = $true }
+  Assert-True $packageRejected "Beta packaging must reject untracked source inputs"
+  Remove-Item -LiteralPath (Join-Path $fixturePluginScripts "scratch.ps1") -Force
+  Set-Content -LiteralPath (& git -C $betaWorktree rev-parse --git-path info/exclude) -Value "*.local"
+  Set-Content -LiteralPath (Join-Path $fixturePluginScripts "scratch.local") -Value "ignored" -NoNewline
+  $ignoredPackageRejected = $false
+  try { Assert-BetaPackageSource $betaConfig } catch { $ignoredPackageRejected = $true }
+  Assert-True $ignoredPackageRejected "Beta packaging must reject ignored plugin inputs"
+  Remove-Item -LiteralPath (Join-Path $betaWorktree "plugins") -Recurse -Force
+  Set-Content -LiteralPath (Join-Path $betaWorktree "incoming.local") -Value "preserve me" -NoNewline
+  Set-Content -LiteralPath (Join-Path $sourceRepo "incoming.local") -Value "remote" -NoNewline
+  & git -C $sourceRepo add -f incoming.local
+  & git -C $sourceRepo commit -m "remote ignored collision" | Out-Null
+  & git -C $sourceRepo push origin HEAD:beta | Out-Null
+  $collisionRejected = $false
+  try { Initialize-BetaWorktree $betaConfig } catch { $collisionRejected = $true }
+  Assert-True ($collisionRejected -and (Get-Content -LiteralPath (Join-Path $betaWorktree "incoming.local") -Raw) -eq "preserve me") "Beta setup must not overwrite ignored local files"
+  Remove-Item -LiteralPath (Join-Path $betaWorktree "incoming.local") -Force
+  Initialize-BetaWorktree $betaConfig
+  $ignoredDirectory = Join-Path $betaWorktree "dír.local"
+  New-Item -ItemType Directory -Path $ignoredDirectory | Out-Null
+  Set-Content -LiteralPath (Join-Path $ignoredDirectory "item") -Value "preserve me" -NoNewline
+  Set-Content -LiteralPath (Join-Path $sourceRepo "dír.local") -Value "remote" -NoNewline
+  & git -C $sourceRepo add -f "dír.local"
+  & git -C $sourceRepo commit -m "remote ignored directory collision" | Out-Null
+  & git -C $sourceRepo push origin HEAD:beta | Out-Null
+  $directoryCollisionRejected = $false
+  try { Initialize-BetaWorktree $betaConfig } catch { $directoryCollisionRejected = $true }
+  Assert-True ($directoryCollisionRejected -and (Get-Content -LiteralPath (Join-Path $ignoredDirectory "item") -Raw) -eq "preserve me") "Beta setup must not replace ignored local directories"
+  Remove-Item -LiteralPath $ignoredDirectory -Recurse -Force
+  Initialize-BetaWorktree $betaConfig
   Set-Content -LiteralPath (Join-Path $betaWorktree "README.md") -Value "dirty state" -NoNewline
   $dirtyRejected = $false
   try { Initialize-BetaWorktree $betaConfig } catch { $dirtyRejected = $true }

@@ -42,9 +42,15 @@ backend.
 
 ## Isolated Beta Development
 
-From the stable `main` checkout, this one command creates or reuses the fixed
-adjacent `symphony-plus-plus-beta` worktree, starts the isolated source runtime,
-and opens Codex with the normal authenticated Codex home:
+From the stable `main` checkout, explicitly create or update the fixed adjacent
+`symphony-plus-plus-beta` worktree:
+
+```powershell
+pwsh -NoProfile -File .\scripts\sympp-beta.ps1 -Action Setup
+```
+
+Then start the isolated source runtime and open Codex with the normal
+authenticated Codex home:
 
 ```powershell
 pwsh -NoProfile -File .\scripts\sympp-beta.ps1 -Action Codex
@@ -70,6 +76,11 @@ beta-only runtime control. Vite owns frontend hot reload. `Restart` restarts
 only the source cockpit; the existing bridge reinitializes its MCP session when
 the backend returns. Open a fresh beta Codex thread when an MCP tool schema
 changes because tool discovery happens at thread startup.
+
+Runtime-control actions use the existing beta checkout as-is. They do not fetch
+or update Git. Run `-Action Setup` when you want to synchronize with
+`origin/beta`; it preserves untracked files and refuses tracked local changes or
+local commits that are not on `origin/beta`.
 
 Run `-Action Validate` for the declared launcher and environment check without
 starting or stopping either runtime. `-Action Package` refreshes and validates
