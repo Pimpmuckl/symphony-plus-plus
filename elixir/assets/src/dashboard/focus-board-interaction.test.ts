@@ -19,7 +19,7 @@ beforeAll(async () => {
   await server.listen();
   url = server.resolvedUrls!.local[0];
   browser = await chromium.launch({ executablePath: browserExecutablePath() });
-}, 20_000);
+}, 45_000);
 
 afterAll(async () => {
   await browser?.close();
