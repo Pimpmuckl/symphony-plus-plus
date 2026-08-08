@@ -153,15 +153,20 @@ try {
   Remove-Item -LiteralPath $artifactTemp -Recurse -Force -ErrorAction SilentlyContinue
 }
 & (Get-Command node.exe -ErrorAction Stop).Source --check $nodePath
-Assert-True ($LASTEXITCODE -eq 0) "Node bridge must parse"
+$nodeExitCode = $LASTEXITCODE
+Assert-True ($nodeExitCode -eq 0) "Node bridge must parse"
 & (Get-Command node.exe -ErrorAction Stop).Source $nodePath --runtime-supported
-Assert-True ($LASTEXITCODE -eq 0) "Current Node runtime must satisfy the conservative bridge check"
+$nodeExitCode = $LASTEXITCODE
+Assert-True ($nodeExitCode -eq 0) "Current Node runtime must satisfy the conservative bridge check"
 & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "state-identity-tests.js")
-Assert-True ($LASTEXITCODE -eq 0) "Node state identity tests must pass"
+$nodeExitCode = $LASTEXITCODE
+Assert-True ($nodeExitCode -eq 0) "Node state identity tests must pass"
 & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "dashboard-health-tests.js")
-Assert-True ($LASTEXITCODE -eq 0) "Node dashboard health tests must pass"
+$nodeExitCode = $LASTEXITCODE
+Assert-True ($nodeExitCode -eq 0) "Node dashboard health tests must pass"
 & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "bridge-response-forwarding-tests.js")
-Assert-True ($LASTEXITCODE -eq 0) "Node bridge response forwarding test must pass"
+$nodeExitCode = $LASTEXITCODE
+Assert-True ($nodeExitCode -eq 0) "Node bridge response forwarding test must pass"
 $artifactCommandTemp = Join-Path $PSScriptRoot (".artifact-command-" + [guid]::NewGuid().ToString("N"))
 try {
   $artifactRoot = Join-Path $artifactCommandTemp "artifact & command"
