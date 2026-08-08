@@ -234,6 +234,56 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
     end
   end
 
+  if match?({:win32, _}, :os.type()) do
+    @tag skip: "System.cmd cannot execute the shell wrapper directly on Windows"
+  end
+
+  test "delivery closeout retries proof-gated cleanup after partial worktree removal", %{repo: repo} do
+    {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_merge")
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-closeout-cleanup-retry")
+    codex_home = Path.join(fixture.root, "codex-home")
+    fake_bin = Path.join(fixture.root, "fake-bin")
+    marker = Path.join(fixture.root, "failed-once")
+    real_git = System.find_executable("git") || flunk("git is required")
+    previous_env = Map.new(["CODEX_HOME", "PATH", "SYMPP_REAL_GIT", "SYMPP_FAIL_ONCE_MARKER"], &{&1, System.get_env(&1)})
+
+    try do
+      install_fail_once_git!(fake_bin)
+
+      System.put_env(%{
+        "CODEX_HOME" => codex_home,
+        "PATH" => TestSupport.path_with_prepended(fake_bin, System.get_env("PATH")),
+        "SYMPP_REAL_GIT" => real_git,
+        "SYMPP_FAIL_ONCE_MARKER" => marker
+      })
+
+      assert {:ok, prepared} =
+               WorktreeLifecycle.prepare(repo, linked_package.id, %{
+                 "repo_root" => fixture.repo_root,
+                 "base_branch" => linked_package.base_branch,
+                 "branch" => "fix/closeout-cleanup-retry"
+               })
+
+      attrs =
+        delivery_attrs(%{
+          outcome: "pr_merged",
+          idempotency_key: "delivery-pr-merged-cleanup-retry",
+          pr_url: "https://github.com/nextide/symphony-plus-plus/pull/457",
+          pr_merged_at: ~U[2026-05-24 12:59:00.000000Z],
+          merge_commit_sha: "abc457"
+        })
+
+      assert {:ok, _delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
+      assert File.exists?(marker)
+      refute File.exists?(prepared.worktree_path)
+      assert repo.get!(WorkPackage, linked_package.id).worktree_path == nil
+      refute Enum.any?(repo.all(ProgressEvent), &(&1.status == "worktree_cleanup_failed"))
+    after
+      Enum.each(previous_env, fn {key, value} -> restore_env(key, value) end)
+      WorktreeLifecycle.cleanup(repo, linked_package.id, codex_home: codex_home)
+    end
+  end
+
   test "terminal dispatch retirement completes deferred delivery worktree cleanup", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_worker")
     fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-closeout-active-runner")
@@ -1217,6 +1267,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
 
   defp restore_env(key, nil), do: System.delete_env(key)
   defp restore_env(key, value), do: System.put_env(key, value)
+
+  defp install_fail_once_git!(bin_dir) do
+    File.mkdir_p!(bin_dir)
+    path = Path.join(bin_dir, "git")
+
+    File.write!(
+      path,
+      """
+      #!/bin/sh
+      if [ "$3" = "worktree" ] && [ "$4" = "remove" ] && [ ! -e "$SYMPP_FAIL_ONCE_MARKER" ]; then
+        : > "$SYMPP_FAIL_ONCE_MARKER"
+        "$SYMPP_REAL_GIT" "$@" || exit $?
+        exit 17
+      fi
+      exec "$SYMPP_REAL_GIT" "$@"
+      """
+    )
+
+    File.chmod!(path, 0o755)
+  end
 
   defp assert_eventually(fun, attempts \\ 40)
   defp assert_eventually(_fun, 0), do: flunk("condition was not met before timeout")

@@ -169,6 +169,30 @@ function Invoke-BetaGit([string]$Root, [string[]]$Arguments) {
   return $output
 }
 
+function Invoke-BetaGitNullPaths([string]$Root, [string[]]$Arguments) {
+  $git = Get-Command git -ErrorAction Stop | Select-Object -First 1
+  $info = [System.Diagnostics.ProcessStartInfo]::new()
+  $info.FileName = $git.Source
+  $info.UseShellExecute = $false
+  $info.RedirectStandardOutput = $true
+  $info.RedirectStandardError = $true
+  foreach ($argument in @("-C", $Root) + $Arguments) { [void]$info.ArgumentList.Add($argument) }
+  $process = [System.Diagnostics.Process]::new()
+  $process.StartInfo = $info
+  try {
+    if (-not $process.Start()) { throw "Could not start Git." }
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $output = $stdout.GetAwaiter().GetResult()
+    $errorOutput = $stderr.GetAwaiter().GetResult()
+    if ($process.ExitCode -ne 0) { throw "git -C '$Root' $($Arguments -join ' ') failed: $errorOutput" }
+    return @($output.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries))
+  } finally {
+    $process.Dispose()
+  }
+}
+
 function Get-BetaGitWorktrees([string]$Root) {
   $result = @()
   $current = $null
@@ -182,6 +206,20 @@ function Get-BetaGitWorktrees([string]$Root) {
   }
   if ($current) { $result += [pscustomobject]$current }
   return $result
+}
+
+function Assert-BetaWorktreeIdentity($Config) {
+  [void](Invoke-BetaGit $Config.repo_root @("rev-parse", "--show-toplevel"))
+  $target = @(
+    Get-BetaGitWorktrees $Config.repo_root |
+      Where-Object { Test-SamePath $_.path $Config.worktree }
+  ) | Select-Object -First 1
+  if (-not $target -or $target.branch -ne "refs/heads/beta") {
+    throw "Beta runtime requires the registered beta worktree at $($Config.worktree). Run -Action Setup first."
+  }
+  $remote = @(Invoke-BetaGit $Config.worktree @("config", "--get", "branch.beta.remote")) | Select-Object -First 1
+  $merge = @(Invoke-BetaGit $Config.worktree @("config", "--get", "branch.beta.merge")) | Select-Object -First 1
+  if ($remote -ne "origin" -or $merge -ne "refs/heads/beta") { throw "Beta branch is not tracking origin/beta." }
 }
 
 function Initialize-BetaWorktree($Config) {
@@ -206,16 +244,47 @@ function Initialize-BetaWorktree($Config) {
   }
 
   [void](Invoke-BetaGit $Config.worktree @("branch", "--set-upstream-to=origin/beta", "beta"))
-  $remote = @(Invoke-BetaGit $Config.worktree @("config", "--get", "branch.beta.remote")) | Select-Object -First 1
-  $merge = @(Invoke-BetaGit $Config.worktree @("config", "--get", "branch.beta.merge")) | Select-Object -First 1
-  if ($remote -ne "origin" -or $merge -ne "refs/heads/beta") { throw "Beta branch is not tracking origin/beta." }
+  Assert-BetaWorktreeIdentity $Config
 
-  if (@(Invoke-BetaGit $Config.worktree @("status", "--porcelain")).Count -gt 0) {
+  if (@(Invoke-BetaGit $Config.worktree @("status", "--porcelain", "--untracked-files=no")).Count -gt 0) {
     throw "Refusing to update dirty beta worktree: $($Config.worktree)"
   }
   $counts = ((@(Invoke-BetaGit $Config.worktree @("rev-list", "--left-right", "--count", "HEAD...origin/beta")) | Select-Object -First 1) -split "\s+")
   if ([int]$counts[0] -gt 0) { throw "Refusing to update beta because local commits are not on origin/beta." }
-  if ([int]$counts[1] -gt 0) { [void](Invoke-BetaGit $Config.worktree @("merge", "--ff-only", "origin/beta")) }
+  if ([int]$counts[1] -gt 0) {
+    $incoming = @(Invoke-BetaGitNullPaths $Config.worktree @("diff", "--name-only", "-z", "HEAD..origin/beta"))
+    $local = @(
+      Invoke-BetaGitNullPaths $Config.worktree @("ls-files", "-z", "--others", "--exclude-standard")
+      Invoke-BetaGitNullPaths $Config.worktree @("ls-files", "-z", "--others", "--ignored", "--exclude-standard")
+    )
+    $comparison = if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+      [System.StringComparison]::OrdinalIgnoreCase
+    } else {
+      [System.StringComparison]::Ordinal
+    }
+    $conflicts = @(
+      foreach ($localPath in $local) {
+        foreach ($incomingPath in $incoming) {
+          if ($localPath.Equals($incomingPath, $comparison) -or
+              $localPath.StartsWith($incomingPath + "/", $comparison) -or
+              $incomingPath.StartsWith($localPath + "/", $comparison)) {
+            $localPath
+            break
+          }
+        }
+      }
+    )
+    if ($conflicts.Count -gt 0) { throw "Refusing to overwrite local files during beta update: $($conflicts -join ', ')" }
+    [void](Invoke-BetaGit $Config.worktree @("merge", "--ff-only", "origin/beta"))
+  }
+}
+
+function Assert-BetaPackageSource($Config) {
+  $untracked = @(
+    Invoke-BetaGit $Config.worktree @("ls-files", "--others", "--exclude-standard", "--", "elixir", "plugins", "scripts")
+    Invoke-BetaGit $Config.worktree @("ls-files", "--others", "--ignored", "--exclude-standard", "--", "plugins/symphony-plus-plus-mcp")
+  )
+  if ($untracked.Count -gt 0) { throw "Refusing to package untracked source files: $($untracked -join ', ')" }
 }
 
 function Get-BetaEnvironment($Config, [switch]$Package) {
@@ -259,7 +328,12 @@ function Invoke-WithBetaEnvironment($Config, [scriptblock]$Command, [switch]$Pac
 
 function Get-BetaCodexArguments($Config, [string]$SessionId) {
   $pluginRoot = (Join-Path $Config.worktree "plugins/symphony-plus-plus-mcp").Replace("\", "/")
-  $mcpOverride = 'mcp_servers.symphony_plus_plus={command="cmd.exe",args=["/d","/s","/c","scripts\\start-sympp-mcp.cmd"],cwd="' + $pluginRoot + '",env_vars=["SYMPP_HOME","SYMPP_RUNTIME_FILE","SYMPP_LOG_DIR","MIX_BUILD_ROOT","SYMPP_REPO_ROOT","SYMPP_DATABASE","SYMPP_BACKEND_PORT","SYMPP_DASHBOARD_PORT"],startup_timeout_sec=360,tool_timeout_sec=300}'
+  $environment = Get-BetaEnvironment $Config
+  $mcpEnvironment = @(
+    "SYMPP_HOME", "SYMPP_RUNTIME_FILE", "SYMPP_LOG_DIR", "MIX_BUILD_ROOT",
+    "SYMPP_REPO_ROOT", "SYMPP_DATABASE", "SYMPP_BACKEND_PORT", "SYMPP_DASHBOARD_PORT"
+  ) | ForEach-Object { "$_=$($environment[$_] | ConvertTo-Json -Compress)" }
+  $mcpOverride = 'mcp_servers.symphony_plus_plus={command="cmd.exe",args=["/d","/s","/c","scripts\\start-sympp-mcp.cmd"],cwd="' + $pluginRoot + '",env={' + ($mcpEnvironment -join ",") + '},startup_timeout_sec=360,tool_timeout_sec=300}'
   $arguments = @("-c", $mcpOverride, "-C", $Config.worktree)
   if (-not [string]::IsNullOrWhiteSpace($SessionId)) { $arguments += @("resume", $SessionId) }
   return $arguments
@@ -399,11 +473,11 @@ switch ($Action) {
   }
   "Validate" { Test-BetaBootstrap $config }
   "Start" {
-    Initialize-BetaWorktree $config
+    Assert-BetaWorktreeIdentity $config
     Start-BetaRuntime $config
   }
   "Restart" {
-    Initialize-BetaWorktree $config
+    Assert-BetaWorktreeIdentity $config
     Stop-BetaRuntime $config -BackendOnly
     Start-BetaRuntime $config
   }
@@ -411,16 +485,15 @@ switch ($Action) {
   "Stop" { Stop-BetaRuntime $config }
   "Package" {
     Initialize-BetaWorktree $config
+    Assert-BetaPackageSource $config
     Install-BetaPlugin $config
   }
   "Codex" {
-    Initialize-BetaWorktree $config
+    Assert-BetaWorktreeIdentity $config
     Start-BetaRuntime $config
-    Invoke-WithBetaEnvironment $config {
-      $codexArguments = @(Get-BetaCodexArguments $config $ResumeSessionId)
-      & codex @codexArguments
-      if ($LASTEXITCODE -ne 0) { throw "Beta Codex exited with code $LASTEXITCODE." }
-    }
+    $codexArguments = @(Get-BetaCodexArguments $config $ResumeSessionId)
+    & codex @codexArguments
+    if ($LASTEXITCODE -ne 0) { throw "Beta Codex exited with code $LASTEXITCODE." }
   }
 }
 

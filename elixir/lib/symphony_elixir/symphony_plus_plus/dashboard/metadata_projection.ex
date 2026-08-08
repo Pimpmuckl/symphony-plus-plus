@@ -71,7 +71,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
     is_binary(head_sha) and String.trim(head_sha) != ""
   end
 
-  def review_head_matches?(payload, head_sha) when is_map(payload) and is_binary(head_sha), do: Map.get(payload, "head_sha") == head_sha
+  def review_head_matches?(payload, head_sha) when is_map(payload) and is_binary(head_sha),
+    do: PullRequest.head_sha_matches?(Map.get(payload, "head_sha"), head_sha)
+
   def review_head_matches?(_payload, _head_sha), do: false
 
   @spec latest_current_head_sha([ProgressEvent.t()]) :: String.t() | nil

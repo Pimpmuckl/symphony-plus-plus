@@ -20,9 +20,11 @@ $scriptPath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/start-
 $helperPath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-mcp-launcher-helpers.ps1"
 $runtimePath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-launcher-runtime.ps1"
 $artifactRuntimePath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-mcp-artifact-runtime.ps1"
+$processRuntimePath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-mcp-process-runtime.ps1"
 $betaPath = Join-Path $repoRoot "scripts/sympp-beta.ps1"
 . $runtimePath
 . $helperPath
+. $processRuntimePath
 foreach ($name in @(
     "Normalize-McpContractFingerprint", "Get-McpContractFingerprintFromContractFile",
     "Get-McpContractFingerprintFromMarketplaceSource", "Resolve-LocalMcpContractFingerprint",
@@ -36,7 +38,7 @@ foreach ($name in @(
 foreach ($name in @("Get-SymppArtifactDirectoryFingerprint", "Test-SymppArtifactDashboardReady", "Remove-SymppArtifactExtractionStaging", "Expand-SymppArtifactArchive", "Test-ArtifactBackendProvidesDashboard")) {
   Import-ScriptFunction $artifactRuntimePath $name
 }
-foreach ($name in @("Get-PathIdentity", "Test-SamePath", "Test-SameDatabasePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Get-BetaGitWorktrees", "Initialize-BetaWorktree", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Get-BetaCodexArguments", "Assert-BetaRuntimeIdentity", "Test-BetaRuntimeProcessRunning")) {
+foreach ($name in @("Get-PathIdentity", "Test-SamePath", "Test-SameDatabasePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Invoke-BetaGitNullPaths", "Get-BetaGitWorktrees", "Assert-BetaWorktreeIdentity", "Initialize-BetaWorktree", "Assert-BetaPackageSource", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Get-BetaCodexArguments", "Assert-BetaRuntimeIdentity", "Test-BetaRuntimeProcessRunning")) {
   Import-ScriptFunction $betaPath $name
 }
 function script:git { Write-Error "normal git progress"; $script:LASTEXITCODE = 0; "ok" }
@@ -151,11 +153,41 @@ try {
   Remove-Item -LiteralPath $artifactTemp -Recurse -Force -ErrorAction SilentlyContinue
 }
 & (Get-Command node.exe -ErrorAction Stop).Source --check $nodePath
-Assert-True ($LASTEXITCODE -eq 0) "Node bridge must parse"
+$nodeExitCode = $LASTEXITCODE
+Assert-True ($nodeExitCode -eq 0) "Node bridge must parse"
 & (Get-Command node.exe -ErrorAction Stop).Source $nodePath --runtime-supported
-Assert-True ($LASTEXITCODE -eq 0) "Current Node runtime must satisfy the conservative bridge check"
+$nodeExitCode = $LASTEXITCODE
+Assert-True ($nodeExitCode -eq 0) "Current Node runtime must satisfy the conservative bridge check"
 & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "state-identity-tests.js")
-Assert-True ($LASTEXITCODE -eq 0) "Node state identity tests must pass"
+$nodeExitCode = $LASTEXITCODE
+Assert-True ($nodeExitCode -eq 0) "Node state identity tests must pass"
+& (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "bridge-response-forwarding-tests.js")
+$nodeExitCode = $LASTEXITCODE
+Assert-True ($nodeExitCode -eq 0) "Node bridge response forwarding test must pass"
+$artifactCommandTemp = Join-Path $PSScriptRoot (".artifact-command-" + [guid]::NewGuid().ToString("N"))
+try {
+  $artifactRoot = Join-Path $artifactCommandTemp "artifact & command"
+  $releaseEntrypoint = Join-Path $artifactRoot "runtime/bin/symphony_elixir.bat"
+  New-Item -ItemType Directory -Path (Split-Path -Parent $releaseEntrypoint) -Force | Out-Null
+  Set-Content -LiteralPath $releaseEntrypoint -Value "@exit /b 0" -Encoding ascii
+  $artifactRuntime = [pscustomobject]@{
+    root = $artifactRoot
+    entrypoint = Join-Path $artifactRoot "start-runtime.ps1"
+    runtime_args = $null
+    workflow = $null
+  }
+  $artifactPlan = [pscustomobject]@{ port = 20000 }
+  $artifactCommand = Get-ArtifactBackendCommand $artifactRuntime $artifactPlan $null $null (Join-Path $artifactCommandTemp "logs")
+  Assert-True ($artifactCommand.file -eq "cmd.exe" -and (@($artifactCommand.args) -join "|") -eq "/d|/s|/c|call|runtime\bin\symphony_elixir.bat|start") "Windows artifact startup must launch the release directly without reparsing the artifact root"
+  Assert-True ($artifactCommand.working_directory -eq $artifactRoot) "Direct artifact startup must preserve the artifact working directory"
+  Assert-True ($artifactCommand.environment.SYMPP_RUNTIME_ARTIFACT_ACKNOWLEDGED -eq "1" -and $artifactCommand.environment.PHX_SERVER -eq "true") "Direct artifact startup must preserve release safety and server environment"
+  Assert-True ((Test-Path -LiteralPath $artifactCommand.environment.RELEASE_TMP -PathType Container)) "Direct artifact startup must provide an isolated release temp directory"
+  $artifactRuntime.runtime_args = @("-Port", "{port}")
+  $customCommand = Get-ArtifactBackendCommand $artifactRuntime $artifactPlan $null $null (Join-Path $artifactCommandTemp "custom-logs")
+  Assert-True ($customCommand.file -eq $artifactRuntime.entrypoint -and (@($customCommand.args) -join "|") -eq "-Port|20000") "Artifacts with custom manifest arguments must retain the declared wrapper contract"
+} finally {
+  Remove-Item -LiteralPath $artifactCommandTemp -Recurse -Force -ErrorAction SilentlyContinue
+}
 $process = Get-Process -Id $PID
 $startIdentity = Get-ProcessStartIdentity $process
 $processMap = @{ [string]$PID = [pscustomobject]@{ exists = $true; start_time_utc_ticks = $startIdentity } }
@@ -180,13 +212,20 @@ $betaRoot = Join-Path $PSScriptRoot (".beta-bootstrap-" + [guid]::NewGuid().ToSt
 try {
   $betaSource = Get-Content -LiteralPath $betaPath -Raw
   Assert-True ($betaSource.Contains('"Validate" { Test-BetaBootstrap $config }')) "Beta bootstrap must expose its declared validation action"
+  Assert-True ([regex]::Matches($betaSource, 'Initialize-BetaWorktree \$config').Count -eq 2) "Only explicit setup and package actions may fetch or update Git"
+  Assert-True ([regex]::Matches($betaSource, 'Assert-BetaWorktreeIdentity \$config').Count -eq 3) "Runtime actions must verify beta worktree identity"
   Assert-True ($betaSource.Contains('"--dereference"') -and $betaSource.Contains('"-L" "-f"')) "Unix database identity checks must dereference symbolic links"
   Assert-True ($betaSource.Contains('[void](Get-BetaRuntimeState $Config)')) "Beta start must validate existing runtime identity before preparation"
-  Assert-True ($betaSource -match '(?s)"Codex"\s*\{.*?Start-BetaRuntime \$config\s*Invoke-WithBetaEnvironment' -and $betaSource -notmatch '(?s)"Codex"\s*\{.*?Install-BetaPlugin') "Source Codex must start through normal authentication without package refresh"
-  $codexConfig = [pscustomobject]@{ worktree = "C:\beta" }
+  Assert-True ($betaSource -match '(?s)"Codex"\s*\{.*?Start-BetaRuntime \$config\s*\$codexArguments' -and $betaSource -notmatch '(?s)"Codex"\s*\{.*?(Invoke-WithBetaEnvironment|Install-BetaPlugin)') "Source Codex must start in the caller environment without package refresh"
+  $codexConfig = [pscustomobject]@{
+    worktree = "C:\beta"; sympp_home = "C:\beta-home"; runtime_file = "C:\beta-home\runtime.json"; log_dir = "C:\beta-home\logs"
+    mix_build_root = "C:\beta-home\build"; database = "C:\beta-home\ledger.sqlite3"; backend_port = 20000; dashboard_port = 20001
+  }
   $freshCodexArguments = @(Get-BetaCodexArguments $codexConfig $null)
   $resumeCodexArguments = @(Get-BetaCodexArguments $codexConfig "thread-id")
-  Assert-True (($freshCodexArguments[0] -eq "-c") -and $freshCodexArguments[1].Contains('cwd="C:/beta/plugins/symphony-plus-plus-mcp"') -and $freshCodexArguments[1].Contains('env_vars=["SYMPP_HOME","SYMPP_RUNTIME_FILE","SYMPP_LOG_DIR","MIX_BUILD_ROOT","SYMPP_REPO_ROOT","SYMPP_DATABASE","SYMPP_BACKEND_PORT","SYMPP_DASHBOARD_PORT"]')) "Beta Codex must bind its MCP bridge to the source checkout and beta environment"
+  $mcpEnvironmentNames = [regex]::Matches($freshCodexArguments[1], '(?:env=\{|,)(SYMPP_[A-Z_]+|MIX_BUILD_ROOT)=') | ForEach-Object { $_.Groups[1].Value }
+  Assert-True (($freshCodexArguments[0] -eq "-c") -and $freshCodexArguments[1].Contains('cwd="C:/beta/plugins/symphony-plus-plus-mcp"') -and $freshCodexArguments[1].Contains('env={SYMPP_HOME="C:\\beta-home"') -and $freshCodexArguments[1].Contains('SYMPP_DATABASE="C:\\beta-home\\ledger.sqlite3"') -and $freshCodexArguments[1] -notmatch 'env_vars') "Beta Codex must pass its eight-value environment directly to the source MCP bridge"
+  Assert-True ((@($mcpEnvironmentNames) -join ",") -eq "SYMPP_HOME,SYMPP_RUNTIME_FILE,SYMPP_LOG_DIR,MIX_BUILD_ROOT,SYMPP_REPO_ROOT,SYMPP_DATABASE,SYMPP_BACKEND_PORT,SYMPP_DASHBOARD_PORT") "Beta MCP override must contain exactly the eight beta runtime values"
   Assert-True ((@($freshCodexArguments[2..3]) -join "|") -eq "-C|C:\beta") "Beta Codex must open a fresh thread directly in the beta worktree"
   Assert-True ((@($resumeCodexArguments[2..5]) -join "|") -eq "-C|C:\beta|resume|thread-id") "Beta Codex must resume directly inside the beta environment"
   $origin = Join-Path $betaRoot "origin.git"
@@ -219,6 +258,44 @@ try {
   & git -C $sourceRepo push origin HEAD:beta | Out-Null
   Initialize-BetaWorktree $betaConfig
   Assert-True ((& git -C $betaWorktree rev-parse HEAD) -eq (& git -C $betaWorktree rev-parse origin/beta)) "Clean beta setup must fast-forward to origin/beta"
+  Set-Content -LiteralPath (Join-Path $betaWorktree "untracked.txt") -Value "preserve me" -NoNewline
+  Initialize-BetaWorktree $betaConfig
+  Assert-True ((Get-Content -LiteralPath (Join-Path $betaWorktree "untracked.txt") -Raw) -eq "preserve me") "Beta setup must preserve harmless untracked files"
+  $fixturePluginScripts = Join-Path $betaWorktree "plugins/symphony-plus-plus-mcp/scripts"
+  New-Item -ItemType Directory -Path $fixturePluginScripts -Force | Out-Null
+  Set-Content -LiteralPath (Join-Path $fixturePluginScripts "scratch.ps1") -Value "scratch" -NoNewline
+  $packageRejected = $false
+  try { Assert-BetaPackageSource $betaConfig } catch { $packageRejected = $true }
+  Assert-True $packageRejected "Beta packaging must reject untracked source inputs"
+  Remove-Item -LiteralPath (Join-Path $fixturePluginScripts "scratch.ps1") -Force
+  Set-Content -LiteralPath (& git -C $betaWorktree rev-parse --git-path info/exclude) -Value "*.local"
+  Set-Content -LiteralPath (Join-Path $fixturePluginScripts "scratch.local") -Value "ignored" -NoNewline
+  $ignoredPackageRejected = $false
+  try { Assert-BetaPackageSource $betaConfig } catch { $ignoredPackageRejected = $true }
+  Assert-True $ignoredPackageRejected "Beta packaging must reject ignored plugin inputs"
+  Remove-Item -LiteralPath (Join-Path $betaWorktree "plugins") -Recurse -Force
+  Set-Content -LiteralPath (Join-Path $betaWorktree "incoming.local") -Value "preserve me" -NoNewline
+  Set-Content -LiteralPath (Join-Path $sourceRepo "incoming.local") -Value "remote" -NoNewline
+  & git -C $sourceRepo add -f incoming.local
+  & git -C $sourceRepo commit -m "remote ignored collision" | Out-Null
+  & git -C $sourceRepo push origin HEAD:beta | Out-Null
+  $collisionRejected = $false
+  try { Initialize-BetaWorktree $betaConfig } catch { $collisionRejected = $true }
+  Assert-True ($collisionRejected -and (Get-Content -LiteralPath (Join-Path $betaWorktree "incoming.local") -Raw) -eq "preserve me") "Beta setup must not overwrite ignored local files"
+  Remove-Item -LiteralPath (Join-Path $betaWorktree "incoming.local") -Force
+  Initialize-BetaWorktree $betaConfig
+  $ignoredDirectory = Join-Path $betaWorktree "dír.local"
+  New-Item -ItemType Directory -Path $ignoredDirectory | Out-Null
+  Set-Content -LiteralPath (Join-Path $ignoredDirectory "item") -Value "preserve me" -NoNewline
+  Set-Content -LiteralPath (Join-Path $sourceRepo "dír.local") -Value "remote" -NoNewline
+  & git -C $sourceRepo add -f "dír.local"
+  & git -C $sourceRepo commit -m "remote ignored directory collision" | Out-Null
+  & git -C $sourceRepo push origin HEAD:beta | Out-Null
+  $directoryCollisionRejected = $false
+  try { Initialize-BetaWorktree $betaConfig } catch { $directoryCollisionRejected = $true }
+  Assert-True ($directoryCollisionRejected -and (Get-Content -LiteralPath (Join-Path $ignoredDirectory "item") -Raw) -eq "preserve me") "Beta setup must not replace ignored local directories"
+  Remove-Item -LiteralPath $ignoredDirectory -Recurse -Force
+  Initialize-BetaWorktree $betaConfig
   Set-Content -LiteralPath (Join-Path $betaWorktree "README.md") -Value "dirty state" -NoNewline
   $dirtyRejected = $false
   try { Initialize-BetaWorktree $betaConfig } catch { $dirtyRejected = $true }
@@ -370,7 +447,10 @@ $benchmark = & (Join-Path $PSScriptRoot "warm-attach-benchmark.ps1") | ConvertFr
 Assert-True ($benchmark.clients -eq 100 -and $benchmark.p95_ms -lt 2000) "100-client PowerShell fallback warm attach p95 must stay below 2 seconds"
 Assert-True ($benchmark.backend_processes -eq 1 -and $benchmark.leases_peak -eq 100 -and $benchmark.leases_after -eq 0) "Fallback warm burst must preserve one listener and exact lease lifecycle"
 Assert-True ($benchmark.remote_resolution_attempts -eq 0) "Fallback warm burst must make zero artifact or remote resolution attempts"
-$nodeBurst = & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "node-bridge-burst.js") | ConvertFrom-Json
+$nodeBurstJson = & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "node-bridge-burst.js")
+$nodeExitCode = $LASTEXITCODE
+Assert-True ($nodeExitCode -eq 0) "Node bridge burst test must pass"
+$nodeBurst = $nodeBurstJson | ConvertFrom-Json
 Assert-True ($nodeBurst.clients -eq 200 -and $nodeBurst.board -eq 0 -and $nodeBurst.earlyLease -eq 1 -and $nodeBurst.initialize -eq 200) "200 concurrent production Node bridges must initialize with one health-leader lease and no dashboard traffic"
 $coldSmoke = & (Join-Path $PSScriptRoot "cold-start-singleton-smoke.ps1") | ConvertFrom-Json
 Assert-True ($coldSmoke.clients -eq 20 -and $coldSmoke.singleton_creations -eq 1 -and $coldSmoke.backend_processes -eq 1) "Concurrent production cold clients must create exactly one backend"

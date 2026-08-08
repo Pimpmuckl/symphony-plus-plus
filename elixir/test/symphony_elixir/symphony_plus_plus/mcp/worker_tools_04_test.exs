@@ -3,6 +3,8 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{MetadataProjection, OperationalProjection}
+
   test "review package submitted before PR attach does not satisfy later PR readiness", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-PRE-PR-REVIEW", kind: "mcp", status: "ci_waiting"))
     append_done_plan(repo, package.id)
@@ -1129,6 +1131,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
   end
 
   test "latest branch head supersedes earlier PR head for review evidence", %{repo: repo} do
+    full_head_sha = "abcdef1234567890abcdef1234567890abcdef12"
+    short_head_sha = "abcdef12"
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-PR-BRANCH-HEAD", kind: "quick_fix", status: "ci_waiting"))
     append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
@@ -1137,7 +1141,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-PR-BRANCH-HEAD/worker", "head_sha" => "head-a"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/789", "head_sha" => "head-a"})
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-PR-BRANCH-HEAD/worker", "head_sha" => "head-b"})
+    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-PR-BRANCH-HEAD/worker", "head_sha" => short_head_sha})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/789", "head_sha" => "head-a"})
 
     stale_response =
@@ -1152,7 +1156,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
               "summary" => "Old PR head review",
               "tests" => ["mix test"],
               "artifacts" => ["old-pr-head-review.txt"],
-              "head_sha" => "head-a"
+              "head_sha" => "bbcdef1234567890abcdef1234567890abcdef12"
             }
           }
         },
@@ -1166,8 +1170,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "summary" => "Latest branch head review",
       "tests" => ["mix test"],
       "artifacts" => ["latest-branch-head-review.txt"],
-      "head_sha" => "head-b"
+      "head_sha" => full_head_sha
     })
+
+    assert MetadataProjection.review_head_matches?(%{"head_sha" => full_head_sha}, short_head_sha)
+    refute MetadataProjection.review_head_matches?(%{"head_sha" => full_head_sha}, "bbcdef12")
+    assert {:ok, state} = PlanningRepository.get_state(repo, package.id)
+    context = OperationalProjection.readiness_context(state, repo, 0, 0)
+    refute "review_artifacts_attached" in OperationalProjection.missing_readiness_evidence(context)
 
     ready_response =
       MCPHarness.request(

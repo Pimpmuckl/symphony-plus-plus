@@ -37,6 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionRelease
             cd: Path.dirname(Path.dirname(script_path)),
             stderr_to_stdout: true,
             env: [
+              {"SYMPP_DATABASE", ""},
               {"SYMPP_HOME", sympp_home},
               {"SYMPP_REPO_ROOT", ""}
             ]
@@ -88,6 +89,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionRelease
             cd: Path.dirname(Path.dirname(script_path)),
             stderr_to_stdout: true,
             env: [
+              {"SYMPP_DATABASE", ""},
               {"SYMPP_HOME", sympp_home},
               {"SYMPP_REPO_ROOT", ""}
             ]

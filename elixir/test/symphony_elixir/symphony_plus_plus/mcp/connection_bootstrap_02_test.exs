@@ -415,6 +415,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
            ]
 
     assert get_in(tools_by_name, ["set_status", "inputSchema", "required"]) == ["status", "expected_status"]
+
+    assert get_in(tools_by_name, ["set_status", "inputSchema", "properties", "status", "enum"]) ==
+             ["claimed", "planning", "implementing", "reviewing", "ci_waiting", "blocked", "abandoned"]
+
     refute Map.has_key?(get_in(tools_by_name, ["set_status", "inputSchema", "properties"]), "blocker_closeout")
     assert get_in(tools_by_name, ["mark_ready", "inputSchema", "properties"]) == %{}
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "required"]) == ["body"]
