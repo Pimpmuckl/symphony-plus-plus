@@ -453,6 +453,7 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
     after
       GenServer.stop(pid)
       Repo.put_dynamic_repo(original_repo)
+      :erlang.garbage_collect()
     end
   end
 end

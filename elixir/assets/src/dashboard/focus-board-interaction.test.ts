@@ -19,7 +19,7 @@ beforeAll(async () => {
   await server.listen();
   url = server.resolvedUrls!.local[0];
   browser = await chromium.launch({ executablePath: browserExecutablePath() });
-});
+}, 20_000);
 
 afterAll(async () => {
   await browser?.close();
@@ -97,11 +97,15 @@ describe("focus board interactions", () => {
     await deferredRequested;
     expect(requests).toEqual(["priority", "deferred"]);
     expect(await board.getAttribute("aria-busy")).toBe("true");
+    expect(await board.getByText("Loading latest activity…", { exact: true }).isVisible()).toBe(true);
+    expect(await board.getByText(/open across repositories/).count()).toBe(0);
     expect(await board.getByRole("region", { name: /Moving now/ }).count()).toBe(0);
     expect(await page.locator('.workstream-repo-card [data-request-id="wr-interaction"]').count()).toBe(1);
 
     releaseDeferred();
     await board.locator('[data-request-id="wr-interaction"]').waitFor({ state: "attached" });
+    await board.getByText("3 open across repositories", { exact: true }).waitFor();
+    expect(await board.getByText("Loading latest activity…", { exact: true }).count()).toBe(0);
     const workbench = board.locator(".focus-board__workbench");
     const selected = board.locator('[data-request-id="wr-following-group"]');
     const next = board.locator('[data-request-id="wr-interaction"]');

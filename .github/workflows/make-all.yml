@@ -226,6 +226,9 @@ jobs:
       - name: Check frontend quality
         run: npm run quality
 
+      - name: Build production frontend
+        run: npm run build
+
   make-all:
     runs-on: ubuntu-latest
     needs:
