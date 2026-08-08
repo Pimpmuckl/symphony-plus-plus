@@ -28,7 +28,7 @@ $betaPath = Join-Path $repoRoot "scripts/sympp-beta.ps1"
 foreach ($name in @(
     "Normalize-McpContractFingerprint", "Get-McpContractFingerprintFromContractFile",
     "Get-McpContractFingerprintFromMarketplaceSource", "Resolve-LocalMcpContractFingerprint",
-    "New-RuntimeKey", "Get-RuntimeStateKey", "Get-PortFromOrigin", "Test-EndpointMatches",
+    "New-RuntimeKey", "Get-RuntimeStateKey", "Get-PortFromOrigin", "Test-EndpointMatches", "Test-BackendShouldShutdownOnIdle",
     "Test-PortSelectionAllowsReuse", "Test-BackendContractMatches", "Test-BackendLaunchCompatible",
     "Test-RuntimeStateExternalLoopback", "Test-RuntimeEntryEndpointMatches", "New-ReusedBackendPlan", "New-ReusedDashboardPlan",
     "Resolve-LocalWarmAttachIdentity", "Resolve-FastAttachRuntimePlan", "Resolve-DashboardPlan"
@@ -74,6 +74,8 @@ Assert-True ($null -eq (Resolve-LocalWarmAttachIdentity $staleState $pluginRoot 
 $health = [pscustomobject]@{ healthy = $true; source_revision = $state.backend.source_revision; contract_fingerprint = $fingerprint }
 $plan = Resolve-FastAttachRuntimePlan $state $state.backend.source_revision $fingerprint 0 0 $false $false $null $null $health $true $true
 Assert-True ($null -ne $plan -and -not $plan.dashboard_plan.managed) "Artifact-static runtime should produce an unmanaged-dashboard fallback plan"
+Assert-True (-not (Test-BackendShouldShutdownOnIdle $state.backend $state.frontend "artifact")) "Artifact-static backends must remain resident after transient bridge churn"
+Assert-True (Test-BackendShouldShutdownOnIdle $state.backend $state.frontend "source") "Source backends without a managed dashboard must remain idle-disposable"
 $sourceState = [pscustomobject]@{ runtime_kind = "managed"; backend = [pscustomobject]@{ url = "http://127.0.0.1:20000" } }
 $reusedSourcePlan = [pscustomobject]@{ reused = $true; should_start = $false; url = "http://127.0.0.1:20000" }
 Assert-True (-not (Test-ArtifactBackendProvidesDashboard $sourceState $reusedSourcePlan "source")) "Reused source backends must not be promoted to artifact mode"
@@ -455,5 +457,8 @@ Assert-True ($nodeBurst.clients -eq 200 -and $nodeBurst.board -eq 0 -and $nodeBu
 $coldSmoke = & (Join-Path $PSScriptRoot "cold-start-singleton-smoke.ps1") | ConvertFrom-Json
 Assert-True ($coldSmoke.clients -eq 20 -and $coldSmoke.singleton_creations -eq 1 -and $coldSmoke.backend_processes -eq 1) "Concurrent production cold clients must create exactly one backend"
 Assert-True ($coldSmoke.isolated_roots -and $coldSmoke.preflight_listeners -eq 0) "Cold smoke must prove isolated roots and empty unique ports before launch"
+$persistentRuntime = @(& (Join-Path $PSScriptRoot "persistent-artifact-runtime-smoke.ps1"))[-1] | ConvertFrom-Json
+Assert-True ($persistentRuntime.artifact_waves -eq 2 -and $persistentRuntime.initialize_and_tools_list -eq 2 -and $persistentRuntime.artifact_pid_reused) "Installed artifact-static runtime must survive idle detach and serve a second real MCP bridge wave on the same backend PID"
+Assert-True ($persistentRuntime.stale_cleanup_preserved_current -and $persistentRuntime.explicit_cleanup_stopped_exact -and $persistentRuntime.source_last_detach_stopped -and $persistentRuntime.isolated_runtime_ledger_ports) "Cleanup must remain exact, explicit, disposable for source runtimes, and isolated from the main runtime"
 
 Write-Host "Launcher bootstrap, contract freshness, cold singleton, and lease identity regressions passed."
