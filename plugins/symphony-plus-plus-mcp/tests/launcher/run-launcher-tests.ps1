@@ -160,6 +160,8 @@ Assert-True ($LASTEXITCODE -eq 0) "Current Node runtime must satisfy the conserv
 Assert-True ($LASTEXITCODE -eq 0) "Node state identity tests must pass"
 & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "dashboard-health-tests.js")
 Assert-True ($LASTEXITCODE -eq 0) "Node dashboard health tests must pass"
+& (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "bridge-response-forwarding-tests.js")
+Assert-True ($LASTEXITCODE -eq 0) "Node bridge response forwarding test must pass"
 $artifactCommandTemp = Join-Path $PSScriptRoot (".artifact-command-" + [guid]::NewGuid().ToString("N"))
 try {
   $artifactRoot = Join-Path $artifactCommandTemp "artifact & command"
