@@ -1887,7 +1887,7 @@ function Invoke-WarmAttachFromRuntimeState {
   }
 }
 
-function Resolve-DashboardPlan([int]$PreferredPort, [string]$ConfiguredOrigin, [string]$BackendUrl, [string]$BackendSourceRevision, $RuntimeState, [bool]$EnforcePreferredPort, [string]$ExpectedSourceRevision, [string]$ExpectedContractFingerprint, [bool]$AllowRecordedRuntimeReuse) {
+function Resolve-DashboardPlan([int]$PreferredPort, [string]$ConfiguredOrigin, [string]$BackendUrl, [string]$BackendSourceRevision, $RuntimeState, [bool]$EnforcePreferredPort, [string]$ExpectedSourceRevision, [string]$ExpectedContractFingerprint, [bool]$AllowRecordedRuntimeReuse, [bool]$BackendWillStart) {
   if (-not [string]::IsNullOrWhiteSpace($ConfiguredOrigin)) {
     $origin = $ConfiguredOrigin.TrimEnd("/")
     return New-ReusedDashboardPlan "external_override" $origin $false $null
@@ -1924,15 +1924,17 @@ function Resolve-DashboardPlan([int]$PreferredPort, [string]$ConfiguredOrigin, [
         $runtimeBackendUrl.TrimEnd("/") -eq $BackendUrl.TrimEnd("/")) {
       $runtimeManaged = $RuntimeState.frontend.managed -eq $true
       $portAllowed = Test-PortSelectionAllowsReuse $PreferredPort $runtimeOrigin $EnforcePreferredPort
-      if ($runtimeManaged -and $portAllowed -and -not [string]::IsNullOrWhiteSpace($runtimeOrigin) -and (Test-HealthySymppDashboard $runtimeOrigin) -and (Test-SymppDashboardMcpProxyMatches $runtimeOrigin $ExpectedContractFingerprint)) {
+      $runtimeHealthy = -not [string]::IsNullOrWhiteSpace($runtimeOrigin) -and (Test-HealthySymppDashboard $runtimeOrigin)
+      $proxyMatches = $BackendWillStart -or ($runtimeHealthy -and (Test-SymppDashboardMcpProxyMatches $runtimeOrigin $ExpectedContractFingerprint))
+      if ($runtimeManaged -and $portAllowed -and $runtimeHealthy -and $proxyMatches) {
         return New-ReusedDashboardPlan "reused" $runtimeOrigin ($RuntimeState.frontend.managed -eq $true) $RuntimeState.frontend.pid
       }
-      if (-not [string]::IsNullOrWhiteSpace($runtimeOrigin) -and (Test-HealthySymppDashboard $runtimeOrigin)) {
+      if ($runtimeHealthy) {
         if (-not $runtimeManaged) {
           Write-Diagnostic "Ignoring recorded external dashboard $($runtimeOrigin.TrimEnd('/')) for implicit reuse. Set SYMPP_DASHBOARD_ORIGIN=$($runtimeOrigin.TrimEnd('/')) to reuse it explicitly."
         } elseif (-not $portAllowed) {
           Write-Diagnostic "Ignoring healthy runtime dashboard $($runtimeOrigin.TrimEnd('/')) because SYMPP_DASHBOARD_PORT requests $PreferredPort. Set SYMPP_DASHBOARD_ORIGIN=$($runtimeOrigin.TrimEnd('/')) to reuse it explicitly."
-        } elseif (-not (Test-SymppDashboardMcpProxyMatches $runtimeOrigin $ExpectedContractFingerprint)) {
+        } elseif (-not $proxyMatches) {
           Write-Diagnostic "Ignoring healthy runtime dashboard $($runtimeOrigin.TrimEnd('/')) because its MCP proxy does not match expected MCP contract $(Format-McpContractFingerprintForDiagnostic $ExpectedContractFingerprint). Expected source revision remains $(Format-SourceRevisionForDiagnostic $ExpectedSourceRevision)."
         }
       }
@@ -2101,8 +2103,12 @@ if ($ValidateOnly) {
 
   if ($sourceFallbackAllowed -and -not $artifactValidationLaunchable) {
     Assert-LauncherAvailable $launcher $mix $mise
-    Set-Location -LiteralPath $elixirDir
-    $validationExitCode = Test-LauncherVersion $launcher $mix $mise
+    Push-Location -LiteralPath $elixirDir
+    try {
+      $validationExitCode = Test-LauncherVersion $launcher $mix $mise
+    } finally {
+      Pop-Location
+    }
     if ($validationExitCode -ne 0) {
       throw "Selected Symphony++ MCP launcher failed validation with exit code $validationExitCode."
     }
@@ -2207,7 +2213,13 @@ try {
   if ($activeLeasesAtStart.Count -eq 0 -and $null -ne $runtimeState -and $null -ne $runtimeState.backend) {
     $runtimeHealth = Get-SymppBackendHealthWithRetry ([string]$runtimeState.backend.url)
     $preserveBackendUrl = if ([string]::IsNullOrWhiteSpace($env:SYMPP_BACKEND_URL)) { $null } else { $env:SYMPP_BACKEND_URL.TrimEnd("/") }
-    $preserveDashboardOrigin = if ([string]::IsNullOrWhiteSpace($env:SYMPP_DASHBOARD_ORIGIN)) { $null } else { $env:SYMPP_DASHBOARD_ORIGIN.TrimEnd("/") }
+    $preserveDashboardOrigin = if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_DASHBOARD_ORIGIN)) {
+      $env:SYMPP_DASHBOARD_ORIGIN.TrimEnd("/")
+    } elseif ($runtimeState.frontend.managed -eq $true -and (Test-HealthySymppDashboard ([string]$runtimeState.frontend.origin))) {
+      ([string]$runtimeState.frontend.origin).TrimEnd("/")
+    } else {
+      $null
+    }
     if (-not (Test-BackendContractMatches $runtimeHealth $expectedContractFingerprint) -and
         (Stop-ManagedRuntimeStateEntries $runtimeState $preserveBackendUrl $preserveDashboardOrigin)) {
       Write-RuntimeState $runtimeFile $runtimeState
@@ -2225,7 +2237,10 @@ try {
     $expectedSourceRevision = [string]$artifactSelection.expected_source_revision
   }
 
-  $allowRecordedDashboardReuse = $backendPlan.managed -eq $true -and [string]$backendPlan.status -eq "reused"
+  $restartingRecordedBackend = $backendPlan.should_start -and $runtimeState.backend.managed -eq $true -and
+    (Test-RuntimeEntryEndpointMatches "backend" $runtimeState.backend $backendPlan.url)
+  $allowRecordedDashboardReuse = $backendPlan.managed -eq $true -and
+    ([string]$backendPlan.status -eq "reused" -or $restartingRecordedBackend)
   $artifactDashboardPortMatchesBackend = $dashboardPortExplicit -and $dashboardPort -eq $backendPlan.port
   $artifactBackendProvidesDashboard = (Test-ArtifactBackendProvidesDashboard $runtimeState $backendPlan $runtimeMode) -and
     ($backendPlan.should_start -or ((Test-HealthySymppDashboard $backendPlan.url) -and (Test-SymppDashboardMcpProxyMatches $backendPlan.url $expectedContractFingerprint)))
@@ -2239,7 +2254,7 @@ try {
     $dashboardPlan = New-ReusedDashboardPlan "artifact_static" $backendPlan.url $false $null
   } else {
     $dashboardBackendSourceRevision = if ($backendPlan.should_start) { $expectedSourceRevision } else { [string]$backendPlan.source_revision }
-    $dashboardPlan = Resolve-DashboardPlan $dashboardPort $env:SYMPP_DASHBOARD_ORIGIN $backendPlan.url $dashboardBackendSourceRevision $runtimeState $dashboardPortExplicit $expectedSourceRevision $expectedContractFingerprint $allowRecordedDashboardReuse
+    $dashboardPlan = Resolve-DashboardPlan $dashboardPort $env:SYMPP_DASHBOARD_ORIGIN $backendPlan.url $dashboardBackendSourceRevision $runtimeState $dashboardPortExplicit $expectedSourceRevision $expectedContractFingerprint $allowRecordedDashboardReuse $backendPlan.should_start
   }
   if ($runtimeMode -eq "artifact" -and $dashboardPortExplicit -and $dashboardPlan.should_start -and -not (Test-Path -LiteralPath $assetsDir -PathType Container)) {
     throw "SYMPP_DASHBOARD_PORT requires source dashboard assets when artifact mode must start a separate dashboard. Set SYMPP_DASHBOARD_ORIGIN to reuse an operator-owned dashboard, or clear SYMPP_DASHBOARD_PORT to use the artifact backend dashboard."
@@ -2262,6 +2277,11 @@ try {
     $backendPlan.pid = $backendLaunch.pid
     $backendPlan.source_revision = $backendLaunch.source_revision
     $backendPlan.contract_fingerprint = $backendLaunch.contract_fingerprint
+    if ($restartingRecordedBackend -and $dashboardPlan.reused -and
+        -not (Test-SymppDashboardMcpProxyMatches $dashboardPlan.origin $expectedContractFingerprint)) {
+      [void](Stop-ManagedRuntimeEntry "backend" $backendPlan)
+      throw "dashboard_proxy_mismatch: the preserved dashboard proxy did not recover after the backend restarted."
+    }
     if ($runtimeMode -eq "artifact" -and [string]$dashboardPlan.status -eq "artifact_static") {
       if (-not (Test-HealthySymppDashboard $backendPlan.url) -or -not (Test-SymppDashboardMcpProxyMatches $backendPlan.url $expectedContractFingerprint)) {
         [void](Stop-ManagedRuntimeEntry "backend" $backendPlan)
