@@ -959,7 +959,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
         is_list(artifacts) and artifacts != [] and
           Enum.all?(artifacts, fn path ->
             is_binary(path) and String.trim(path) != "" and
-              MetadataProjection.persisted_review_artifact?(context.artifacts, context.work_package.id, current_head_sha, path)
+              MetadataProjection.persisted_review_artifact?(context.artifacts, context.work_package.id, Map.get(payload, "head_sha"), path)
           end)
 
       _event ->

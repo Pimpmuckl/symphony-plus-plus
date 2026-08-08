@@ -76,7 +76,8 @@ function SliceAttentionBadge({ active, attention, fallback, label, onSelect, var
   onSelect: AttentionSelect;
   variant: Parameters<typeof RowBadgeSlot>[0]["variant"];
 }) {
-  return <RowBadgeSlot active={active} actionLabel={attention ? `Open attention details for ${label}` : undefined} label={attention?.label || fallback} onClick={attention ? () => onSelect(attention.target) : undefined} variant={attention?.tone === "blocked" ? "danger" : attention ? "guidance" : variant} />;
+  const fallbackVariant = variant === "danger" || variant === "guidance" ? "secondary" : variant;
+  return <RowBadgeSlot active={active} actionLabel={attention ? `Open attention details for ${label}` : undefined} label={attention?.label || fallback} onClick={attention ? () => onSelect(attention.target) : undefined} variant={attention?.tone === "blocked" ? "danger" : attention ? "guidance" : fallbackVariant} />;
 }
 
 function sliceTargetContext(detail: WorkRequestDetail, slice: WorkRequestPackage, pkg?: WorkPackageCard) {

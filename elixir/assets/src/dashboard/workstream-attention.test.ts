@@ -7,6 +7,7 @@ import {
   attentionJumpDestination,
   dashboardAttentionItems,
   groupDirectAttention,
+  requestActionableAttentionCounts,
   requestAttentionTarget,
   workPackageDirectAttention,
 } from "./workstream-attention";
@@ -100,16 +101,29 @@ describe("WorkRequest attention badge targets", () => {
     });
   });
 
-  it("keeps status-only attention inside the attention dialog contract", () => {
+  it("does not create attention targets from lifecycle status alone", () => {
     const guidance = requestDetail([requestSlice("slice-guidance", "human_info_needed", "wp-guidance")]);
     const blocked = requestDetail([requestSlice("slice-blocked", "blocked", "wp-blocked")]);
 
-    expect(requestAttentionTarget(guidance, new Map(), [], "guidance")).toMatchObject({
-      items: [{ kind: "status", tone: "guidance", selection: { kind: "slice", slice: { id: "slice-guidance" } } }],
-    });
-    expect(requestAttentionTarget(blocked, new Map(), [], "blocked")).toMatchObject({
-      items: [{ kind: "status", tone: "blocked", selection: { kind: "slice", slice: { id: "slice-blocked" } } }],
-    });
+    expect(requestAttentionTarget(guidance, new Map(), [], "guidance")).toBeNull();
+    expect(requestAttentionTarget(blocked, new Map(), [], "blocked")).toBeNull();
+    expect(requestActionableAttentionCounts(guidance, new Map(), [], [])).toEqual({ blockerCount: 0, guidanceCount: 0 });
+    expect(requestActionableAttentionCounts(blocked, new Map(), [], [])).toEqual({ blockerCount: 0, guidanceCount: 0 });
+  });
+
+  it("counts a real clearable blocker record but not its projected count", () => {
+    const slice = requestSlice("slice-blocked", "blocked", "wp-blocked");
+    const detail = requestDetail([slice]);
+    const projectedOnly = new Map<string, WorkPackageCard>([["wp-blocked", { id: "wp-blocked", status: "blocked", active_blocker_count: 1 }]]);
+    const explicit = new Map<string, WorkPackageCard>([["wp-blocked", {
+      id: "wp-blocked",
+      status: "blocked",
+      active_blocker_count: 1,
+      active_blockers: [{ id: "blocker-clearable", active: true }],
+    }]]);
+
+    expect(requestActionableAttentionCounts(detail, projectedOnly, [], [])).toEqual({ blockerCount: 0, guidanceCount: 0 });
+    expect(requestActionableAttentionCounts(detail, explicit, [], [])).toEqual({ blockerCount: 1, guidanceCount: 0 });
   });
 
   it("keeps top-bar attention limited to explicit human-action records", () => {
@@ -251,24 +265,34 @@ describe("WorkRequest attention badge targets", () => {
       operational_state: { key: "human_info_needed", label: "Human Info Needed" },
     };
     const packages = new Map([[pkg.id, pkg], [guidancePackage.id, guidancePackage]]);
+    const guidance: GuidanceItem = {
+      source: "guidance",
+      id: "guidance-group",
+      repo: "fixture/repo",
+      repoKey: "fixture/repo",
+      title: "Choose a path",
+      packageId: guidancePackage.id,
+      detail: "A human decision is required.",
+      guidance: { id: "guidance-group", work_package_id: guidancePackage.id },
+    };
 
     expect(workPackageDirectAttention(detail, slice, pkg, [], [])).toMatchObject({
       label: "Blocked",
       target: { items: [{ kind: "blocker", selection: { blocker: { blocker_id: "blocker-direct" } } }] },
     });
-    expect(groupDirectAttention(detail, "group-blocked", packages, [], [])).toMatchObject({
+    expect(groupDirectAttention(detail, "group-blocked", packages, [], [guidance])).toMatchObject({
       label: "Blocked",
       target: {
         items: [
           { kind: "blocker", selection: { blocker: { blocker_id: "blocker-direct" } } },
-          { kind: "status", tone: "guidance", selection: { slice: { id: "slice-guidance" } } },
+          { kind: "guidance", tone: "guidance", item: guidance },
         ],
       },
     });
 
-    expect(workPackageDirectAttention(detail, guidanceSlice, guidancePackage, [], [])).toMatchObject({
-      label: "Human Info Needed",
-      target: { items: [{ kind: "status", selection: { kind: "slice", pkg: guidancePackage } }] },
+    expect(workPackageDirectAttention(detail, guidanceSlice, guidancePackage, [], [guidance])).toMatchObject({
+      label: "Guidance Needed",
+      target: { items: [{ kind: "guidance", item: guidance }] },
     });
   });
 

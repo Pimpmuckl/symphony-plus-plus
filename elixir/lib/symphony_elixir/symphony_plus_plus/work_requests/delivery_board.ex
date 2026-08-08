@@ -280,10 +280,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       |> Map.merge(preloaded_work_packages)
 
     progress_events = progress_events_by_work_package_id(repo, metadata_fallback_ids)
+    loaded_progress_events = Map.new(metadata_fallback_ids, &{&1, Map.get(progress_events, &1, [])})
 
     activity_contexts =
       repo
-      |> activity_contexts_by_id(missing_ids(work_package_ids, preloaded_activity_contexts))
+      |> activity_contexts_by_id(missing_ids(work_package_ids, preloaded_activity_contexts), loaded_progress_events)
       |> Map.merge(preloaded_activity_contexts)
 
     {:ok,
@@ -425,12 +426,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     |> Enum.group_by(& &1.work_package_id)
   end
 
-  defp activity_contexts_by_id(_repo, []), do: %{}
+  defp activity_contexts_by_id(_repo, [], _progress_events_by_id), do: %{}
 
-  defp activity_contexts_by_id(repo, work_package_ids) do
+  defp activity_contexts_by_id(repo, work_package_ids, progress_events_by_id) do
     work_package_ids
     |> context_lookup_chunks()
-    |> Enum.map(&WorkPackageActivity.contexts(repo, &1))
+    |> Enum.map(&WorkPackageActivity.contexts(repo, &1, progress_events_by_id))
     |> Enum.reduce(%{}, &Map.merge/2)
   end
 

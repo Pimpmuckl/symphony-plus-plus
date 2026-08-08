@@ -21,6 +21,7 @@ defmodule Mix.Tasks.StaticGateMakefileTest do
     assert makefile =~ "FAST_TEST_PARTITIONS ?= 9"
     assert makefile =~ "SLOW_TEST_PARTITIONS ?= 8"
     assert makefile =~ "SLOW_TEST_MAX_CASES ?= 4"
+    assert makefile =~ "[Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'BelowNormal'"
 
     assert target(makefile, "ci-test") == "ci-prepare ci-test-run\n"
 
