@@ -225,6 +225,22 @@ function Get-ArtifactBackendCommand($ArtifactRuntime, $Plan, [string]$DashboardO
 
   $args = Resolve-ArtifactRuntimeArgs $ArtifactRuntime $workflow $runtimeLogRoot $Plan $DashboardOrigin $entrypointName
 
+  if ((Test-SymppWindowsPlatform) -and $entrypointName -eq "start-runtime.ps1" -and $manifestArgs.Count -eq 0) {
+    $releaseEntrypoint = Join-Path $ArtifactRuntime.root "runtime/bin/symphony_elixir.bat"
+    if (Test-Path -LiteralPath $releaseEntrypoint -PathType Leaf) {
+      $releaseTmp = Join-Path $runtimeLogRoot "release-tmp"
+      New-Item -ItemType Directory -Force -Path $releaseTmp | Out-Null
+      $environment["RELEASE_TMP"] = $releaseTmp
+      $environment["PHX_SERVER"] = "true"
+      return [pscustomobject]@{
+        file = "cmd.exe"
+        args = @("/d", "/s", "/c", "call", "runtime\bin\symphony_elixir.bat", "start")
+        working_directory = [string]$ArtifactRuntime.root
+        environment = $environment
+      }
+    }
+  }
+
   return [pscustomobject]@{
     file = $entrypoint
     args = $args

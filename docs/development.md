@@ -17,8 +17,10 @@ Pop-Location
 Run the repository gate from the root:
 
 ```powershell
-make -C elixir all
+make all
 ```
+
+For the fast Elixir-only loop, run `make -C elixir all`.
 
 Frontend-only iteration can use:
 

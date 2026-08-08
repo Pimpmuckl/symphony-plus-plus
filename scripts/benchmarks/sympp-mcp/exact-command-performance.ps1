@@ -234,6 +234,18 @@ function Wait-ClientsReady([object[]]$Cohort, [int]$TimeoutSec) {
   }
 }
 
+function Measure-ExactToolsList($Client, [int]$TimeoutSec) {
+  $watch = [System.Diagnostics.Stopwatch]::StartNew()
+  $Client.process.StandardInput.WriteLine('{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
+  $responseTask = $Client.process.StandardOutput.ReadLineAsync()
+  if (-not $responseTask.Wait($TimeoutSec * 1000)) { throw "Timed out waiting for exact-command tools/list." }
+  $watch.Stop()
+  $line = $responseTask.GetAwaiter().GetResult()
+  $response = $line | ConvertFrom-Json
+  if ($null -eq $response.result.tools -or $response.error) { throw "Exact client returned an invalid tools/list response: $line" }
+  return $watch.Elapsed.TotalMilliseconds
+}
+
 function Stop-ExactClients([object[]]$Clients) {
   $active = @($Clients | Where-Object { $null -ne $_ -and $null -ne $_.process })
   if ($script:probeFailure) {
@@ -486,8 +498,15 @@ exit /b %ERRORLEVEL%
   if ($owners.Count -ne 1 -or [int]$owners[0] -ne [int]$runtimeState.backend.pid) { throw "Cold exact command did not own one backend singleton." }
   $backend = Get-Process -Id ([int]$runtimeState.backend.pid) -ErrorAction Stop
   $backendStartTicks = $backend.StartTime.ToUniversalTime().Ticks
+  $toolsListMs = Measure-ExactToolsList $cold $StartupTimeoutSec
+  $clientStartedAt = $cold.process.StartTime.ToUniversalTime()
+  $runtimeReadyAt = ([DateTimeOffset]$runtimeState.generated_at).UtcDateTime
   $coldMetrics = [pscustomobject]@{
     initialize_ms = [Math]::Round($cold.elapsed_ms, 2)
+    backend_process_started_ms = [Math]::Round(($backend.StartTime.ToUniversalTime() - $clientStartedAt).TotalMilliseconds, 2)
+    runtime_state_ready_ms = [Math]::Round(($runtimeReadyAt - $clientStartedAt).TotalMilliseconds, 2)
+    tools_list_ms = [Math]::Round($toolsListMs, 2)
+    tools_list_total_ms = [Math]::Round($cold.elapsed_ms + $toolsListMs, 2)
     backend_pid = $backend.Id
     backend_start_ticks = $backendStartTicks
     dashboard_healthy = $true
