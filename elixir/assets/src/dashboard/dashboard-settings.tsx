@@ -196,7 +196,7 @@ function RetentionCutoffSetting({
 
 export function DashboardSettingsDialog({
   archiveAfterDays,
-  canUpdateRetentionSettings,
+  captureFailedMcpCalls,
   hideEmptyWorkstreams,
   hiddenWorkstreamCount,
   openDashboardOnBoot,
@@ -204,6 +204,7 @@ export function DashboardSettingsDialog({
   showWelcomeToast,
   soloSessionDeleteAfterDays,
   onArchiveAfterDaysChange,
+  onCaptureFailedMcpCallsChange,
   onHideEmptyWorkstreamsChange,
   onOpenDashboardOnBootChange,
   onSoloSessionDeleteAfterDaysChange,
@@ -211,7 +212,7 @@ export function DashboardSettingsDialog({
   onShowWelcomeToastChange,
 }: {
   archiveAfterDays: number;
-  canUpdateRetentionSettings: boolean;
+  captureFailedMcpCalls: boolean;
   hideEmptyWorkstreams: boolean;
   hiddenWorkstreamCount: number;
   openDashboardOnBoot: boolean;
@@ -219,6 +220,7 @@ export function DashboardSettingsDialog({
   showWelcomeToast: boolean;
   soloSessionDeleteAfterDays: number;
   onArchiveAfterDaysChange: (value: number) => Promise<void>;
+  onCaptureFailedMcpCallsChange: (value: boolean) => Promise<void>;
   onHideEmptyWorkstreamsChange: (value: boolean) => void;
   onOpenDashboardOnBootChange: (value: boolean) => Promise<void>;
   onSoloSessionDeleteAfterDaysChange: (value: number) => Promise<void>;
@@ -269,35 +271,38 @@ export function DashboardSettingsDialog({
         >
           <DialogHeader>
             <DialogTitle>Settings</DialogTitle>
-            <DialogDescription>Dashboard display preferences</DialogDescription>
+            <DialogDescription>Operator preferences</DialogDescription>
           </DialogHeader>
 
           <div ref={initialFocusRef} tabIndex={-1} className="grid gap-3 outline-none">
-            {canUpdateRetentionSettings ? (
-              <>
-                <RetentionCutoffSetting
-                  description={`Delivered WorkRequests archive after ${archiveAfterDays} days.`}
-                  inputLabel="Archive cutoff days"
-                  label="Archive cutoff"
-                  value={archiveAfterDays}
-                  onSave={onArchiveAfterDaysChange}
-                />
-                <RetentionCutoffSetting
-                  description={`Archived WorkRequests delete after ${soloSessionDeleteAfterDays} days.`}
-                  inputLabel="Deletion cutoff days"
-                  label="Deletion cutoff"
-                  value={soloSessionDeleteAfterDays}
-                  onSave={onSoloSessionDeleteAfterDaysChange}
-                />
-                <SettingsSwitch
-                  ariaLabel="Open dashboard with Codex"
-                  checked={openDashboardOnBoot}
-                  description={openOnBootLabel}
-                  label="Open dashboard with Codex"
-                  onChange={onOpenDashboardOnBootChange}
-                />
-              </>
-            ) : null}
+            <RetentionCutoffSetting
+              description={`Delivered WorkRequests archive after ${archiveAfterDays} days.`}
+              inputLabel="Archive cutoff days"
+              label="Archive cutoff"
+              value={archiveAfterDays}
+              onSave={onArchiveAfterDaysChange}
+            />
+            <RetentionCutoffSetting
+              description={`Archived WorkRequests delete after ${soloSessionDeleteAfterDays} days.`}
+              inputLabel="Deletion cutoff days"
+              label="Deletion cutoff"
+              value={soloSessionDeleteAfterDays}
+              onSave={onSoloSessionDeleteAfterDaysChange}
+            />
+            <SettingsSwitch
+              ariaLabel="Open dashboard with Codex"
+              checked={openDashboardOnBoot}
+              description={openOnBootLabel}
+              label="Open dashboard with Codex"
+              onChange={onOpenDashboardOnBootChange}
+            />
+            <SettingsSwitch
+              ariaLabel="Capture failed MCP calls"
+              checked={captureFailedMcpCalls}
+              description="Writes a diagnostic ID and redacted metadata to the rotating runtime log."
+              label="Capture failed MCP calls"
+              onChange={onCaptureFailedMcpCallsChange}
+            />
 
             <SettingsSwitch
               ariaLabel="Show welcome toast"
@@ -343,14 +348,12 @@ function workstreamHiddenSummary(hiddenWorkstreamCount: number) {
 }
 
 export function ArchivedRequestsDialog({
-  canRestoreWorkRequest,
   loading,
   requests,
   onOpen,
   onRestoreWorkRequest,
   refreshVersion,
 }: {
-  canRestoreWorkRequest: boolean;
   loading: boolean;
   requests: WorkRequestCard[];
   onOpen: () => Promise<void>;
@@ -435,18 +438,16 @@ export function ArchivedRequestsDialog({
                         {repoDisplayName(request)} / {request.base_branch || "main"} / archived {detailDate(request.archived_at)}
                       </span>
                     </div>
-                    {canRestoreWorkRequest ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={pendingId === request.id}
-                        onClick={() => void restoreRequest(request.id)}
-                      >
-                        {pendingId === request.id ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
-                        Restore
-                      </Button>
-                    ) : null}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={pendingId === request.id}
+                      onClick={() => void restoreRequest(request.id)}
+                    >
+                      {pendingId === request.id ? <Loader2 className="size-4 animate-spin" /> : <RotateCcw className="size-4" />}
+                      Restore
+                    </Button>
                   </div>
                 ))}
               </div>

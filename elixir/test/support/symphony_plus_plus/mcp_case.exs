@@ -69,12 +69,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "append_finding",
     "append_progress",
     "set_status",
-    "report_blocker",
-    "resolve_blocker",
     "add_comment",
     "list_comments",
     "resolve_comment",
-    "create_guidance_request",
     "read_guidance_request",
     "request_scope_expansion",
     "attach_branch",
@@ -147,6 +144,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
       }
     end
 
+    def one(%Ecto.Query{from: %{source: {"sympp_work_packages", _schema}}}),
+      do: %{status: "ci_waiting", delivered?: false}
+
     def one(_query), do: raise(%Exqlite.Error{message: "database is locked"})
     def all(_query), do: raise(%Exqlite.Error{message: "database is locked"})
   end
@@ -197,8 +197,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     def arm(actor_overrides \\ %{}), do: Process.put(@race_key, actor_overrides)
     def disarm, do: Process.delete(@race_key)
 
-    def transaction(fun), do: Repo.transaction(fun)
-    def rollback(value), do: Repo.rollback(value)
+    def transaction(fun) do
+      {:ok, fun.()}
+    catch
+      {:rollback, value} -> {:error, value}
+    end
+
+    def rollback(value), do: throw({:rollback, value})
     def database_path, do: Repo.database_path()
     def get(schema, id), do: Repo.get(schema, id)
     def one(query), do: Repo.one(query)

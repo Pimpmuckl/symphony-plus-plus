@@ -25,7 +25,6 @@ export function SliceDetailContent({
   pkg,
   onSubmitComment,
   onResolveComment,
-  canMutateComments,
   detailError,
   attentionTarget,
   onSelectAttention,
@@ -35,7 +34,6 @@ export function SliceDetailContent({
   pkg?: WorkPackageCard;
   onSubmitComment: SubmitContextComment;
   onResolveComment: ResolveContextComment;
-  canMutateComments: boolean;
   detailError?: string | null;
   attentionTarget?: AttentionTarget;
   onSelectAttention: (target: AttentionTarget) => void;
@@ -113,7 +111,7 @@ export function SliceDetailContent({
             onCommentsChange={setSliceComments}
             onSubmitComment={onSubmitComment}
             onResolveComment={onResolveComment}
-            canMutate={canMutateComments}
+            canMutate
           />
         </DetailDisclosure>
         <RecentDecisionsDisclosure detail={detail} />
@@ -144,7 +142,6 @@ export function BlockerDetailContent({
   location,
   onJumpToAttention,
   onClearWorkPackageBlocker,
-  canMutateOperatorActions,
 }: {
   selection: Extract<CardDetailSelection, { kind: "blocker" }>;
   detailPayload: WorkPackageDetailPayload | null;
@@ -153,7 +150,6 @@ export function BlockerDetailContent({
   location?: AttentionLocation;
   onJumpToAttention?: (destination: AttentionJumpDestination) => void;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
-  canMutateOperatorActions: boolean;
 }) {
   const [pending, setPending] = useState(false);
   const [clearError, setClearError] = useState<string | null>(null);
@@ -216,16 +212,14 @@ export function BlockerDetailContent({
             ]}
           />
         </DetailSection>
-        {canMutateOperatorActions ? (
-          <div className="flex flex-col items-start gap-2 border-t border-destructive/20 pt-4">
-            <Button type="button" size="sm" variant="destructive" onClick={() => void clearBlocker()} disabled={pending || !workPackageId || !blockerId}>
-              {pending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-              Clear
-            </Button>
-            {clearError ? <p className="text-xs text-destructive">{clearError}</p> : null}
-            {!workPackageId || !blockerId ? <p className="text-xs text-destructive">Blocker cannot be cleared because its package or blocker id is missing.</p> : null}
-          </div>
-        ) : null}
+        <div className="flex flex-col items-start gap-2 border-t border-destructive/20 pt-4">
+          <Button type="button" size="sm" variant="destructive" onClick={() => void clearBlocker()} disabled={pending || !workPackageId || !blockerId}>
+            {pending ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+            Clear
+          </Button>
+          {clearError ? <p className="text-xs text-destructive">{clearError}</p> : null}
+          {!workPackageId || !blockerId ? <p className="text-xs text-destructive">Blocker cannot be cleared because its package or blocker id is missing.</p> : null}
+        </div>
       </div>
     </>
   );
@@ -276,11 +270,9 @@ export function PackageDetailContent({
   error,
   onChangeWorkPackageState,
   onArchiveWorkPackage,
-  canMutateOperatorActions,
   linkedWorkPackageIds,
   onSubmitComment,
   onResolveComment,
-  canMutateComments,
 }: {
   selection: Extract<CardDetailSelection, { kind: "package" }>;
   detailPayload: WorkPackageDetailPayload | null;
@@ -288,11 +280,9 @@ export function PackageDetailContent({
   error: string | null;
   onChangeWorkPackageState: WorkPackageStateMutation;
   onArchiveWorkPackage: WorkPackageArchiveMutation;
-  canMutateOperatorActions: boolean;
   linkedWorkPackageIds: Set<string>;
   onSubmitComment: SubmitContextComment;
   onResolveComment: ResolveContextComment;
-  canMutateComments: boolean;
 }) {
   const [packageComments, setPackageComments] = useSyncedComments(detailPayload?.comments || []);
   const [uiState, dispatchUiState] = useReducer(packageDetailUiReducer, initialPackageDetailUiState);
@@ -302,10 +292,8 @@ export function PackageDetailContent({
     stateError,
     statePending,
   } = uiState;
-  const setArchiveConfirmOpen = useCallback((open: boolean) => dispatchUiState({ type: "archiveConfirmOpen", open }), []);
   const setEvidenceDialogOpen = useCallback((open: boolean) => dispatchUiState({ type: "evidenceDialogOpen", open }), []);
   const setNoPrEvidence = useCallback((value: string) => dispatchUiState({ type: "noPrEvidence", value }), []);
-  const setStateConfirmOpen = useCallback((open: boolean) => dispatchUiState({ type: "stateConfirmOpen", open }), []);
   const pkg = { ...selection.pkg, ...(detailPayload?.work_package || {}) } as PackageDetailPackage;
   const summary = detailPayload?.summary;
   const blockers = (detailPayload?.blockers || []).filter((blocker) => blocker.active !== false);
@@ -327,9 +315,9 @@ export function PackageDetailContent({
       })
     : "";
   const currentCommentStats = targetCommentStats(summary || pkg, detailPayload?.comments || [], packageComments);
-  const canMarkMerged = canMutateOperatorActions && !isFinishedBoardStatus(operational?.key || pkg.status);
+  const canMarkMerged = !isFinishedBoardStatus(operational?.key || pkg.status);
   const isLinkedPackage = linkedWorkPackageIds.has(pkg.id);
-  const canArchiveUnlinked = canMutateOperatorActions && !isLinkedPackage && ["merged", "merged_into_phase", "closed"].includes(pkg.status || "");
+  const canArchiveUnlinked = !isLinkedPackage && ["merged", "merged_into_phase", "closed"].includes(pkg.status || "");
   const canCloseWithEvidence = Boolean(isLinkedPackage && canMarkMerged && readyWithoutMerge(pkg, operational));
   const stateActions: Array<{ value: WorkPackageStateAction; label: string }> = isLinkedPackage
     ? linkedPackageStateActions(pkg, operational, canMarkMerged, canCloseWithEvidence)
@@ -349,8 +337,7 @@ export function PackageDetailContent({
       return;
     }
 
-    dispatchUiState({ type: "pendingStateAction", action: nextAction });
-    setStateConfirmOpen(true);
+    void changePackageState(nextAction);
   }
 
   async function changePackageState(action: WorkPackageStateAction, options?: { noPrEvidence?: string }) {
@@ -373,7 +360,6 @@ export function PackageDetailContent({
 
     try {
       await onArchiveWorkPackage(pkg.id);
-      setArchiveConfirmOpen(false);
     } catch (caught) {
       dispatchUiState({ type: "archiveError", error: caught instanceof Error ? caught.message : "WorkPackage was not archived" });
     } finally {
@@ -382,7 +368,7 @@ export function PackageDetailContent({
   }
 
   const comments: PackageDetailComments = {
-    canMutate: canMutateComments,
+    canMutate: true,
     comments: packageComments,
     onCommentsChange: setPackageComments,
     onResolveComment,
@@ -393,19 +379,15 @@ export function PackageDetailContent({
     archiveError,
     archivePending,
     canArchiveUnlinked,
-    onArchiveRequest: () => setArchiveConfirmOpen(true),
+    onArchiveRequest: () => void archivePackage(),
     onSelectStateAction: selectStateAction,
     stateError,
     statePending,
   };
   const dialogControls: PackageDetailDialogControls = {
-    archivePackage,
     changePackageState,
-    dispatchUiState,
-    setArchiveConfirmOpen,
     setEvidenceDialogOpen,
     setNoPrEvidence,
-    setStateConfirmOpen,
   };
   const status: PackageDetailStatus = { error, loading };
 

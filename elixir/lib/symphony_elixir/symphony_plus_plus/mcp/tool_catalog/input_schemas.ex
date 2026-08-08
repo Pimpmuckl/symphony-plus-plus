@@ -120,7 +120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   end
 
   def worker_tool_input_schema("mark_ready") do
-    schema(%{"blocker_closeout" => blocker_closeout_schema()}, [])
+    schema(%{}, [])
   end
 
   def worker_tool_input_schema("update_task_plan") do
@@ -163,25 +163,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(progress_properties(), ["summary", "idempotency_key"])
   end
 
-  def worker_tool_input_schema("report_blocker") do
-    schema(
-      Map.put(
-        progress_properties(),
-        "blocker_id",
-        described_string_schema("Optional stable blocker id returned in structured output; defaults to idempotency_key.")
-      ),
-      ["summary", "idempotency_key"]
-    )
-  end
-
-  def worker_tool_input_schema("resolve_blocker") do
-    schema(
-      progress_properties()
-      |> Map.merge(%{"blocker_id" => string_schema(), "resolution" => string_schema()}),
-      ["blocker_id", "resolution", "summary", "idempotency_key"]
-    )
-  end
-
   def worker_tool_input_schema("add_comment") do
     schema(
       session_scoped_properties(%{
@@ -212,18 +193,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "resolution_note" => markdown_string_schema("Optional Markdown resolution note.") |> Map.put("maxLength", Comment.max_resolution_note_length())
       }),
       ["comment_id"]
-    )
-  end
-
-  def worker_tool_input_schema("create_guidance_request") do
-    schema(
-      session_scoped_properties(%{
-        "summary" => string_schema(),
-        "question" => markdown_string_schema("Human-facing guidance question in Markdown."),
-        "context" => markdown_string_schema("Human-facing guidance context in Markdown."),
-        "idempotency_key" => string_schema()
-      }),
-      ["summary", "question", "context", "idempotency_key"]
     )
   end
 
@@ -288,8 +257,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     %{
       "status" => string_schema(),
       "expected_status" => string_schema(),
-      "reason" => nullable_string_schema(),
-      "blocker_closeout" => blocker_closeout_schema()
+      "reason" => nullable_string_schema()
     }
   end
 
@@ -379,8 +347,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           ),
         "idempotency_key" => described_string_schema("Stable caller-provided key for replay. Reusing the same key and evidence returns the existing delivery; conflicting evidence is rejected."),
         "recorded_by" => described_string_schema("Optional closeout actor. Defaults to the claimed architect identity."),
-        "evidence" => work_package_delivery_evidence_schema(),
-        "blocker_closeout" => blocker_closeout_schema()
+        "evidence" => work_package_delivery_evidence_schema()
       },
       ["work_package_id", "outcome", "idempotency_key", "evidence"]
     )
@@ -619,7 +586,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       %{
         "work_package_id" => string_schema(),
         "target_repo_root" => described_string_schema("Optional target product repository root. Omit when the current MCP repo root or a standard local checkout matches the WorkPackage repo."),
-        "branch" => described_string_schema("Optional branch override, used only when the WorkPackage branch_pattern is a template or absent. Exact branch patterns are derived from the WorkPackage.")
+        "branch" =>
+          described_string_schema("Optional branch override. Omit it to derive a package-unique branch from the WorkPackage id or branch_pattern template. Exact branch patterns are used unchanged.")
       },
       ["work_package_id"]
     )
@@ -695,45 +663,32 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     %{
       "type" => "object",
       "description" => "Exactly one typed evidence object matching outcome.",
-      "additionalProperties" => false,
-      "properties" => %{
-        "pr_merged" =>
-          schema(
-            %{
-              "pr_url" => described_string_schema("Merged pull request URL."),
-              "pr_number" => integer_schema() |> Map.put("minimum", 1) |> Map.put("description", "Optional positive pull request number."),
-              "pr_repository" => described_string_schema("Optional owner/repository."),
-              "pr_merged_at" => described_string_schema("ISO-8601 merge timestamp."),
-              "merge_commit_sha" => described_string_schema("Required for WorkPackage closeout strong evidence.")
-            },
-            ["pr_url", "pr_merged_at"]
-          ),
-        "completed_no_pr" =>
-          schema(
-            %{
-              "no_pr_evidence" => markdown_string_schema("Markdown evidence for direct no-PR completion.")
-            },
-            ["no_pr_evidence"]
-          ),
-        "superseded" =>
-          schema(
-            %{
-              "successor_work_package_id" => described_string_schema("Successor WorkPackage id in the same WorkRequest."),
-              "superseded_reason" => markdown_string_schema("Markdown reason for supersession.")
-            },
-            ["successor_work_package_id", "superseded_reason"]
-          ),
-        "abandoned" =>
-          schema(
-            %{
-              "abandoned_rationale" => markdown_string_schema("Markdown rationale for abandonment.")
-            },
-            ["abandoned_rationale"]
-          )
-      },
-      "oneOf" => Enum.map(WorkPackageDelivery.outcomes(), &%{"required" => [&1]})
+      "oneOf" => Enum.map(WorkPackageDelivery.outcomes(), &work_package_delivery_outcome_evidence_schema/1)
     }
   end
+
+  defp work_package_delivery_outcome_evidence_schema(outcome) do
+    schema(%{outcome => work_package_delivery_typed_evidence_schema(outcome)}, [outcome])
+  end
+
+  defp work_package_delivery_typed_evidence_schema(outcome) do
+    field_specs = WorkPackageDelivery.evidence_field_specs(outcome)
+
+    properties =
+      Map.new(field_specs, fn field_spec ->
+        {field_spec.name, work_package_delivery_evidence_field_schema(field_spec)}
+      end)
+
+    required = for %{name: name, required: true} <- field_specs, do: name
+
+    schema(properties, required)
+  end
+
+  defp work_package_delivery_evidence_field_schema(%{type: :string, description: description}),
+    do: described_string_schema(description)
+
+  defp work_package_delivery_evidence_field_schema(%{type: :positive_integer, description: description}),
+    do: positive_integer_schema() |> Map.put("description", description)
 
   @spec explicit_work_request_architect_tool_input_schema(tool_name()) :: input_schema()
   def explicit_work_request_architect_tool_input_schema(name) do
@@ -948,25 +903,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       ["dependent", "prerequisite"]
     )
     |> always_validate(%{"anyOf" => [%{"required" => ["reason"]}, %{"required" => ["decision_ref"]}]})
-  end
-
-  defp blocker_closeout_schema do
-    %{
-      "type" => "object",
-      "additionalProperties" => false,
-      "properties" => %{
-        "decision" =>
-          ToolCatalog.blocker_closeout_decisions()
-          |> string_enum_schema()
-          |> Map.put("description", "Use resolved when the active blockers are no longer true, or still_active when they must remain active after this finish transition."),
-        "blocker_ids" =>
-          string_array_schema()
-          |> Map.put("description", "Optional explicit active blocker ids. Omit to apply the decision to every active blocker in scope."),
-        "resolution" => markdown_string_schema("Required when decision is resolved. Human-facing note explaining why the blocker is clear."),
-        "summary" => described_string_schema("Optional short audit summary for the blocker closeout decision.")
-      },
-      "required" => ["decision"]
-    }
   end
 
   defp decision_prompt_schema do

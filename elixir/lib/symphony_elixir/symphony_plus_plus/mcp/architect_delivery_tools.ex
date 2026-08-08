@@ -139,22 +139,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
              "record_work_package_delivery"
            ),
          :ok <- require_work_package_delivery_scope(config.repo, work_request, work_package, attrs, filters),
-         {:ok, attrs, blocker_closeout_plan} <-
-           maybe_prepare_slice_delivery_blocker_closeout(config.repo, live_session, work_package, arguments, attrs),
-         {:ok, {delivery, blocker_closeout}} <-
+         {:ok, delivery} <-
            mutate_product_tree(
              config.repo,
              work_request_id,
              "record_work_package_delivery",
              recorded_by,
              fn ->
-               record_work_package_delivery_with_blocker_closeout(
+               WorkRequestService.record_work_package_delivery(
                  config.repo,
-                 live_session,
                  work_request_id,
                  work_package_id,
-                 attrs,
-                 blocker_closeout_plan
+                 attrs
                )
              end
            ),
@@ -165,7 +161,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
        ToolResult.tool_result(%{
          "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
          "work_package_delivery" => WorkRequestPayloads.work_package_delivery(delivery),
-         "blocker_closeout" => blocker_closeout,
          "delivery_board" => WorkRequestPayloads.delivery_board(delivery_board),
          "scope" => scope
        })}
@@ -384,7 +379,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
         end
 
       [] ->
-        {:tool_error, "missing_evidence"}
+        work_package_delivery_typed_evidence_attrs(outcome, %{})
 
       _keys ->
         {:tool_error, "conflicting_delivery_evidence"}
@@ -392,36 +387,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   defp work_package_delivery_typed_evidence_attrs(outcome, evidence) do
-    field_specs = work_package_delivery_evidence_field_specs(outcome)
-    allowed_keys = Enum.map(field_specs, &elem(&1, 0))
+    case WorkPackageDelivery.validate_evidence(outcome, evidence) do
+      :ok ->
+        collect_work_package_delivery_evidence_attrs(
+          evidence,
+          WorkPackageDelivery.evidence_field_specs(outcome)
+        )
 
-    with :ok <- require_work_package_delivery_evidence_fields(evidence, allowed_keys) do
-      collect_work_package_delivery_evidence_attrs(evidence, field_specs)
+      {:error, details} ->
+        {:tool_error, {:invalid_evidence, details}}
     end
   end
 
-  defp work_package_delivery_evidence_field_specs("pr_merged"),
-    do: [
-      {"pr_url", :string},
-      {"pr_number", :positive_integer},
-      {"pr_repository", :string},
-      {"pr_merged_at", :string},
-      {"merge_commit_sha", :string}
-    ]
-
-  defp work_package_delivery_evidence_field_specs("completed_no_pr"), do: [{"no_pr_evidence", :string}]
-
-  defp work_package_delivery_evidence_field_specs("superseded"),
-    do: [
-      {"successor_work_package_id", :string},
-      {"successor_work_package_id", :string},
-      {"superseded_reason", :string}
-    ]
-
-  defp work_package_delivery_evidence_field_specs("abandoned"), do: [{"abandoned_rationale", :string}]
-
   defp collect_work_package_delivery_evidence_attrs(evidence, field_specs) do
-    Enum.reduce_while(field_specs, {:ok, %{}}, fn {field, type}, {:ok, attrs} ->
+    Enum.reduce_while(field_specs, {:ok, %{}}, fn %{name: field, type: type}, {:ok, attrs} ->
       case work_package_delivery_evidence_field(evidence, field, type) do
         {:ok, value} -> {:cont, {:ok, optional_put(attrs, field, value)}}
         {:tool_error, reason} -> {:halt, {:tool_error, reason}}
@@ -434,73 +413,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp work_package_delivery_evidence_field(evidence, field, :positive_integer),
     do: optional_positive_integer_argument(evidence, field)
 
-  defp require_work_package_delivery_evidence_fields(evidence, allowed_keys) do
-    case Map.keys(evidence) -- allowed_keys do
-      [] -> :ok
-      _unexpected -> {:tool_error, "invalid_evidence"}
-    end
-  end
-
-  defp maybe_prepare_slice_delivery_blocker_closeout(
-         repo,
-         %Session{} = session,
-         %WorkPackage{id: work_package_id},
-         arguments,
-         attrs
-       ) do
-    case prepare_scoped_blocker_closeout(
-           repo,
-           session,
-           [work_package_id],
-           arguments,
-           "record_work_package_delivery"
-         ) do
-      {:ok, closeout_plan} ->
-        attrs =
-          if blocker_closeout_decision(closeout_plan) == "still_active" do
-            Map.put(attrs, "allow_active_blocker_closeout", true)
-          else
-            attrs
-          end
-
-        {:ok, attrs, closeout_plan}
-
-      {:tool_error, reason} ->
-        {:tool_error, reason}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp record_work_package_delivery_with_blocker_closeout(
-         repo,
-         %Session{} = session,
-         work_request_id,
-         work_package_id,
-         attrs,
-         blocker_closeout_plan
-       ) do
-    with {:ok, blocker_closeout} <- apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan),
-         {:ok, delivery} <-
-           WorkRequestService.record_work_package_delivery(
-             repo,
-             work_request_id,
-             work_package_id,
-             attrs
-           ) do
-      {:ok, {delivery, blocker_closeout}}
-    end
-  end
-
   defp prepare_active_blocker_closeout(active_blockers, closeout, tool) do
     with :ok <- require_blocker_closeout_covers_active_blockers(active_blockers, closeout.blocker_ids) do
       {:ok, %{active_blockers: active_blockers, closeout: closeout, tool: tool}}
     end
   end
-
-  defp blocker_closeout_decision(%{closeout: %{decision: decision}}), do: decision
-  defp blocker_closeout_decision(:not_needed), do: nil
 
   defp optional_blocker_closeout_argument(arguments) do
     with {:ok, closeout} <- optional_object_argument(arguments, "blocker_closeout") do
@@ -1361,6 +1278,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp invalid_params_error(tool, {:invalid_changeset, reason, %Ecto.Changeset{} = changeset}) do
     changeset_invalid_params_error(tool, reason, changeset)
+  end
+
+  defp invalid_params_error(tool, {:invalid_evidence, details}) do
+    {:error, -32_602, "Invalid params",
+     details
+     |> Map.put("tool", tool)
+     |> Map.put("reason", "invalid_evidence")}
   end
 
   defp invalid_params_error(tool, {:invalid_enum, _field, _allowed_values} = reason) do

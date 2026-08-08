@@ -87,14 +87,12 @@ function initialGuidanceDialogStateWithChoice(selectedChoice: string): GuidanceD
 }
 
 export function GuidanceDialog({
-  canSubmitAnswer,
   item,
   location,
   onJumpToAttention,
   onOpenChange,
   onSubmitAnswer,
 }: {
-  canSubmitAnswer: boolean;
   item: GuidanceItem | null;
   location?: AttentionLocation;
   onJumpToAttention?: (destination: AttentionJumpDestination) => void;
@@ -107,7 +105,6 @@ export function GuidanceDialog({
         {item ? (
           <GuidanceDialogBody
             key={guidanceDialogStateKey(item)}
-            canSubmitAnswer={canSubmitAnswer}
             item={item}
             location={location}
             onJumpToAttention={onJumpToAttention}
@@ -121,14 +118,12 @@ export function GuidanceDialog({
 }
 
 export function GuidanceDialogBody({
-  canSubmitAnswer,
   item,
   location,
   onJumpToAttention,
   onOpenChange,
   onSubmitAnswer,
 }: {
-  canSubmitAnswer: boolean;
   item: GuidanceItem;
   location?: AttentionLocation;
   onJumpToAttention?: (destination: AttentionJumpDestination) => void;
@@ -158,7 +153,7 @@ export function GuidanceDialogBody({
   }
 
   async function submitAnswer() {
-    if (!item || !state.selectedChoice) return;
+    if (!state.selectedChoice) return;
 
     dispatch({ type: "submitting", submitting: true });
 
@@ -189,7 +184,7 @@ export function GuidanceDialogBody({
           </div>
         </div>
       </DialogHeader>
-      {location ? <AttentionLocationBar location={location} onJump={onJumpToAttention} /> : null}
+      <GuidanceLocation location={location} onJumpToAttention={onJumpToAttention} />
       <div className="grid gap-4">
         <section className="rounded-lg border bg-muted/40 p-4" data-guidance-section style={{ animationDelay: "70ms" }}>
           <p className="text-sm font-medium">TL;DR</p>
@@ -276,21 +271,23 @@ export function GuidanceDialogBody({
         <Button variant="outline" onClick={() => onOpenChange(false)}>
           Cancel
         </Button>
-        <GuidanceSubmitButton canSubmitAnswer={canSubmitAnswer} state={state} onSubmit={submitAnswer} />
+        <Button onClick={submitAnswer} disabled={state.submitting || (state.selectedChoice === CUSTOM_CHOICE && !state.notes[state.selectedChoice]?.trim())}>
+          {state.submitting ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+          Answer
+        </Button>
       </DialogFooter>
     </>
   );
 }
 
-function GuidanceSubmitButton({ canSubmitAnswer, state, onSubmit }: { canSubmitAnswer: boolean; state: GuidanceDialogState; onSubmit: () => void }) {
-  if (!canSubmitAnswer) return null;
-
-  return (
-    <Button onClick={onSubmit} disabled={state.submitting || (state.selectedChoice === CUSTOM_CHOICE && !state.notes[state.selectedChoice]?.trim())}>
-      {state.submitting ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-      Answer
-    </Button>
-  );
+function GuidanceLocation({
+  location,
+  onJumpToAttention,
+}: {
+  location?: AttentionLocation;
+  onJumpToAttention?: (destination: AttentionJumpDestination) => void;
+}) {
+  return location ? <AttentionLocationBar location={location} onJump={onJumpToAttention} /> : null;
 }
 
 function guidanceDialogStateKey(item: GuidanceItem) {

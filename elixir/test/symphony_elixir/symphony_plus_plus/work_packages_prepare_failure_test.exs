@@ -133,7 +133,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackagesPrepareFailureTest do
     TestSupport.git_output!(fixture.repo_root, ["add", "stale.txt"])
     TestSupport.git_output!(fixture.repo_root, ["commit", "-m", "Stale branch commit"])
 
-    assert {:error, :stale_existing_branch} = WorktreeLifecycle.prepare(repo, package.id, attrs, codex_home: codex_home)
+    assert {:error, {:stale_existing_branch, details}} =
+             WorktreeLifecycle.prepare(repo, package.id, attrs, codex_home: codex_home)
+
+    assert details.branch == "feat/stale"
+    assert details.existing_revision == fixture.repo_root |> TestSupport.git_output!(["rev-parse", "feat/stale"]) |> String.trim()
+    assert details.base_revision == fixture.repo_root |> TestSupport.git_output!(["rev-parse", "origin/main"]) |> String.trim()
+    assert details.base_ref == "origin/main"
+    assert details.remediation =~ "Retry without branch"
     refute File.exists?(prepared.worktree_path)
   end
 

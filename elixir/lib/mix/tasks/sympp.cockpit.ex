@@ -18,8 +18,6 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   @default_port 19_998
   @retention_interval_ms 30_000
   @board_path "/sympp/board"
-  @operator_bootstrap_param "operator_bootstrap"
-  @operator_bootstrap_config_key :sympp_local_operator_bootstrap_token
   @open_dashboard_override_config_key :sympp_open_dashboard_override
   @open_dashboard_env "SYMPP_OPEN_DASHBOARD"
   @defer_dashboard_open_env "SYMPP_DEFER_DASHBOARD_OPEN"
@@ -172,7 +170,6 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   defp run_cockpit(opts), do: run_cockpit(opts, &wait_forever/0)
 
   defp run_cockpit(opts, wait_fun) when is_function(wait_fun, 0) do
-    opts = put_operator_bootstrap_token(opts)
     original_database = Application.get_env(:symphony_elixir, :sympp_repo_database)
     original_endpoint_config = Application.get_env(:symphony_elixir, Endpoint, [])
     original_dynamic_repo = Repo.get_dynamic_repo()
@@ -188,7 +185,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
       :ok = start_http_server_or_raise(opts)
       port = wait_for_bound_port()
 
-      Mix.shell().info("Symphony++ local operator dashboard: #{redacted_cockpit_url(opts, port)}")
+      Mix.shell().info("Symphony++ local operator dashboard: #{cockpit_url(opts, port)}")
       Mix.shell().info("Symphony++ API bridge: #{api_url(opts, port)}")
       :ok = maybe_open_operator_dashboard(opts, port)
       Mix.shell().info(dashboard_open_message(opts))
@@ -202,6 +199,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
       stop_owned_endpoint(Process.delete(:sympp_cockpit_endpoint_pid))
       stop_owned_endpoint(Process.delete(:sympp_cockpit_repo_pid))
       stop_owned_processes(Process.delete(:sympp_cockpit_pubsub_pids))
+      stop_owned_endpoint(Process.delete(:sympp_cockpit_task_supervisor_pid))
     end
   end
 
@@ -316,14 +314,10 @@ defmodule Mix.Tasks.Sympp.Cockpit do
 
   defp endpoint_config(original_endpoint_config, opts) do
     original_endpoint_config
-    |> Keyword.merge(
-      server: false,
-      sympp_local_operator: true
-    )
+    |> Keyword.merge(server: false)
     |> Keyword.delete(:sympp_dashboard_origin)
     |> Keyword.delete(@open_dashboard_override_config_key)
     |> maybe_put_open_dashboard_override(opts)
-    |> maybe_put_operator_bootstrap_token(opts)
     |> maybe_put_dashboard_origin(opts)
     |> maybe_force_default_repo(opts)
   end
@@ -332,13 +326,6 @@ defmodule Mix.Tasks.Sympp.Cockpit do
     case Keyword.fetch(opts, :open_dashboard) do
       {:ok, enabled} when is_boolean(enabled) -> Keyword.put(endpoint_config, @open_dashboard_override_config_key, enabled)
       :error -> endpoint_config
-    end
-  end
-
-  defp maybe_put_operator_bootstrap_token(endpoint_config, opts) do
-    case Keyword.get(opts, :operator_bootstrap_token) do
-      token when is_binary(token) and token != "" -> Keyword.put(endpoint_config, @operator_bootstrap_config_key, token)
-      _token -> endpoint_config
     end
   end
 
@@ -362,8 +349,29 @@ defmodule Mix.Tasks.Sympp.Cockpit do
          {:ok, _started} <- Application.ensure_all_started(:phoenix_live_view),
          {:ok, _started} <- Application.ensure_all_started(:bandit),
          {:ok, _started} <- Application.ensure_all_started(:ecto_sql),
-         {:ok, _started} <- ensure_pubsub_started() do
+         {:ok, _started} <- ensure_pubsub_started(),
+         {:ok, _started} <- ensure_task_supervisor_started() do
       {:ok, []}
+    end
+  end
+
+  defp ensure_task_supervisor_started do
+    case Process.whereis(SymphonyElixir.TaskSupervisor) do
+      pid when is_pid(pid) ->
+        {:ok, []}
+
+      nil ->
+        case Task.Supervisor.start_link(name: SymphonyElixir.TaskSupervisor) do
+          {:ok, pid} ->
+            Process.put(:sympp_cockpit_task_supervisor_pid, pid)
+            {:ok, [Task.Supervisor]}
+
+          {:error, {:already_started, _pid}} ->
+            {:ok, []}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 
@@ -495,32 +503,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
       |> Keyword.get(:dashboard_origin, api_url(opts, port))
       |> String.trim_trailing("/")
 
-    dashboard_origin
-    |> then(&"#{&1}#{@board_path}")
-    |> maybe_put_operator_bootstrap_param(opts)
-  end
-
-  defp maybe_put_operator_bootstrap_param(url, opts) do
-    case Keyword.get(opts, :operator_bootstrap_token) do
-      token when is_binary(token) and token != "" -> URI.append_query(URI.parse(url), URI.encode_query([{@operator_bootstrap_param, token}])) |> URI.to_string()
-      _token -> url
-    end
-  end
-
-  defp redacted_cockpit_url(opts, port) do
-    opts
-    |> cockpit_url(port)
-    |> String.replace(~r/([?&]#{@operator_bootstrap_param}=)[^&]+/, "\\1[REDACTED]")
-  end
-
-  defp put_operator_bootstrap_token(opts) do
-    Keyword.put_new_lazy(opts, :operator_bootstrap_token, &operator_bootstrap_token/0)
-  end
-
-  defp operator_bootstrap_token do
-    32
-    |> :crypto.strong_rand_bytes()
-    |> Base.url_encode64(padding: false)
+    "#{dashboard_origin}#{@board_path}"
   end
 
   defp maybe_open_operator_dashboard(opts, port) do
@@ -537,7 +520,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
         "Dashboard browser open deferred until an MCP client connects."
 
       Keyword.get(opts, :open_dashboard, false) ->
-        "Bootstrap URL browser open attempted; token redacted from logs."
+        "Dashboard browser open attempted."
 
       true ->
         "Dashboard browser auto-open disabled; pass --open-dashboard or set #{@open_dashboard_env}=1 to open it."
@@ -562,24 +545,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   end
 
   defp operator_dashboard_open_urls(opts, port) do
-    dashboard_url = cockpit_url(opts, port)
-
-    if Keyword.has_key?(opts, :dashboard_origin) do
-      [operator_config_bootstrap_url(opts, port), dashboard_url]
-    else
-      [dashboard_url]
-    end
-  end
-
-  defp operator_config_bootstrap_url(opts, port) do
-    dashboard_origin =
-      opts
-      |> Keyword.get(:dashboard_origin, api_url(opts, port))
-      |> String.trim_trailing("/")
-
-    dashboard_origin
-    |> then(&"#{&1}/api/v1/sympp/operator/config")
-    |> maybe_put_operator_bootstrap_param(opts)
+    [cockpit_url(opts, port)]
   end
 
   defp normalize_open_result(:ok), do: :ok

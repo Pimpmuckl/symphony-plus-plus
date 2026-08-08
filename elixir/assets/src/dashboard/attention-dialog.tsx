@@ -22,7 +22,6 @@ import {
 } from "./workstream-attention";
 
 export function AttentionDialog({
-  canMutateOperatorActions,
   onChangeWorkPackageState,
   onChangeWorkRequestState,
   onClearWorkPackageBlocker,
@@ -33,7 +32,6 @@ export function AttentionDialog({
   requestDetails,
   target,
 }: {
-  canMutateOperatorActions: boolean;
   onChangeWorkPackageState: WorkPackageStateMutation;
   onChangeWorkRequestState: WorkRequestStateMutation;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
@@ -50,7 +48,6 @@ export function AttentionDialog({
         {target ? (
           <AttentionDialogBody
             key={target.items.map((item) => item.key).join("|")}
-            canMutateOperatorActions={canMutateOperatorActions}
             onChangeWorkPackageState={onChangeWorkPackageState}
             onChangeWorkRequestState={onChangeWorkRequestState}
             onClearWorkPackageBlocker={onClearWorkPackageBlocker}
@@ -67,7 +64,6 @@ export function AttentionDialog({
 }
 
 function AttentionDialogBody({
-  canMutateOperatorActions,
   onChangeWorkPackageState,
   onChangeWorkRequestState,
   onClearWorkPackageBlocker,
@@ -77,7 +73,6 @@ function AttentionDialogBody({
   requestDetails,
   target,
 }: {
-  canMutateOperatorActions: boolean;
   onChangeWorkPackageState: WorkPackageStateMutation;
   onChangeWorkRequestState: WorkRequestStateMutation;
   onClearWorkPackageBlocker: WorkPackageBlockerClearMutation;
@@ -122,7 +117,6 @@ function AttentionDialogBody({
         </Button>
       ) : null}
       <AttentionItemBody
-        canMutateOperatorActions={canMutateOperatorActions}
         item={selected}
         onChangeWorkPackageState={onChangeWorkPackageState}
         onChangeWorkRequestState={onChangeWorkRequestState}
@@ -137,7 +131,6 @@ function AttentionDialogBody({
 }
 
 function AttentionItemBody({
-  canMutateOperatorActions,
   item,
   onChangeWorkPackageState,
   onChangeWorkRequestState,
@@ -147,7 +140,6 @@ function AttentionItemBody({
   onSubmitGuidanceAnswer,
   requestDetails,
 }: {
-  canMutateOperatorActions: boolean;
   item: AttentionItem;
   onChangeWorkPackageState: WorkPackageStateMutation;
   onChangeWorkRequestState: WorkRequestStateMutation;
@@ -162,7 +154,6 @@ function AttentionItemBody({
   if (item.kind === "guidance") {
     return (
       <GuidanceDialogBody
-        canSubmitAnswer={canMutateOperatorActions}
         item={item.item}
         location={location}
         onJumpToAttention={onJumpToAttention}
@@ -182,14 +173,12 @@ function AttentionItemBody({
         location={location}
         onJumpToAttention={onJumpToAttention}
         onClearWorkPackageBlocker={onClearWorkPackageBlocker}
-        canMutateOperatorActions={canMutateOperatorActions}
       />
     );
   }
 
   return (
     <StatusAttentionBody
-      canMutateOperatorActions={canMutateOperatorActions}
       item={item}
       location={location}
       onChangeWorkPackageState={onChangeWorkPackageState}
@@ -199,15 +188,13 @@ function AttentionItemBody({
   );
 }
 
-function StatusAttentionBody({
-  canMutateOperatorActions,
+export function StatusAttentionBody({
   item,
   location,
   onChangeWorkPackageState,
   onChangeWorkRequestState,
   onJumpToAttention,
 }: {
-  canMutateOperatorActions: boolean;
   item: Extract<AttentionItem, { kind: "status" }>;
   location: ReturnType<typeof attentionLocationForItem>;
   onChangeWorkPackageState: WorkPackageStateMutation;
@@ -252,7 +239,7 @@ function StatusAttentionBody({
               ? "No separate blocker record is attached, so there is nothing to clear from this view."
             : "No question is attached yet, so there is nothing to answer from this view."}
         </p>
-        {(workPackageId || workRequestId) && canMutateOperatorActions ? (
+        {workPackageId || workRequestId ? (
           <Button type="button" variant="destructive" className="w-fit" disabled={pending} onClick={() => void clear()}>
             {pending ? <Loader2 className="size-4 animate-spin" /> : null}
             Clear

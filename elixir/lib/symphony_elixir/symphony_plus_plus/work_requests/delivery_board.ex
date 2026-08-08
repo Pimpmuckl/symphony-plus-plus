@@ -280,10 +280,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       |> Map.merge(preloaded_work_packages)
 
     progress_events = progress_events_by_work_package_id(repo, metadata_fallback_ids)
+    loaded_progress_events = Map.new(metadata_fallback_ids, &{&1, Map.get(progress_events, &1, [])})
 
     activity_contexts =
       repo
-      |> activity_contexts_by_id(missing_ids(work_package_ids, preloaded_activity_contexts))
+      |> activity_contexts_by_id(missing_ids(work_package_ids, preloaded_activity_contexts), loaded_progress_events)
       |> Map.merge(preloaded_activity_contexts)
 
     {:ok,
@@ -425,18 +426,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     |> Enum.group_by(& &1.work_package_id)
   end
 
-  defp activity_contexts_by_id(_repo, []), do: %{}
+  defp activity_contexts_by_id(_repo, [], _progress_events_by_id), do: %{}
 
-  defp activity_contexts_by_id(repo, work_package_ids) do
+  defp activity_contexts_by_id(repo, work_package_ids, progress_events_by_id) do
     work_package_ids
     |> context_lookup_chunks()
-    |> Enum.map(&WorkPackageActivity.contexts(repo, &1))
+    |> Enum.map(&WorkPackageActivity.contexts(repo, &1, progress_events_by_id))
     |> Enum.reduce(%{}, &Map.merge/2)
   end
 
   defp project_slice(%WorkPackage{} = work_package, deliveries_by_slice_id, slices_by_scope, context, opts) do
     delivery = delivery_for_slice(deliveries_by_slice_id, work_package)
-    work_package_summary = slice_work_package_summary(work_package.id, context, opts)
+    work_package_summary = slice_work_package_summary(work_package.id, delivery, context, opts)
     operational_work_package = work_package_summary || hidden_work_package_marker(work_package, context)
     operational_state = operational_state(work_package, delivery, operational_work_package)
 
@@ -477,11 +478,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     }
   end
 
-  defp slice_work_package_summary(work_package_id, context, opts) do
+  defp slice_work_package_summary(work_package_id, delivery, context, opts) do
     if Keyword.get(opts, :slice_projection) == :operational_state do
       operational_work_package_summary(work_package_id, context)
     else
-      work_package_summary(work_package_id, context)
+      work_package_summary(work_package_id, delivery, context)
     end
   end
 
@@ -535,14 +536,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     }
   end
 
-  defp work_package_summary(nil, _context), do: nil
-  defp work_package_summary("", _context), do: nil
+  defp work_package_summary(nil, _delivery, _context), do: nil
+  defp work_package_summary("", _delivery, _context), do: nil
 
-  defp work_package_summary(work_package_id, context) do
-    visible_work_package_summary(work_package_id, context)
+  defp work_package_summary(work_package_id, delivery, context) do
+    visible_work_package_summary(work_package_id, delivery, context)
   end
 
-  defp visible_work_package_summary(work_package_id, context) do
+  defp visible_work_package_summary(work_package_id, delivery, context) do
     case get_in(context, [:work_packages, work_package_id]) do
       %WorkPackage{} = work_package ->
         events = Map.get(context.progress_events, work_package_id, [])
@@ -564,7 +565,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           pr: pr_summary(legacy_pr_metadata(metadata)),
           review: review_summary(metadata),
           worker_signal: Map.get(activity, :worker_signal),
-          pr_signal: Signals.pr(metadata),
+          pr_signal: Signals.pr(metadata, delivery),
           review_signal: Signals.review(work_package, metadata, Map.get(context.review_observations, work_package.id)),
           dependency_signal: Signals.dependency(work_package, context),
           blocker_state: Map.fetch!(activity, :blocker_state),
@@ -847,21 +848,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     {key, status_label(key), "neutral", "Package status: #{key}.", []}
   end
 
-  defp terminal_delivery_attention_codes(%WorkPackageDelivery{} = delivery, work_package) do
-    [
-      if(work_package && active_blocker?(work_package), do: "work_package_blocked_after_delivery"),
-      if(work_package && active_runtime?(work_package), do: "work_package_active_after_delivery"),
-      if(is_map(work_package) and not package_reconciled_with_delivery?(work_package.raw_status, delivery.outcome),
-        do: "work_package_status_stale_after_delivery"
-      )
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
-  end
+  defp terminal_delivery_attention_codes(%WorkPackageDelivery{}, :hidden), do: []
 
-  defp package_reconciled_with_delivery?(status, outcome) do
-    is_nil(WorkPackageDelivery.terminal_status_for_outcome(outcome)) or
-      WorkPackageDelivery.terminal_status_matches_outcome?(status, outcome)
+  defp terminal_delivery_attention_codes(%WorkPackageDelivery{}, work_package) do
+    if active_runtime?(work_package), do: ["work_package_active_after_delivery"], else: []
   end
 
   defp state(key, label, tone, reason, raw_status, delivery_outcome, work_package, attention_reason_codes) do
@@ -893,11 +883,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     }
   end
 
-  defp active_blocker?(work_package) when is_map(work_package), do: get_in(work_package, [:blocker_state, :active?]) == true
-  defp active_blocker?(_work_package), do: false
+  defp active_blocker?(work_package), do: get_in(work_package, [:blocker_state, :active?]) == true
 
-  defp active_runtime?(work_package) when is_map(work_package), do: get_in(work_package, [:runtime_state, :active?]) == true
-  defp active_runtime?(_work_package), do: false
+  defp active_runtime?(work_package), do: get_in(work_package, [:runtime_state, :active?]) == true
 
   defp terminal_package_status?(status), do: status in @terminal_package_statuses
 

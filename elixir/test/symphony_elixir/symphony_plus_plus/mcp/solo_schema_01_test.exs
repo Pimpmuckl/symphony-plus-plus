@@ -864,13 +864,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert get_in(delivery_schema, ["properties", "outcome", "enum"]) == ["pr_merged", "completed_no_pr", "superseded", "abandoned"]
     assert get_in(delivery_schema, ["properties", "idempotency_key", "description"]) =~ "Reusing the same key"
     refute Map.has_key?(delivery_schema["properties"], "merge_commit_sha")
-    assert get_in(delivery_schema, ["properties", "evidence", "properties", "pr_merged", "properties", "merge_commit_sha", "description"]) =~ "strong evidence"
 
-    assert get_in(delivery_schema, ["properties", "evidence", "oneOf"]) == [
-             %{"required" => ["pr_merged"]},
-             %{"required" => ["completed_no_pr"]},
-             %{"required" => ["superseded"]},
-             %{"required" => ["abandoned"]}
+    evidence_variants = get_in(delivery_schema, ["properties", "evidence", "oneOf"])
+    pr_merged_variant = Enum.find(evidence_variants, &(&1["required"] == ["pr_merged"]))
+
+    assert get_in(pr_merged_variant, ["properties", "pr_merged", "properties", "merge_commit_sha", "type"]) == "string"
+
+    assert get_in(pr_merged_variant, ["properties", "pr_merged", "required"]) == [
+             "pr_url",
+             "pr_merged_at",
+             "merge_commit_sha"
+           ]
+
+    assert Enum.map(evidence_variants, fn variant ->
+             {variant["required"], Map.keys(variant["properties"]), variant["additionalProperties"]}
+           end) == [
+             {["pr_merged"], ["pr_merged"], false},
+             {["completed_no_pr"], ["completed_no_pr"], false},
+             {["superseded"], ["superseded"], false},
+             {["abandoned"], ["abandoned"], false}
            ]
 
     assert revoke_schema["required"] == ["work_request_id", "work_package_id", "grant_id", "reason"]
@@ -973,7 +985,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              "target product repository root"
 
     assert get_in(tools_by_name, ["prepare_work_package_worktree", "inputSchema", "properties", "branch", "description"]) =~
-             "Optional branch override"
+             "Omit it to derive a package-unique branch"
 
     assert get_in(tools_by_name, ["cleanup_work_package_worktree", "inputSchema", "required"]) == [
              "work_package_id"

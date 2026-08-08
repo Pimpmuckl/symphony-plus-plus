@@ -30,6 +30,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
+  alias SymphonyElixir.TestSupport
   alias SymphonyElixir.WorkPackageFactory
 
   setup_all do
@@ -116,6 +117,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
              events,
              &match?(%ProgressEvent{status: "github_pr_merged", payload: %{"source_tool" => "operator_sync_prs", "after_status" => "merged"}}, &1)
            )
+  end
+
+  test "merged PR matches a package scoped to its local checkout", %{repo: repo} do
+    repo_path = TestSupport.git_repo_with_origin_fixture!("https://github.com/nextide/repo.git", prefix: "sympp-sync-pr-repo")
+    assert {:ok, package} = create_package(repo, id: "SYMPP-GH-LOCAL-REPO", repo: repo_path, status: "ready_for_merge")
+    append_pr_evidence(repo, package, 27, "head-local")
+    FakeGitHubClient.put_response("nextide/repo", 27, GitHubPullRequestFixtures.metadata(27, "head-local", merged?: true))
+
+    assert {:ok, result} = MergeReconciler.reconcile(repo, client: FakeGitHubClient)
+    assert [%{status: "merged", reason: "github_pr_merged"}] = result.results
+    assert repo.get!(WorkPackage, package.id).status == "merged"
   end
 
   test "verified terminal sync closes a linked WorkPackage and replays cleanly", %{repo: repo} do

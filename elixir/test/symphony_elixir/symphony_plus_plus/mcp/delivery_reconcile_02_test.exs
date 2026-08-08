@@ -3,6 +3,8 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope
+
   @moduletag :ci_slow
 
   test "WorkPackage worktree MCP tools fail closed for direct phase packages", %{repo: repo} do
@@ -172,6 +174,56 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
       cleanup_payload = get_in(cleanup_response, ["result", "structuredContent"])
       assert cleanup_payload["worktree"]["status"] == "cleaned"
       refute File.exists?(prepare_payload["worktree"]["path"])
+
+      assert {:ok, package} = WorkPackageRepository.update(repo, package.id, %{branch_pattern: nil})
+      stale_branch = "investigate/reused-branch"
+      TestSupport.git_output!(fixture.repo_root, ["checkout", "-b", stale_branch, "origin/#{delivery_base}"])
+      File.write!(Path.join(fixture.repo_root, "stale-branch.txt"), "stale\n")
+      TestSupport.git_output!(fixture.repo_root, ["add", "stale-branch.txt"])
+      TestSupport.git_output!(fixture.repo_root, ["commit", "-m", "Stale branch"])
+
+      stale_response =
+        mcp_tool(
+          repo,
+          session,
+          "prepare_work_package_worktree",
+          %{"work_package_id" => package.id, "target_repo_root" => fixture.repo_root, "branch" => stale_branch},
+          config: config
+        )
+
+      stale_data = get_in(stale_response, ["error", "data"])
+      assert stale_data["reason"] == "stale_existing_branch"
+      assert stale_data["branch"] == stale_branch
+      assert stale_data["existing_revision"] == fixture.repo_root |> TestSupport.git_output!(["rev-parse", stale_branch]) |> String.trim()
+      assert stale_data["base_revision"] == fixture.repo_root |> TestSupport.git_output!(["rev-parse", "origin/#{delivery_base}"]) |> String.trim()
+      assert stale_data["base_ref"] == "origin/#{delivery_base}"
+      assert stale_data["remediation"] =~ "Retry without branch"
+
+      default_response =
+        mcp_tool(
+          repo,
+          session,
+          "prepare_work_package_worktree",
+          %{"work_package_id" => package.id, "target_repo_root" => fixture.repo_root},
+          config: config
+        )
+
+      default_payload = get_in(default_response, ["result", "structuredContent"])
+      assert {:ok, default_branch} = WorktreeScope.prepare_branch(package, nil)
+      assert default_payload["worktree"]["status"] == "prepared"
+      assert default_payload["worktree"]["branch"] == default_branch
+
+      assert {:ok, other_branch} = WorktreeScope.prepare_branch(%{package | id: "#{package.id}-OTHER"}, nil)
+      refute other_branch == default_branch
+
+      assert {:ok, spaced_branch} = WorktreeScope.prepare_branch(%{package | id: "foo bar"}, nil)
+      assert {:ok, dashed_branch} = WorktreeScope.prepare_branch(%{package | id: "foo-bar"}, nil)
+      refute spaced_branch == dashed_branch
+
+      default_cleanup_response =
+        mcp_tool(repo, session, "cleanup_work_package_worktree", %{"work_package_id" => package.id}, config: config)
+
+      assert get_in(default_cleanup_response, ["result", "structuredContent", "worktree", "status"]) == "cleaned"
     after
       restore_env("CODEX_HOME", previous_codex_home)
     end
@@ -252,6 +304,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
 
       assert get_in(wrong_branch_response, ["error", "code"]) == -32_602
       assert get_in(wrong_branch_response, ["error", "data", "reason"]) == "branch_scope_mismatch"
+      template_override = "agent/#{package.id}/setup"
+      assert {:ok, ^template_override} = WorktreeScope.prepare_branch(package, template_override)
 
       prepare_response =
         mcp_tool(
@@ -260,14 +314,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile02Test do
           "prepare_work_package_worktree",
           %{
             "work_package_id" => package.id,
-            "target_repo_root" => fixture.repo_root,
-            "branch" => "agent/#{package.id}/setup"
+            "target_repo_root" => fixture.repo_root
           },
           config: config
         )
 
       prepare_payload = get_in(prepare_response, ["result", "structuredContent"])
+      assert {:ok, derived_branch} = WorktreeScope.prepare_branch(package, nil)
+      assert {:ok, ^derived_branch} = WorktreeScope.prepare_branch(package, derived_branch)
       assert prepare_payload["worktree"]["status"] == "prepared"
+      assert prepare_payload["worktree"]["branch"] == derived_branch
+
+      shared_template = %{package | branch_pattern: "agent/{{phase_id}}", phase_id: "shared-phase"}
+      assert {:ok, shared_branch} = WorktreeScope.prepare_branch(shared_template, nil)
+      assert {:ok, other_shared_branch} = WorktreeScope.prepare_branch(%{shared_template | id: "#{package.id}-OTHER"}, nil)
+      refute shared_branch == other_shared_branch
 
       cleanup_response =
         mcp_tool(

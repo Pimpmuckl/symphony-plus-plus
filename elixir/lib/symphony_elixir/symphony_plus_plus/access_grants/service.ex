@@ -37,15 +37,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
     with :ok <- Repository.validate_work_package(repo, work_package_id),
          :ok <- require_claimable_worker_package(repo, work_package_id),
          {:ok, grant} <-
-           Repository.create(repo, %{
-             work_package_id: work_package_id,
-             display_key: work_key.display_key,
-             secret_hash: WorkKey.secret_hash(work_key.secret),
-             grant_role: "worker",
-             provenance: provenance,
-             capabilities: capabilities,
-             expires_at: truncate_expires_at(expires_at)
-           }) do
+           Repository.create(
+             repo,
+             %{
+               work_package_id: work_package_id,
+               display_key: work_key.display_key,
+               secret_hash: WorkKey.secret_hash(work_key.secret),
+               grant_role: "worker",
+               provenance: provenance,
+               capabilities: capabilities,
+               expires_at: truncate_expires_at(expires_at)
+             },
+             terminal_work_package_statuses: @non_claimable_work_package_statuses
+           ) do
       {:ok, %{grant: grant, work_key: work_key}}
     end
   end
@@ -204,14 +208,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
   def require_live_package_authority(_repo, %AccessGrant{}), do: {:error, :missing_work_package_id}
 
   defp require_claimable_worker_package(repo, work_package_id) do
-    case WorkPackageRepository.get(repo, work_package_id) do
+    case Repository.work_package_authority_state(repo, work_package_id) do
+      {:ok, %{delivered?: true}} ->
+        {:error, :work_package_terminal}
+
       {:ok, %{status: status}} when status in @pre_dispatch_work_package_statuses ->
         {:error, :work_package_not_dispatched}
 
       {:ok, %{status: status}} when status in @terminal_work_package_statuses ->
         {:error, :work_package_terminal}
 
-      {:ok, _work_package} ->
+      {:ok, _state} ->
         :ok
 
       {:error, reason} ->

@@ -8,7 +8,7 @@ const MIN_STATUS_LABEL_LENGTH = 8;
 const MIN_STATUS_BADGE_WIDTH_REM = 6.1;
 const MAX_STATUS_BADGE_WIDTH_REM = 11;
 
-export type BoardRowStateKind = "active" | "blocked" | "deferred" | "done" | "guidance" | "not_started" | "partial" | "planned" | "ready" | "unknown";
+export type BoardRowStateKind = "active" | "blocked" | "deferred" | "done" | "guidance" | "not_started" | "partial" | "planned" | "ready" | "recovery" | "unknown" | "waiting";
 export type BoardRowState = {
   badgeVariant: BadgeTone;
   kind: BoardRowStateKind;
@@ -26,7 +26,9 @@ const BOARD_ROW_STATES: Record<BoardRowStateKind, BoardRowState> = {
   partial: { badgeVariant: "secondary", kind: "partial", label: "Partial", tone: "muted" },
   planned: { badgeVariant: "secondary", kind: "planned", label: "Planned", tone: "muted" },
   ready: { badgeVariant: "ready", kind: "ready", label: "Ready", tone: "ready" },
+  recovery: { badgeVariant: "warning", kind: "recovery", label: "Recovery Needed", tone: "review" },
   unknown: { badgeVariant: "secondary", kind: "unknown", label: "Unknown", tone: "slice" },
+  waiting: { badgeVariant: "secondary", kind: "waiting", label: "Waiting", tone: "muted" },
 };
 
 export function statusBadgeWidthForLabels(labels: Iterable<string | null | undefined>) {
@@ -36,6 +38,27 @@ export function statusBadgeWidthForLabels(labels: Iterable<string | null | undef
 
 export function statusBadgeWidthForRequestDetails(details: WorkRequestDetail[], packageById: Map<string, WorkPackageCard>) {
   return statusBadgeWidthForLabels(details.flatMap((detail) => requestStatusLabels(detail, packageById)));
+}
+
+export function workRequestIsTerminal(detail: WorkRequestDetail) {
+  const request = detail.work_request;
+  return Boolean(request.completed_at || request.archived_at || [request.status, request.operational_state?.key].includes("completed"));
+}
+
+export function workPackageIsTerminal(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
+  const operational = slice.operational_state ?? pkg?.operational_state;
+  return Boolean(slice.delivery?.outcome || operational?.delivery_outcome)
+    || isFinishedBoardStatus(operational?.key || slice.work_package_status || pkg?.status || slice.status);
+}
+
+export function terminalWorkPackageIds(details: WorkRequestDetail[], packageById: Map<string, WorkPackageCard>) {
+  const detailIds = details.flatMap((detail) => (detail.work_packages ?? [])
+    .filter((slice) => workRequestIsTerminal(detail) || workPackageIsTerminal(slice, packageById.get(slice.work_package_id || slice.id)))
+    .flatMap((slice) => [slice.id, slice.work_package_id].filter((id): id is string => Boolean(id))));
+  const packageIds = [...packageById.values()]
+    .filter((pkg) => Boolean(pkg.operational_state?.delivery_outcome) || isFinishedBoardStatus(pkg.operational_state?.key || pkg.status))
+    .map((pkg) => pkg.id);
+  return new Set([...detailIds, ...packageIds]);
 }
 
 export function requestBoardState(
@@ -116,9 +139,11 @@ function aggregateBoardRowState({
   const derived = firstMatchingBoardRowState([
     [completionDone, "done", finishedFallbackLabel(fallbackLabel)],
     [completionDeferred, "deferred", fallbackLabel],
-    [blockerCount > 0 || childState.blocked, "blocked"],
-    [guidanceCount > 0 || childState.guidance, "guidance"],
+    [blockerCount > 0, "blocked"],
+    [guidanceCount > 0, "guidance"],
+    [childState.recovery, "recovery"],
     [childState.active, "active"],
+    [childState.waiting, "waiting"],
     [childState.ready, "ready"],
     [childState.planned, "planned"],
     [childState.done && childrenComplete, "done", finishedFallbackLabel(fallbackLabel)],
@@ -132,36 +157,36 @@ function aggregateBoardRowState({
 
 type AggregateChildSliceState = {
   active: boolean;
-  blocked: boolean;
   deferred: boolean;
   done: boolean;
-  guidance: boolean;
   notStarted: boolean;
   planned: boolean;
   ready: boolean;
+  recovery: boolean;
+  waiting: boolean;
 };
 
 function aggregateChildSliceState(slices: WorkRequestPackage[], packageById: Map<string, WorkPackageCard>): AggregateChildSliceState {
   const state: AggregateChildSliceState = {
     active: false,
-    blocked: false,
     deferred: false,
     done: slices.length > 0,
-    guidance: false,
     notStarted: false,
     planned: slices.length > 0,
     ready: false,
+    recovery: false,
+    waiting: false,
   };
 
   for (const slice of slices) {
     const kind = sliceBoardStateKind(slice, packageById.get(slice.work_package_id || ""));
     state.active ||= kind === "active";
-    state.blocked ||= kind === "blocked";
     state.deferred ||= kind === "deferred";
-    state.guidance ||= kind === "guidance";
     state.notStarted ||= kind === "not_started";
     state.planned &&= kind === "planned";
     state.ready ||= kind === "ready";
+    state.recovery ||= kind === "recovery";
+    state.waiting ||= kind === "waiting";
     state.done &&= kind === "done";
   }
 
@@ -172,11 +197,10 @@ function sliceBoardStateKind(slice: WorkRequestPackage, pkg?: WorkPackageCard): 
   const operational = sliceOperationalState(slice, pkg);
   const status = operational?.key || slice.work_package_status || pkg?.operational_state?.key || pkg?.status || slice.status;
   return firstMatchingBoardRowKind([
-    [sliceHasFailedGate(slice), "blocked"],
+    [sliceHasFailedGate(slice), "recovery"],
     [sliceHasActiveWork(slice, pkg, status), "active"],
     [isFinishedBoardStatus(status), "done"],
-    [sliceIsBlocked(slice, pkg, status), "blocked"],
-    [sliceGuidanceCount(slice, pkg) > 0, "guidance"],
+    [statusIn(WAITING_STATUSES, status), "waiting"],
     [statusIn(READY_STATUSES, status), "ready"],
     [statusIn(PLANNED_STATUSES, status), "planned"],
     [statusIn(DEFERRED_STATUSES, status), "deferred"],
@@ -186,10 +210,6 @@ function sliceBoardStateKind(slice: WorkRequestPackage, pkg?: WorkPackageCard): 
 
 function sliceHasFailedGate(slice: WorkRequestPackage) {
   return slice.review_signal?.status === "failed" || slice.pr_signal?.checks?.status === "failing";
-}
-
-function sliceIsBlocked(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, status?: string | null) {
-  return status === "blocked" || sliceBlockerCount(slice, pkg, new Map()) > 0;
 }
 
 function productTreeIsComplete(detail: WorkRequestDetail) {
@@ -214,8 +234,7 @@ function boardRowStateFromStatus(status?: string | null, label?: string | null):
   return firstMatchingBoardRowState([
     [statusIn(ACTIVE_WORK_STATUSES, status), "active"],
     [isFinishedBoardStatus(status), "done", finishedFallbackLabel(label)],
-    [status === "blocked", "blocked"],
-    [statusIsGuidance(status), "guidance", label],
+    [statusIn(WAITING_STATUSES, status), "waiting", label],
     [statusIn(READY_STATUSES, status), "ready", label],
     [statusIn(PLANNED_STATUSES, status), "planned", label],
     [statusIn(DEFERRED_STATUSES, status), "deferred", label],
@@ -267,6 +286,7 @@ const READY_STATUSES = new Set(["approved", "ready_for_slicing", "ready_for_work
 const PLANNED_STATUSES = new Set(["planned"]);
 const NOT_STARTED_STATUSES = new Set(["created", "not_done"]);
 const DEFERRED_STATUSES = new Set(["abandoned", "deferred", "skipped", "superseded"]);
+const WAITING_STATUSES = new Set(["blocked", "clarifying", "human_info_needed", "ready_for_clarification", "started_paused"]);
 
 function completionMarkLabel(mark: ProductTreeCompletionMark) {
   switch (mark) {
@@ -281,68 +301,4 @@ function completionMarkLabel(mark: ProductTreeCompletionMark) {
     default:
       return "Unknown";
   }
-}
-
-export function sliceBlockerCount(
-  slice: WorkRequestPackage,
-  pkg: WorkPackageCard | undefined,
-  activeBlockerCountBySliceId: Map<string, number>,
-) {
-  const activeCount = sliceActionableBlockerCount(slice, pkg, activeBlockerCountBySliceId);
-  if (activeCount > 0) return activeCount;
-
-  const operational = sliceOperationalState(slice, pkg);
-  return [operational?.key, slice.work_package_status, slice.status, pkg?.status].includes("blocked") ? 1 : 0;
-}
-
-export function sliceActionableBlockerCount(
-  slice: WorkRequestPackage,
-  pkg: WorkPackageCard | undefined,
-  activeBlockerCountBySliceId: Map<string, number>,
-) {
-  const operational = sliceOperationalState(slice, pkg);
-  const activeCount = Math.max(activeBlockerCountBySliceId.get(slice.id) ?? 0, pkg?.active_blocker_count ?? 0);
-
-  if (activeCount > 0) return activeCount;
-  return attentionBlockerCount(operational);
-}
-
-export function sliceGuidanceCount(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined) {
-  const operational = sliceOperationalState(slice, pkg);
-  const guidanceAttention = (operational?.attention_items ?? []).filter(attentionItemIsGuidance).length;
-  const stateNeedsGuidance = [operational?.key, slice.status, slice.work_package_status, pkg?.status].some((status) =>
-    statusIsGuidance(status),
-  );
-
-  return Math.max(guidanceAttention, stateNeedsGuidance ? 1 : 0);
-}
-
-function attentionBlockerCount(operational?: WorkPackageCard["operational_state"]) {
-  const blockerIds = new Set<string>();
-  let fallbackCount = 0;
-
-  for (const item of operational?.attention_items ?? []) {
-    if (!attentionItemIsBlocker(item)) continue;
-
-    fallbackCount += 1;
-    for (const blockerId of item.blocker_ids ?? []) blockerIds.add(blockerId);
-  }
-
-  return blockerIds.size || fallbackCount;
-}
-
-function attentionItemIsBlocker(item: NonNullable<NonNullable<WorkPackageCard["operational_state"]>["attention_items"]>[number]) {
-  const key = (item.key || "").toLowerCase();
-  const label = (item.label || "").toLowerCase();
-  return key.includes("blocker") || label.includes("blocker") || (item.blocker_ids?.length ?? 0) > 0;
-}
-
-function attentionItemIsGuidance(item: NonNullable<NonNullable<WorkPackageCard["operational_state"]>["attention_items"]>[number]) {
-  const key = (item.key || "").toLowerCase();
-  const label = (item.label || "").toLowerCase();
-  return statusIsGuidance(key) || key.includes("guidance") || key.includes("question") || label.includes("guidance") || label.includes("question");
-}
-
-function statusIsGuidance(status?: string | null) {
-  return status === "human_info_needed" || status === "ready_for_clarification" || status === "clarifying";
 }

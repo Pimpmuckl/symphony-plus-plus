@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveBlockingEdge, GuidanceItem, WorkPackageCard, WorkRequestDetail, WorkRequestPackage } from "@/types/dashboard";
 import type { BlockerItem } from "./dashboard-state";
+import { activeBlockerItems } from "./dashboard-data";
 import {
   attentionLocationForSelection,
   attentionJumpDestination,
   dashboardAttentionItems,
   groupDirectAttention,
+  requestActionableAttentionCounts,
   requestAttentionTarget,
   workPackageDirectAttention,
 } from "./workstream-attention";
@@ -34,6 +36,32 @@ describe("WorkRequest attention badge targets", () => {
     expect(requestAttentionTarget(detail, new Map([[pkg.id, pkg]]), [blocker], "blocked")).toMatchObject({
       items: [{ kind: "blocker", selection: { kind: "blocker", blocker, detail, slice, pkg } }],
     });
+  });
+
+  it("routes a blocker by its active target when its event owner is terminal", () => {
+    const deliveredSlice = requestSlice("slice-delivered", "blocked", "wp-delivered");
+    deliveredSlice.operational_state = { key: "blocked", delivery_outcome: "pr_merged" };
+    const activeSlice = requestSlice("slice-active", "blocked", "wp-active");
+    const detail = requestDetail([deliveredSlice, activeSlice]);
+    const deliveredPackage: WorkPackageCard = { id: "wp-delivered", status: "blocked" };
+    const activePackage: WorkPackageCard = { id: "wp-active", status: "blocked" };
+    const packages = new Map([[deliveredPackage.id, deliveredPackage], [activePackage.id, activePackage]]);
+    const blocker: ActiveBlockingEdge = {
+      id: "edge-terminal-owner",
+      blocker_id: "blocker-terminal-owner",
+      work_package_id: deliveredPackage.id,
+      from: { kind: "work_package", id: deliveredPackage.id },
+      to: { kind: "work_package", id: activePackage.id },
+    };
+
+    expect(requestAttentionTarget(detail, packages, [blocker], "blocked")).toMatchObject({
+      items: [{ kind: "blocker", selection: { blocker, slice: activeSlice, pkg: activePackage } }],
+    });
+    const blockerItems = activeBlockerItems([deliveredPackage, activePackage], new Map(), [blocker]);
+    expect(blockerItems.find((item) => item.id === blocker.id)?.selection).toMatchObject({ blocker, pkg: activePackage });
+    expect(dashboardAttentionItems([detail], packages, [blocker], [], blockerItems)).toMatchObject([
+      { kind: "blocker", selection: { blocker, slice: activeSlice, pkg: activePackage } },
+    ]);
   });
 
   it("opens package guidance and embedded blocker records when projections are absent", () => {
@@ -73,37 +101,72 @@ describe("WorkRequest attention badge targets", () => {
     });
   });
 
-  it("keeps status-only attention inside the attention dialog contract", () => {
+  it("does not create attention targets from lifecycle status alone", () => {
     const guidance = requestDetail([requestSlice("slice-guidance", "human_info_needed", "wp-guidance")]);
     const blocked = requestDetail([requestSlice("slice-blocked", "blocked", "wp-blocked")]);
 
-    expect(requestAttentionTarget(guidance, new Map(), [], "guidance")).toMatchObject({
-      items: [{ kind: "status", tone: "guidance", selection: { kind: "slice", slice: { id: "slice-guidance" } } }],
-    });
-    expect(requestAttentionTarget(blocked, new Map(), [], "blocked")).toMatchObject({
-      items: [{ kind: "status", tone: "blocked", selection: { kind: "slice", slice: { id: "slice-blocked" } } }],
-    });
+    expect(requestAttentionTarget(guidance, new Map(), [], "guidance")).toBeNull();
+    expect(requestAttentionTarget(blocked, new Map(), [], "blocked")).toBeNull();
+    expect(requestActionableAttentionCounts(guidance, new Map(), [], [])).toEqual({ blockerCount: 0, guidanceCount: 0 });
+    expect(requestActionableAttentionCounts(blocked, new Map(), [], [])).toEqual({ blockerCount: 0, guidanceCount: 0 });
   });
 
-  it("deduplicates linked status-only blocker projections", () => {
+  it("counts a real clearable blocker record but not its projected count", () => {
     const slice = requestSlice("slice-blocked", "blocked", "wp-blocked");
     const detail = requestDetail([slice]);
-    const pkg: WorkPackageCard = { id: "wp-blocked", status: "blocked", active_blocker_count: 1 };
-    const blocker: BlockerItem = {
-      id: pkg.id,
-      title: "Blocked package",
-      repo: "fixture/repo",
-      blockerCount: 1,
-      detail: "No blocker record is attached.",
-      selection: { kind: "slice", detail, slice, pkg },
-    };
+    const projectedOnly = new Map<string, WorkPackageCard>([["wp-blocked", { id: "wp-blocked", status: "blocked", active_blocker_count: 1 }]]);
+    const explicit = new Map<string, WorkPackageCard>([["wp-blocked", {
+      id: "wp-blocked",
+      status: "blocked",
+      active_blocker_count: 1,
+      active_blockers: [{ id: "blocker-clearable", active: true }],
+    }]]);
 
-    expect(dashboardAttentionItems([detail], new Map([[pkg.id, pkg]]), [], [], [blocker])).toMatchObject([
-      { kind: "status", key: "status:blocked:package:wp-blocked" },
-    ]);
+    expect(requestActionableAttentionCounts(detail, projectedOnly, [], [])).toEqual({ blockerCount: 0, guidanceCount: 0 });
+    expect(requestActionableAttentionCounts(detail, explicit, [], [])).toEqual({ blockerCount: 1, guidanceCount: 0 });
   });
 
-  it("keeps the pre-run Clarifying state out of top-bar human guidance", () => {
+  it("keeps top-bar attention limited to explicit human-action records", () => {
+    const blocked = requestSlice("slice-blocked", "blocked", "wp-blocked");
+    const reviewFailed = requestSlice("slice-review", "reviewing", "wp-review");
+    reviewFailed.review_signal = { status: "failed" };
+    const ciFailed = requestSlice("slice-ci", "ci_waiting", "wp-ci");
+    ciFailed.pr_signal = { status: "open", number: 42, url: "https://example.test/pull/42", checks: { status: "failing" } };
+    const guidanceStatus = requestSlice("slice-guidance", "human_info_needed", "wp-guidance");
+    const detail = requestDetail([blocked, reviewFailed, ciFailed, guidanceStatus]);
+    const pkg: WorkPackageCard = { id: "wp-blocked", status: "blocked", active_blocker_count: 1 };
+    const edge: ActiveBlockingEdge = {
+      id: "edge-explicit",
+      blocker_id: "blocker-explicit",
+      from: { kind: "work_package", id: "wp-source" },
+      to: { kind: "work_package", id: pkg.id },
+    };
+    const blocker: BlockerItem = {
+      id: edge.id,
+      title: "Explicit blocker",
+      repo: "fixture/repo",
+      blockerCount: 1,
+      detail: "A human can act on this blocker.",
+      selection: { kind: "blocker", blocker: edge, detail, slice: blocked, pkg },
+    };
+    const guidance: GuidanceItem = {
+      source: "guidance",
+      id: "guidance-explicit",
+      repo: "fixture/repo",
+      repoKey: "fixture/repo",
+      title: "Choose a path",
+      packageId: guidanceStatus.id,
+      detail: "A human decision is required.",
+      guidance: { id: "guidance-explicit", work_package_id: guidanceStatus.id },
+    };
+
+    const items = dashboardAttentionItems([detail], new Map([[pkg.id, pkg]]), [edge], [guidance], [blocker]);
+
+    expect(items.map((item) => item.kind).sort()).toEqual(["blocker", "guidance"]);
+    expect(items.map((item) => item.key).sort()).toEqual(["blocker:edge-explicit", "guidance:guidance:guidance-explicit"]);
+  });
+
+  it("keeps generic lifecycle states out of top-bar human guidance", () => {
     const clarifying = requestDetail([]);
     clarifying.work_request = {
       ...clarifying.work_request,
@@ -122,10 +185,7 @@ describe("WorkRequest attention badge targets", () => {
 
     const items = dashboardAttentionItems([clarifying, readyForClarification, humanInfo, completed], new Map(), [], [], []);
 
-    expect(items.map((item) => item.label)).toContain("Human Info Needed");
-    expect(items.map((item) => item.label)).not.toContain("Clarifying");
-    expect(items.some((item) => item.kind === "status" && item.selection.detail?.work_request.id === "wr-ready-for-clarification")).toBe(false);
-    expect(items.some((item) => item.kind === "status" && item.selection.detail?.work_request.id === "wr-completed")).toBe(false);
+    expect(items).toEqual([]);
   });
 
   it("drops stale projected attention attached to a completed WorkRequest", () => {
@@ -155,6 +215,38 @@ describe("WorkRequest attention badge targets", () => {
     expect(dashboardAttentionItems([completed], new Map([[pkg.id, pkg]]), [], [guidance], [blocker])).toEqual([]);
   });
 
+  it("drops stale blocker and guidance attention attached to a delivered WorkPackage", () => {
+    const slice = requestSlice("slice-delivered", "blocked", "wp-delivered");
+    slice.operational_state = { key: "blocked", delivery_outcome: "pr_merged" };
+    const detail = requestDetail([slice]);
+    const pkg: WorkPackageCard = {
+      id: "wp-delivered",
+      status: "blocked",
+      active_blockers: [{ id: "stale-blocker", active: true }],
+    };
+    const guidance: GuidanceItem = {
+      source: "guidance",
+      id: "stale-guidance",
+      repo: "fixture/repo",
+      repoKey: "fixture/repo",
+      title: "Stale guidance",
+      packageId: pkg.id,
+      detail: "Already delivered.",
+      guidance: { id: "stale-guidance", work_package_id: pkg.id },
+    };
+    const blocker: BlockerItem = {
+      id: "stale-blocker",
+      title: "Stale blocker",
+      repo: "fixture/repo",
+      blockerCount: 1,
+      detail: "Already delivered.",
+      selection: { kind: "slice", detail, slice, pkg },
+    };
+
+    expect(workPackageDirectAttention(detail, slice, pkg, [], [guidance])).toBeNull();
+    expect(dashboardAttentionItems([detail], new Map([[pkg.id, pkg]]), [], [guidance], [blocker])).toEqual([]);
+  });
+
   it("opens every attention item under a Group with blockers first", () => {
     const slice = requestSlice("slice-blocked", "blocked", "wp-blocked");
     slice.product_tree_node_id = "group-blocked";
@@ -173,24 +265,34 @@ describe("WorkRequest attention badge targets", () => {
       operational_state: { key: "human_info_needed", label: "Human Info Needed" },
     };
     const packages = new Map([[pkg.id, pkg], [guidancePackage.id, guidancePackage]]);
+    const guidance: GuidanceItem = {
+      source: "guidance",
+      id: "guidance-group",
+      repo: "fixture/repo",
+      repoKey: "fixture/repo",
+      title: "Choose a path",
+      packageId: guidancePackage.id,
+      detail: "A human decision is required.",
+      guidance: { id: "guidance-group", work_package_id: guidancePackage.id },
+    };
 
     expect(workPackageDirectAttention(detail, slice, pkg, [], [])).toMatchObject({
       label: "Blocked",
       target: { items: [{ kind: "blocker", selection: { blocker: { blocker_id: "blocker-direct" } } }] },
     });
-    expect(groupDirectAttention(detail, "group-blocked", packages, [], [])).toMatchObject({
+    expect(groupDirectAttention(detail, "group-blocked", packages, [], [guidance])).toMatchObject({
       label: "Blocked",
       target: {
         items: [
           { kind: "blocker", selection: { blocker: { blocker_id: "blocker-direct" } } },
-          { kind: "status", tone: "guidance", selection: { slice: { id: "slice-guidance" } } },
+          { kind: "guidance", tone: "guidance", item: guidance },
         ],
       },
     });
 
-    expect(workPackageDirectAttention(detail, guidanceSlice, guidancePackage, [], [])).toMatchObject({
-      label: "Human Info Needed",
-      target: { items: [{ kind: "status", selection: { kind: "slice", pkg: guidancePackage } }] },
+    expect(workPackageDirectAttention(detail, guidanceSlice, guidancePackage, [], [guidance])).toMatchObject({
+      label: "Guidance Needed",
+      target: { items: [{ kind: "guidance", item: guidance }] },
     });
   });
 

@@ -3,13 +3,12 @@ import type { RefObject } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   dashboardCaughtMessage,
-  isReconnectableLocalOperatorError,
   jsonHeaders,
   mergeDashboardPayload,
   operatorApiUrl,
   operatorFetch,
   readDashboardApiResponse,
-  withLocalOperatorReconnect,
+  withRuntimeConfigRetry,
 } from "./runtime";
 
 export type DashboardSurface = "archived" | "solo";
@@ -26,7 +25,7 @@ export function useDashboardSurfaceLoading({
   dashboardRef: RefObject<DashboardPayload | null>;
   clearFailure: (failureVersion?: number) => void;
   failureVersionRef: RefObject<number>;
-  recordFailure: (message: string, immediate?: boolean, reconnectable?: boolean) => void;
+  recordFailure: (message: string, immediate?: boolean) => void;
   setDashboard: (dashboard: DashboardPayload | null) => void;
   soloOpen: boolean;
   refreshVersion: number;
@@ -41,7 +40,7 @@ export function useDashboardSurfaceLoading({
     setLoading((state) => ({ ...state, [surface]: true }));
 
     try {
-      await withLocalOperatorReconnect(async () => {
+      await withRuntimeConfigRetry(async () => {
         const response = await operatorFetch(operatorApiUrl(`/dashboard?surface=${surface}`), { headers: jsonHeaders() });
         const payload = (await readDashboardApiResponse(response, `Dashboard ${surface} data unavailable`)) as DashboardPayload;
         if (requestVersions.current[surface] !== requestVersion) return;
@@ -50,11 +49,7 @@ export function useDashboardSurfaceLoading({
       });
     } catch (caught) {
       if (requestVersions.current[surface] !== requestVersion) return;
-      recordFailure(
-        dashboardCaughtMessage(caught, `Dashboard ${surface} data unavailable`),
-        false,
-        isReconnectableLocalOperatorError(caught),
-      );
+      recordFailure(dashboardCaughtMessage(caught, `Dashboard ${surface} data unavailable`));
     } finally {
       if (requestVersions.current[surface] === requestVersion) {
         setLoading((state) => ({ ...state, [surface]: false }));

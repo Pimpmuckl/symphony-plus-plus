@@ -12,6 +12,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
 
   @outcomes ["pr_merged", "completed_no_pr", "superseded", "abandoned"]
 
+  @evidence_contract %{
+    "pr_merged" => [
+      %{name: "pr_url", type: :string, required: true, description: "Merged pull request URL."},
+      %{name: "pr_number", type: :positive_integer, required: false, description: "Optional positive pull request number."},
+      %{name: "pr_repository", type: :string, required: false, description: "Optional owner/repository."},
+      %{name: "pr_merged_at", type: :string, required: true, description: "ISO-8601 merge timestamp."},
+      %{name: "merge_commit_sha", type: :string, required: true, description: "Merge commit SHA."}
+    ],
+    "completed_no_pr" => [
+      %{name: "no_pr_evidence", type: :string, required: true, description: "Markdown evidence for direct no-PR completion."}
+    ],
+    "superseded" => [
+      %{
+        name: "successor_work_package_id",
+        type: :string,
+        required: true,
+        description: "Successor WorkPackage id in the same WorkRequest."
+      },
+      %{name: "superseded_reason", type: :string, required: true, description: "Markdown reason for supersession."}
+    ],
+    "abandoned" => [
+      %{name: "abandoned_rationale", type: :string, required: true, description: "Markdown rationale for abandonment."}
+    ]
+  }
+
+  @type evidence_field_spec :: %{
+          name: String.t(),
+          type: :string | :positive_integer,
+          required: boolean(),
+          description: String.t()
+        }
+
   @type t :: %__MODULE__{
           id: String.t() | nil,
           work_request_id: String.t() | nil,
@@ -55,6 +87,47 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
 
   @spec outcomes() :: [String.t()]
   def outcomes, do: @outcomes
+
+  @spec evidence_field_specs(String.t()) :: [evidence_field_spec()]
+  def evidence_field_specs(outcome), do: Map.get(@evidence_contract, outcome, [])
+
+  @spec validate_evidence(String.t(), map()) ::
+          :ok | {:error, %{required(String.t()) => [String.t()]}}
+  def validate_evidence(outcome, evidence) when is_map(evidence) do
+    field_specs = evidence_field_specs(outcome)
+    allowed_fields = Enum.map(field_specs, & &1.name)
+
+    evidence_fields =
+      evidence
+      |> Map.keys()
+      |> Enum.map(&to_string/1)
+      |> Enum.uniq()
+
+    supplied_fields =
+      evidence
+      |> Enum.reject(fn {_field, value} -> missing_evidence_value?(value) end)
+      |> Enum.map(fn {field, _value} -> to_string(field) end)
+      |> Enum.uniq()
+
+    missing_fields =
+      field_specs
+      |> Enum.filter(& &1.required)
+      |> Enum.map(& &1.name)
+      |> Kernel.--(supplied_fields)
+
+    unexpected_fields = evidence_fields -- allowed_fields
+
+    if missing_fields == [] and unexpected_fields == [] do
+      :ok
+    else
+      {:error,
+       %{
+         "missing_fields" => missing_fields,
+         "unexpected_fields" => Enum.sort(unexpected_fields),
+         "allowed_fields" => allowed_fields
+       }}
+    end
+  end
 
   @spec terminal_status_for_outcome(String.t()) :: String.t() | nil
   def terminal_status_for_outcome("pr_merged"), do: "merged"
@@ -105,7 +178,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
     |> validate_nonblank_optional(:recorded_by)
     |> validate_nonblank_optional(:pr_repository)
     |> validate_nonblank_optional(:merge_commit_sha)
-    |> validate_outcome_evidence()
+    |> validate_outcome_evidence(attrs)
     |> validate_successor_is_different()
     |> unique_constraint(:id, name: :sympp_work_package_deliveries_id_unique_index)
     |> unique_constraint(:work_package_id,
@@ -116,26 +189,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
     |> foreign_key_constraint(:successor_work_package_id)
   end
 
-  defp validate_outcome_evidence(changeset) do
-    case get_field(changeset, :outcome) do
-      "pr_merged" ->
-        validate_required(changeset, [:pr_url, :pr_merged_at])
+  defp validate_outcome_evidence(changeset, attrs) do
+    outcome = get_field(changeset, :outcome)
+    evidence = Map.take(attrs, all_evidence_fields())
 
-      "completed_no_pr" ->
-        validate_required(changeset, [:no_pr_evidence])
-
-      "superseded" ->
+    case validate_evidence(outcome, evidence) do
+      :ok ->
         changeset
-        |> validate_required([:successor_work_package_id, :superseded_reason])
-        |> validate_nonblank_optional(:successor_work_package_id)
 
-      "abandoned" ->
-        validate_required(changeset, [:abandoned_rationale])
-
-      _outcome ->
+      {:error, details} ->
         changeset
+        |> add_evidence_errors(details["missing_fields"], "can't be blank", :required)
+        |> add_evidence_errors(details["unexpected_fields"], "is not allowed for outcome", :exclusion)
     end
   end
+
+  defp all_evidence_fields do
+    @outcomes
+    |> Enum.flat_map(fn outcome -> Enum.map(evidence_field_specs(outcome), & &1.name) end)
+    |> Enum.uniq()
+  end
+
+  defp add_evidence_errors(changeset, fields, message, validation) do
+    Enum.reduce(fields, changeset, fn field, changeset ->
+      add_error(changeset, String.to_existing_atom(field), message, validation: validation)
+    end)
+  end
+
+  defp missing_evidence_value?(nil), do: true
+  defp missing_evidence_value?(value) when is_binary(value), do: String.trim(value) == ""
+  defp missing_evidence_value?(_value), do: false
 
   defp validate_successor_is_different(changeset) do
     work_package_id = get_field(changeset, :work_package_id)

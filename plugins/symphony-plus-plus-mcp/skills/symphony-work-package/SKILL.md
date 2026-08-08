@@ -53,22 +53,22 @@ Keep S++ current as the work changes:
 - `update_task_plan(patch, expected_version)`.
 - `append_finding(finding, idempotency_key)`.
 - `append_progress(event, idempotency_key)`.
-- `report_blocker` / `resolve_blocker`.
 - `add_comment(body)`, `list_comments()`, and
   `resolve_comment(comment_id, resolution_note?)` for scoped package notes.
   Pass `target_kind` and `target_id` only for another authorized target.
 - `set_status` for allowed lifecycle transitions.
 - `request_scope_expansion` when the assignment must grow.
-- `create_guidance_request` when product, architecture, dependency, or
-  slice-boundary ambiguity would otherwise force guessing.
+- Use comments for ordinary parent-agent coordination. Workers do not create
+  or resolve durable human blockers or guidance.
 
 Human-facing bodies, comments, blocker notes, findings, progress details, and
 guidance context are Markdown. Keep titles, ids, statuses, branch names, and
 other compact labels plain.
 
-Make guidance human-answerable: state the blocked decision, checked evidence,
-package impact, candidate answers if known, and the smallest answer that
-unblocks you. Treat architect escalation to `human_info_needed` as a blocker.
+When you need direction, ask the parent or architect through ordinary agent
+messaging or comments. State the decision, checked evidence, package impact,
+candidate answers if known, and the smallest answer that unblocks you. Treat
+architect escalation to `human_info_needed` as a blocker.
 
 Stay inside the assigned WorkPackage. Do not inspect or mutate siblings unless
 S++ explicitly gives scoped context.
@@ -104,8 +104,8 @@ Before `mark_ready()`:
   infers completed plan, PR, branch, and review facts from existing evidence
   when the matching facts are already recorded.
 - No active blocker remains.
-  If a finish transition must address active blockers, pass
-  `blocker_closeout` to `set_status` or `mark_ready`.
+  Active blockers must be resolved by the architect or trusted local operator
+  before worker finish transitions.
 
 After `mark_ready()` succeeds, evidence is frozen except idempotent replay of
 already-recorded writes.

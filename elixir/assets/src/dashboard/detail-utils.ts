@@ -3,7 +3,7 @@ import { attentionTone, operationalLabel } from "@/lib/operational-state";
 import { formatStatus, statusLabel } from "@/lib/status-labels";
 import { packageReviewLabel, planProgressLabel } from "@/lib/review-signals";
 import { sortedCopy } from "@/lib/collections";
-import type { CommentStats, DashboardRuntimeConfig, PackageLineageProjection } from "./runtime";
+import type { CommentStats, PackageLineageProjection } from "./runtime";
 import { formatDate } from "./dashboard-persistence";
 import { sliceSuccessorLabel, sortableTime } from "./workstream-data";
 
@@ -90,14 +90,6 @@ export function requestCommentStats(detail: WorkRequestDetail, requestComments: 
     comment_count: Math.max(0, base.comment_count + currentRequestStats.comment_count - initialRequestStats.comment_count),
     open_comment_count: Math.max(0, base.open_comment_count + currentRequestStats.open_comment_count - initialRequestStats.open_comment_count),
   };
-}
-
-export function canMutateDashboardOperatorActions(config?: DashboardRuntimeConfig) {
-  return config?.operatorMode === true;
-}
-
-export function canMutateDashboardComments(config?: DashboardRuntimeConfig) {
-  return canMutateDashboardOperatorActions(config);
 }
 
 export function requestProgressText(detail: WorkRequestDetail) {

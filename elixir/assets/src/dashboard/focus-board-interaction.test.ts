@@ -35,13 +35,14 @@ describe("focus board interactions", () => {
 
     await page.route("**/api/v1/sympp/operator/config*", async (route) => {
       await configReady;
-      await route.fulfill({ json: { apiBase: "/api/v1/sympp/operator", operatorMode: true, dashboard: priorityDashboard } });
+      await route.fulfill({ json: { apiBase: "/api/v1/sympp/operator", operatorMode: false, dashboard: priorityDashboard } });
     });
     await page.route("**/api/v1/sympp/operator/dashboard", (route) => {
       priorityRequests += 1;
       return route.fulfill({ json: priorityDashboard });
     });
     await page.route("**/api/v1/sympp/operator/dashboard/deferred", (route) => route.fulfill({ json: deferredDashboard }));
+    await page.route("**/api/v1/sympp/operator/work-requests/wr-interaction*", (route) => route.fulfill({ json: deferredDashboard.work_request_details[0] }));
     await page.route("**/api/v1/sympp/operator/dashboard/events", (route) => route.abort());
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
@@ -52,6 +53,12 @@ describe("focus board interactions", () => {
     releaseConfig();
     await page.getByText("Interaction request", { exact: true }).waitFor();
     expect(priorityRequests).toBe(0);
+    await page.keyboard.press("Escape");
+    await page.locator('[data-request-id="wr-interaction"]').first().getByRole("button", { name: "Open request details" }).click();
+    const detail = page.locator(".dashboard-dialog-content");
+    await detail.getByText("Mark Delivered", { exact: true }).waitFor();
+    expect(await detail.getByText("Add Comment", { exact: true }).count()).toBe(1);
+    expect(await detail.getByText("Delete Request", { exact: true }).count()).toBe(1);
     await page.close();
   }, 20_000);
 
@@ -70,7 +77,7 @@ describe("focus board interactions", () => {
     const requests: string[] = [];
 
     await page.route("**/api/v1/sympp/operator/config*", (route) =>
-      route.fulfill({ json: { apiBase: "/api/v1/sympp/operator", basePath: "/sympp/board", operatorMode: true } }),
+      route.fulfill({ json: { apiBase: "/api/v1/sympp/operator", basePath: "/sympp/board" } }),
     );
     await page.route("**/api/v1/sympp/operator/dashboard/events", (route) => route.abort());
     await page.route("**/api/v1/sympp/operator/dashboard", async (route) => {
@@ -90,11 +97,15 @@ describe("focus board interactions", () => {
     await deferredRequested;
     expect(requests).toEqual(["priority", "deferred"]);
     expect(await board.getAttribute("aria-busy")).toBe("true");
+    expect(await board.getByText("Loading latest activity…", { exact: true }).isVisible()).toBe(true);
+    expect(await board.getByText(/open across repositories/).count()).toBe(0);
     expect(await board.getByRole("region", { name: /Moving now/ }).count()).toBe(0);
     expect(await page.locator('.workstream-repo-card [data-request-id="wr-interaction"]').count()).toBe(1);
 
     releaseDeferred();
     await board.locator('[data-request-id="wr-interaction"]').waitFor({ state: "attached" });
+    await board.getByText("3 open across repositories", { exact: true }).waitFor();
+    expect(await board.getByText("Loading latest activity…", { exact: true }).count()).toBe(0);
     const workbench = board.locator(".focus-board__workbench");
     const selected = board.locator('[data-request-id="wr-following-group"]');
     const next = board.locator('[data-request-id="wr-interaction"]');
@@ -148,7 +159,7 @@ describe("focus board interactions", () => {
     page.setDefaultTimeout(5_000);
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.route("**/api/v1/sympp/operator/config*", (route) =>
-      route.fulfill({ json: { apiBase: "/api/v1/sympp/operator", basePath: "/sympp/board", operatorMode: true } }),
+      route.fulfill({ json: { apiBase: "/api/v1/sympp/operator", basePath: "/sympp/board" } }),
     );
     await page.route("**/api/v1/sympp/operator/dashboard/events", (route) => route.abort());
     await page.route("**/api/v1/sympp/operator/dashboard", (route) => route.fulfill({ json: attentionDashboard }));
@@ -204,7 +215,7 @@ describe("focus board interactions", () => {
     await disableFocusBoard(page);
     page.setDefaultTimeout(5_000);
     await page.route("**/api/v1/sympp/operator/config*", (route) =>
-      route.fulfill({ json: { apiBase: "/api/v1/sympp/operator", basePath: "/sympp/board", operatorMode: true } }),
+      route.fulfill({ json: { apiBase: "/api/v1/sympp/operator", basePath: "/sympp/board" } }),
     );
     await page.route("**/api/v1/sympp/operator/dashboard/events", (route) => route.abort());
     await page.route("**/api/v1/sympp/operator/dashboard", (route) => route.fulfill({ json: attentionDashboard }));

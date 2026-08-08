@@ -1,12 +1,13 @@
 import type { DashboardMutationPayload, DashboardPayload } from "@/types/dashboard";
 import { useCallback } from "react";
 
-import { mutationHeaders, operatorApiUrl, operatorFetch, readDashboardApiResponse, withLocalOperatorReconnect } from "./runtime";
+import { mutationHeaders, operatorApiUrl, operatorFetch, readDashboardApiResponse, withRuntimeConfigRetry } from "./runtime";
 
 type OperatorSettingsPayload = {
   work_request_archive_after_days?: number;
   solo_session_delete_after_days?: number;
   open_dashboard_on_boot?: boolean;
+  capture_failed_mcp_calls?: boolean;
 };
 
 type RefreshAfterMutation = (payload?: DashboardMutationPayload) => Promise<void>;
@@ -22,10 +23,11 @@ export function useDashboardOperatorSettings({
   const archiveAfterDays = settings?.work_request_archive_after_days ?? 14;
   const soloSessionDeleteAfterDays = settings?.solo_session_delete_after_days ?? 30;
   const openDashboardOnBoot = settings?.open_dashboard_on_boot ?? true;
+  const captureFailedMcpCalls = settings?.capture_failed_mcp_calls ?? false;
 
   const updateOperatorSettings = useCallback(
     async (payload: OperatorSettingsPayload) => {
-      await withLocalOperatorReconnect(async () => {
+      await withRuntimeConfigRetry(async () => {
         const response = await operatorFetch(operatorApiUrl("/settings"), {
           method: "POST",
           headers: await mutationHeaders(),
@@ -53,11 +55,18 @@ export function useDashboardOperatorSettings({
     [updateOperatorSettings],
   );
 
+  const updateCaptureFailedMcpCalls = useCallback(
+    (capture: boolean) => updateOperatorSettings({ capture_failed_mcp_calls: capture }),
+    [updateOperatorSettings],
+  );
+
   return {
     archiveAfterDays,
+    captureFailedMcpCalls,
     openDashboardOnBoot,
     soloSessionDeleteAfterDays,
     updateArchiveAfterDays,
+    updateCaptureFailedMcpCalls,
     updateOpenDashboardOnBoot,
     updateSoloSessionDeleteAfterDays,
   };

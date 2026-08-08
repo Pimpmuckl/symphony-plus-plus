@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
   use SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase, async: true
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
 
   test "documentation index links only current local files" do
     index_path = Path.join(@repo_root, "docs/README.md")
@@ -37,7 +38,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
           "record_work_package_delivery",
           "reconcile_work_request",
           "PR-size or line-budget",
-          "cleanup_work_request_work_package_runtime"
+          "cleanup_work_request_work_package_runtime",
+          ~s({"pr_merged":{"pr_url":"...","pr_merged_at":"...","merge_commit_sha":"..."}}),
+          ~s({"completed_no_pr":{"no_pr_evidence":"..."}}),
+          ~s({"superseded":{"successor_work_package_id":"...","superseded_reason":"..."}}),
+          ~s({"abandoned":{"abandoned_rationale":"..."}})
         ] do
       assert architect_skill =~ marker
     end
@@ -50,12 +55,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     end
   end
 
+  test "delivery evidence schema exposes each concrete runtime contract" do
+    evidence_schema =
+      ToolCatalog.architect_tool_input_schema("record_work_package_delivery")
+      |> get_in(["properties", "evidence"])
+
+    assert length(evidence_schema["oneOf"]) == 4
+
+    for outcome <- WorkPackageDelivery.outcomes() do
+      assert branch = Enum.find(evidence_schema["oneOf"], &(&1["required"] == [outcome]))
+      assert branch["additionalProperties"] == false
+
+      typed_schema = get_in(branch, ["properties", outcome])
+      field_specs = WorkPackageDelivery.evidence_field_specs(outcome)
+
+      assert Map.keys(typed_schema["properties"]) |> Enum.sort() ==
+               field_specs |> Enum.map(& &1.name) |> Enum.sort()
+
+      assert typed_schema["required"] ==
+               for(%{name: name, required: true} <- field_specs, do: name)
+    end
+
+    pr_merged_branch = Enum.find(evidence_schema["oneOf"], &(&1["required"] == ["pr_merged"]))
+
+    assert get_in(pr_merged_branch, ["properties", "pr_merged", "required"]) == [
+             "pr_url",
+             "pr_merged_at",
+             "merge_commit_sha"
+           ]
+  end
+
   test "runtime schemas and packaged worker skill agree on compact calls" do
     worker_skill = @mcp_plugin_skill_path |> File.read!() |> normalize_newlines()
     prompt = File.read!(@mcp_plugin_prompt_path)
 
-    assert Map.has_key?(ToolCatalog.worker_tool_input_schema("set_status")["properties"], "blocker_closeout")
-    assert Map.keys(ToolCatalog.worker_tool_input_schema("mark_ready")["properties"]) == ["blocker_closeout"]
+    refute Map.has_key?(ToolCatalog.worker_tool_input_schema("set_status")["properties"], "blocker_closeout")
+    assert ToolCatalog.worker_tool_input_schema("mark_ready")["properties"] == %{}
     assert Map.keys(ToolCatalog.worker_tool_input_schema("complete_review")["properties"]) |> Enum.sort() == ["note", "reference"]
     assert ToolCatalog.worker_tool_input_schema("add_comment")["required"] == ["body"]
     assert ToolCatalog.worker_tool_input_schema("list_comments")["required"] == []
@@ -67,12 +102,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
           "append_finding",
           "append_progress",
           "set_status",
-          "report_blocker",
-          "resolve_blocker",
           "add_comment",
           "list_comments",
           "resolve_comment",
-          "create_guidance_request",
           "read_guidance_request",
           "request_scope_expansion",
           "attach_branch",
@@ -90,8 +122,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
       assert content =~ "attach_branch(head_sha)"
       assert content =~ "complete_review(reference?, note?)"
       assert content =~ "sync_pr()"
-      assert content =~ "blocker_closeout"
       assert content =~ "attached PR"
+      assert content =~ "Workers do not create"
+      refute content =~ "blocker_closeout"
+      refute content =~ "report_blocker"
+      refute content =~ "resolve_blocker"
+      refute content =~ "create_guidance_request"
       refute content =~ "sync_pr(metadata, url|number)"
       refute content =~ "sync_pr(url_or_number, metadata)"
     end
@@ -106,7 +142,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
       assert content =~ "Worktree path: <PREPARED_WORKTREE_PATH>"
       assert content =~ ~s({"work_package_id":"<WORK_PACKAGE_ID>"})
       assert content =~ "update_task_plan(patch, expected_version)"
-      assert content =~ "resolve_blocker(blocker_id, resolution, summary, idempotency_key)"
+      refute content =~ "resolve_blocker"
       assert content =~ "request_scope_expansion(summary, idempotency_key, payload)"
       assert content =~ "attach_pr(url, head_sha)"
       assert content =~ "Do not create local planning files as the WorkPackage source of truth."

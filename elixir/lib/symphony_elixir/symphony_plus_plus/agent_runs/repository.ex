@@ -7,9 +7,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
   alias Ecto.Changeset
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion, as: WorkRequestCompletion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   @active_run_statuses AgentRun.active_statuses()
+  @terminal_work_package_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
 
   @type repo :: module()
   @type error ::
@@ -19,6 +23,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
           | :id_already_exists
           | :not_active
           | :not_found
+          | :work_package_terminal
           | {:constraint_failed, String.t()}
           | {:migration_failed, term()}
           | {:storage_failed, String.t()}
@@ -35,8 +40,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
   @spec start_run(repo(), map(), keyword()) :: {:ok, AgentRun.t()} | {:error, error()}
   def start_run(repo, attrs, opts \\ []) when is_atom(repo) and is_map(attrs) and is_list(opts) do
     case repo.transaction(fn -> start_run_or_rollback(repo, attrs, opts) end) do
-      {:ok, agent_run} -> {:ok, agent_run}
-      {:error, reason} -> {:error, reason}
+      {:ok, %AgentRun{} = agent_run} ->
+        {:ok, agent_run}
+
+      {:ok, {:error, :work_package_terminal}} ->
+        maybe_schedule_terminal_worktree_cleanup(repo, work_package_id(attrs))
+        {:error, :work_package_terminal}
+
+      {:ok, {:error, reason}} ->
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -132,6 +147,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
   defp start_run_or_rollback(repo, attrs, opts) do
     case start_run_transaction(repo, attrs, opts) do
       {:ok, agent_run} -> agent_run
+      {:error, :work_package_terminal} -> preserve_previous_attempt_on_terminal_rejection(repo, attrs, opts)
+      {:error, reason} -> repo.rollback(reason)
+    end
+  end
+
+  defp preserve_previous_attempt_on_terminal_rejection(repo, attrs, opts) do
+    opts = Keyword.put(opts, :replacement_reason, "work package became terminal before retry dispatch")
+
+    case release_previous_attempt(repo, Keyword.get(opts, :replace_agent_run_id), work_package_id(attrs), opts) do
+      :ok -> {:error, :work_package_terminal}
       {:error, reason} -> repo.rollback(reason)
     end
   end
@@ -139,10 +164,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
   defp start_run_transaction(repo, attrs, opts) do
     work_package_id = work_package_id(attrs)
 
-    with :ok <- release_previous_attempt(repo, Keyword.get(opts, :replace_agent_run_id), work_package_id, opts),
+    with :ok <- reject_terminal_work_package(repo, work_package_id),
+         :ok <- release_previous_attempt(repo, Keyword.get(opts, :replace_agent_run_id), work_package_id, opts),
          {:ok, %AgentRun{} = agent_run} <- insert_run_with_recovery(repo, attrs, work_package_id, opts),
          :ok <- clear_completion_for_active_run(repo, agent_run) do
       {:ok, agent_run}
+    end
+  end
+
+  defp reject_terminal_work_package(repo, work_package_id) when is_binary(work_package_id) do
+    case repo.get(WorkPackage, work_package_id) do
+      %WorkPackage{status: status} when status in @terminal_work_package_statuses -> {:error, :work_package_terminal}
+      %WorkPackage{} -> reject_terminal_delivery(repo, work_package_id)
+      nil -> :ok
+    end
+  end
+
+  defp reject_terminal_work_package(_repo, _work_package_id), do: :ok
+
+  defp reject_terminal_delivery(repo, work_package_id) do
+    if repo.one(
+         from(delivery in WorkPackageDelivery,
+           where: delivery.work_package_id == ^work_package_id,
+           select: 1,
+           limit: 1
+         )
+       ) do
+      {:error, :work_package_terminal}
+    else
+      :ok
     end
   end
 
@@ -189,9 +239,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
 
   defp release_previous_attempt(_repo, _previous_agent_run_id, _work_package_id, _opts), do: :ok
 
-  defp release_previous_agent_run(repo, %AgentRun{work_package_id: work_package_id, status: status, id: id}, work_package_id, _opts)
+  defp release_previous_agent_run(repo, %AgentRun{work_package_id: work_package_id, status: status, id: id}, work_package_id, opts)
        when status in ["starting", "retrying"] do
-    mark_previous_attempt_failed(repo, id, status, "replaced by retry dispatch")
+    mark_previous_attempt_failed(repo, id, status, Keyword.get(opts, :replacement_reason, "replaced by retry dispatch"))
   end
 
   defp release_previous_agent_run(repo, %AgentRun{work_package_id: work_package_id, status: "running", id: id}, work_package_id, opts) do
@@ -203,7 +253,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
 
   defp release_confirmed_dead_running_attempt(repo, previous_agent_run_id, opts) do
     if Keyword.get(opts, :replace_confirmed_dead_worker) == true do
-      mark_previous_attempt_failed(repo, previous_agent_run_id, "running", "replaced after confirmed worker exit")
+      reason = Keyword.get(opts, :replacement_reason, "replaced after confirmed worker exit")
+      mark_previous_attempt_failed(repo, previous_agent_run_id, "running", reason)
     else
       :ok
     end
@@ -364,8 +415,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
 
   defp update_run(repo, id, attrs) do
     case repo.transaction(fn -> update_run_or_rollback(repo, id, attrs) end) do
-      {:ok, agent_run} -> {:ok, agent_run}
-      {:error, reason} -> {:error, reason}
+      {:ok, agent_run} ->
+        maybe_schedule_terminal_worktree_cleanup(repo, agent_run)
+        {:ok, agent_run}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   rescue
     error in Exqlite.Error -> normalize_exqlite_error(error)
@@ -381,10 +436,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
   defp update_run_transaction(repo, id, attrs) do
     with {:ok, agent_run} <- get(repo, id),
          :ok <- active_agent_run?(agent_run),
-         {:ok, changes} <- update_changes(agent_run, attrs) do
+         {:ok, changes} <- update_changes(agent_run, attrs),
+         :ok <- revalidate_running_transition(repo, agent_run, changes) do
       persist_active_update(repo, id, changes)
     end
   end
+
+  defp revalidate_running_transition(repo, %AgentRun{work_package_id: work_package_id}, %{status: "running"}) do
+    reject_terminal_work_package(repo, work_package_id)
+  end
+
+  defp revalidate_running_transition(_repo, %AgentRun{}, _changes), do: :ok
 
   defp update_changes(%AgentRun{} = agent_run, attrs) do
     changeset = AgentRun.update_changeset(agent_run, attrs)
@@ -423,10 +485,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
 
   defp clear_completion_for_active_run(repo, %AgentRun{status: status, work_package_id: work_package_id})
        when status in @active_run_statuses and is_binary(work_package_id) do
-    WorkRequestRepository.clear_completion_for_work_package(repo, work_package_id)
+    if repo.one(
+         from(delivery in WorkPackageDelivery,
+           where: delivery.work_package_id == ^work_package_id,
+           select: 1,
+           limit: 1
+         )
+       ) do
+      :ok
+    else
+      WorkRequestRepository.clear_completion_for_work_package(repo, work_package_id)
+    end
   end
 
   defp clear_completion_for_active_run(_repo, %AgentRun{}), do: :ok
+
+  defp maybe_schedule_terminal_worktree_cleanup(repo, %AgentRun{status: status, work_package_id: work_package_id})
+       when status in ["completed", "failed", "stopped"] and is_binary(work_package_id) do
+    maybe_schedule_terminal_worktree_cleanup(repo, work_package_id)
+  end
+
+  defp maybe_schedule_terminal_worktree_cleanup(_repo, %AgentRun{}), do: :ok
+
+  defp maybe_schedule_terminal_worktree_cleanup(repo, work_package_id) when is_binary(work_package_id) do
+    WorkRequestCompletion.schedule_terminal_agent_run_worktree_cleanup(repo, work_package_id)
+  end
+
+  defp maybe_schedule_terminal_worktree_cleanup(_repo, _work_package_id), do: :ok
 
   defp active_agent_run?(%AgentRun{status: status}) when status in ["starting", "running", "retrying"], do: :ok
   defp active_agent_run?(%AgentRun{}), do: {:error, :not_active}

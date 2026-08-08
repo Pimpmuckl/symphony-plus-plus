@@ -9,6 +9,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreePath
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeTargetRoot
 
+  @local_branch_template_fields %{
+    "work_package_id" => :id,
+    "id" => :id,
+    "phase_id" => :phase_id,
+    "parent_id" => :parent_id,
+    "owner_id" => :owner_id
+  }
+
   @type tool_error :: {:tool_error, String.t() | tuple()}
   @type target_repo_root_result :: {:ok, String.t() | nil} | tool_error
   @type scope_result :: :ok | {:error, atom()} | tool_error
@@ -94,14 +102,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope do
     end
   end
 
-  def prepare_branch(%WorkPackage{branch_pattern: branch_pattern}, nil) do
+  def prepare_branch(%WorkPackage{branch_pattern: branch_pattern} = work_package, nil) do
     case normalize_optional_value(branch_pattern) do
       nil ->
-        {:tool_error, "branch_required"}
+        package_branch_segment(work_package.id)
 
       pattern ->
         if local_branch_template_pattern?(pattern) do
-          {:tool_error, "branch_required"}
+          {:ok, materialize_local_branch_template(work_package, pattern)}
         else
           {:ok, pattern}
         end
@@ -157,13 +165,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope do
   end
 
   defp local_branch_template_placeholder_regex(%WorkPackage{} = work_package, placeholder) do
-    case placeholder do
-      "work_package_id" -> local_branch_template_literal_regex(work_package.id)
-      "id" -> local_branch_template_literal_regex(work_package.id)
-      "phase_id" -> local_branch_template_literal_regex(work_package.phase_id)
-      "parent_id" -> local_branch_template_literal_regex(work_package.parent_id)
-      "owner_id" -> local_branch_template_literal_regex(work_package.owner_id)
-      _placeholder -> "[^/]+"
+    case Map.fetch(@local_branch_template_fields, placeholder) do
+      {:ok, field} ->
+        literal = work_package |> Map.get(field) |> local_branch_template_literal_regex()
+        derived = work_package |> local_branch_template_placeholder(placeholder) |> Regex.escape()
+        "(?:#{literal}|#{derived})"
+
+      :error ->
+        "[^/]+"
+    end
+  end
+
+  defp materialize_local_branch_template(%WorkPackage{} = work_package, pattern) do
+    Regex.replace(~r/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/, pattern, fn _match, placeholder ->
+      local_branch_template_placeholder(work_package, placeholder)
+    end)
+  end
+
+  defp local_branch_template_placeholder(%WorkPackage{} = work_package, placeholder) do
+    field = Map.get(@local_branch_template_fields, placeholder, :id)
+    value = normalize_optional_value(Map.get(work_package, field)) || work_package.id
+    fingerprint = if field == :id, do: work_package.id, else: Enum.join([value, work_package.id], <<0>>)
+    {:ok, segment} = WorktreePath.previous_compact_unique_segment(value, fingerprint)
+    segment
+  end
+
+  defp package_branch_segment(id) do
+    case WorktreePath.previous_compact_unique_segment(id, id) do
+      {:ok, branch} -> {:ok, branch}
+      {:error, _reason} -> {:tool_error, "invalid_work_package_id"}
     end
   end
 

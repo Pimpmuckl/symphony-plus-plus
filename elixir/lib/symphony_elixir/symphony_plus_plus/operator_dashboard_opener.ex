@@ -13,8 +13,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener do
   @board_path "/sympp/board"
   @default_open_delay_ms 5_000
   @open_dashboard_override_config_key :sympp_open_dashboard_override
-  @operator_bootstrap_config_key :sympp_local_operator_bootstrap_token
-  @operator_bootstrap_param "operator_bootstrap"
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -166,24 +164,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener do
           end
       end
 
-    origin
-    |> Kernel.<>(@board_path)
-    |> maybe_put_operator_bootstrap_param()
-  end
-
-  defp maybe_put_operator_bootstrap_param(url) do
-    endpoint_config = Application.get_env(:symphony_elixir, Endpoint, [])
-
-    case Keyword.get(endpoint_config, @operator_bootstrap_config_key) do
-      token when is_binary(token) and token != "" ->
-        url
-        |> URI.parse()
-        |> URI.append_query(URI.encode_query([{@operator_bootstrap_param, token}]))
-        |> URI.to_string()
-
-      _token ->
-        url
-    end
+    origin <> @board_path
   end
 
   defp open_url(url, opener) when is_function(opener, 1) do

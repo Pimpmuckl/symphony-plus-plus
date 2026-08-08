@@ -2,10 +2,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
-  alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
@@ -18,6 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   @terminal_work_package_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
   @terminal_delivery_outcomes ["pr_merged", "completed_no_pr", "superseded", "abandoned"]
+  @durable_cleanup_deferral_reasons ["claim_lease_paused", "claim_lease_active", "worker_grant_active", "architect_grant_active"]
   @completion_blocking_work_request_statuses ["human_info_needed"]
   @operator_completion_source "operator"
   @restorable_archive_reasons ["age"]
@@ -44,6 +44,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   @spec default_archive_after_days() :: pos_integer()
   def default_archive_after_days, do: @default_archive_after_days
+
+  @spec schedule_terminal_agent_run_worktree_cleanup(module(), String.t()) :: :ok
+  def schedule_terminal_agent_run_worktree_cleanup(repo, work_package_id)
+      when is_atom(repo) and is_binary(work_package_id) do
+    case canonical_delivery_closeout(repo, work_package_id) do
+      {:ok, {delivery, _event}} ->
+        opts = cleanup_env_opts()
+        cleanup_terminal_agent_run_worktree(repo, work_package_id, delivery, opts)
+        :ok
+
+      {:error, _reason} ->
+        :ok
+    end
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
 
   @spec blocker_event_payload?(map()) :: boolean()
   def blocker_event_payload?(payload) when is_map(payload) do
@@ -184,8 +202,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     with {:ok, work_request} <- Repository.get(repo, work_request_id),
          {:ok, question_state} <- question_state(repo, work_request_id),
          {:ok, work_packages} <- Repository.list_work_packages(repo, work_request_id),
-         {:ok, contexts} <- work_package_contexts(repo, work_packages),
-         {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_packages) do
+         {:ok, deliveries_by_slice_id} <- work_package_deliveries_by_id(repo, work_packages),
+         :ok <- clear_terminal_work_package_attention(repo, work_packages, deliveries_by_slice_id),
+         {:ok, contexts} <- work_package_contexts(repo, work_packages) do
       state = state(work_request, question_state, work_packages, contexts, deliveries_by_slice_id)
       persist_state(repo, work_request, state, work_packages)
     end
@@ -332,7 +351,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   defp clear_completed_attention(repo, work_request_id, work_packages) do
     now = DateTime.utc_now(:microsecond)
-    work_package_ids = Enum.map(work_packages, & &1.id)
 
     repo.update_all(
       from(question in ClarificationQuestion,
@@ -341,55 +359,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
       set: [status: "closed", updated_at: now]
     )
 
-    repo.update_all(
-      from(request in GuidanceRequest,
-        where: request.work_package_id in ^work_package_ids,
-        where: request.status in ["open", "human_info_needed"]
-      ),
-      set: [
-        status: "answered",
-        answer: "Cleared because the WorkRequest reached a terminal state.",
-        answered_by: "work-request-completion",
-        answered_at: now,
-        updated_at: now
-      ]
-    )
-
     Enum.reduce_while(work_packages, :ok, fn work_package, :ok ->
-      case resolve_active_blockers(repo, work_request_id, work_package.id) do
+      case WorkPackageRepository.clear_terminal_attention(repo, work_package) do
         :ok -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
   end
 
-  defp resolve_active_blockers(repo, work_request_id, work_package_id) do
-    with {:ok, events} <- PlanningRepository.list_progress_events(repo, work_package_id) do
-      events
-      |> BlockerProjection.blockers()
-      |> Enum.filter(& &1.active)
-      |> Enum.reduce_while(:ok, &resolve_active_blocker(repo, work_request_id, work_package_id, &1, &2))
-    end
-  end
-
-  defp resolve_active_blocker(repo, work_request_id, work_package_id, blocker, :ok) do
-    case PlanningRepository.append_progress_event(repo, %{
-           work_package_id: work_package_id,
-           summary: "Cleared blocker after WorkRequest completion: #{blocker.summary || blocker.id}",
-           body: "WorkRequest #{work_request_id} reached a terminal state.",
-           status: "resolved",
-           idempotency_key: "work-request-completion:#{work_request_id}:#{work_package_id}:#{blocker.id}",
-           payload: %{
-             type: "blocker",
-             source_tool: "resolve_blocker",
-             blocker_id: blocker.id,
-             resolution: "WorkRequest reached a terminal state.",
-             active: false
-           }
-         }) do
-      {:ok, _event} -> {:cont, :ok}
-      {:error, reason} -> {:halt, {:error, reason}}
-    end
+  defp clear_terminal_work_package_attention(repo, work_packages, deliveries_by_slice_id) do
+    work_packages
+    |> Enum.filter(fn work_package ->
+      work_package.status in @terminal_work_package_statuses or
+        terminal_delivery?(Map.get(deliveries_by_slice_id, work_package.id))
+    end)
+    |> Enum.reduce_while(:ok, fn work_package, :ok ->
+      case WorkPackageRepository.clear_terminal_attention(repo, work_package) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   defp operator_completed?(%WorkRequest{completed_at: %DateTime{}, completion_source: @operator_completion_source}), do: true
@@ -400,10 +389,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
       Enum.all?(work_packages, &terminal_or_filtered_slice?(&1, work_package_contexts, deliveries_by_slice_id))
   end
 
-  defp terminal_or_filtered_slice?(%WorkPackage{status: status, id: id}, work_package_contexts, _deliveries_by_slice_id)
+  defp terminal_or_filtered_slice?(%WorkPackage{status: status, id: id}, work_package_contexts, deliveries_by_slice_id)
        when status in @terminal_work_package_statuses do
     context = Map.get(work_package_contexts, id)
-    not active_blocker_context?(context) and not active_runtime_context?(context)
+    delivery = Map.get(deliveries_by_slice_id, id)
+
+    not active_blocker_context?(context) and
+      (terminal_delivery?(delivery) or not active_runtime_context?(context))
   end
 
   defp terminal_or_filtered_slice?(%WorkPackage{id: id}, _work_package_contexts, deliveries_by_slice_id),
@@ -861,11 +853,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   defp schedule_work_request_linked_worktree_cleanup(repo, work_request_id) do
     opts = cleanup_env_opts()
 
+    schedule_worktree_cleanup(fn ->
+      best_effort_cleanup_work_request_worktrees(repo, work_request_id, opts)
+    end)
+  end
+
+  defp schedule_worktree_cleanup(cleanup) when is_function(cleanup, 0) do
     task = fn ->
       # ponytail: global cleanup lock; move to per-repo workers if archive throughput matters.
-      :global.trans({__MODULE__, :archive_worktree_cleanup}, fn ->
-        best_effort_cleanup_work_request_worktrees(repo, work_request_id, opts)
-      end)
+      :global.trans({__MODULE__, :archive_worktree_cleanup}, cleanup)
     end
 
     case Process.whereis(SymphonyElixir.TaskSupervisor) do
@@ -878,12 +874,108 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   defp best_effort_cleanup_work_request_worktrees(repo, work_request_id, opts) do
     work_package_ids = archived_work_package_ids(repo, [work_request_id])
+    activity_contexts = WorkPackageActivity.contexts(repo, work_package_ids)
 
     work_package_ids
     |> Enum.uniq()
     |> Enum.each(fn work_package_id ->
-      WorkPackageService.cleanup_worktree(repo, work_package_id, opts)
+      unless worktree_cleanup_deferred?(repo, work_package_id, Map.get(activity_contexts, work_package_id)) do
+        WorkPackageService.cleanup_worktree(repo, work_package_id, opts)
+      end
     end)
+  end
+
+  defp worktree_cleanup_deferred?(repo, work_package_id, context) do
+    active_worker_cleanup_owner?(context) or durable_closeout_cleanup_deferral?(repo, work_package_id, context)
+  end
+
+  defp active_worker_cleanup_owner?(%{worker_signal: %{status: status}}) when status in ["active", "paused"], do: true
+  defp active_worker_cleanup_owner?(_context), do: false
+
+  defp cleanup_terminal_agent_run_worktree(repo, work_package_id, delivery, opts) do
+    context = WorkPackageActivity.contexts(repo, [work_package_id]) |> Map.get(work_package_id)
+
+    unless worktree_cleanup_deferred?(repo, work_package_id, context) do
+      case WorkPackageService.cleanup_worktree(repo, work_package_id, opts) do
+        {:ok, _cleanup} -> :ok
+        {:error, reason} -> audit_deferred_worktree_cleanup_failure(repo, work_package_id, delivery, reason)
+      end
+    end
+  end
+
+  defp audit_deferred_worktree_cleanup_failure(repo, work_package_id, delivery, reason) do
+    PlanningRepository.append_progress_event(repo, %{
+      work_package_id: work_package_id,
+      status: "worktree_cleanup_failed",
+      summary: "Worktree cleanup failed: #{inspect(closeout_worktree_cleanup_error(reason))}",
+      idempotency_key: "#{closeout_idempotency_key(delivery)}:worktree_cleanup",
+      payload: %{
+        type: "work_request_delivery_worktree_cleanup",
+        source_tool: "record_work_package_delivery",
+        delivery_id: delivery.id,
+        outcome: delivery.outcome,
+        reason: inspect(closeout_worktree_cleanup_error(reason))
+      }
+    })
+
+    :ok
+  end
+
+  defp canonical_delivery_closeout(repo, work_package_id) do
+    delivery =
+      repo.one(
+        from(delivery in WorkPackageDelivery,
+          where: delivery.work_package_id == ^work_package_id,
+          limit: 1
+        )
+      )
+
+    case delivery do
+      %WorkPackageDelivery{} = delivery -> canonical_delivery_closeout_event(repo, delivery)
+      nil -> {:error, :not_found}
+    end
+  end
+
+  defp canonical_delivery_closeout_event(repo, delivery) do
+    case PlanningRepository.get_progress_event_by_idempotency_key(
+           repo,
+           delivery.work_package_id,
+           closeout_idempotency_key(delivery)
+         ) do
+      {:ok, event} ->
+        if canonical_delivery_closeout_event?(event, delivery), do: {:ok, {delivery, event}}, else: {:error, :not_found}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp canonical_delivery_closeout_event?(event, delivery) do
+    payload = Map.get(event, :payload) || %{}
+
+    event.idempotency_key == closeout_idempotency_key(delivery) and
+      map_value(payload, :type) == "work_request_delivery_closeout" and
+      map_value(payload, :source_tool) == "record_work_package_delivery" and
+      map_value(payload, :work_request_id) == delivery.work_request_id and
+      map_value(payload, :work_package_id) == delivery.work_package_id and
+      map_value(payload, :delivery_id) == delivery.id and
+      map_value(payload, :outcome) == delivery.outcome
+  end
+
+  defp durable_closeout_cleanup_deferral?(repo, work_package_id, context) do
+    case canonical_delivery_closeout(repo, work_package_id) do
+      {:ok, {_delivery, _event}} ->
+        current_reasons = List.wrap(get_in(context, [:runtime_state, :reason_codes]))
+
+        "agent_run_active" in current_reasons or
+          Enum.any?(current_reasons, &(&1 in @durable_cleanup_deferral_reasons))
+
+      {:error, :not_found} ->
+        false
+
+      {:error, _reason} ->
+        true
+    end
   end
 
   defp cleanup_env_opts do
@@ -910,6 +1002,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   defp closeout_worktree_cleanup_error({:storage_failed, _message} = reason), do: reason
   defp closeout_worktree_cleanup_error(%Ecto.Changeset{} = reason), do: reason
   defp closeout_worktree_cleanup_error(reason), do: reason
+
+  defp closeout_idempotency_key(delivery) do
+    Enum.join(
+      [
+        "work_request_delivery_closeout",
+        delivery.work_request_id,
+        delivery.work_package_id,
+        delivery.idempotency_key
+      ],
+      ":"
+    )
+  end
 
   defp maybe_skip_archived_cleanup_error(reason, deleted_ids) do
     if hard_archived_cleanup_error?(reason) do
@@ -1024,8 +1128,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   defp terminal_slice?(work_package, context, delivery)
 
-  defp terminal_slice?(%WorkPackage{status: status}, context, _delivery) when status in @terminal_work_package_statuses do
-    not active_blocker_context?(context) and not active_runtime_context?(context)
+  defp terminal_slice?(%WorkPackage{status: status}, context, delivery) when status in @terminal_work_package_statuses do
+    not active_blocker_context?(context) and
+      (terminal_delivery?(delivery) or not active_runtime_context?(context))
   end
 
   defp terminal_slice?(%WorkPackage{}, _context, %WorkPackageDelivery{outcome: outcome})

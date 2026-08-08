@@ -377,6 +377,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
     |> put_settings_param(params, "work_request_archive_after_days")
     |> put_settings_param(params, "solo_session_delete_after_days")
     |> put_settings_param(params, "open_dashboard_on_boot")
+    |> put_settings_param(params, "capture_failed_mcp_calls")
   end
 
   defp put_settings_param(attrs, params, key) do
@@ -401,6 +402,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
       work_request_archive_after_days: settings.work_request_archive_after_days,
       solo_session_delete_after_days: settings.solo_session_delete_after_days,
       open_dashboard_on_boot: settings.open_dashboard_on_boot,
+      capture_failed_mcp_calls: settings.capture_failed_mcp_calls,
       hidden_work_package_ids: Enum.uniq(settings.hidden_work_package_ids)
     }
   end

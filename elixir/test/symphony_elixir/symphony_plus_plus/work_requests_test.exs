@@ -17,6 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
@@ -920,10 +921,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, request} = Repository.create(repo, attrs(id: "WR-COMPLETE-PAUSED-LEASE", status: "ready_for_slicing"))
     assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-COMPLETE-PAUSED-LEASE"))
     assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
-    linked_package = set_work_package_status!(repo, approved_slice, "merged")
 
     assert {:ok, claim_lease} =
-             ClaimLeaseService.claim(repo, linked_package.id, activity_actor("paused-completion-worker"), stale_after_ms: 60_000)
+             ClaimLeaseService.claim(repo, approved_slice.id, activity_actor("paused-completion-worker"), stale_after_ms: 60_000)
+
+    linked_package = set_work_package_status!(repo, approved_slice, "merged")
 
     assert {:ok, paused_lease} = ClaimLeaseService.pause(repo, claim_lease.id, activity_actor("operator"), reason: "operator pause")
 
@@ -950,7 +952,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert %DateTime{} = archived.archived_at
   end
 
-  test "completion waits for questions blockers linked packages and honors terminal runtime", %{repo: repo} do
+  test "completion waits for questions and runtime while clearing terminal package blockers", %{repo: repo} do
     assert {:ok, human_request} = Repository.create(repo, attrs(id: "WR-COMPLETE-HUMAN", status: "ready_for_slicing"))
     assert {:ok, human_slice} = CanonicalWorkPackageFixtures.add_work_package(repo, human_request.id, work_package_attrs(id: "WRS-COMPLETE-HUMAN"))
     assert {:ok, _human_skipped} = Repository.skip_work_package(repo, human_request.id, human_slice.id, "planned")
@@ -978,13 +980,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     linked_package = set_work_package_status!(repo, approved_slice, "merged")
 
     append_blocker_event!(repo, linked_package.id, "blocker-completion", true)
-    assert {:ok, blocked} = Service.refresh_completion(repo, linked_request.id)
-    assert blocked.completed_at == nil
-
-    resolved_blocker = append_blocker_event!(repo, linked_package.id, "blocker-completion", false)
-    assert {:ok, unblocked} = Service.refresh_completion(repo, linked_request.id)
-    assert %DateTime{} = unblocked.completed_at
-    assert DateTime.compare(unblocked.completed_at, resolved_blocker.created_at) in [:eq, :gt]
+    assert {:ok, completed_after_cleanup} = Service.refresh_completion(repo, linked_request.id)
+    assert %DateTime{} = completed_after_cleanup.completed_at
+    refute WorkPackageActivity.context(repo, linked_package.id).blocker_state.active?
 
     assert {:ok, ordered_request} = Repository.create(repo, attrs(id: "WR-COMPLETE-BLOCKER-ORDER", status: "ready_for_slicing"))
     assert {:ok, ordered_slice} = CanonicalWorkPackageFixtures.add_work_package(repo, ordered_request.id, work_package_attrs(id: "WRS-COMPLETE-BLOCKER-ORDER"))
@@ -1000,15 +998,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, runtime_request} = Repository.create(repo, attrs(id: "WR-COMPLETE-RUNTIME", status: "ready_for_slicing"))
     assert {:ok, runtime_slice} = CanonicalWorkPackageFixtures.add_work_package(repo, runtime_request.id, work_package_attrs(id: "WRS-COMPLETE-RUNTIME"))
     assert {:ok, runtime_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, runtime_request.id, runtime_slice.id, "planned")
-    runtime_package = set_work_package_status!(repo, runtime_slice, "merged")
 
     assert {:ok, run} =
              AgentRunRepository.start_run(repo, %{
-               work_package_id: runtime_package.id,
+               work_package_id: runtime_slice.id,
                status: "running",
                attempt: 1,
                worker_task_handle: "completion-runtime"
              })
+
+    set_work_package_status!(repo, runtime_slice, "merged")
 
     assert {:ok, with_runtime} = Service.refresh_completion(repo, runtime_request.id)
     assert with_runtime.completed_at == nil
@@ -1017,6 +1016,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, _completed_run} = AgentRunRepository.mark_completed(repo, run.id, "done")
     assert {:ok, without_runtime} = Service.refresh_completion(repo, runtime_request.id)
     assert %DateTime{} = without_runtime.completed_at
+  end
+
+  test "completion refresh clears residue for a delivery-backed nonterminal package", %{repo: repo} do
+    assert {:ok, request} = Repository.create(repo, attrs(id: "WR-COMPLETE-DELIVERY-RESIDUE", status: "ready_for_slicing"))
+
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
+               repo,
+               request.id,
+               work_package_attrs(id: "WRS-COMPLETE-DELIVERY-RESIDUE")
+             )
+
+    assert {:ok, work_package} =
+             CanonicalWorkPackageFixtures.approve_work_package(repo, request.id, work_package.id, "planned")
+
+    append_blocker_event!(repo, work_package.id, "blocker-delivery-residue", true)
+
+    assert {:ok, _delivery} =
+             %{
+               work_request_id: request.id,
+               work_package_id: work_package.id,
+               outcome: "completed_no_pr",
+               idempotency_key: "delivery-residue",
+               recorded_by: "legacy-import",
+               no_pr_evidence: "Legacy delivery was recorded without lifecycle cleanup."
+             }
+             |> WorkPackageDelivery.create_changeset()
+             |> repo.insert()
+
+    assert repo.get!(WorkPackage, work_package.id).status == "planned"
+    assert WorkPackageActivity.context(repo, work_package.id).blocker_state.active?
+
+    assert {:ok, completed} = Service.refresh_completion(repo, request.id)
+    assert %DateTime{} = completed.completed_at
+    refute WorkPackageActivity.context(repo, work_package.id).blocker_state.active?
   end
 
   test "visible completion treats terminal package cards as terminal" do
@@ -1141,7 +1175,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     paused_package = create_activity_work_package!(repo, "WP-ACTIVITY-PAUSED", status: "implementing")
     recycled_package = create_activity_work_package!(repo, "WP-ACTIVITY-RECYCLED", status: "ready_for_worker")
     ready_package = create_activity_work_package!(repo, "WP-ACTIVITY-READY", status: "ready_for_merge")
-    terminal_package = create_activity_work_package!(repo, "WP-ACTIVITY-TERMINAL", status: "closed")
+    terminal_package = create_activity_work_package!(repo, "WP-ACTIVITY-TERMINAL", status: "implementing")
     agent_package = create_activity_work_package!(repo, "WP-ACTIVITY-AGENT-STALE", status: "implementing")
 
     assert {:ok, _active_lease} =
@@ -1211,6 +1245,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
                status: "running",
                last_seen_at: DateTime.add(now, -301, :second)
              })
+
+    terminal_package = set_work_package_status!(repo, terminal_package, "closed")
 
     contexts =
       WorkPackageActivity.contexts(repo, [

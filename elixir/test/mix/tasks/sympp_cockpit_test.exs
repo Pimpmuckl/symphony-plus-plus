@@ -72,10 +72,9 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
       assert Keyword.fetch!(opts, :dashboard_origin) == "http://127.0.0.1:5174"
       assert Repo.same_database_path?(Keyword.fetch!(opts, :database), Path.expand(relative_database))
 
-      token_opts = Keyword.put(opts, :operator_bootstrap_token, "test-bootstrap-token")
-      endpoint_config = CockpitTask.endpoint_config_for_test(token_opts)
-      assert endpoint_config[:sympp_local_operator] == true
-      assert endpoint_config[:sympp_local_operator_bootstrap_token] == "test-bootstrap-token"
+      endpoint_config = CockpitTask.endpoint_config_for_test(opts)
+      refute Keyword.has_key?(endpoint_config, :sympp_local_operator)
+      refute Keyword.has_key?(endpoint_config, :sympp_local_operator_bootstrap_token)
       assert endpoint_config[:sympp_repo] == Repo
       assert endpoint_config[:server] == false
       assert endpoint_config[:sympp_dashboard_origin] == "http://127.0.0.1:5174"
@@ -83,8 +82,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
       assert CockpitTask.endpoint_config_for_test(open_dashboard: false)[:sympp_open_dashboard_override] == false
       assert CockpitTask.endpoint_config_for_test(open_dashboard: true)[:sympp_open_dashboard_override] == true
 
-      assert CockpitTask.cockpit_url_for_test(token_opts, 4567) ==
-               "http://127.0.0.1:5174/sympp/board?operator_bootstrap=test-bootstrap-token"
+      assert CockpitTask.cockpit_url_for_test(opts, 4567) == "http://127.0.0.1:5174/sympp/board"
 
       assert {:ok, ipv6_opts} = CockpitTask.parse_args_for_test(["--host", "[::1]"])
       assert CockpitTask.cockpit_url_for_test(ipv6_opts, 4567) == "http://[::1]:4567/sympp/board"
@@ -99,14 +97,14 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
 
     no_database_config = CockpitTask.endpoint_config_for_test(endpoint_config: original_config)
 
-    assert no_database_config[:sympp_local_operator] == true
+    refute Keyword.has_key?(no_database_config, :sympp_local_operator)
     assert no_database_config[:sympp_repo] == custom_repo
     assert no_database_config[:other] == :kept
     refute Keyword.has_key?(no_database_config, :sympp_dashboard_origin)
 
     database_config = CockpitTask.endpoint_config_for_test(endpoint_config: original_config, database: ":memory:")
 
-    assert database_config[:sympp_local_operator] == true
+    refute Keyword.has_key?(database_config, :sympp_local_operator)
     assert database_config[:sympp_repo] == Repo
     assert database_config[:other] == :kept
   end
@@ -196,14 +194,14 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
       end)
 
       assert_received {:mix_shell, :info, [url]}
-      assert url =~ ~r{Symphony\+\+ local operator dashboard: http://127\.0\.0\.1:\d+/sympp/board\?operator_bootstrap=\[REDACTED\]}
+      assert url =~ ~r{Symphony\+\+ local operator dashboard: http://127\.0\.0\.1:\d+/sympp/board}
       assert_received {:operator_dashboard_opened, opened_url}
-      assert opened_url =~ ~r{http://127\.0\.0\.1:\d+/sympp/board\?operator_bootstrap=[^&]+}
+      assert opened_url =~ ~r{http://127\.0\.0\.1:\d+/sympp/board}
       assert_received {:mix_shell, :info, [bridge]}
       assert bridge =~ ~r{Symphony\+\+ API bridge: http://127\.0\.0\.1:\d+}
-      assert_received {:mix_shell, :info, ["Bootstrap URL browser open attempted; token redacted from logs."]}
+      assert_received {:mix_shell, :info, ["Dashboard browser open attempted."]}
       assert_received {:mix_shell, :info, ["Press Ctrl+C to stop."]}
-      assert_received {:cockpit_response, 200, nil, 401, 200, payload}
+      assert_received {:cockpit_response, 200, nil, 200, 200, payload}
       assert payload["work_requests"]["total_count"] == 0
       assert payload["deferred"] == %{"dashboard_sections" => true}
       refute Map.has_key?(payload, "board")
@@ -268,7 +266,7 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
     end
   end
 
-  test "opens dashboard bootstrap URLs when explicitly requested" do
+  test "opens the dashboard when explicitly requested" do
     database_path = WorkPackageFactory.database_path()
 
     try do
@@ -291,11 +289,10 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
 
       CockpitTask.run_cockpit_for_test(opts, fn -> :ok end)
 
-      assert_received {:operator_dashboard_opened, bootstrap_url}
-      assert bootstrap_url =~ ~r{http://127\.0\.0\.1:5174/api/v1/sympp/operator/config\?operator_bootstrap=[^&]+}
       assert_received {:operator_dashboard_opened, dashboard_url}
-      assert dashboard_url =~ ~r{http://127\.0\.0\.1:5174/sympp/board\?operator_bootstrap=[^&]+}
-      assert_received {:mix_shell, :info, ["Bootstrap URL browser open attempted; token redacted from logs."]}
+      assert dashboard_url == "http://127.0.0.1:5174/sympp/board"
+      refute_received {:operator_dashboard_opened, _other_url}
+      assert_received {:mix_shell, :info, ["Dashboard browser open attempted."]}
     after
       File.rm(database_path)
     end
@@ -416,6 +413,38 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
     end
   end
 
+  test "starts and stops only its own task supervisor" do
+    database_path = WorkPackageFactory.database_path()
+    application_supervisor = Process.whereis(SymphonyElixir.TaskSupervisor)
+
+    {child_id, ^application_supervisor, _type, _modules} =
+      Enum.find(Supervisor.which_children(SymphonyElixir.Supervisor), fn {_id, pid, _type, _modules} ->
+        pid == application_supervisor
+      end)
+
+    try do
+      assert is_pid(application_supervisor)
+      assert {:ok, opts} = CockpitTask.parse_args_for_test(["--database", database_path, "--port", "0"])
+
+      CockpitTask.run_cockpit_for_test(opts, fn ->
+        assert Process.whereis(SymphonyElixir.TaskSupervisor) == application_supervisor
+      end)
+
+      assert Process.whereis(SymphonyElixir.TaskSupervisor) == application_supervisor
+      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, child_id)
+      refute Process.whereis(SymphonyElixir.TaskSupervisor)
+
+      CockpitTask.run_cockpit_for_test(opts, fn ->
+        assert is_pid(Process.whereis(SymphonyElixir.TaskSupervisor))
+      end)
+
+      refute Process.whereis(SymphonyElixir.TaskSupervisor)
+    after
+      Supervisor.restart_child(SymphonyElixir.Supervisor, child_id)
+      File.rm(database_path)
+    end
+  end
+
   defp wait_for_bound_port do
     Enum.reduce_while(1..500, nil, fn _attempt, _port ->
       case SymphonyElixir.HttpServer.bound_port() do
@@ -430,20 +459,11 @@ defmodule Mix.Tasks.Sympp.CockpitTest do
   end
 
   defp operator_shell_url(port) do
-    "http://127.0.0.1:#{port}/sympp/board?operator_bootstrap=#{URI.encode_www_form(operator_bootstrap_token())}"
+    "http://127.0.0.1:#{port}/sympp/board"
   end
 
   defp operator_config_url(port) do
-    "http://127.0.0.1:#{port}/api/v1/sympp/operator/config?operator_bootstrap=#{URI.encode_www_form(operator_bootstrap_token())}"
-  end
-
-  defp operator_bootstrap_token do
-    token =
-      :symphony_elixir
-      |> Application.get_env(Endpoint, [])
-      |> Keyword.fetch!(:sympp_local_operator_bootstrap_token)
-
-    token
+    "http://127.0.0.1:#{port}/api/v1/sympp/operator/config"
   end
 
   defp browser_navigation_headers do

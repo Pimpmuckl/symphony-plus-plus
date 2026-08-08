@@ -140,7 +140,8 @@ for secrets.
 
 Dispatch workers with `prepare_work_package_worktree`; pass the WorkPackage id
 and use the returned `worker_launch.workspace_path` as the worker cwd. Pass a
-concrete `branch` when the WorkPackage branch pattern is absent or templated.
+concrete `branch` only to override the package-unique branch derived when the
+WorkPackage branch pattern is absent or templated.
 If prepare or cleanup returns `target_repo_root_required`, retry with the
 product checkout that owns the recorded worktree path.
 
@@ -191,21 +192,23 @@ PR URL or package facts. If you choose explicit PR closeout instead of
 
 Record other terminal outcomes with `record_work_package_delivery`:
 
-- `outcome: "pr_merged"` with `evidence.pr_merged`: PR URL, merged-at
-  timestamp, and merge commit.
-- `outcome: "completed_no_pr"` with `evidence.completed_no_pr`: direct no-PR
-  evidence.
-- `outcome: "superseded"` with `evidence.superseded`: successor WorkPackage id and
-  reason.
-- `outcome: "abandoned"` with `evidence.abandoned`: rationale.
+- `outcome: "pr_merged"`: `evidence` is
+  `{"pr_merged":{"pr_url":"...","pr_merged_at":"...","merge_commit_sha":"..."}}`.
+  `pr_number` and `pr_repository` are optional inside `pr_merged`.
+- `outcome: "completed_no_pr"`: `evidence` is
+  `{"completed_no_pr":{"no_pr_evidence":"..."}}`.
+- `outcome: "superseded"`: `evidence` is
+  `{"superseded":{"successor_work_package_id":"...","superseded_reason":"..."}}`.
+- `outcome: "abandoned"`: `evidence` is
+  `{"abandoned":{"abandoned_rationale":"..."}}`.
 
 Do not infer delivery from prose decisions or chat. Phase-child PRs remain phase
 controlled; call `merge_child_into_phase` before `pr_merged` closeout when
-required. Use `cleanup_work_request_work_package_runtime` to recycle
-worker grants, non-paused claim leases, and recoverable worker MCP session bindings
-before final closeout when superseded or abandoned delivery truth is established;
-pass the flat superseded or abandoned evidence fields that authorize cleanup,
-then use the matching typed `evidence` object for final closeout.
+required. A successful terminal closeout revokes live worker grants and releases
+current claim leases, including paused leases; do not require a separate worker
+or runtime-cleanup step first. Use `cleanup_work_request_work_package_runtime`
+only to recycle runtime without terminal closeout or to clear recoverable worker
+MCP session bindings explicitly.
 If package evidence is missing or ambiguous, do not record WorkRequest delivery
 closeout; repair evidence first.
 

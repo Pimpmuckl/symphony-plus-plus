@@ -247,6 +247,7 @@ export type DashboardSettings = {
   work_request_archive_after_days?: number;
   solo_session_delete_after_days?: number;
   open_dashboard_on_boot?: boolean;
+  capture_failed_mcp_calls?: boolean;
   hidden_work_package_ids?: string[];
 };
 

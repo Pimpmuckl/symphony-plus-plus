@@ -4,12 +4,11 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { flushSync } from "react-dom";
 
 import { dashboardPrefersReducedMotion } from "@/components/dashboard/motion-utils";
-import { activeBlockerEntityCounts } from "./workstream-progress";
 import { buildFocusBoardItems, requestHasExecutionBoard, scrollFocusLane, type FocusBoardItem } from "./focus-board-data";
 import type { FocusFrontierVariant } from "./execution-graph/adapter";
 import { repoDisplayName, repoIdentityKey } from "./dashboard-persistence";
 import type { CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
-import type { AttentionJumpTarget, AttentionSelect } from "./workstream-attention";
+import { requestActionableAttentionCounts, type AttentionJumpTarget, type AttentionSelect } from "./workstream-attention";
 import { ProductRequestRow } from "./workstream-board";
 import { sortWorkRequestDetails } from "./workstream-data";
 
@@ -24,10 +23,10 @@ type WorkbenchMode = "frontier" | "full";
 type FocusBoardTransition = "close" | "open" | "swap";
 let activeFocusBoardTransition: ViewTransition | null = null;
 
-export function FocusBoardLoading({ openCount }: { openCount: number }) {
+export function FocusBoardLoading() {
   return (
     <section className="focus-board rounded-lg border bg-card text-card-foreground shadow-sm" aria-busy="true" aria-labelledby="focus-board-loading-title">
-      <FocusBoardHeader id="focus-board-loading-title" openCount={openCount} />
+      <FocusBoardHeader id="focus-board-loading-title" />
     </section>
   );
 }
@@ -58,8 +57,14 @@ export function FocusBoard({
   updateAnimations: DashboardUpdateAnimations;
 }) {
   const packageById = useMemo(() => new Map(packages.map((pkg) => [pkg.id, pkg])), [packages]);
-  const blockerCounts = useMemo(() => activeBlockerEntityCounts(activeBlockingEdges, details), [activeBlockingEdges, details]);
-  const items = useMemo(() => buildFocusBoardItems(sortWorkRequestDetails(details), now, packageById, blockerCounts.requests), [blockerCounts.requests, details, now, packageById]);
+  const attentionCounts = useMemo(
+    () => new Map(details.map((detail) => [
+      detail.work_request.id,
+      requestActionableAttentionCounts(detail, packageById, activeBlockingEdges, guidanceItems),
+    ])),
+    [activeBlockingEdges, details, guidanceItems, packageById],
+  );
+  const items = useMemo(() => buildFocusBoardItems(sortWorkRequestDetails(details), now, packageById, attentionCounts), [attentionCounts, details, now, packageById]);
   const needsAttention = items.filter((item) => item.lane === "attention");
   const moving = items.filter((item) => item.lane === "active" || item.lane === "next");
   const shelfItems = [...needsAttention, ...moving];
@@ -100,8 +105,6 @@ export function FocusBoard({
       activeBlockingEdges={activeBlockingEdges}
       guidanceItems={guidanceItems}
       packageById={packageById}
-      activeBlockerCount={blockerCounts.requests.get(item.id) ?? 0}
-      activeBlockerCountBySliceId={blockerCounts.slices}
       expanded={false}
       focusSelected={selectedItem?.id === item.id}
       index={itemIndexById.get(item.id) ?? 0}
@@ -156,10 +159,10 @@ export function FocusBoard({
   );
 }
 
-function FocusBoardHeader({ id, openCount }: { id: string; openCount: number }) {
+function FocusBoardHeader({ id, openCount }: { id: string; openCount?: number }) {
   return (
     <header className="focus-board__header">
-      <div><h2 id={id}>Focus Board</h2><span>{openCount} open across repositories</span></div>
+      <div><h2 id={id}>Focus Board</h2><span>{openCount === undefined ? "Loading latest activity…" : `${openCount} open across repositories`}</span></div>
       <strong>Experimental</strong>
     </header>
   );

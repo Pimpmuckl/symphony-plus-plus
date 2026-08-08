@@ -14,6 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   # Mirrors ArchitectHandoff deterministic IDs without adding a reverse module dependency from AccessGrants.
@@ -50,12 +51,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
     error -> {:error, {:migration_failed, error}}
   end
 
-  @spec create(repo(), map()) :: {:ok, AccessGrant.t()} | {:error, error()}
-  def create(repo, attrs) when is_atom(repo) and is_map(attrs) do
+  @spec create(repo(), map(), keyword()) :: {:ok, AccessGrant.t()} | {:error, error()}
+  def create(repo, attrs, opts \\ []) when is_atom(repo) and is_map(attrs) and is_list(opts) do
     changeset = AccessGrant.create_changeset(attrs)
 
     with {:ok, changeset} <- validate_architect_phase_anchor(repo, changeset) do
-      repo.transaction(fn -> insert_grant_with_scopes(repo, changeset, attrs) end)
+      repo.transaction(fn -> create_in_transaction(repo, changeset, attrs, opts) end)
       |> normalize_transaction_result()
     end
   rescue
@@ -69,6 +70,54 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
       grant
     else
       {:error, reason} -> repo.rollback(reason)
+    end
+  end
+
+  defp create_in_transaction(repo, changeset, attrs, opts) do
+    case reject_terminal_worker_package(repo, changeset, opts) do
+      :ok -> insert_grant_with_scopes(repo, changeset, attrs)
+      {:error, reason} -> repo.rollback(reason)
+    end
+  end
+
+  defp reject_terminal_worker_package(repo, changeset, opts) do
+    terminal_statuses = Keyword.get(opts, :terminal_work_package_statuses, [])
+    work_package_id = Changeset.get_field(changeset, :work_package_id)
+    grant_role = Changeset.get_field(changeset, :grant_role)
+
+    reject_terminal_worker_package(repo, grant_role, work_package_id, terminal_statuses)
+  end
+
+  defp reject_terminal_worker_package(repo, "worker", work_package_id, [_status | _statuses] = terminal_statuses)
+       when is_binary(work_package_id) do
+    case repo.get(WorkPackage, work_package_id) do
+      %WorkPackage{status: status} ->
+        with :ok <- terminal_worker_package_status(status, terminal_statuses) do
+          reject_terminal_worker_delivery(repo, work_package_id)
+        end
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  defp reject_terminal_worker_package(_repo, _grant_role, _work_package_id, _terminal_statuses), do: :ok
+
+  defp terminal_worker_package_status(status, terminal_statuses) do
+    if status in terminal_statuses, do: {:error, :work_package_terminal}, else: :ok
+  end
+
+  defp reject_terminal_worker_delivery(repo, work_package_id) do
+    if repo.one(
+         from(delivery in WorkPackageDelivery,
+           where: delivery.work_package_id == ^work_package_id,
+           select: 1,
+           limit: 1
+         )
+       ) do
+      {:error, :work_package_terminal}
+    else
+      :ok
     end
   end
 
@@ -252,6 +301,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
     end
   end
 
+  @spec work_package_authority_state(repo(), String.t()) ::
+          {:ok, %{status: String.t(), delivered?: boolean()}} | {:error, error()}
+  def work_package_authority_state(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
+    case repo.one(
+           from(work_package in WorkPackage,
+             left_join: delivery in WorkPackageDelivery,
+             on: delivery.work_package_id == work_package.id,
+             where: work_package.id == ^work_package_id,
+             select: %{status: work_package.status, delivered?: not is_nil(delivery.id)},
+             limit: 1
+           )
+         ) do
+      nil -> {:error, :not_found}
+      state -> {:ok, state}
+    end
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
   @spec validate_phase(repo(), String.t()) :: :ok | {:error, error()}
   def validate_phase(repo, phase_id) when is_atom(repo) and is_binary(phase_id) do
     case PhaseRepository.get(repo, phase_id) do
@@ -334,25 +402,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
         select: work_package.id
       )
 
+    delivered_package_ids =
+      from(delivery in WorkPackageDelivery,
+        select: delivery.work_package_id
+      )
+
     from(grant in query,
-      where: is_nil(grant.work_package_id) or grant.work_package_id not in subquery(terminal_package_ids)
+      where:
+        is_nil(grant.work_package_id) or
+          (grant.work_package_id not in subquery(terminal_package_ids) and
+             grant.work_package_id not in subquery(delivered_package_ids))
     )
   end
 
   defp local_worker_grant_missing_reason(repo, work_package_id, terminal_statuses) do
-    if terminal_work_package?(repo, work_package_id, terminal_statuses) do
-      {:error, :work_package_terminal}
-    else
-      {:error, inactive_worker_grant_reason(repo, work_package_id)}
+    case terminal_work_package?(repo, work_package_id, terminal_statuses) do
+      {:ok, true} -> {:error, :work_package_terminal}
+      {:ok, false} -> {:error, inactive_worker_grant_reason(repo, work_package_id)}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp terminal_work_package?(_repo, _work_package_id, []), do: false
+  defp terminal_work_package?(_repo, _work_package_id, []), do: {:ok, false}
 
   defp terminal_work_package?(repo, work_package_id, terminal_statuses) do
-    case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, %{status: status}} -> status in terminal_statuses
-      {:error, _reason} -> false
+    case work_package_authority_state(repo, work_package_id) do
+      {:ok, %{status: status, delivered?: delivered?}} -> {:ok, delivered? or status in terminal_statuses}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -579,10 +655,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   end
 
   defp local_architect_grant_missing_reason(repo, work_package_id, phase_id, scope_repo, scope_base_branch, terminal_statuses) do
-    if terminal_work_package?(repo, work_package_id, terminal_statuses) do
-      {:error, :work_package_terminal}
-    else
-      {:error, inactive_architect_grant_reason(repo, work_package_id, phase_id, scope_repo, scope_base_branch)}
+    case terminal_work_package?(repo, work_package_id, terminal_statuses) do
+      {:ok, true} ->
+        {:error, :work_package_terminal}
+
+      {:ok, false} ->
+        {:error, inactive_architect_grant_reason(repo, work_package_id, phase_id, scope_repo, scope_base_branch)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -619,16 +700,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
 
   defp package_authority_claim_error(repo, %AccessGrant{work_package_id: work_package_id}, terminal_statuses)
        when is_binary(work_package_id) do
-    case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, %{status: status}} ->
-        if Enum.member?(terminal_statuses, status) do
-          {:error, :work_package_terminal}
-        else
-          {:error, :already_claimed}
-        end
-
-      {:error, _reason} = error ->
-        error
+    case terminal_work_package?(repo, work_package_id, terminal_statuses) do
+      {:ok, true} -> {:error, :work_package_terminal}
+      {:ok, false} -> {:error, :already_claimed}
+      {:error, reason} -> {:error, reason}
     end
   end
 
