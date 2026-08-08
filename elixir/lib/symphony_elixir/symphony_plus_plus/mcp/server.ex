@@ -1345,7 +1345,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
            :ok <- lock_work_package(repo, work_package.id),
            {:ok, state} <- PlanningRepository.get_state(repo, work_package.id),
-           :ok <- require_scope_guard_package(state.work_package),
            {:ok, result} <-
              approve_scope_expansion_result(
                repo,
@@ -1514,10 +1513,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       "allowed_file_globs" => Map.get(event.payload || %{}, "allowed_file_globs", work_package.allowed_file_globs),
       "progress_event" => ProgressEvents.payload(event)
     }
-  end
-
-  defp require_scope_guard_package(%WorkPackage{} = work_package) do
-    if ScopeGuard.required?(work_package), do: :ok, else: {:error, "scope_guard_not_required"}
   end
 
   defp scope_expansion_approval_attrs(%WorkPackage{} = previous_work_package, %WorkPackage{} = updated_work_package, arguments, allowed_file_globs, rationale) do
