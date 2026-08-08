@@ -591,8 +591,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
          _closeout_context
        ) do
     case WorkPackageService.cleanup_worktree(repo, work_package_id) do
-      {:ok, _cleanup} -> :ok
-      {:error, reason} -> audit_worktree_cleanup_failure(repo, work_package_id, delivery, reason)
+      {:ok, _cleanup} ->
+        :ok
+
+      {:error, _first_reason} ->
+        case WorkPackageService.cleanup_worktree(repo, work_package_id) do
+          {:ok, _cleanup} -> :ok
+          {:error, reason} -> audit_worktree_cleanup_failure(repo, work_package_id, delivery, reason)
+        end
     end
   end
 

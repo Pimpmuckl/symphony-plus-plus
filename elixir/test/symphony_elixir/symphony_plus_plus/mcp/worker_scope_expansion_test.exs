@@ -492,16 +492,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerScopeExpansionTest do
     assert get_in(retry_response, ["result", "structuredContent", "progress_event", "id"]) == approval_event_id
   end
 
-  test "scope expansion approval rejects packages without scope guard", %{repo: repo} do
+  test "architect approves scope expansion for an implementing package without scope guard", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-SCOPE-GUARD-NOT-REQUIRED",
-                 kind: "quick_fix",
-                 status: "ci_waiting",
-                 policy_template: "quick_fix",
-                 allowed_file_globs: []
+                 kind: "mcp",
+                 status: "implementing",
+                 policy_template: "mcp",
+                 allowed_file_globs: ["elixir/lib/**"]
                )
              )
 
@@ -523,7 +523,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerScopeExpansionTest do
             "arguments" => %{
               "work_package_id" => package.id,
               "allowed_file_globs" => ["docs/**"],
-              "rationale" => "Unguarded packages must not record scope approvals."
+              "rationale" => "Implementation requires package documentation."
             }
           }
         },
@@ -531,9 +531,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerScopeExpansionTest do
         session: architect_session
       )
 
-    assert get_in(approval_response, ["error", "data", "reason"]) == "scope_guard_not_required"
+    assert get_in(approval_response, ["result", "structuredContent", "allowed_file_globs"]) == ["elixir/lib/**", "docs/**"]
 
-    assert {:ok, unchanged_package} = WorkPackageRepository.get(repo, package.id)
-    assert unchanged_package.allowed_file_globs == []
+    assert {:ok, updated_package} = WorkPackageRepository.get(repo, package.id)
+    assert updated_package.status == "implementing"
+    assert updated_package.allowed_file_globs == ["elixir/lib/**", "docs/**"]
   end
 end
