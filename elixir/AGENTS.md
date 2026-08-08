@@ -4,7 +4,7 @@ This directory contains the Elixir agent orchestration service that polls Linear
 
 ## Environment
 
-- Elixir: `1.19.x` (OTP 28) via `mise`.
+- Elixir: `1.20.1` (OTP 29) via `mise`.
 - Install deps: `mix setup`.
 - Fast PR gate: `make all` (format check, specs, Credo, and fast tests).
 - Full local gate: `make ci-full` (fast PR gate plus coverage and Dialyzer).

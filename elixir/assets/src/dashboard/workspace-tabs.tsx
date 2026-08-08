@@ -67,7 +67,7 @@ export function WorkstreamsPane({
         onSelectCard={onSelectCard}
         primaryBranchByRepo={primaryBranchByRepo}
         updateAnimations={updateAnimations}
-      /> : useFocusBoard ? <FocusBoardLoading openCount={focusDetails.length} /> : null}
+      /> : useFocusBoard ? <FocusBoardLoading /> : null}
       {repos.map((repo) => (
         <RepoWorkstream
           key={repoWorkstreamStateKey(repo)}

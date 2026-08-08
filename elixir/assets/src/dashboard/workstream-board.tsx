@@ -6,8 +6,8 @@ import { lazy, Suspense, type CSSProperties, type ReactNode, useCallback, useEff
 import { copyTextToClipboard, CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
 import { clarificationGuidanceItem } from "./dashboard-data";
 import { finishedRequestChildrenStorageKey, sortWorkRequestPackages, sortWorkRequestDetails } from "./workstream-data";
-import { activeBlockerEntityCounts, productTreeCounts, requestProgress } from "./workstream-progress";
-import { requestBoardState, sliceBlockerCount, sliceGuidanceCount, statusBadgeWidthForLabels, type BoardRowStateKind } from "./workstream-row-state";
+import { requestProgress } from "./workstream-progress";
+import { requestBoardState, statusBadgeWidthForLabels, type BoardRowStateKind } from "./workstream-row-state";
 import { RequestAttentionBadge, RequestIdentityCopyButton, RequestInfoButton, RequestProgressBar } from "./workstream-row-ui";
 import { requestUpdateKey } from "./update-animations";
 import { dashboardPrefersReducedMotion, updateMotionAttributes } from "@/components/dashboard/motion-utils";
@@ -18,7 +18,7 @@ import { isFinishedBoardStatus, operationalLabel, operationalStatusIsRunning, sl
 import { PullRequestBadge } from "./execution-graph/pull-request-badge";
 import { requestBadgeLabel } from "./workstream-row-age";
 import { architectStartPrompt, mergeRequestDetailsWithExiting, visibleRequestBranch } from "./workstream-utils";
-import type { AttentionJumpTarget, AttentionSelect } from "./workstream-attention";
+import { requestActionableAttentionCounts, workPackageDirectAttention, type AttentionJumpTarget, type AttentionSelect } from "./workstream-attention";
 import { ProductPlanBody } from "./workstream-product-plan";
 import { useRepositoryAttentionJump } from "./use-repository-attention-jump";
 const REQUEST_EXIT_MOTION_MS = 320;
@@ -59,8 +59,6 @@ export function WorkstreamBoard({
   const sortedDetails = useMemo(() => sortWorkRequestDetails(renderDetails), [renderDetails]);
   const sortedActiveDetails = useMemo(() => sortWorkRequestDetails(repoDetails), [repoDetails]);
   const packageById = useMemo(() => new Map(packages.map((pkg) => [pkg.id, pkg])), [packages]);
-  const blockerCounts = useMemo(() => activeBlockerEntityCounts(activeBlockingEdges, repoDetails, packageById),
-    [activeBlockingEdges, packageById, repoDetails]);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const contextSignature = useMemo(() => workstreamContextSignature(sortedActiveDetails), [sortedActiveDetails]);
   useRepositoryAttentionJump(boardRef, jumpTarget, repoDetails, onSetFinishedRequestChildrenOpen);
@@ -81,8 +79,6 @@ export function WorkstreamBoard({
               activeBlockingEdges={activeBlockingEdges}
               guidanceItems={guidanceItems}
               packageById={packageById}
-              activeBlockerCount={blockerCounts.requests.get(detail.work_request.id) ?? 0}
-              activeBlockerCountBySliceId={blockerCounts.slices}
               expanded={expanded}
               expandedContent="list" inheritedStatusRail
               focusSelected={false}
@@ -158,8 +154,6 @@ export function ProductRequestRow({
   exiting = false,
   activeBlockingEdges, guidanceItems,
   packageById,
-  activeBlockerCount,
-  activeBlockerCountBySliceId,
   expanded,
   expandedContent,
   expandedBodyVisible = expanded,
@@ -181,8 +175,6 @@ export function ProductRequestRow({
   exiting?: boolean;
   activeBlockingEdges: ActiveBlockingEdge[]; guidanceItems: GuidanceItem[];
   packageById: Map<string, WorkPackageCard>;
-  activeBlockerCount: number;
-  activeBlockerCountBySliceId: Map<string, number>;
   expanded: boolean;
   expandedContent?: "graph" | "list";
   expandedBodyVisible?: boolean;
@@ -204,7 +196,7 @@ export function ProductRequestRow({
   const requestPath = useMemo(() => [{ id: request.id, label: requestTitle }], [request.id, requestTitle]);
   const slices = useMemo(() => sortWorkRequestPackages(detail.work_packages ?? []), [detail.work_packages]);
   const progress = requestProgress(detail, packageById);
-  const counts = productTreeCounts(detail, activeBlockerCount);
+  const counts = requestActionableAttentionCounts(detail, packageById, activeBlockingEdges, guidanceItems);
   const openQuestion = detail.clarification_questions?.find((question) => question.status === "open");
   const branch = visibleRequestBranch(request.base_branch, primaryBranch);
   const requestState = requestBoardState(detail, packageById, counts, progress);
@@ -217,7 +209,7 @@ export function ProductRequestRow({
     if (slice) onSelectCard({ kind: "slice", detail, slice, pkg });
     else if (pkg) onSelectCard({ kind: "package", detail, pkg });
   };
-  const frontierNode = (() => { if (expandedContent === "list") return null; const frontier = requestFrontier(detail, slices, packageById, activeBlockerCountBySliceId, frontierMode ?? requestFrontierMode(requestState.kind), requestLabel); return <RequestFrontier summary={frontier} onSelectWorkPackage={selectWorkPackage} hidden={requestFrontierIsHidden(focusSelected, expanded)} />; })();
+  const frontierNode = (() => { if (expandedContent === "list") return null; const frontier = requestFrontier(detail, slices, packageById, activeBlockingEdges, guidanceItems, frontierMode ?? requestFrontierMode(requestState.kind), requestLabel); return <RequestFrontier summary={frontier} onSelectWorkPackage={selectWorkPackage} hidden={requestFrontierIsHidden(focusSelected, expanded)} />; })();
   const rowStyle = { "--v3-row-badge-width": (() => inheritedStatusRail ? "inherit" : statusBadgeWidthForLabels([badgeLabel]))(), animationDelay: `${index * 30}ms` } as CSSProperties;
   const rowHidden = requestRowIsHidden(exiting, focusEjected);
   const requestFinished = requestState.kind === "done";
@@ -365,11 +357,12 @@ function requestFrontier(
   detail: WorkRequestDetail,
   slices: WorkRequestPackage[],
   packageById: Map<string, WorkPackageCard>,
-  activeBlockerCountBySliceId: Map<string, number>,
+  activeBlockingEdges: ActiveBlockingEdge[],
+  guidanceItems: GuidanceItem[],
   mode: RequestFrontierMode,
   overallLabel: string,
 ): RequestFrontierSummary | null {
-  const relevant = slices.filter((slice) => frontierSliceMatches(mode, slice, packageById.get(slice.work_package_id || slice.id), activeBlockerCountBySliceId));
+  const relevant = slices.filter((slice) => frontierSliceMatches(mode, detail, slice, packageById.get(slice.work_package_id || slice.id), activeBlockingEdges, guidanceItems));
   if (!relevant.length) return null;
   const visible = mode === "active" ? relevant : relevant.slice(0, 3);
   const groups = frontierGroups(detail, visible, packageById, overallLabel);
@@ -426,28 +419,20 @@ function requestFrontierMode(kind: BoardRowStateKind): RequestFrontierMode {
   return "waiting";
 }
 
-function frontierSliceMatches(mode: RequestFrontierMode, slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, activeBlockerCountBySliceId: Map<string, number>) {
-  if (mode === "attention") return sliceNeedsAttention(slice, pkg, activeBlockerCountBySliceId);
+function frontierSliceMatches(mode: RequestFrontierMode, detail: WorkRequestDetail, slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, activeBlockingEdges: ActiveBlockingEdge[], guidanceItems: GuidanceItem[]) {
+  if (mode === "attention") return sliceNeedsAttention(detail, slice, pkg, activeBlockingEdges, guidanceItems);
   if (mode === "active") return sliceIsRunning(slice, pkg);
   if (mode === "recent") return sliceIsFinished(slice, pkg);
   if (mode === "waiting") return sliceIsWaiting(slice, pkg);
-  return !sliceIsFinished(slice, pkg) && !sliceIsRunning(slice, pkg) && !sliceNeedsAttention(slice, pkg, activeBlockerCountBySliceId) && !sliceIsWaiting(slice, pkg);
+  return !sliceIsFinished(slice, pkg) && !sliceIsRunning(slice, pkg) && !sliceNeedsAttention(detail, slice, pkg, activeBlockingEdges, guidanceItems) && !sliceIsWaiting(slice, pkg);
 }
 
-function sliceNeedsAttention(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, activeBlockerCountBySliceId: Map<string, number>) {
-  const dependencyWaiting = sliceHasUnsatisfiedDependencies(slice);
-  return slice.review_signal?.status === "failed"
-    || slice.pr_signal?.checks?.status === "failing"
-    || sliceGuidanceCount(slice, pkg) > 0
-    || (sliceBlockerCount(slice, pkg, activeBlockerCountBySliceId) > 0 && (!dependencyWaiting || sliceHasActiveBlockerEdge(slice, pkg, activeBlockerCountBySliceId)));
-}
-
-function sliceHasActiveBlockerEdge(slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, counts: Map<string, number>) {
-  return (counts.get(slice.id) ?? 0) > 0 || (pkg?.active_blocker_count ?? 0) > 0;
+function sliceNeedsAttention(detail: WorkRequestDetail, slice: WorkRequestPackage, pkg: WorkPackageCard | undefined, activeBlockingEdges: ActiveBlockingEdge[], guidanceItems: GuidanceItem[]) {
+  return Boolean(workPackageDirectAttention(detail, slice, pkg, activeBlockingEdges, guidanceItems));
 }
 
 function sliceIsWaiting(slice: WorkRequestPackage, pkg?: WorkPackageCard) {
-  if (sliceHasUnsatisfiedDependencies(slice)) return true;
+  if (sliceHasUnsatisfiedDependencies(slice) || slice.review_signal?.status === "failed" || slice.pr_signal?.checks?.status === "failing") return true;
   const status = sliceStatus(slice, pkg).toLowerCase();
   return /blocked|deferred|paused|pending|queued|waiting/.test(status);
 }
