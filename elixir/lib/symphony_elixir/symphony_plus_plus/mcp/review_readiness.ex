@@ -189,7 +189,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     current_head_sha = latest_current_head_sha(progress_events)
 
     cond do
-      is_binary(current_head_sha) and head_sha == current_head_sha ->
+      is_binary(current_head_sha) and PullRequest.head_sha_matches?(head_sha, current_head_sha) ->
         {:ok, head_sha}
 
       is_binary(current_head_sha) and is_binary(head_sha) ->
@@ -594,10 +594,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
     case latest_review_package_event(state.progress_events, current_head_sha) do
       %ProgressEvent{} = event ->
+        review_head_sha = Map.get(event.payload, "head_sha")
         artifacts = review_package_artifact_paths(event, current_head_sha)
 
         artifacts != [] and
-          Enum.all?(artifacts, &persisted_review_artifact?(state.artifacts, state.work_package.id, current_head_sha, &1))
+          Enum.all?(artifacts, &persisted_review_artifact?(state.artifacts, state.work_package.id, review_head_sha, &1))
 
       nil ->
         false
@@ -638,7 +639,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   end
 
   defp review_head_matches?(payload, current_head_sha) when is_map(payload) and is_binary(current_head_sha) do
-    Map.get(payload, "head_sha") == current_head_sha
+    PullRequest.head_sha_matches?(Map.get(payload, "head_sha"), current_head_sha)
   end
 
   defp review_head_matches?(_payload, _current_head_sha), do: false

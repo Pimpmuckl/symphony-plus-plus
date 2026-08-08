@@ -20,9 +20,11 @@ $scriptPath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/start-
 $helperPath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-mcp-launcher-helpers.ps1"
 $runtimePath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-launcher-runtime.ps1"
 $artifactRuntimePath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-mcp-artifact-runtime.ps1"
+$processRuntimePath = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/scripts/sympp-mcp-process-runtime.ps1"
 $betaPath = Join-Path $repoRoot "scripts/sympp-beta.ps1"
 . $runtimePath
 . $helperPath
+. $processRuntimePath
 foreach ($name in @(
     "Normalize-McpContractFingerprint", "Get-McpContractFingerprintFromContractFile",
     "Get-McpContractFingerprintFromMarketplaceSource", "Resolve-LocalMcpContractFingerprint",
@@ -158,6 +160,30 @@ Assert-True ($LASTEXITCODE -eq 0) "Current Node runtime must satisfy the conserv
 Assert-True ($LASTEXITCODE -eq 0) "Node state identity tests must pass"
 & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "dashboard-health-tests.js")
 Assert-True ($LASTEXITCODE -eq 0) "Node dashboard health tests must pass"
+$artifactCommandTemp = Join-Path $PSScriptRoot (".artifact-command-" + [guid]::NewGuid().ToString("N"))
+try {
+  $artifactRoot = Join-Path $artifactCommandTemp "artifact & command"
+  $releaseEntrypoint = Join-Path $artifactRoot "runtime/bin/symphony_elixir.bat"
+  New-Item -ItemType Directory -Path (Split-Path -Parent $releaseEntrypoint) -Force | Out-Null
+  Set-Content -LiteralPath $releaseEntrypoint -Value "@exit /b 0" -Encoding ascii
+  $artifactRuntime = [pscustomobject]@{
+    root = $artifactRoot
+    entrypoint = Join-Path $artifactRoot "start-runtime.ps1"
+    runtime_args = $null
+    workflow = $null
+  }
+  $artifactPlan = [pscustomobject]@{ port = 20000 }
+  $artifactCommand = Get-ArtifactBackendCommand $artifactRuntime $artifactPlan $null $null (Join-Path $artifactCommandTemp "logs")
+  Assert-True ($artifactCommand.file -eq "cmd.exe" -and (@($artifactCommand.args) -join "|") -eq "/d|/s|/c|call|runtime\bin\symphony_elixir.bat|start") "Windows artifact startup must launch the release directly without reparsing the artifact root"
+  Assert-True ($artifactCommand.working_directory -eq $artifactRoot) "Direct artifact startup must preserve the artifact working directory"
+  Assert-True ($artifactCommand.environment.SYMPP_RUNTIME_ARTIFACT_ACKNOWLEDGED -eq "1" -and $artifactCommand.environment.PHX_SERVER -eq "true") "Direct artifact startup must preserve release safety and server environment"
+  Assert-True ((Test-Path -LiteralPath $artifactCommand.environment.RELEASE_TMP -PathType Container)) "Direct artifact startup must provide an isolated release temp directory"
+  $artifactRuntime.runtime_args = @("-Port", "{port}")
+  $customCommand = Get-ArtifactBackendCommand $artifactRuntime $artifactPlan $null $null (Join-Path $artifactCommandTemp "custom-logs")
+  Assert-True ($customCommand.file -eq $artifactRuntime.entrypoint -and (@($customCommand.args) -join "|") -eq "-Port|20000") "Artifacts with custom manifest arguments must retain the declared wrapper contract"
+} finally {
+  Remove-Item -LiteralPath $artifactCommandTemp -Recurse -Force -ErrorAction SilentlyContinue
+}
 $process = Get-Process -Id $PID
 $startIdentity = Get-ProcessStartIdentity $process
 $processMap = @{ [string]$PID = [pscustomobject]@{ exists = $true; start_time_utc_ticks = $startIdentity } }

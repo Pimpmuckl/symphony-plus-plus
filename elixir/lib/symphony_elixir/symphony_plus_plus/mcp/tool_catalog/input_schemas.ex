@@ -255,7 +255,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
 
   defp set_status_schema_properties do
     %{
-      "status" => string_schema(),
+      "status" => string_enum_schema(["claimed", "planning", "implementing", "reviewing", "ci_waiting", "blocked", "abandoned"]),
       "expected_status" => string_schema(),
       "reason" => nullable_string_schema()
     }

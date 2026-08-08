@@ -103,6 +103,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionArtifac
             cd: Path.dirname(Path.dirname(script_path)),
             stderr_to_stdout: true,
             env: [
+              {"SYMPP_DATABASE", ""},
               {"SYMPP_HOME", sympp_home},
               {"SYMPP_LAUNCHER", "direct"},
               {"SYMPP_MIX", Path.join(temp_codex_home, "missing-mix.cmd")},
@@ -149,6 +150,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherArtifactSelectionArtifac
             cd: Path.dirname(Path.dirname(script_path)),
             stderr_to_stdout: true,
             env: [
+              {"SYMPP_DATABASE", ""},
               {"SYMPP_HOME", sympp_home},
               {"SYMPP_LAUNCHER", "direct"},
               {"SYMPP_MIX", Path.join(temp_codex_home, "missing-mix.cmd")},
