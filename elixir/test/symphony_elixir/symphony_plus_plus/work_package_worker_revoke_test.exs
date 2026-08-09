@@ -58,8 +58,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
     :ok
   end
 
-  test "architect recycles in-progress work-package worker authority before superseded closeout", %{repo: repo} do
-    {work_request, work_package, linked_package} = linked_slice!(repo, "implementing")
+  test "architect recycles active work-package worker authority before superseded closeout", %{repo: repo} do
+    {work_request, work_package, linked_package} = linked_slice!(repo, "active")
     successor_slice = create_work_package!(repo, work_request, "WRS-MCP-DELIVERY-IN-PROGRESS-SUCCESSOR")
     session = create_work_request_architect_session(repo, work_request)
 
@@ -88,7 +88,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
              "work_package_blocked_for_recycle"
            ]
 
-    assert revoke_payload["closeout_affordance"]["previous_work_package_status"] == "implementing"
+    assert revoke_payload["closeout_affordance"]["previous_work_package_status"] == "active"
     assert revoke_payload["closeout_affordance"]["work_package_status"] == "blocked"
     assert is_binary(get_in(revoke_payload, ["audit_event", "id"]))
     refute Map.has_key?(revoke_payload, "revocation_event")

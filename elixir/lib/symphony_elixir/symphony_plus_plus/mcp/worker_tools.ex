@@ -543,7 +543,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
                repo,
                session,
                [work_package.id],
-               %{},
+               %{
+                 "blocker_closeout" => %{
+                   "decision" => "still_active",
+                   "summary" => "Preserved active blocker when worker abandoned the work package"
+                 }
+               },
                "abandon"
              ),
            {:ok, _event} <- append_abandon_event(repo, session, work_package.status, reason),
@@ -736,8 +741,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   defp append_scoped_progress(repo, session, arguments, tool, payload) do
     with {:ok, session} <- scoped_session(repo, session, arguments),
-         {action, resource_type} <- progress_tool_policy(tool),
-         :ok <- authorize_current_package_policy(repo, session, action, resource_type),
+         :ok <- authorize_current_package_policy(repo, session, :progress_append, :progress),
          {:ok, summary} <- required_argument(arguments, "summary"),
          {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
          {:ok, caller_payload} <- optional_payload(arguments) do
@@ -842,8 +846,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp require_worker_assignment(_assignment), do: {:error, :worker_grant_required}
   defp require_assignment_introspection(%{grant_role: grant_role}) when grant_role in ["worker", "architect"], do: :ok
   defp require_assignment_introspection(_assignment), do: {:error, :worker_grant_required}
-
-  defp progress_tool_policy(_tool), do: {:progress_append, :progress}
 
   defp metadata_tool_response({:ok, _result} = result, _tool), do: result
   defp metadata_tool_response({:error, _code, _message, _data} = error, _tool), do: error

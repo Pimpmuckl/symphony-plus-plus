@@ -608,6 +608,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
     assert Enum.any?(blocker_events, &(&1.payload["blocker_id"] == "worker-blocker" and &1.payload["active"] == true))
     assert Enum.any?(blocker_events, &(&1.payload["blocker_id"] == "worker-blocker" and &1.payload["active"] == false))
 
+    abandon_blocker_response =
+      Server.handle(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "report-abandon-blocker",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "report_blocker",
+            "arguments" => %{
+              "blocker_id" => "abandon-blocker",
+              "summary" => "Work cannot continue",
+              "idempotency_key" => "abandon-blocker"
+            }
+          }
+        },
+        claimed_server
+      )
+
+    assert get_in(abandon_blocker_response, ["result", "structuredContent", "progress_event", "id"])
+    assert repo.get!(WorkPackage, package.id).status == "blocked"
+
     abandon_response =
       Server.handle(
         %{
@@ -622,6 +643,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
     assert get_in(abandon_response, ["result", "structuredContent", "work_package", "status"]) == "abandoned"
     assert {:ok, abandoned_package} = WorkPackageRepository.get(repo, package.id)
     assert abandoned_package.status == "abandoned"
+
+    assert {:ok, abandoned_events} = PlanningRepository.list_progress_events(repo, package.id)
+    assert Enum.any?(abandoned_events, &(&1.payload["blocker_id"] == "abandon-blocker" and &1.payload["active"] == true))
+
+    assert Enum.any?(abandoned_events, fn event ->
+             event.payload["type"] == "blocker_closeout_decision" and
+               event.payload["blocker_id"] == "abandon-blocker" and
+               event.payload["decision"] == "still_active"
+           end)
   end
 
   test "one of 100 simultaneous owners atomically claims and activates the package", %{repo: repo} do
@@ -634,7 +664,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
         fn attempt ->
           arguments = local_assignment_claim_args(package, %{"claimed_by" => "claimant-#{attempt}"})
 
-          Server.handle(
+          Server.handle_state(
             %{
               "jsonrpc" => "2.0",
               "id" => "claim-#{attempt}",
@@ -650,9 +680,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
       )
       |> Enum.map(fn {:ok, response} -> response end)
 
-    successful = Enum.filter(responses, &get_in(&1, ["result", "structuredContent", "assignment"]))
+    successful = Enum.filter(responses, fn {response, _server} -> get_in(response, ["result", "structuredContent", "assignment"]) end)
     assert length(successful) == 1
-    assert Enum.all?(responses -- successful, &(get_in(&1, ["result", "structuredContent", "assignment"]) == nil))
+
+    assert Enum.all?(responses -- successful, fn {response, server} ->
+             get_in(response, ["result", "structuredContent", "assignment"]) == nil and server.session == nil
+           end)
+
+    assert [{_response, winning_server}] = successful
+    assert winning_server.session.assignment.work_package_id == package.id
 
     assert {:ok, active_package} = WorkPackageRepository.get(repo, package.id)
     assert active_package.status == "active"
@@ -676,13 +712,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
     assert claimed_grant.id == minted.grant.id
     assert repo.aggregate(from(grant in AccessGrant, where: grant.work_package_id == ^package.id), :count) == 1
     assert repo.aggregate(from(claim_lease in ClaimLease, where: claim_lease.work_package_id == ^package.id), :count) == 1
-
-    assert [_session_binding] =
-             repo.all(
-               from(binding in SymphonyElixir.SymphonyPlusPlus.MCP.SessionBinding,
-                 where: binding.work_package_id == ^package.id and binding.recoverable == true
-               )
-             )
   end
 
   test "claim_local_assignment claims and reconnects a worker session from scoped local identity", %{repo: repo} do

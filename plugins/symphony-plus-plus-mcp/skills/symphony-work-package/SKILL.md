@@ -63,7 +63,9 @@ Keep S++ current as the work changes:
 - `report_blocker(summary, idempotency_key, blocker_id?)` when this worker is
   blocked. Resolve only that same worker-owned blocker with
   `resolve_blocker(blocker_id, resolution, summary, idempotency_key)`.
-- `abandon(reason)` only when this worker must terminally abandon active work.
+- `abandon(reason)` only when this worker must terminally abandon an active or
+  blocked assignment.
+  Active blocker facts remain preserved in the closeout audit trail.
 - `request_scope_expansion` when the assignment must grow.
 - Use comments for ordinary parent-agent coordination. Worker blocker tools
   record execution blockers; they do not create or resolve architect-owned
