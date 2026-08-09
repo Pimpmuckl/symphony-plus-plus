@@ -28,6 +28,7 @@ $directProbe = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp/tests/transpo
 $exactProbe = Join-Path $PSScriptRoot "exact-command-performance.ps1"
 $payloadProbe = Join-Path $PSScriptRoot "measure-payloads.exs"
 $stateProbe = Join-Path $PSScriptRoot "measure-state-hot-path.exs"
+$claimContentionProbe = Join-Path $PSScriptRoot "measure-claim-contention.exs"
 $responseListProbe = Join-Path $PSScriptRoot "measure-response-list-hot-path.exs"
 $profileCaps = [ordered]@{
   full = @{ tools = 80; bytes = 55000 }; worker = @{ tools = 35; bytes = 25000 }
@@ -71,6 +72,7 @@ function Get-GateFailures($Metrics, $Limits) {
   if ($Metrics.state_hot_path.operations.recovery_steady.write_statements -ne 0) { $failures.Add("state_hot_path.recovery_writes") }
   if ($Metrics.state_hot_path.ready_guard.package_reads_after_lock -ne 1 -or $Metrics.state_hot_path.ready_guard.history_reads_after_lock -ne 0) { $failures.Add("state_hot_path.ready_guard") }
   if (@($Metrics.state_hot_path.operations.PSObject.Properties.Value | Where-Object { $_.busy_retries -ne 0 }).Count -gt 0) { $failures.Add("state_hot_path.busy_retries") }
+  if ($Metrics.claim_contention.clients -ne 100 -or $Metrics.claim_contention.heartbeat -ne 50 -or $Metrics.claim_contention.reclaimed -ne 50 -or $Metrics.claim_contention.database_busy -ne 0 -or $Metrics.claim_contention.errors -ne 0 -or $Metrics.claim_contention.active_claims -ne 100 -or $Metrics.claim_contention.duplicate_ownership -ne 0 -or $Metrics.claim_contention.lost_claim_state -ne 0 -or $Metrics.claim_contention.total_claim_rows -ne 150 -or -not $Metrics.claim_contention.cleanup.repo_stopped -or -not $Metrics.claim_contention.cleanup.database_removed) { $failures.Add("claim_contention.integrity") }
   if ($Metrics.response_list.read_plan.http.text_encodes.canonical -ne 1 -or $Metrics.response_list.read_plan.http.text_encodes.full -ne 0 -or $Metrics.response_list.read_plan.legacy_full_stdio.text_encodes.canonical -ne 0 -or $Metrics.response_list.read_plan.legacy_full_stdio.text_encodes.full -ne 1) { $failures.Add("response_list.read_plan_encoding") }
   if ($Metrics.response_list.read_plan.http.structured_nodes -ne 1000 -or $Metrics.response_list.read_plan.legacy_full_stdio.structured_nodes -ne 1000) { $failures.Add("response_list.read_plan_structured") }
   if ($Metrics.response_list.read_plan.http.p50_ms -gt ($Metrics.response_list.read_plan.legacy_full_stdio.p50_ms * $Limits.response_list_caps.read_plan_p50_ratio)) { $failures.Add("response_list.read_plan_p50") }
@@ -173,6 +175,12 @@ function Write-Result($Metrics, [string[]]$Failures, $Cleanup) {
     $row = $property.Value
     [Console]::Out.WriteLine("    $($property.Name),$($row.samples),$($row.p50_ms),$($row.p95_ms),$($row.max_ms),$($row.sql_statements),$($row.write_statements),$($row.busy_retries)")
   }
+  [Console]::Out.WriteLine("claim_contention:")
+  [Console]::Out.WriteLine("  clients: $($Metrics.claim_contention.clients)")
+  [Console]::Out.WriteLine("  elapsed_ms: $($Metrics.claim_contention.elapsed_ms)")
+  [Console]::Out.WriteLine("  actions: heartbeat=$($Metrics.claim_contention.heartbeat),reclaimed=$($Metrics.claim_contention.reclaimed)")
+  [Console]::Out.WriteLine("  integrity: database_busy=$($Metrics.claim_contention.database_busy),errors=$($Metrics.claim_contention.errors),active_claims=$($Metrics.claim_contention.active_claims),duplicate_ownership=$($Metrics.claim_contention.duplicate_ownership),lost_claim_state=$($Metrics.claim_contention.lost_claim_state),total_claim_rows=$($Metrics.claim_contention.total_claim_rows)")
+  [Console]::Out.WriteLine("  cleanup: repo_stopped=$($Metrics.claim_contention.cleanup.repo_stopped.ToString().ToLowerInvariant()),database_removed=$($Metrics.claim_contention.cleanup.database_removed.ToString().ToLowerInvariant())")
   [Console]::Out.WriteLine("response_list_hot_path:")
   [Console]::Out.WriteLine("  read_plan_http: p50_ms=$($Metrics.response_list.read_plan.http.p50_ms),p95_ms=$($Metrics.response_list.read_plan.http.p95_ms),allocation_bytes_p50=$($Metrics.response_list.read_plan.http.allocation_bytes_p50),bytes=$($Metrics.response_list.read_plan.http.bytes),reductions_p50=$($Metrics.response_list.read_plan.http.reductions_p50),full_encodes=$($Metrics.response_list.read_plan.http.text_encodes.full),canonical_encodes=$($Metrics.response_list.read_plan.http.text_encodes.canonical)")
   [Console]::Out.WriteLine("  read_plan_legacy_full_stdio: p50_ms=$($Metrics.response_list.read_plan.legacy_full_stdio.p50_ms),p95_ms=$($Metrics.response_list.read_plan.legacy_full_stdio.p95_ms),allocation_bytes_p50=$($Metrics.response_list.read_plan.legacy_full_stdio.allocation_bytes_p50),bytes=$($Metrics.response_list.read_plan.legacy_full_stdio.bytes),reductions_p50=$($Metrics.response_list.read_plan.legacy_full_stdio.reductions_p50),full_encodes=$($Metrics.response_list.read_plan.legacy_full_stdio.text_encodes.full),canonical_encodes=$($Metrics.response_list.read_plan.legacy_full_stdio.text_encodes.canonical)")
@@ -385,6 +393,11 @@ function Invoke-SelfTest {
         architect_read = @{ busy_retries = 0 }; architect_write = @{ busy_retries = 0 }; ready_guard_1000 = @{ busy_retries = 0 }
       }
     }
+    claim_contention = [pscustomobject]@{
+      clients = 100; heartbeat = 50; reclaimed = 50; database_busy = 0; errors = 0
+      active_claims = 100; duplicate_ownership = 0; lost_claim_state = 0; total_claim_rows = 150
+      cleanup = [pscustomobject]@{ repo_stopped = $true; database_removed = $true }
+    }
     response_list = [pscustomobject]@{
       read_plan = [pscustomobject]@{
         http = [pscustomobject]@{ p50_ms = 1; reductions_p50 = 1; structured_nodes = 1000; text_encodes = [pscustomobject]@{ canonical = 1; full = 0 } }
@@ -420,6 +433,7 @@ function Invoke-SelfTest {
     "state_hot_path.recovery_writes" = { param($m) $m.state_hot_path.operations.recovery_steady.write_statements = 1 }
     "state_hot_path.ready_guard" = { param($m) $m.state_hot_path.ready_guard.history_reads_after_lock = 1 }
     "state_hot_path.busy_retries" = { param($m) $m.state_hot_path.operations.worker_read.busy_retries = 1 }
+    "claim_contention.integrity" = { param($m) $m.claim_contention.errors = 1 }
     "response_list.read_plan_encoding" = { param($m) $m.response_list.read_plan.http.text_encodes.full = 1 }
     "response_list.read_plan_structured" = { param($m) $m.response_list.read_plan.http.structured_nodes = 999 }
     "response_list.read_plan_p50" = { param($m) $m.response_list.read_plan.http.p50_ms = 2 }
@@ -529,12 +543,17 @@ try {
   $stateJson = @($stateOutput -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1)
   if ($stateJson.Count -ne 1) { throw "state hot-path probe omitted JSON output" }
   $stateHotPath = $stateJson[0] | ConvertFrom-Json
+  [Console]::Error.WriteLine("Measuring 100 concurrent claim heartbeats and stale reclaims...")
+  $claimContentionOutput = Invoke-IsolatedMix @("run", "--no-start", $claimContentionProbe) $environment
+  $claimContentionJson = @($claimContentionOutput -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1)
+  if ($claimContentionJson.Count -ne 1) { throw "claim contention probe omitted JSON output" }
+  $claimContention = $claimContentionJson[0] | ConvertFrom-Json
   [Console]::Error.WriteLine("Measuring MCP response construction and WorkRequest list hot paths...")
   $responseListOutput = Invoke-IsolatedMix @("run", "--no-start", $responseListProbe) $environment
   $responseListJson = @($responseListOutput -split "`r?`n" | Where-Object { $_.Trim().StartsWith("{") } | Select-Object -Last 1)
   if ($responseListJson.Count -ne 1) { throw "response/list hot-path probe omitted JSON output" }
   $responseList = $responseListJson[0] | ConvertFrom-Json
-  $revision = [string](& git -C $repoRoot rev-parse HEAD); $metrics = [pscustomobject]@{ revision = $revision.Trim(); cold = $cold; warm = $warm; direct = $direct; exact = [pscustomobject]@{ node = $exactNode; fallback = $exactFallback }; profiles = $payloads.profiles; results = $payloads.results; state_hot_path = $stateHotPath; response_list = $responseList }
+  $revision = [string](& git -C $repoRoot rev-parse HEAD); $metrics = [pscustomobject]@{ revision = $revision.Trim(); cold = $cold; warm = $warm; direct = $direct; exact = [pscustomobject]@{ node = $exactNode; fallback = $exactFallback }; profiles = $payloads.profiles; results = $payloads.results; state_hot_path = $stateHotPath; claim_contention = $claimContention; response_list = $responseList }
 } catch {
   $caught = $_
   $failure = @(

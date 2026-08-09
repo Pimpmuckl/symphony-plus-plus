@@ -156,7 +156,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
     alias SymphonyElixir.SymphonyPlusPlus.Repo
 
-    def transaction(fun), do: Repo.transaction(fun)
+    def transaction(fun, opts \\ []), do: Repo.transaction(fun, opts)
     def rollback(value), do: Repo.rollback(value)
     def database_path, do: Repo.database_path()
     def get(schema, id), do: Repo.get(schema, id)

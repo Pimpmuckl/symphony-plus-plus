@@ -203,12 +203,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository do
   @spec reclaim_stale(repo(), String.t(), map(), keyword()) :: {:ok, ClaimLease.t()} | {:error, error()}
   def reclaim_stale(repo, work_package_id, attrs, opts \\ [])
       when is_atom(repo) and is_binary(work_package_id) and is_map(attrs) and is_list(opts) do
-    repo.transaction(fn ->
-      case reclaim_stale_transaction(repo, work_package_id, attrs, opts) do
-        {:ok, claim_lease} -> claim_lease
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
+    repo.transaction(
+      fn ->
+        case reclaim_stale_transaction(repo, work_package_id, attrs, opts) do
+          {:ok, claim_lease} -> claim_lease
+          {:error, reason} -> repo.rollback(reason)
+        end
+      end,
+      mode: :immediate
+    )
     |> case do
       {:ok, claim_lease} -> {:ok, claim_lease}
       {:error, reason} -> {:error, reason}

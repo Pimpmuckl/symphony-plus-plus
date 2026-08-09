@@ -21,6 +21,7 @@ $expectedFailures = @(
   "warm.lease_lifecycle", "warm.network_attempts", "direct.wrapper_processes",
   "direct.wrapper_private_bytes", "direct.backend_private_bytes",
   "state_hot_path.readiness_state", "state_hot_path.recovery_writes", "state_hot_path.ready_guard", "state_hot_path.busy_retries",
+  "claim_contention.integrity",
   "response_list.read_plan_encoding", "response_list.read_plan_structured", "response_list.read_plan_p50",
   "response_list.read_plan_reductions", "response_list.list_queries", "response_list.list_bound", "response_list.list_p95",
   "exact.node.p95_ms", "exact.node.live_100", "exact.node.private_bytes", "exact.node.warm_resolution",

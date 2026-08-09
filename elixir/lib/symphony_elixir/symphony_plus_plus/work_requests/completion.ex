@@ -262,17 +262,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
     with {:ok, archive_after_days} <- archive_after_days(opts),
          {:ok, delete_after_days} <- delete_after_days(opts),
-         {:ok, refreshed} <- refresh_all(repo),
+         {:ok, age_candidates} <- retention_age_candidates(repo, now, archive_after_days),
+         {:ok, refreshed} <- refresh_all(repo, age_candidates),
          {:ok, _restored_for_age} <- restore_unexpired(repo, refreshed, now, archive_after_days),
          {:ok, archived_for_age} <- archive_expired(repo, refreshed, now, archive_after_days),
          {:ok, visible_completed} <- completed_unarchived(repo),
-         {:ok, archived_for_limit} <- archive_overflow(repo, visible_completed),
+         {:ok, archived_for_limit, overflow_refreshed_count} <- archive_overflow(repo, visible_completed),
          {:ok, deleted_ids} <- delete_expired_archived(repo, now, delete_after_days) do
       archived_ids = archived_for_age ++ archived_for_limit
 
       {:ok,
        %{
-         refreshed_count: length(refreshed),
+         refreshed_count: length(refreshed) + overflow_refreshed_count,
          archived_count: length(archived_ids),
          archived_ids: archived_ids,
          deleted_count: length(deleted_ids),
@@ -403,12 +404,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   defp completion_status_allowed?(%WorkRequest{status: status}), do: status not in @completion_blocking_work_request_statuses
 
-  defp refresh_all(repo) do
-    with {:ok, work_requests} <- all_work_requests(repo) do
-      work_requests
-      |> Enum.map(&refresh(repo, &1.id))
-      |> collect_or_error()
-    end
+  defp refresh_all(repo, work_requests) do
+    work_requests
+    |> Enum.map(&refresh(repo, &1.id))
+    |> collect_or_error()
   end
 
   defp archive_after_days(opts) do
@@ -464,14 +463,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   defp archive_overflow(repo, work_requests) do
     work_requests
     |> Enum.group_by(&{&1.repo, &1.base_branch})
-    |> Enum.reduce_while({:ok, []}, fn {_scope, scoped_work_requests}, {:ok, archived_ids} ->
+    |> Enum.reduce_while({:ok, [], 0}, fn {_scope, scoped_work_requests}, {:ok, archived_ids, refreshed_count} ->
       case archive_overflow_scope(repo, scoped_work_requests) do
-        {:ok, scoped_archived_ids} -> {:cont, {:ok, archived_ids ++ scoped_archived_ids}}
-        {:error, reason} -> {:halt, {:error, reason}}
+        {:ok, scoped_archived_ids, scoped_refreshed_count} ->
+          {:cont, {:ok, archived_ids ++ scoped_archived_ids, refreshed_count + scoped_refreshed_count}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
       end
     end)
     |> case do
-      {:ok, archived_ids} -> {:ok, archived_ids}
+      {:ok, archived_ids, refreshed_count} -> {:ok, archived_ids, refreshed_count}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -480,17 +482,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     sorted_work_requests = Enum.sort_by(work_requests, &completed_sort_key/1)
     archive_count = max(length(sorted_work_requests) - @completed_visible_limit, 0)
 
-    archive_overflow_candidates(repo, sorted_work_requests, archive_count, [])
+    archive_overflow_candidates(repo, sorted_work_requests, archive_count, [], 0)
   end
 
-  defp archive_overflow_candidates(_repo, _work_requests, 0, archived_ids), do: {:ok, Enum.reverse(archived_ids)}
-  defp archive_overflow_candidates(_repo, [], _archive_count, archived_ids), do: {:ok, Enum.reverse(archived_ids)}
+  defp archive_overflow_candidates(_repo, _work_requests, 0, archived_ids, refreshed_count),
+    do: {:ok, Enum.reverse(archived_ids), refreshed_count}
 
-  defp archive_overflow_candidates(repo, [work_request | rest], archive_count, archived_ids) do
-    case archive_completed(repo, work_request, "limit") do
-      {:ok, %WorkRequest{id: id}} -> archive_overflow_candidates(repo, rest, archive_count - 1, [id | archived_ids])
-      {:error, :not_completed} -> archive_overflow_candidates(repo, rest, archive_count, archived_ids)
-      {:error, reason} -> {:error, reason}
+  defp archive_overflow_candidates(_repo, [], _archive_count, archived_ids, refreshed_count),
+    do: {:ok, Enum.reverse(archived_ids), refreshed_count}
+
+  defp archive_overflow_candidates(repo, [work_request | rest], archive_count, archived_ids, refreshed_count) do
+    case refresh(repo, work_request.id) do
+      {:ok, %WorkRequest{archived_at: %DateTime{}}} ->
+        archive_overflow_candidates(repo, rest, archive_count - 1, archived_ids, refreshed_count + 1)
+
+      {:ok, %WorkRequest{completed_at: nil}} ->
+        archive_overflow_candidates(repo, rest, archive_count, archived_ids, refreshed_count + 1)
+
+      {:ok, %WorkRequest{} = refreshed} ->
+        case archive_completed(repo, refreshed, "limit") do
+          {:ok, %WorkRequest{id: id}} ->
+            archive_overflow_candidates(repo, rest, archive_count - 1, [id | archived_ids], refreshed_count + 1)
+
+          {:error, :not_completed} ->
+            archive_overflow_candidates(repo, rest, archive_count, archived_ids, refreshed_count + 1)
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -519,10 +541,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
     end
   end
 
-  defp all_work_requests(repo) do
+  defp retention_age_candidates(repo, now, archive_after_days) do
+    cutoff = DateTime.add(now, -archive_after_days * 24 * 60 * 60, :second)
+
     work_requests =
       repo.all(
         from(work_request in WorkRequest,
+          where: not is_nil(work_request.completed_at),
+          where:
+            (is_nil(work_request.archived_at) and work_request.completed_at <= ^cutoff) or
+              (not is_nil(work_request.archived_at) and
+                 work_request.archive_reason in ^@restorable_archive_reasons and work_request.completed_at > ^cutoff),
           order_by: [asc: work_request.inserted_at, asc: work_request.id]
         )
       )
