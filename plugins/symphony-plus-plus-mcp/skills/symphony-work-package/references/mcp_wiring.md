@@ -134,10 +134,12 @@ MCP session that will do the WorkPackage work.
 Workers start by calling `claim_local_assignment` in a dedicated S++ MCP
 session connected to the same ledger as dispatch. Pass `work_package_id` and,
 when provided, `claimed_by`. Then call
-`get_current_assignment()` and read package context.
+`get_current_assignment()` and read package context. The first successful
+claim atomically activates a `ready_for_worker` package.
 
 Replaying the same claim heartbeats the current claim lease. If the prior lease
-is stale, the server may reclaim it and records audit evidence. If the lease is
+is stale, the server may reclaim it and records audit evidence without
+rewriting the current package lifecycle. If the lease is
 paused or another active owner still has authority, stop and ask the
 architect/operator to repair that state. A configured `state_key` only
 preserves initialized handshake continuity for stateless transports; it does

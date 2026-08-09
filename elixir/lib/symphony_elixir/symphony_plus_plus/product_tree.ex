@@ -34,4 +34,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree do
 
   @spec execution_graph(module(), String.t()) :: {:ok, ExecutionGraph.graph()} | {:error, term()}
   defdelegate execution_graph(repo, work_request_id), to: ExecutionGraph, as: :evaluate
+
+  @spec execution_graph(module(), String.t(), [map() | struct()]) :: {:ok, ExecutionGraph.graph()} | {:error, term()}
+  defdelegate execution_graph(repo, work_request_id, work_packages), to: ExecutionGraph, as: :evaluate
 end

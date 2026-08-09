@@ -3,6 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.TrackerStates do
 
   @worker_dispatchable_states [
     "ready_for_worker",
+    "active",
     "claimed",
     "planning",
     "implementing",

@@ -61,8 +61,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
     "investigation" => %{
       template: "investigation",
       constraints: %{expiry_seconds: nil, planning_depth: "findings", terminal_readiness_status: "ready_for_merge"},
-      required_gates: ["findings_documented", "recommendation_artifact_recorded"],
-      readiness_requirements: ["findings_complete", "recommendation_artifact_recorded"]
+      required_gates: ["findings_documented"],
+      readiness_requirements: ["findings_complete"]
     }
   }
 

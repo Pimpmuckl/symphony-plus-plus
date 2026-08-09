@@ -27,15 +27,18 @@ cross-slice target, successor relation, audit closeout, or concurrency guard.
 2. Claim the package with `claim_local_assignment` using the WorkPackage id:
    `{"work_package_id":"<WP id>"}`. Include `claimed_by` only when the
    dispatch payload or operator provided a stable worker identity.
+   A successful first claim atomically activates a `ready_for_worker` package.
 3. Replay the same local claim after reconnects. The server heartbeats the
    current lease, reclaims stale leases with audit evidence, and rejects paused
-   leases or another active owner.
+   leases or another active owner. Reconnect does not rewrite lifecycle state.
    Stop and report those blockers instead of minting your own replacement.
 4. Call `get_current_assignment()` and treat that WorkPackage as authoritative.
 5. Read `sympp://work-packages/{id}/acceptance.md` with the other MCP-backed
    package resources.
 6. Read current context before coding: `read_context()`, `read_task_plan()`,
    acceptance/review/handoff resources, findings, and progress.
+   `read_context()` includes only the parent WorkRequest title and goal, direct
+   dependency ids/titles/statuses, and the architect-owned completion step.
 7. Do not create local `task_plan.md`, `findings.md`, or `progress.md` files as
    the source of truth.
 
@@ -50,16 +53,25 @@ machine-readable response.
 
 Keep S++ current as the work changes:
 
-- `update_task_plan(patch, expected_version)`.
+- `update_task_plan({"expected_version": <read version>, "nodes": [...]})`.
+  Each node is `{id?, title?, body?, status?}`. Omit `id` to create a node
+  with a required `title`; use the returned server-owned `id` for updates.
+  Statuses are `pending`, `in_progress`, `done`, and `skipped`.
 - `append_finding(finding, idempotency_key)`.
 - `append_progress(event, idempotency_key)`.
 - `add_comment(body)`, `list_comments()`, and
   `resolve_comment(comment_id, resolution_note?)` for scoped package notes.
   Pass `target_kind` and `target_id` only for another authorized target.
-- `set_status` for allowed lifecycle transitions.
+- `report_blocker(summary, idempotency_key, blocker_id?)` when this worker is
+  blocked. Resolve only that same worker-owned blocker with
+  `resolve_blocker(blocker_id, resolution, summary, idempotency_key)`.
+- `abandon(reason)` only when this worker must terminally abandon an active or
+  blocked assignment.
+  Active blocker facts remain preserved in the closeout audit trail.
 - `request_scope_expansion` when the assignment must grow.
-- Use comments for ordinary parent-agent coordination. Workers do not create
-  or resolve durable human blockers or guidance.
+- Use comments for ordinary parent-agent coordination. Worker blocker tools
+  record execution blockers; they do not create or resolve architect-owned
+  human blockers or guidance.
 
 Human-facing bodies, comments, blocker notes, findings, progress details, and
 guidance context are Markdown. Keep titles, ids, statuses, branch names, and
@@ -83,8 +95,9 @@ S++ explicitly gives scoped context.
   state fields such as `head_sha`, `check_summary`, `review_state`, or
   `merge_state` when they changed; use explicit `url`/`number` or `recovery`
   only when repairing missing attachment evidence.
-- `submit_review_package(summary, tests, artifacts)` after branch metadata is
-  current to record validation and acceptance evidence.
+- `submit_review_package(summary, tests, artifacts)` records validation and
+  acceptance evidence. Policy-approved no-PR work may submit without a branch
+  head; PR-backed or review-required work must use its attached exact head.
 - If `review.md` declares a review requirement, use that provider and its
   optional arguments. After it succeeds for the attached exact head, call
   `complete_review(reference?, note?)`. The reference is an opaque provider or
@@ -104,11 +117,13 @@ Before `mark_ready()`:
   infers completed plan, PR, branch, and review facts from existing evidence
   when the matching facts are already recorded.
 - No active blocker remains.
-  Active blockers must be resolved by the architect or trusted local operator
-  before worker finish transitions.
+  Resolve worker-owned blockers with `resolve_blocker`. Architect-owned human
+  blockers still require the architect or trusted local operator.
 
 After `mark_ready()` succeeds, evidence is frozen except idempotent replay of
 already-recorded writes.
+Return ready or terminal packages to the architect named by `next_owner`; the
+worker does not need or receive architect tools for that handoff.
 
 ## Safety
 

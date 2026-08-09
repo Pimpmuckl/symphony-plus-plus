@@ -68,7 +68,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "set_status",
+    "report_blocker",
+    "resolve_blocker",
+    "abandon",
     "add_comment",
     "list_comments",
     "resolve_comment",
@@ -156,10 +158,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
     alias SymphonyElixir.SymphonyPlusPlus.Repo
 
-    def transaction(fun), do: Repo.transaction(fun)
+    def transaction(fun, opts \\ []), do: Repo.transaction(fun, opts)
+    def in_transaction?, do: Repo.in_transaction?()
     def rollback(value), do: Repo.rollback(value)
     def database_path, do: Repo.database_path()
     def get(schema, id), do: Repo.get(schema, id)
+    def get!(schema, id), do: Repo.get!(schema, id)
     def one(query), do: Repo.one(query)
     def all(query), do: Repo.all(query)
     def query(sql, params, opts), do: Repo.query(sql, params, opts)
@@ -203,9 +207,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
       {:rollback, value} -> {:error, value}
     end
 
+    def in_transaction?, do: Repo.in_transaction?()
     def rollback(value), do: throw({:rollback, value})
     def database_path, do: Repo.database_path()
     def get(schema, id), do: Repo.get(schema, id)
+    def get!(schema, id), do: Repo.get!(schema, id)
     def one(query), do: Repo.one(query)
     def all(query), do: Repo.all(query)
     def query(sql, params, opts), do: Repo.query(sql, params, opts)

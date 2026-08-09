@@ -3,6 +3,7 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
 
@@ -31,6 +32,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     assert enabled_log =~ ~s("tool_name":"sympp.health")
     assert enabled_log =~ ~s("argument_keys":[])
     assert enabled_log =~ ~s("error_classification":"invalid_params")
+    assert enabled_log =~ ~s("failure_reason":"invalid_tool_arguments")
     assert enabled_log =~ ~s("source":)
     refute enabled_log =~ secret
     refute enabled_log =~ "bearer"
@@ -103,6 +105,67 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     assert not_found_log =~ ~s("tool_name":"solo_show")
     assert not_found_log =~ ~s("argument_keys":["session_id"])
     refute diagnostic_event_line(not_found_log) =~ missing_session_id
+  end
+
+  test "HTTP worker diagnostics recognize restricted catalog tools without request details", %{repo: repo} do
+    assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"capture_failed_mcp_calls" => true})
+    package = create_local_claim_package!(repo, "SYMPP-DIAGNOSTIC-WORKER")
+    assert {:ok, _grant} = AccessGrantService.mint_worker_grant(repo, package.id)
+
+    config = local_mcp_config(repo)
+    client_key = "failed-call-diagnostics"
+
+    assert {:ok, initialized} =
+             HTTPTransport.handle(
+               config,
+               %{"jsonrpc" => "2.0", "id" => "init", "method" => "initialize", "params" => initialize_params()},
+               client_key: client_key
+             )
+
+    assert {:ok, claimed} =
+             HTTPTransport.handle(
+               config,
+               %{
+                 "jsonrpc" => "2.0",
+                 "id" => "claim",
+                 "method" => "tools/call",
+                 "params" => %{"name" => "claim_local_assignment", "arguments" => local_assignment_claim_args(package)}
+               },
+               client_key: client_key,
+               state_key: initialized.state_key
+             )
+
+    assert get_in(claimed.response, ["result", "structuredContent", "assignment", "work_package_id"]) == package.id
+
+    secret = "Bearer C:/private/branch/wp_identifier_secret"
+
+    request = %{
+      "jsonrpc" => "2.0",
+      "id" => secret,
+      "method" => "tools/call",
+      "params" => %{
+        "name" => "create_child_work_package",
+        "arguments" => %{"package" => %{"goal" => secret, "path" => secret}}
+      }
+    }
+
+    {response, log} =
+      capture_response(fn ->
+        assert {:ok, result} =
+                 HTTPTransport.handle(config, request,
+                   client_key: client_key,
+                   state_key: initialized.state_key
+                 )
+
+        result.response
+      end)
+
+    assert response["error"]["code"] == -32_001
+    assert response["error"]["data"]["reason"] == "architect_grant_required"
+    assert log =~ ~s("tool_name":"create_child_work_package")
+    assert log =~ ~s("failure_reason":"architect_grant_required")
+    assert log =~ ~s("argument_keys":[])
+    refute diagnostic_event_line(log) =~ secret
   end
 
   defp failed_health_request(secret) do

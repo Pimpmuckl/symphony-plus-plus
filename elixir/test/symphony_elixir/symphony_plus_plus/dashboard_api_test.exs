@@ -311,14 +311,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert card.operational_state.has_active_worker == false
 
     assert {:ok, started} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-OP-READY-STARTED", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-OP-READY-STARTED", status: "active"))
 
     create_claimed_worker_grant(repo, started.id, "worker-started")
 
     assert {:ok, started_card} = Dashboard.card(repo, started)
     assert started_card.operational_state.key == "active"
     assert started_card.operational_state.label == "Active"
-    assert started_card.operational_state.raw_status == "ready_for_worker"
+    assert started_card.operational_state.raw_status == "active"
     assert started_card.operational_state.has_started == true
     assert started_card.operational_state.has_active_worker == true
     assert started_card.operational_state.attention_items == []
@@ -481,7 +481,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              })
 
     assert {:ok, ci_card} = Dashboard.card(repo, ci_waiting)
-    assert ci_card.operational_state.key == "ci_waiting"
+    assert ci_card.operational_state.key == "started_paused"
   end
 
   test "package operational state projects merged PRs while surfacing missing readiness contradictions", %{repo: repo} do
@@ -2412,6 +2412,54 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert "branch_attached" in missing["missing"]
     assert "pr_attached" in missing["missing"]
     assert "review_artifacts_attached" in missing["missing"]
+  end
+
+  test "headless investigation evidence is projected without a recommendation artifact gate", %{repo: repo} do
+    assert {:ok, work_package} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-DASH-HEADLESS-INVESTIGATION",
+                 kind: "investigation",
+                 status: "ready_for_merge"
+               )
+             )
+
+    assert {:ok, _finding} =
+             PlanningRepository.append_finding(repo, %{
+               work_package_id: work_package.id,
+               title: "Recommendation",
+               body: "No code change needed.",
+               idempotency_key: "headless-investigation-finding"
+             })
+
+    assert {:ok, _review_package} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: work_package.id,
+               summary: "Headless evidence submitted",
+               status: "review_package_submitted",
+               payload: %{
+                 type: "review_package",
+                 source_tool: "submit_review_package",
+                 acceptance_criteria_met: true,
+                 tests: ["Investigation evidence reviewed"],
+                 artifacts: []
+               }
+             })
+
+    assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
+
+    assert %{review_package: %{"type" => "review_package"} = review_package} =
+             MetadataProjection.metadata(progress_events, [], work_package.id, nil)
+
+    refute Map.has_key?(review_package, "head_sha")
+
+    secret = create_architect_grant_secret(repo, work_package.id)
+    payload = json_response(get(auth_conn(secret), "/api/v1/sympp/work-packages/#{work_package.id}"), 200)
+    missing = Enum.find(payload["alert_indicators"], &(&1["type"] == "missing_readiness_evidence"))
+
+    assert missing["active"] == false
+    assert missing["missing"] == []
   end
 
   test "ready phase-child packages without a plan are flagged in API", %{repo: repo} do

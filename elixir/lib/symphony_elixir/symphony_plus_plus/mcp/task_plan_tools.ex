@@ -13,9 +13,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
-  @plan_append_argument_keys ["body", "expected_version", "id", "status", "title", "work_package_id"]
-  @plan_patch_argument_keys ["expected_version", "patch", "work_package_id"]
-  @plan_node_patch_keys ["body", "id", "status", "title"]
+  @plan_argument_keys ["expected_version", "nodes"]
+  @plan_node_keys ["body", "id", "status", "title"]
 
   @type repo :: module()
   @type result :: {:ok, map()} | {:tool_error, term()} | {:error, term()}
@@ -41,9 +40,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
   @spec update_task_plan(repo(), Session.t(), map()) :: result()
   def update_task_plan(repo, %Session{} = session, arguments) do
     with {:ok, expected_version} <- required_integer(arguments, "expected_version"),
+         {:ok, nodes} <- required_nodes(arguments),
+         :ok <- require_update_task_plan_keys(arguments),
          work_package_id = Session.work_package_id(session),
          {:ok, plan_nodes, version} <-
-           apply_plan_update(repo, session.assignment, work_package_id, expected_version, arguments) do
+           transaction_plan_update(repo, session.assignment, work_package_id, expected_version, nodes) do
       {:ok,
        ToolResult.agent_tool_result(%{
          "plan_nodes" => Enum.map(plan_nodes, &plan_node_payload/1),
@@ -55,29 +56,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
   defp require_worker_assignment(%{grant_role: "worker"}), do: :ok
   defp require_worker_assignment(_assignment), do: {:error, :worker_grant_required}
 
-  defp apply_plan_update(repo, assignment, work_package_id, expected_version, %{"patch" => patch} = arguments) when is_map(patch) do
-    with :ok <- require_update_task_plan_keys(arguments, @plan_patch_argument_keys) do
-      transaction_plan_update(repo, assignment, work_package_id, expected_version, fn ->
-        apply_plan_patch(repo, work_package_id, patch)
-      end)
-    end
-  end
-
-  defp apply_plan_update(_repo, _assignment, _work_package_id, _expected_version, %{"patch" => _patch}) do
-    {:tool_error, "invalid_patch"}
-  end
-
-  defp apply_plan_update(repo, assignment, work_package_id, expected_version, arguments) do
-    with :ok <- require_update_task_plan_keys(arguments, @plan_append_argument_keys) do
-      transaction_plan_update(repo, assignment, work_package_id, expected_version, fn ->
-        append_plan_node_from_arguments(repo, work_package_id, arguments)
-      end)
-    end
-  end
-
-  defp transaction_plan_update(repo, assignment, work_package_id, expected_version, update_fun) do
+  defp transaction_plan_update(repo, assignment, work_package_id, expected_version, nodes) do
     transaction_fun = fn ->
-      transaction_result(repo, assignment, work_package_id, expected_version, update_fun)
+      transaction_result(repo, assignment, work_package_id, expected_version, nodes)
     end
 
     case repo.transaction(transaction_fun) do
@@ -86,14 +67,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
     end
   end
 
-  defp transaction_result(repo, assignment, work_package_id, expected_version, update_fun) do
+  defp transaction_result(repo, assignment, work_package_id, expected_version, nodes) do
     with :ok <- PlanningService.require_valid_assignment(repo, assignment),
          :ok <- lock_work_package(repo, work_package_id),
          {:ok, state} <- PlanningRepository.get_state(repo, work_package_id),
          :ok <- reject_ready_work_package(state.work_package),
          plan_nodes = state.plan_nodes,
          :ok <- require_plan_version(plan_nodes, expected_version),
-         {:ok, updated_plan_nodes} <- transaction_result(repo, update_fun.()),
+         {:ok, updates} <- prepare_plan_updates(nodes, plan_nodes),
+         {:ok, updated_plan_nodes} <- apply_plan_updates(repo, work_package_id, updates),
          {:ok, refreshed_plan_nodes} <- PlanningRepository.list_plan_nodes(repo, work_package_id) do
       {updated_plan_nodes, plan_version(refreshed_plan_nodes)}
     else
@@ -101,10 +83,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
       {:error, reason} -> repo.rollback({:error, reason})
     end
   end
-
-  defp transaction_result(_repo, {:ok, result}), do: {:ok, result}
-  defp transaction_result(repo, {:tool_error, reason}), do: repo.rollback({:tool_error, reason})
-  defp transaction_result(repo, {:error, reason}), do: repo.rollback({:error, reason})
 
   defp lock_work_package(repo, work_package_id) do
     query = from(work_package in WorkPackage, where: work_package.id == ^work_package_id)
@@ -115,108 +93,88 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
     end
   end
 
-  defp append_plan_node_from_arguments(repo, work_package_id, arguments) do
-    with :ok <- require_plan_node_status(arguments),
-         {:ok, title} <- required_argument(arguments, "title"),
-         attrs = %{
-           "work_package_id" => work_package_id,
-           "title" => title,
-           "body" => optional_argument(arguments, "body", nil),
-           "status" => optional_argument(arguments, "status", "pending")
-         },
-         {:ok, plan_node} <- PlanningRepository.append_plan_node(repo, maybe_put_id(attrs, arguments)) do
-      {:ok, [plan_node]}
-    end
-  end
-
-  defp apply_plan_patch(repo, work_package_id, patch) do
-    nodes = Map.get(patch, "nodes", [])
-
-    cond do
-      not is_list(nodes) -> {:tool_error, "missing_patch_nodes"}
-      nodes == [] -> {:tool_error, "missing_patch_nodes"}
-      true -> apply_plan_node_patches(repo, work_package_id, nodes)
-    end
-  end
-
-  defp apply_plan_node_patches(repo, work_package_id, nodes) do
+  defp prepare_plan_updates(nodes, plan_nodes) do
     nodes
-    |> Enum.reduce_while({:ok, []}, &apply_plan_node_patch_step(repo, work_package_id, &1, &2))
-    |> reverse_plan_patch_result()
+    |> Enum.reduce_while({:ok, []}, &prepare_plan_update(&1, plan_nodes, &2))
+    |> reverse_plan_updates()
   end
 
-  defp apply_plan_node_patch_step(repo, work_package_id, node_attrs, {:ok, plan_nodes}) do
-    case apply_plan_node_patch(repo, work_package_id, node_attrs) do
-      {:ok, plan_node} -> {:cont, {:ok, [plan_node | plan_nodes]}}
+  defp prepare_plan_update(node_attrs, plan_nodes, {:ok, updates}) do
+    case prepare_plan_update(node_attrs, plan_nodes) do
+      {:ok, update} -> {:cont, {:ok, [update | updates]}}
       {:tool_error, reason} -> {:halt, {:tool_error, reason}}
       {:error, reason} -> {:halt, {:error, reason}}
     end
   end
 
-  defp reverse_plan_patch_result({:ok, plan_nodes}), do: {:ok, Enum.reverse(plan_nodes)}
-  defp reverse_plan_patch_result({:tool_error, reason}), do: {:tool_error, reason}
-  defp reverse_plan_patch_result({:error, reason}), do: {:error, reason}
+  defp reverse_plan_updates({:ok, updates}), do: {:ok, Enum.reverse(updates)}
+  defp reverse_plan_updates({:tool_error, reason}), do: {:tool_error, reason}
+  defp reverse_plan_updates({:error, reason}), do: {:error, reason}
 
-  defp apply_plan_node_patch(repo, work_package_id, %{"id" => id} = attrs) when is_binary(id) do
+  defp prepare_plan_update(%{"id" => id} = attrs, plan_nodes) when is_binary(id) do
     id = String.trim(id)
     updates = Map.take(attrs, ["title", "body", "status"])
 
-    with :ok <- require_known_plan_node_patch_keys(attrs),
+    with :ok <- require_known_plan_node_keys(attrs),
          :ok <- require_plan_node_status(attrs),
-         true <- id != "" || {:tool_error, "invalid_patch_node"},
-         {:ok, existing_nodes} <- PlanningRepository.list_plan_nodes(repo, work_package_id) do
-      existing_node = Enum.find(existing_nodes, &(&1.id == id))
-      patch_existing_or_append_plan_node(repo, work_package_id, existing_node, id, attrs, updates)
+         true <- id != "" || {:tool_error, "invalid_plan_node"},
+         :ok <- require_plan_node_updates(updates),
+         %PlanNode{} = plan_node <- Enum.find(plan_nodes, &(&1.id == id)) || {:tool_error, "unknown_plan_node"} do
+      {:ok, {:update, plan_node, updates}}
     else
       {:tool_error, reason} -> {:tool_error, reason}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp apply_plan_node_patch(_repo, _work_package_id, %{"id" => _id}), do: {:tool_error, "invalid_patch_node"}
+  defp prepare_plan_update(%{"id" => _id}, _plan_nodes), do: {:tool_error, "invalid_plan_node"}
 
-  defp apply_plan_node_patch(repo, work_package_id, attrs) when is_map(attrs) do
-    with :ok <- require_known_plan_node_patch_keys(attrs),
+  defp prepare_plan_update(attrs, _plan_nodes) when is_map(attrs) do
+    with :ok <- require_known_plan_node_keys(attrs),
          :ok <- require_plan_node_status(attrs),
          {:ok, title} <- required_argument(attrs, "title") do
-      PlanningRepository.append_plan_node(repo, %{
-        "work_package_id" => work_package_id,
-        "title" => title,
-        "body" => optional_argument(attrs, "body", nil),
-        "status" => optional_argument(attrs, "status", "pending")
-      })
+      {:ok,
+       {:create,
+        %{
+          "title" => title,
+          "body" => optional_argument(attrs, "body", nil),
+          "status" => optional_argument(attrs, "status", "pending")
+        }}}
     end
   end
 
-  defp apply_plan_node_patch(_repo, _work_package_id, _attrs), do: {:tool_error, "invalid_patch_node"}
+  defp prepare_plan_update(_attrs, _plan_nodes), do: {:tool_error, "invalid_plan_node"}
 
-  defp patch_existing_or_append_plan_node(repo, _work_package_id, %PlanNode{}, id, _attrs, updates) do
-    with :ok <- require_plan_node_updates(updates) do
-      PlanningService.update_plan_node(repo, id, updates)
+  defp apply_plan_updates(repo, work_package_id, updates) do
+    updates
+    |> Enum.reduce_while({:ok, []}, &apply_plan_update(repo, work_package_id, &1, &2))
+    |> reverse_plan_updates()
+  end
+
+  defp apply_plan_update(repo, work_package_id, update, {:ok, plan_nodes}) do
+    result =
+      case update do
+        {:create, attrs} -> PlanningRepository.append_plan_node(repo, Map.put(attrs, "work_package_id", work_package_id))
+        {:update, %PlanNode{id: id}, attrs} -> PlanningService.update_plan_node(repo, id, attrs)
+      end
+
+    case result do
+      {:ok, plan_node} -> {:cont, {:ok, [plan_node | plan_nodes]}}
+      {:error, reason} -> {:halt, {:error, reason}}
     end
   end
 
-  defp patch_existing_or_append_plan_node(repo, work_package_id, nil, id, attrs, _updates) do
-    with {:ok, title} <- required_argument(attrs, "title") do
-      PlanningRepository.append_plan_node(repo, %{
-        "id" => id,
-        "work_package_id" => work_package_id,
-        "title" => title,
-        "body" => optional_argument(attrs, "body", nil),
-        "status" => optional_argument(attrs, "status", "pending")
-      })
-    end
+  defp require_known_plan_node_keys(attrs) do
+    if Enum.all?(Map.keys(attrs), &(&1 in @plan_node_keys)), do: :ok, else: {:tool_error, "invalid_plan_node"}
   end
 
-  defp require_known_plan_node_patch_keys(attrs) do
-    if Enum.all?(Map.keys(attrs), &(&1 in @plan_node_patch_keys)), do: :ok, else: {:tool_error, "invalid_patch_node"}
+  defp require_update_task_plan_keys(arguments) do
+    if Map.keys(arguments) |> Enum.sort() == @plan_argument_keys,
+      do: :ok,
+      else: {:tool_error, "invalid_update_task_plan"}
   end
 
-  defp require_update_task_plan_keys(arguments, allowed_keys) do
-    if Enum.all?(Map.keys(arguments), &(&1 in allowed_keys)), do: :ok, else: {:tool_error, "invalid_update_task_plan"}
-  end
-
-  defp require_plan_node_updates(updates) when map_size(updates) == 0, do: {:tool_error, "invalid_patch_node"}
+  defp require_plan_node_updates(updates) when map_size(updates) == 0, do: {:tool_error, "invalid_plan_node"}
   defp require_plan_node_updates(_updates), do: :ok
 
   defp require_plan_node_status(arguments) do
@@ -286,24 +244,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
     end
   end
 
+  defp required_nodes(arguments) do
+    case Map.get(arguments, "nodes") do
+      nodes when is_list(nodes) and nodes != [] -> {:ok, nodes}
+      _nodes -> {:tool_error, "missing_nodes"}
+    end
+  end
+
   defp optional_argument(arguments, key, default) do
     case Map.get(arguments, key, default) do
       value when is_binary(value) -> if String.trim(value) == "", do: default, else: value
       nil -> default
       value -> value
-    end
-  end
-
-  defp maybe_put_id(attrs, arguments) do
-    case Map.get(arguments, "id") do
-      id when is_binary(id) ->
-        case String.trim(id) do
-          "" -> attrs
-          trimmed -> Map.put(attrs, "id", trimmed)
-        end
-
-      _id ->
-        attrs
     end
   end
 

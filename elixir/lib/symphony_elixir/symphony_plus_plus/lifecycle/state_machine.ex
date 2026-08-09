@@ -12,7 +12,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
 
   @worker_package_transitions %{
     "created" => ["ready_for_worker", "blocked", "abandoned"],
-    "ready_for_worker" => ["claimed", "blocked", "abandoned"],
+    "ready_for_worker" => ["active", "blocked", "abandoned"],
+    "active" => [@ready_status, "blocked", "abandoned"],
     "claimed" => ["planning", "blocked", "abandoned"],
     "planning" => ["implementing", "blocked", "abandoned"],
     "implementing" => ["reviewing", "blocked", "abandoned"],
@@ -20,7 +21,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
     "ci_waiting" => [@ready_status, "reviewing", "blocked", "abandoned"],
     @ready_status => ["merged", "closed"],
     @legacy_ready_status => ["merged", "closed"],
-    "blocked" => ["planning", "implementing", "abandoned"],
+    "blocked" => ["active", "planning", "implementing", "abandoned"],
     "abandoned" => [],
     "closed" => [],
     "merged" => []
@@ -28,7 +29,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
 
   @phase_child_transitions %{
     "created" => ["ready_for_worker", "blocked", "abandoned"],
-    "ready_for_worker" => ["claimed", "blocked", "abandoned"],
+    "ready_for_worker" => ["active", "blocked", "abandoned"],
+    "active" => ["ready_for_architect_merge", "blocked", "abandoned"],
     "claimed" => ["planning", "blocked", "abandoned"],
     "planning" => ["implementing", "blocked", "abandoned"],
     "implementing" => ["reviewing", "blocked", "abandoned"],
@@ -37,7 +39,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
     "ready_for_architect_merge" => ["merging_into_phase", "closed"],
     "merging_into_phase" => ["merged_into_phase", "blocked"],
     "merged_into_phase" => [],
-    "blocked" => ["planning", "implementing", "abandoned"],
+    "blocked" => ["active", "planning", "implementing", "abandoned"],
     "abandoned" => [],
     "closed" => []
   }
@@ -112,16 +114,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
   defp validate_mark_ready_status(%WorkPackage{} = work_package, next_status) do
     cond do
       next_status != terminal_readiness_status(work_package) -> {:error, :invalid_transition}
-      work_package.status not in ["reviewing", "ci_waiting"] -> {:error, :invalid_transition}
+      work_package.status not in ["active", "reviewing", "ci_waiting"] -> {:error, :invalid_transition}
       true -> :ok
     end
   end
 
-  defp validate_mark_ready_policy(%WorkPackage{status: "ci_waiting"}), do: :ok
-
   defp validate_mark_ready_policy(%WorkPackage{} = work_package) do
     case Templates.expand(policy_key(work_package)) do
-      {:ok, policy} -> if "ci_waiting" in Map.get(policy, :required_gates, []), do: {:error, :invalid_transition}, else: :ok
+      {:ok, _policy} -> :ok
       {:error, reason} -> {:error, reason}
     end
   end

@@ -211,10 +211,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools02Test do
     assert is_binary(first_grant_id)
 
     worker_session = claim_child_worker_from_mint_response(repo, first_response, "worker-1")
-    advance_child_worker_to_ci_waiting(repo, worker_session)
+    assert_child_worker_active(repo, worker_session)
 
     assert {:ok, in_progress_child} = WorkPackageRepository.get(repo, child_id)
-    assert in_progress_child.status == "ci_waiting"
+    assert in_progress_child.status == "active"
 
     revoke_response =
       mcp_tool(repo, architect_session, "revoke_child_worker_key", %{
@@ -226,7 +226,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools02Test do
 
     recycle = get_in(revoke_response, ["result", "structuredContent", "recycle"])
     assert recycle["status"] == "revoked"
-    assert recycle["previous_child_status"] == "ci_waiting"
+    assert recycle["previous_child_status"] == "active"
     assert recycle["new_child_status"] == "ready_for_worker"
     assert recycle["status_reset"] == true
     assert recycle["remint_available"] == true
@@ -234,7 +234,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools02Test do
 
     event = get_in(revoke_response, ["result", "structuredContent", "revocation_event"])
     assert event["payload"]["grant_id"] == first_grant_id
-    assert event["payload"]["previous_status"] == "ci_waiting"
+    assert event["payload"]["previous_status"] == "active"
     assert event["payload"]["new_status"] == "ready_for_worker"
     assert event["payload"]["status_reset"] == true
     assert event["payload"]["reason_codes"] == ["worker_recycled", "work_package_reset_for_recycle"]
@@ -252,10 +252,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools02Test do
     assert second_grant_id != first_grant_id
 
     stale_worker_response =
-      mcp_tool(repo, worker_session, "set_status", %{
-        "expected_status" => "ready_for_worker",
-        "status" => "claimed",
-        "reason" => "stale worker should not mutate recycled child"
+      mcp_tool(repo, worker_session, "report_blocker", %{
+        "summary" => "stale worker should not mutate recycled child",
+        "idempotency_key" => "stale-worker-blocker"
       })
 
     assert get_in(stale_worker_response, ["error", "code"]) == -32_001

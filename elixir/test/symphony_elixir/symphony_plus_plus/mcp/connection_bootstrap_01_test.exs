@@ -541,7 +541,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
     try do
       Repo.put_dynamic_repo(pid)
       assert :ok = WorkPackageRepository.migrate(Repo)
-      assert {:ok, package} = WorkPackageRepository.create(Repo, WorkPackageFactory.attrs(id: "SYMPP-P3-001"))
+
+      assert {:ok, package} =
+               WorkPackageRepository.create(
+                 Repo,
+                 WorkPackageFactory.attrs(id: "SYMPP-P3-001", status: "ready_for_worker")
+               )
+
       assert {:ok, _minted} = AccessGrantService.mint_worker_grant(Repo, package.id)
 
       input =
@@ -764,7 +770,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
     try do
       Repo.put_dynamic_repo(pid)
       assert :ok = WorkPackageRepository.migrate(Repo)
-      assert {:ok, package} = WorkPackageRepository.create(Repo, WorkPackageFactory.attrs(id: "SYMPP-P10-006-HEALTH"))
+
+      assert {:ok, package} =
+               WorkPackageRepository.create(
+                 Repo,
+                 WorkPackageFactory.attrs(id: "SYMPP-P10-006-HEALTH", status: "ready_for_worker")
+               )
+
       assert {:ok, _minted} = AccessGrantService.mint_worker_grant(Repo, package.id)
 
       input =

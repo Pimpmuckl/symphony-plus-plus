@@ -2,10 +2,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildScope do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
+  alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @type globs_result :: {:ok, [String.t()]} | {:tool_error, String.t()}
-  @type scope_result :: :ok | {:tool_error, String.t()}
+  @type scope_result :: :ok | {:tool_error, String.t()} | {:error, :phase_scope_not_available}
+
+  @spec context_anchor(module(), WorkPackage.t()) :: {:ok, WorkPackage.t()} | {:error, term()}
+  def context_anchor(_repo, %WorkPackage{kind: kind} = work_package) when kind != "phase_child", do: {:ok, work_package}
+
+  def context_anchor(repo, %WorkPackage{parent_id: parent_id} = child) when is_binary(parent_id) do
+    with {:ok, anchor} <- WorkPackageRepository.get(repo, parent_id),
+         :ok <- require_scope(child, anchor) do
+      {:ok, anchor}
+    else
+      {:error, :not_found} -> {:error, :forbidden}
+      {:error, :phase_scope_not_available} -> {:error, :forbidden}
+      {:tool_error, _reason} -> {:error, :forbidden}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def context_anchor(_repo, %WorkPackage{}), do: {:error, :forbidden}
+
+  @spec require_scope(WorkPackage.t(), WorkPackage.t()) :: scope_result()
+  def require_scope(%WorkPackage{kind: "phase_child"} = child, %WorkPackage{} = anchor) do
+    cond do
+      child.parent_id != anchor.id -> {:error, :phase_scope_not_available}
+      child.phase_id != anchor.phase_id -> {:error, :phase_scope_not_available}
+      not repo_scope_match?(child.repo, anchor.repo) -> {:tool_error, "repo_scope_mismatch"}
+      child.base_branch != anchor.base_branch -> {:tool_error, "base_branch_scope_mismatch"}
+      true -> require_file_scope(child, anchor)
+    end
+  end
+
+  def require_scope(%WorkPackage{}, %WorkPackage{}), do: {:error, :phase_scope_not_available}
 
   @spec require_file_scope(WorkPackage.t(), WorkPackage.t()) :: scope_result()
   def require_file_scope(%WorkPackage{} = child, %WorkPackage{} = anchor) do
@@ -185,6 +217,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildScope do
       {:tool_error, "invalid_#{key}"}
     end
   end
+
+  defp repo_scope_match?(repo, repo) when is_binary(repo), do: true
+
+  defp repo_scope_match?(expected_repo, actual_repo) when is_binary(expected_repo) and is_binary(actual_repo) do
+    RepoIdentity.scope_match?(expected_repo, actual_repo,
+      trusted_remotes: Application.get_env(:symphony_elixir, :sympp_repo_identity_trusted_remotes, []),
+      local_path_remotes?: true
+    )
+  end
+
+  defp repo_scope_match?(_expected_repo, _actual_repo), do: false
 
   defp normalize_child_scope_globs(globs) when is_list(globs) do
     normalized_globs =

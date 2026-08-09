@@ -438,7 +438,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   end
 
   defp run_operator_retention(settings) do
-    RetentionThrottle.run(Repo, settings, &run_operator_retention_pass(settings, &1), force: true)
+    RetentionThrottle.run(Repo, settings, &run_operator_retention_pass(settings, &1))
   end
 
   defp run_operator_retention_pass(settings, now) do

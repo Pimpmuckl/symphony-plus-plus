@@ -23,7 +23,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   @complete_plan_statuses ["done", "completed", "skipped"]
   @merge_required_gates ["human_merge", "architect_merge"]
   @runtime_merge_required_kinds ["hotfix", "adapter", "mcp", "skill", "hooks", "phase_child"]
-  @started_package_statuses ["claimed", "planning", "implementing"]
+  @started_package_statuses ["active", "claimed", "planning", "implementing"]
   @prepared_worktree_statuses ["prepared", "already_prepared"]
   @merged_package_statuses ["merged", "merged_into_phase"]
   @closed_package_statuses ["closed", "abandoned", "skipped"]
@@ -316,11 +316,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       status in @ready_statuses ->
         ready_operational_state(work_package, missing_readiness)
 
-      status == "ci_waiting" ->
-        operational_state("ci_waiting", "CI Waiting", "info", "Package is waiting on validation or CI evidence.", status)
-
-      status == "reviewing" or review_activity?(metadata) ->
-        operational_state("reviewing", "Reviewing", "info", "Review evidence or lifecycle status indicates review is active.", status)
+      review_activity?(metadata) ->
+        operational_state("reviewing", "Reviewing", "info", "Durable review evidence indicates review is active.", status)
 
       true ->
         nil
@@ -337,10 +334,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       reason = if missing_readiness == [], do: "Package is ready to finish with closeout evidence.", else: "Package is ready to finish but evidence is incomplete."
       operational_state("ready_to_finish", "Ready To Finish", tone, reason, status)
     end
-  end
-
-  defp pickup_operational_state("ready_for_worker" = status, %{has_active_worker: true}) do
-    operational_state("active", "Active", "info", "Worker grant or runtime evidence indicates work is active now.", status)
   end
 
   defp pickup_operational_state("ready_for_worker" = status, %{has_started: true}) do
@@ -689,7 +682,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   end
 
   defp review_activity?(metadata) do
-    present_metadata_value?(safe_map_get(metadata, :review_completion))
+    Enum.any?([:review_package, :review_completion], &present_metadata_value?(safe_map_get(metadata, &1)))
   end
 
   defp present_metadata_value?(nil), do: false
@@ -868,8 +861,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       {review_artifacts_missing?(context), "review_artifacts_attached"},
       {review_current_head_missing?(context), "review_current_head"},
       {review_completion_missing?(context), "review_complete"},
-      {investigation_findings_missing?(context), "findings_documented"},
-      {investigation_recommendation_missing?(context), "recommendation_artifact_recorded"}
+      {investigation_findings_missing?(context), "findings_documented"}
     ]
     |> Enum.flat_map(fn
       {true, @scope_guard_gate} -> ScopeGuard.failure_reasons(context.work_package, context.progress_events)
@@ -897,7 +889,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   defp readiness_failure_message("review_current_head"), do: "Required review is waiting for an attached exact head."
   defp readiness_failure_message("review_complete"), do: "Required review is not completed for the current exact head and requirement."
   defp readiness_failure_message("findings_documented"), do: "Investigation findings are missing."
-  defp readiness_failure_message("recommendation_artifact_recorded"), do: "Investigation recommendation artifact is missing."
   defp readiness_failure_message(_gate), do: "Readiness gate is not satisfied."
 
   defp merge_metadata_missing?(context, "pr") do
@@ -968,11 +959,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   end
 
   defp investigation_findings_missing?(context), do: context.work_package.kind == "investigation" and context.findings == []
-
-  defp investigation_recommendation_missing?(context) do
-    context.work_package.kind == "investigation" and
-      not recommendation_artifact_recorded?(context.artifacts, context.work_package.id)
-  end
 
   defp incomplete_plan?(context) do
     plan_required?(context.work_package) and
@@ -1183,7 +1169,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   defp normalize_blocker_id(value) when is_binary(value), do: String.trim(value)
   defp normalize_blocker_id(value), do: to_string(value)
 
-  defp recommendation_artifact_recorded?(artifacts, work_package_id), do: MetadataProjection.recommendation_artifact_recorded?(artifacts, work_package_id)
+  defp review_head_matches?(payload, :any_head) when is_map(payload), do: true
   defp review_head_matches?(payload, readiness_head_sha), do: MetadataProjection.review_head_matches?(payload, readiness_head_sha)
   defp latest_current_head_sha(progress_events), do: MetadataProjection.latest_current_head_sha(progress_events)
   defp metadata_present?(progress_events, type, head_sha), do: MetadataProjection.metadata_present?(progress_events, type, head_sha)

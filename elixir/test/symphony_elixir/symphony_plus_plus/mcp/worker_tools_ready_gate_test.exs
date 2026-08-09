@@ -16,23 +16,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    bypass_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "ready-bypass",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "set_status",
-            "arguments" => %{"expected_status" => "ci_waiting", "status" => "ready_for_merge"}
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(bypass_response, ["error", "data", "reason"]) == "use_mark_ready"
-
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-READY-PACKAGE-PLAN/worker", "head_sha" => "abc126"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/126", "head_sha" => "abc126"})
 
@@ -63,6 +46,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
       )
 
     assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
+    assert get_in(ready_response, ["result", "structuredContent", "next_owner"]) == "architect"
+    assert get_in(ready_response, ["result", "structuredContent", "next_action"]) == "return_to_architect"
   end
 
   test "mark_ready rejects empty review packages and requires an external blocker resolution", %{repo: repo} do
@@ -236,6 +221,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert completion_payload["note"] == "Maintainers approved the exact head."
     assert completion_payload["review_fingerprint"] == ReviewRequirement.fingerprint(review)
     assert String.ends_with?(get_in(completion_payload, ["review", "args", "context"]), "[truncated]")
+    assert get_in(completion, ["result", "structuredContent", "remaining_readiness_gates"]) == []
 
     replay =
       attach_tool(repo, session, "complete_review", %{
@@ -245,6 +231,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
 
     assert get_in(replay, ["result", "structuredContent", "progress_event", "id"]) ==
              get_in(completion, ["result", "structuredContent", "progress_event", "id"])
+
+    assert get_in(replay, ["result", "structuredContent", "remaining_readiness_gates"]) == []
 
     changed_review = %{"type" => "automated", "args" => %{"policy" => "internal"}}
     package |> Ecto.Changeset.change(review_requirement: changed_review) |> repo.update!()

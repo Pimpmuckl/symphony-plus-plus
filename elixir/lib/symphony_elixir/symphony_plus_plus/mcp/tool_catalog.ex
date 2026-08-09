@@ -28,7 +28,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "set_status",
+    "report_blocker",
+    "resolve_blocker",
+    "abandon",
     "add_comment",
     "list_comments",
     "resolve_comment",
@@ -47,7 +49,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "set_status",
+    "report_blocker",
+    "resolve_blocker",
+    "abandon",
     "add_comment",
     "list_comments",
     "resolve_comment",
@@ -60,7 +64,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "complete_review",
     "mark_ready"
   ]
-  @shared_worker_architect_tools ["add_comment", "list_comments", "resolve_comment", "read_guidance_request"]
+  @shared_worker_architect_tools ["add_comment", "list_comments", "resolve_comment", "resolve_blocker", "read_guidance_request"]
   @architect_tools [
     "create_child_work_package",
     "mint_child_worker_key",
@@ -103,6 +107,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "approve_child_ready_state",
     "merge_child_into_phase"
   ]
+  @known_tools Enum.uniq(
+                 [@health_tool, @assignment_release_tool] ++
+                   @solo_tools ++
+                   @bootstrap_tools ++
+                   @local_operator_tools ++
+                   @session_claim_tools ++
+                   @worker_tools ++ @architect_tools
+               )
   @work_request_policy_tools [
     "list_work_requests",
     "read_work_request",
@@ -210,6 +222,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   @spec architect_tools() :: [tool_name()]
   def architect_tools, do: @architect_tools
+
+  @spec known_tool?(term()) :: boolean()
+  def known_tool?(name), do: name in @known_tools
 
   @spec work_request_policy_tools() :: [tool_name()]
   def work_request_policy_tools, do: @work_request_policy_tools

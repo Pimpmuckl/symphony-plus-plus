@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   @moduledoc false
 
+  import Ecto.Query, only: [from: 2]
+
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
       optional_argument: 3,
@@ -18,24 +20,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.ActorResolver
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
-  alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     ArchitectDeliveryTools,
     Auth,
     Config,
     ErrorDetails,
+    PhaseChildScope,
     ProgressEvents,
     PullRequestMetadata,
     ReviewReadiness,
     Session,
     TaskPlanTools,
     ToolResult,
+    WorkRequestPayloads,
     WorktreeScope
   }
 
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
@@ -49,7 +54,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "set_status",
+    "report_blocker",
+    "resolve_blocker",
+    "abandon",
     "request_scope_expansion",
     "attach_branch",
     "attach_pr",
@@ -58,7 +65,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     "complete_review",
     "mark_ready"
   ]
-  @terminal_work_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
   @finding_replay_retry_attempts 50
 
   @typep result :: {:ok, map()} | {:error, integer(), String.t(), map()}
@@ -106,19 +112,68 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     append_scoped_progress(config.repo, session, arguments, "append_progress", %{})
   end
 
-  def call("set_status", %Config{} = config, session, arguments) do
+  def call("report_blocker", %Config{} = config, session, arguments) do
     with {:ok, session} <- scoped_session(config.repo, session, arguments),
-         {:ok, status} <- required_argument(arguments, "status"),
-         {:ok, expected_status} <- required_argument(arguments, "expected_status"),
-         {:ok, reason} <- optional_reason(arguments),
-         :ok <- reject_ready_status(status),
-         {:ok, blocker_closeout_plan} <- maybe_prepare_work_package_status_blocker_closeout(config.repo, session, status),
-         {:ok, work_package} <- set_status_transaction(config.repo, session, expected_status, status, reason, blocker_closeout_plan) do
+         :ok <- authorize_current_package_policy(config.repo, session, :blocker_report, :blocker),
+         {:ok, summary} <- required_argument(arguments, "summary"),
+         {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
+         {:ok, blocker_id} <- optional_string_argument(arguments, "blocker_id"),
+         {:ok, caller_payload} <- optional_payload(arguments),
+         {:ok, result} <-
+           report_blocker_transaction(
+             config.repo,
+             session,
+             arguments,
+             summary,
+             idempotency_key,
+             blocker_id,
+             caller_payload
+           ) do
+      {:ok, result}
+    else
+      {:tool_error, reason} -> invalid_params_error("report_blocker", reason)
+      {:error, _code, _message, _data} = error -> error
+      {:error, reason} -> worker_error(reason, "report_blocker")
+    end
+  end
+
+  def call("resolve_blocker", %Config{} = config, session, arguments) do
+    with {:ok, session} <- scoped_session(config.repo, session, arguments),
+         :ok <- authorize_current_package_policy(config.repo, session, :blocker_resolve, :blocker),
+         {:ok, blocker_id} <- required_argument(arguments, "blocker_id"),
+         {:ok, resolution} <- required_argument(arguments, "resolution"),
+         {:ok, summary} <- required_argument(arguments, "summary"),
+         {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
+         {:ok, caller_payload} <- optional_payload(arguments),
+         {:ok, result} <-
+           resolve_blocker_transaction(
+             config.repo,
+             session,
+             arguments,
+             blocker_id,
+             resolution,
+             summary,
+             idempotency_key,
+             caller_payload
+           ) do
+      {:ok, result}
+    else
+      {:tool_error, reason} -> invalid_params_error("resolve_blocker", reason)
+      {:error, _code, _message, _data} = error -> error
+      {:error, reason} -> worker_error(reason, "resolve_blocker")
+    end
+  end
+
+  def call("abandon", %Config{} = config, session, arguments) do
+    with {:ok, session} <- scoped_session(config.repo, session, arguments),
+         :ok <- authorize_current_package_policy(config.repo, session, :work_package_update, :work_package),
+         {:ok, reason} <- required_argument(arguments, "reason"),
+         {:ok, work_package} <- abandon_transaction(config.repo, session, reason) do
       {:ok, ToolResult.tool_result(%{"work_package" => work_package_payload(work_package)})}
     else
-      {:tool_error, reason} -> invalid_params_error("set_status", reason)
+      {:tool_error, reason} -> invalid_params_error("abandon", reason)
       {:error, _code, _message, _data} = error -> error
-      {:error, reason} -> worker_error(reason, "set_status")
+      {:error, reason} -> worker_error(reason, "abandon")
     end
   end
 
@@ -201,6 +256,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
       {:ok,
        ToolResult.tool_result(
          %{"work_package" => work_package_payload(work_package), "ready" => true}
+         |> put_architect_next_step()
          |> ReviewReadiness.maybe_put_readiness_warnings(warnings)
        )}
     else
@@ -255,10 +311,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
          work_package_id = Session.work_package_id(session),
          uri = "sympp://work-packages/#{work_package_id}/#{file_name}",
          {:ok, state} <- PlanningRepository.get_render_state(repo, work_package_id),
-         {:ok, markdown} <- PlanningRenderer.render_state(state, file_name) do
+         {:ok, markdown} <- PlanningRenderer.render_state(state, file_name),
+         {:ok, context_anchor} <- PhaseChildScope.context_anchor(repo, state.work_package),
+         {:ok, worker_context} <- WorkRequestPayloads.worker_context(repo, context_anchor) do
       {:ok,
-       ToolResult.agent_tool_result(%{"uri" => uri, "text" => markdown}, fn ->
-         {:ok, toon} = WorkerContext.encode_virtual_file(state, file_name, uri: uri)
+       ToolResult.agent_tool_result(Map.merge(%{"uri" => uri, "text" => markdown}, worker_context), fn ->
+         {:ok, toon} = WorkerContext.encode_virtual_file(state, file_name, uri: uri, worker_context: worker_context)
          toon
        end)}
     else
@@ -271,19 +329,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   defp normalize_update_task_plan_result({:error, reason}), do: worker_error(reason, "update_task_plan")
   defp normalize_update_task_plan_result(result), do: result
-
-  defp maybe_prepare_work_package_status_blocker_closeout(repo, %Session{} = session, status)
-       when status in @terminal_work_package_statuses do
-    ArchitectDeliveryTools.prepare_scoped_blocker_closeout(
-      repo,
-      session,
-      [Session.work_package_id(session)],
-      %{},
-      "set_status"
-    )
-  end
-
-  defp maybe_prepare_work_package_status_blocker_closeout(_repo, %Session{}, _status), do: {:ok, :not_needed}
 
   defp append_pr_metadata(repo, %Session{} = session, arguments, tool, status, payload) do
     with {:ok, idempotency_key, attrs} <- ProgressEvents.metadata_attrs(session, arguments, tool, status, payload),
@@ -330,7 +375,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   defp terminal_sync_result(repo, work_package_id, %{status: status} = result) when status in ["merged", "already_merged"] do
     with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, ToolResult.agent_tool_result(%{"work_package" => work_package_payload(work_package), "pr_sync" => stringify_keys(result)})}
+      {:ok,
+       ToolResult.agent_tool_result(
+         %{"work_package" => work_package_payload(work_package), "pr_sync" => stringify_keys(result)}
+         |> put_architect_next_step()
+       )}
     end
   end
 
@@ -356,28 +405,230 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     end
   end
 
-  defp set_status_transaction(repo, %Session{} = session, expected_status, status, reason, blocker_closeout_plan) do
-    result =
-      repo
-      |> run_worker_transaction(fn ->
-        with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
-             {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
-             :ok <- require_expected_status(state.work_package, expected_status, session),
-             :ok <- reject_architect_controlled_child(state.work_package, status),
-             {:ok, _event} <- append_status_reason_event(repo, session, expected_status, status, reason),
-             {:ok, work_package} <- LifecycleService.transition(repo, state.work_package, status, actor(session)),
-             {:ok, _blocker_closeout} <-
-               ArchitectDeliveryTools.apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan) do
-          {:ok, work_package}
+  defp report_blocker_transaction(repo, %Session{} = session, arguments, summary, idempotency_key, blocker_id, caller_payload) do
+    idempotency_key = ProgressEvents.scoped_idempotency_key("report_blocker", String.trim(idempotency_key), session)
+    blocker_id = blocker_id || generated_blocker_id(session, idempotency_key)
+
+    attrs = %{
+      "summary" => summary,
+      "body" => optional_argument(arguments, "body", nil),
+      "status" => "blocked",
+      "idempotency_key" => idempotency_key,
+      "payload" =>
+        Map.merge(caller_payload, %{
+          "type" => "blocker",
+          "source_tool" => "report_blocker",
+          "blocker_id" => blocker_id,
+          "active" => true
+        })
+    }
+
+    repo
+    |> run_worker_transaction(fn ->
+      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
+           :ok <- lock_work_package(repo, Session.work_package_id(session)),
+           :ok <- ProgressEvents.reject_ready_evidence_mutation(repo, session, "report_blocker") do
+        append_or_replay_blocker_report(repo, session, attrs, idempotency_key)
+      end
+    end)
+    |> put_reported_blocker_id(blocker_id)
+  end
+
+  defp put_reported_blocker_id({:ok, %{"structuredContent" => payload}}, blocker_id) when is_map(payload) do
+    {:ok, ToolResult.agent_tool_result(Map.put(payload, "blocker_id", blocker_id))}
+  end
+
+  defp put_reported_blocker_id(result, _blocker_id), do: result
+
+  defp append_or_replay_blocker_report(repo, %Session{} = session, attrs, idempotency_key) do
+    case ProgressEvents.existing(repo, session, idempotency_key) do
+      {:ok, %ProgressEvent{} = event} ->
+        ProgressEvents.replay_existing(repo, session, event, attrs, "report_blocker")
+
+      {:error, :not_found} ->
+        with {:ok, %WorkPackage{status: status} = work_package} when status in ["active", "blocked"] <-
+               WorkPackageRepository.get(repo, Session.work_package_id(session)),
+             {:ok, result} <- ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, "report_blocker"),
+             {:ok, _blocked} <- maybe_block_worker_package(repo, session, work_package) do
+          {:ok, result}
+        else
+          {:ok, %WorkPackage{}} -> {:tool_error, "work_package_not_active"}
+          error -> error
         end
-      end)
 
-    case result do
-      {:error, reason} when reason in [:invalid_transition, :stale_status] ->
-        reload_lifecycle_conflict_error(repo, reason, session)
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
-      result ->
-        result
+  defp maybe_block_worker_package(_repo, _session, %WorkPackage{status: "blocked"} = work_package), do: {:ok, work_package}
+  defp maybe_block_worker_package(repo, %Session{} = session, %WorkPackage{} = work_package), do: LifecycleService.transition(repo, work_package, "blocked", actor(session))
+
+  defp resolve_blocker_transaction(
+         repo,
+         %Session{} = session,
+         arguments,
+         blocker_id,
+         resolution,
+         summary,
+         idempotency_key,
+         caller_payload
+       ) do
+    idempotency_key = ProgressEvents.scoped_idempotency_key("resolve_blocker", String.trim(idempotency_key), session)
+
+    attrs = %{
+      "summary" => summary,
+      "body" => optional_argument(arguments, "body", nil),
+      "status" => "resolved",
+      "idempotency_key" => idempotency_key,
+      "payload" =>
+        Map.merge(caller_payload, %{
+          "type" => "blocker",
+          "source_tool" => "resolve_blocker",
+          "blocker_id" => blocker_id,
+          "resolution" => resolution,
+          "active" => false
+        })
+    }
+
+    run_worker_transaction(repo, fn ->
+      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
+           :ok <- lock_work_package(repo, Session.work_package_id(session)),
+           :ok <- ProgressEvents.reject_ready_evidence_mutation(repo, session, "resolve_blocker") do
+        append_or_replay_blocker_resolution(repo, session, blocker_id, attrs, idempotency_key)
+      end
+    end)
+  end
+
+  defp append_or_replay_blocker_resolution(repo, %Session{} = session, blocker_id, attrs, idempotency_key) do
+    case ProgressEvents.existing(repo, session, idempotency_key) do
+      {:ok, %ProgressEvent{} = event} ->
+        ProgressEvents.replay_existing(repo, session, event, attrs, "resolve_blocker")
+
+      {:error, :not_found} ->
+        resolve_new_worker_blocker(repo, session, blocker_id, attrs, idempotency_key)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp resolve_new_worker_blocker(repo, %Session{} = session, blocker_id, attrs, idempotency_key) do
+    with {:ok, %WorkPackage{status: "blocked"} = work_package} <-
+           WorkPackageRepository.get(repo, Session.work_package_id(session)),
+         {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package.id),
+         :ok <-
+           require_worker_owned_active_blocker(
+             progress_events,
+             blocker_id,
+             session.assignment.grant_id
+           ),
+         {:ok, result} <- ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, "resolve_blocker"),
+         {:ok, _work_package} <-
+           maybe_unblock_worker_package(
+             repo,
+             session,
+             work_package,
+             progress_events,
+             blocker_id
+           ) do
+      {:ok, result}
+    else
+      {:ok, %WorkPackage{}} -> {:tool_error, "work_package_not_blocked"}
+      error -> error
+    end
+  end
+
+  defp require_worker_owned_active_blocker(progress_events, blocker_id, grant_id) do
+    case Enum.find(BlockerProjection.blockers(progress_events), &(&1.id == blocker_id)) do
+      %{active: true, actor: %{access_grant_id: ^grant_id}} -> :ok
+      %{active: true} -> {:tool_error, "blocker_owned_by_another_actor"}
+      %{} -> {:tool_error, "blocker_not_active"}
+      nil -> {:tool_error, "blocker_not_found"}
+    end
+  end
+
+  defp maybe_unblock_worker_package(repo, %Session{} = session, %WorkPackage{} = work_package, progress_events, blocker_id) do
+    active_blockers =
+      progress_events
+      |> BlockerProjection.blockers()
+      |> Enum.filter(&(&1.active and &1.id != blocker_id))
+
+    if active_blockers == [] do
+      LifecycleService.transition(repo, work_package, "active", actor(session))
+    else
+      {:ok, work_package}
+    end
+  end
+
+  defp abandon_transaction(repo, %Session{} = session, reason) do
+    run_worker_transaction(repo, fn ->
+      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
+           :ok <- ProgressEvents.reject_ready_evidence_mutation(repo, session, "abandon"),
+           {:ok, %WorkPackage{status: status} = work_package} when status in ["active", "blocked"] <-
+             WorkPackageRepository.get(repo, Session.work_package_id(session)),
+           {:ok, blocker_closeout_plan} <-
+             ArchitectDeliveryTools.prepare_scoped_blocker_closeout(
+               repo,
+               session,
+               [work_package.id],
+               %{
+                 "blocker_closeout" => %{
+                   "decision" => "still_active",
+                   "summary" => "Preserved active blocker when worker abandoned the work package"
+                 }
+               },
+               "abandon"
+             ),
+           {:ok, _event} <- append_abandon_event(repo, session, work_package.status, reason),
+           {:ok, abandoned} <- LifecycleService.transition(repo, work_package, "abandoned", actor(session)),
+           {:ok, _blocker_closeout} <-
+             ArchitectDeliveryTools.apply_prepared_blocker_closeout(repo, session, blocker_closeout_plan) do
+        {:ok, abandoned}
+      else
+        {:ok, %WorkPackage{}} -> {:tool_error, "work_package_not_active"}
+        error -> error
+      end
+    end)
+  end
+
+  defp append_abandon_event(repo, %Session{} = session, from_status, reason) do
+    payload = %{"type" => "status_transition", "from_status" => from_status, "to_status" => "abandoned"}
+    idempotency_key = ProgressEvents.metadata_idempotency_key(Map.put(payload, "reason", reason))
+
+    attrs = %{
+      "summary" => "Work package abandoned",
+      "body" => reason,
+      "status" => "abandoned",
+      "idempotency_key" => idempotency_key,
+      "payload" => Map.put(payload, "source_tool", "abandon")
+    }
+
+    case ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, "abandon") do
+      {:ok, _result} ->
+        PlanningRepository.get_progress_event_by_idempotency_key(
+          repo,
+          session.assignment.work_package_id,
+          idempotency_key,
+          session.assignment.grant_id
+        )
+
+      error ->
+        error
+    end
+  end
+
+  defp generated_blocker_id(%Session{} = session, idempotency_key) do
+    material = [session.assignment.work_package_id, session.assignment.grant_id, idempotency_key] |> Enum.join(":")
+    "blocker_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
+  end
+
+  defp lock_work_package(repo, work_package_id) do
+    query = from(work_package in WorkPackage, where: work_package.id == ^work_package_id)
+
+    case repo.update_all(query, set: [id: work_package_id]) do
+      {1, _rows} -> :ok
+      {0, _rows} -> {:error, :not_found}
     end
   end
 
@@ -527,8 +778,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   defp append_scoped_progress(repo, session, arguments, tool, payload) do
     with {:ok, session} <- scoped_session(repo, session, arguments),
-         {action, resource_type} <- progress_tool_policy(tool),
-         :ok <- authorize_current_package_policy(repo, session, action, resource_type),
+         :ok <- authorize_current_package_policy(repo, session, :progress_append, :progress),
          {:ok, summary} <- required_argument(arguments, "summary"),
          {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
          {:ok, caller_payload} <- optional_payload(arguments) do
@@ -547,26 +797,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
       {:error, reason} -> worker_error(reason, tool)
     end
-  end
-
-  defp append_status_reason_event(_repo, %Session{}, _expected_status, _status, nil), do: {:ok, nil}
-
-  defp append_status_reason_event(repo, %Session{} = session, expected_status, status, reason) when is_binary(reason) do
-    payload = %{"type" => "status_transition", "from_status" => expected_status, "to_status" => status}
-    idempotency_payload = Map.put(payload, "reason_event_id", System.unique_integer([:positive, :monotonic]))
-
-    append_scoped_progress(
-      repo,
-      session,
-      %{
-        "summary" => "Status changed to #{status}",
-        "body" => reason,
-        "status" => "status_changed",
-        "idempotency_key" => ProgressEvents.metadata_idempotency_key(Map.put(idempotency_payload, "reason", reason))
-      },
-      "set_status",
-      payload
-    )
   end
 
   defp run_worker_transaction(repo, fun) do
@@ -654,66 +884,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp require_assignment_introspection(%{grant_role: grant_role}) when grant_role in ["worker", "architect"], do: :ok
   defp require_assignment_introspection(_assignment), do: {:error, :worker_grant_required}
 
-  defp progress_tool_policy("set_status"), do: {:work_package_update, :work_package}
-  defp progress_tool_policy(_tool), do: {:progress_append, :progress}
-
   defp metadata_tool_response({:ok, _result} = result, _tool), do: result
   defp metadata_tool_response({:error, _code, _message, _data} = error, _tool), do: error
   defp metadata_tool_response({:tool_error, reason}, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
   defp metadata_tool_response({:error, reason}, tool), do: worker_error(reason, tool)
-
-  defp reject_ready_status(status) when status in ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"], do: {:tool_error, "use_mark_ready"}
-  defp reject_ready_status(_status), do: :ok
-
-  defp require_expected_status(%WorkPackage{status: expected_status}, expected_status, %Session{}), do: :ok
-
-  defp require_expected_status(%WorkPackage{} = work_package, _expected_status, %Session{} = session),
-    do: lifecycle_conflict_error(:stale_status, work_package, session)
-
-  defp reload_lifecycle_conflict_error(repo, reason, %Session{} = session) do
-    case WorkPackageRepository.get(repo, Session.work_package_id(session)) do
-      {:ok, current_work_package} -> lifecycle_conflict_error(reason, current_work_package, session)
-      {:error, reload_reason} -> worker_error(reload_reason, "set_status")
-    end
-  end
-
-  defp lifecycle_conflict_error(reason, %WorkPackage{} = work_package, %Session{} = session) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => "set_status",
-       "reason" => reason_text(reason),
-       "current_status" => work_package.status,
-       "allowed_next_statuses" =>
-         Enum.filter(WorkPackage.statuses(), fn status ->
-           reject_ready_status(status) == :ok and
-             StateMachine.validate_transition(work_package, status, actor(session)) == :ok
-         end)
-     }}
-  end
-
-  defp reject_architect_controlled_child(%WorkPackage{kind: "phase_child", status: "merging_into_phase"}, "blocked"), do: :ok
-
-  defp reject_architect_controlled_child(%WorkPackage{kind: "phase_child", status: status}, _next_status)
-       when status in ["merging_into_phase", "merged_into_phase"],
-       do: {:tool_error, "child_under_architect_control"}
-
-  defp reject_architect_controlled_child(%WorkPackage{}, _next_status), do: :ok
-
-  defp optional_reason(arguments) do
-    case Map.get(arguments, "reason") do
-      nil ->
-        {:ok, nil}
-
-      reason when is_binary(reason) ->
-        case String.trim(reason) do
-          "" -> {:ok, nil}
-          trimmed -> {:ok, trimmed}
-        end
-
-      _reason ->
-        {:tool_error, "invalid_reason"}
-    end
-  end
 
   defp normalize_optional_value(value) when is_binary(value) do
     case String.trim(value) do
@@ -734,6 +908,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   end
 
   defp worker_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
+  defp worker_error({:unauthorized, :work_package_terminal}, resource), do: terminal_auth_error(resource)
   defp worker_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
   defp worker_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
   defp worker_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
@@ -767,8 +942,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp auth_error({:unauthorized, reason}, resource), do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => reason_text(reason)}}
   defp auth_error({:service_unavailable, reason}, resource), do: service_error(reason, resource)
   defp auth_error(:forbidden, resource), do: {:error, -32_003, "Forbidden", %{"resource" => resource, "reason" => "outside_session_scope"}}
+  defp terminal_auth_error(resource), do: {:error, -32_001, "Unauthorized", put_architect_next_step(%{"resource" => resource, "reason" => "work_package_terminal"})}
   defp service_error(_reason, resource), do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
   defp reason_text(reason) when is_binary(reason), do: reason
   defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_text(reason), do: inspect(reason)
+
+  defp put_architect_next_step(payload) do
+    payload
+    |> Map.put("next_owner", "architect")
+    |> Map.put("next_action", "return_to_architect")
+  end
 end

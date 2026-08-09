@@ -604,7 +604,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
   end
 
   test "release_current_assignment releases a local assignment lease and allows Solo tools in the same server", %{repo: repo} do
-    assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-SOLO-RELEASE-WORK-KEY", kind: "mcp"))
+    assert {:ok, package} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(id: "SYMPP-SOLO-RELEASE-WORK-KEY", kind: "mcp", status: "ready_for_worker")
+             )
+
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
     {claim_response, claimed_server} =
@@ -666,7 +671,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
   end
 
   test "release_current_assignment keeps binding when claim lease identity is unavailable", %{repo: repo} do
-    assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-SOLO-RELEASE-LEGACY", kind: "mcp"))
+    assert {:ok, package} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(id: "SYMPP-SOLO-RELEASE-LEGACY", kind: "mcp", status: "ready_for_worker")
+             )
+
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
     {_claim_response, claimed_server} =

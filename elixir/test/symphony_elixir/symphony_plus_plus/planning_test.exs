@@ -287,6 +287,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
     assert {:ok, work_package} = create_work_package(repo)
     assert {:ok, plan_node} = Service.append_plan_node(repo, %{work_package_id: work_package.id, title: "Mutable"})
 
+    assert {:ok, in_progress} = Service.update_plan_node_status(repo, plan_node.id, "in_progress")
+    assert in_progress.status == "in_progress"
+    assert {:ok, active_plan} = Renderer.render(repo, work_package.id, "task_plan.md")
+    assert active_plan =~ "- [ ] source: `Mutable` _(in progress)_"
+
     assert {:ok, updated} = Service.update_plan_node_status(repo, plan_node.id, "done")
     assert updated.status == "done"
 

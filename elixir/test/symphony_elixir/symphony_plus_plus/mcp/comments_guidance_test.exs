@@ -377,7 +377,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
           "jsonrpc" => "2.0",
           "id" => "local-operator-status-denied",
           "method" => "tools/call",
-          "params" => %{"name" => "set_status", "arguments" => %{}}
+          "params" => %{"name" => "report_blocker", "arguments" => %{}}
         },
         note_server
       )

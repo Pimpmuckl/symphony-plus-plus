@@ -23,15 +23,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
 
   @spec evaluate(module(), String.t()) :: {:ok, graph()} | {:error, term()}
   def evaluate(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
-    with {:ok, tree} <- ProductTreeRepository.tree_for_work_request(repo, work_request_id),
-         {:ok, work_packages} <- WorkRequestRepository.list_work_packages(repo, work_request_id) do
-      deliveries =
-        repo.all(
-          from(delivery in WorkPackageDelivery,
-            where: delivery.work_request_id == ^work_request_id
-          )
-        )
+    with {:ok, work_packages} <- WorkRequestRepository.list_work_packages(repo, work_request_id) do
+      evaluate(repo, work_request_id, work_packages)
+    end
+  end
 
+  @spec evaluate(module(), String.t(), [map() | struct()]) :: {:ok, graph()} | {:error, term()}
+  def evaluate(repo, work_request_id, work_packages)
+      when is_atom(repo) and is_binary(work_request_id) and is_list(work_packages) do
+    with {:ok, tree} <- ProductTreeRepository.tree_for_work_request(repo, work_request_id) do
+      deliveries = repo.all(from(delivery in WorkPackageDelivery, where: delivery.work_request_id == ^work_request_id))
       {:ok, evaluate(tree, work_packages, deliveries)}
     end
   rescue

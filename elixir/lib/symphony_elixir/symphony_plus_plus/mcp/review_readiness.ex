@@ -10,6 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
@@ -21,7 +22,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @complete_plan_statuses ["done", "completed", "skipped"]
-  @review_promotable_work_package_statuses ["ready_for_worker", "claimed", "planning", "implementing"]
   @scope_guard_gate "scope_guard"
 
   @type repo :: module()
@@ -79,7 +79,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
           :ok | {:error, {:readiness_failed, [String.t()], [map()]}} | {:error, term()}
   def child_ready_approval_gates(repo, state) do
     with {:ok, reasons} <- readiness_failure_reasons(repo, state) do
-      reasons = Enum.reject(reasons, &(Map.get(&1, "gate") in ["status_ci_waiting", "status_reviewing"]))
       missing = missing_readiness_gates(reasons)
 
       if missing == [], do: :ok, else: {:error, {:readiness_failed, missing, reasons}}
@@ -112,16 +111,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       arguments = maybe_put_review_head_sha(arguments, replay_head_sha)
       payload = maybe_put_review_head_sha(payload, replay_head_sha)
 
-      submit_or_replay_review_package(
-        repo,
-        session,
-        arguments,
-        artifacts,
-        payload,
-        replay_head_sha,
-        state.work_package,
-        state.progress_events
-      )
+      result =
+        submit_or_replay_review_package(
+          repo,
+          session,
+          arguments,
+          artifacts,
+          payload,
+          replay_head_sha,
+          state.work_package,
+          state.progress_events
+        )
+
+      case put_remaining_readiness_gates(repo, session, result) do
+        {:ok, result} -> result
+        {:error, reason} -> repo.rollback(reason)
+      end
     else
       {:tool_error, reason} ->
         repo.rollback({:mcp_error, -32_602, "Invalid params", %{"tool" => "submit_review_package", "reason" => reason}})
@@ -167,7 +172,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {:ok, head_sha} ->
         case ProgressEvents.append_metadata(repo, session, arguments, "submit_review_package", "review_package_submitted", payload) do
           {:ok, result} ->
-            persist_review_artifacts_and_promote_or_rollback(repo, session, artifacts, head_sha, result, work_package)
+            persist_review_artifacts_or_rollback(repo, session, artifacts, head_sha, result)
 
           {:error, code, message, data} ->
             repo.rollback({:mcp_error, code, message, data})
@@ -181,7 +186,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp review_package_head_sha(nil, progress_events, %WorkPackage{} = work_package) do
     case latest_current_head_sha(progress_events) do
       current_head_sha when is_binary(current_head_sha) -> {:ok, current_head_sha}
-      _missing_head -> missing_review_package_head_sha(work_package)
+      _missing_head -> if exact_head_required?(work_package), do: {:tool_error, "missing_current_head_sha"}, else: {:ok, nil}
     end
   end
 
@@ -195,19 +200,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       is_binary(current_head_sha) and is_binary(head_sha) ->
         {:tool_error, "stale_head_sha"}
 
-      merge_required?(work_package) ->
+      exact_head_required?(work_package) ->
         {:tool_error, "missing_current_head_sha"}
 
       true ->
-        {:ok, head_sha}
-    end
-  end
-
-  defp missing_review_package_head_sha(%WorkPackage{} = work_package) do
-    if merge_required?(work_package) do
-      {:tool_error, "missing_current_head_sha"}
-    else
-      {:tool_error, "missing_head_sha"}
+        {:tool_error, "unbound_head_sha"}
     end
   end
 
@@ -239,11 +236,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp maybe_put_headless_review_idempotency_key(arguments, _requested_head_sha, _payload), do: arguments
 
-  defp persist_review_artifacts_and_promote_or_rollback(repo, %Session{} = session, artifacts, head_sha, result, %WorkPackage{} = work_package) do
-    with :ok <- append_review_artifacts(repo, session, artifacts, head_sha),
-         :ok <- promote_stale_package_to_reviewing(repo, work_package) do
-      result
-    else
+  defp persist_review_artifacts_or_rollback(repo, %Session{} = session, artifacts, head_sha, result) do
+    case append_review_artifacts(repo, session, artifacts, head_sha) do
+      :ok -> result
       {:error, reason} -> repo.rollback(reason)
     end
   end
@@ -333,7 +328,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
          payload <- review_completion_payload(work_package_id, requirement, head_sha, reference, note),
          arguments <- review_completion_arguments(requirement, head_sha, note),
          {:ok, result} <- ProgressEvents.append_metadata(repo, session, arguments, "complete_review", "review_complete", payload),
-         :ok <- promote_stale_package_to_reviewing(repo, state.work_package) do
+         {:ok, result} <- put_remaining_readiness_gates(repo, session, result) do
       result
     else
       {:tool_error, reason} -> repo.rollback({:mcp_error, -32_602, "Invalid params", %{"tool" => "complete_review", "reason" => reason}})
@@ -379,39 +374,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     "current:" <> digest
   end
 
-  defp promote_stale_package_to_reviewing(repo, %WorkPackage{status: status} = work_package)
-       when status in @review_promotable_work_package_statuses do
-    promote_package_status_to_reviewing(repo, work_package.id, status, 0)
-  end
-
-  defp promote_stale_package_to_reviewing(_repo, %WorkPackage{}), do: :ok
-
-  defp promote_package_status_to_reviewing(repo, work_package_id, expected_status, attempts) do
-    case WorkPackageRepository.update_status(repo, work_package_id, expected_status, "reviewing") do
-      {:ok, %WorkPackage{}} ->
-        :ok
-
-      {:error, :stale_status} when attempts < 3 ->
-        retry_review_promotion_from_latest_status(repo, work_package_id, attempts + 1)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp retry_review_promotion_from_latest_status(repo, work_package_id, attempts) do
-    case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, %WorkPackage{status: status}} when status in @review_promotable_work_package_statuses ->
-        promote_package_status_to_reviewing(repo, work_package_id, status, attempts)
-
-      {:ok, %WorkPackage{}} ->
-        :ok
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
   defp readiness_gates(repo, state) do
     with {:ok, reasons} <- readiness_failure_reasons(repo, state) do
       missing = missing_readiness_gates(reasons)
@@ -434,7 +396,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp base_readiness_failure_reasons(state) do
     [
-      {readiness_status_missing?(state.work_package), readiness_status_gate(state.work_package)},
       {active_blocker?(state.progress_events), "no_active_blockers"},
       {incomplete_plan?(state), "plan_complete"},
       {acceptance_missing?(state), "acceptance_criteria_met"},
@@ -446,8 +407,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {review_artifacts_missing?(state), "review_artifacts_attached"},
       {review_current_head_missing?(state), "review_current_head"},
       {review_completion_missing?(state), "review_complete"},
-      {investigation_findings_missing?(state), "findings_documented"},
-      {investigation_recommendation_missing?(state), "recommendation_artifact_recorded"}
+      {investigation_findings_missing?(state), "findings_documented"}
     ]
     |> Enum.flat_map(fn
       {true, @scope_guard_gate} -> ScopeGuard.failure_reasons(state.work_package, state.progress_events)
@@ -527,8 +487,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     |> drop_nil_values()
   end
 
-  defp readiness_failure_message("status_ci_waiting"), do: "Package must be waiting on validation."
-  defp readiness_failure_message("status_reviewing"), do: "Package must be in review or validation."
   defp readiness_failure_message("no_active_blockers"), do: "Active blockers must be resolved."
   defp readiness_failure_message("plan_complete"), do: "Package plan is missing or still has pending items."
   defp readiness_failure_message("acceptance_criteria_met"), do: "Acceptance criteria evidence is missing."
@@ -540,7 +498,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp readiness_failure_message("review_current_head"), do: "Required review cannot be completed until the current exact head is attached."
   defp readiness_failure_message("review_complete"), do: "Required review is not completed for the current exact head and requirement."
   defp readiness_failure_message("findings_documented"), do: "Investigation findings are missing."
-  defp readiness_failure_message("recommendation_artifact_recorded"), do: "Investigation recommendation artifact is missing."
   defp readiness_failure_message("phase_active"), do: "Phase must be active before phase child readiness."
   defp readiness_failure_message("phase_child_scope"), do: "Phase child must remain inside its parent phase repo, base branch, and file scope."
   defp readiness_failure_message(_gate), do: "Readiness gate is not satisfied."
@@ -607,12 +564,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp investigation_findings_missing?(state), do: state.work_package.kind == "investigation" and state.findings == []
 
-  defp investigation_recommendation_missing?(state) do
-    state.work_package.kind == "investigation" and not recommendation_artifact_recorded?(state.artifacts, state.work_package.id)
-  end
-
   defp merge_required?(%WorkPackage{} = work_package) do
     required_gate?(work_package, "human_merge") or required_gate?(work_package, "architect_merge")
+  end
+
+  defp exact_head_required?(%WorkPackage{} = work_package) do
+    merge_required?(work_package) or is_map(work_package.review_requirement)
   end
 
   defp latest_review_package_event(progress_events, current_head_sha) do
@@ -633,10 +590,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp current_head_review_package?(%ProgressEvent{}, _current_head_sha), do: false
 
-  defp review_head_matches?(payload, :any_head) when is_map(payload) do
-    head_sha = Map.get(payload, "head_sha")
-    is_binary(head_sha) and String.trim(head_sha) != ""
-  end
+  defp review_head_matches?(payload, :any_head) when is_map(payload), do: true
 
   defp review_head_matches?(payload, current_head_sha) when is_map(payload) and is_binary(current_head_sha) do
     PullRequest.head_sha_matches?(Map.get(payload, "head_sha"), current_head_sha)
@@ -708,17 +662,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp missing_meaningful_plan?(%{plan_nodes: []}), do: true
   defp missing_meaningful_plan?(_state), do: false
 
-  defp readiness_status_missing?(%WorkPackage{} = work_package) do
-    if ci_waiting_required?(work_package) do
-      work_package.status != "ci_waiting"
-    else
-      work_package.status not in ["reviewing", "ci_waiting"]
-    end
-  end
-
-  defp readiness_status_gate(%WorkPackage{} = work_package), do: if(ci_waiting_required?(work_package), do: "status_ci_waiting", else: "status_reviewing")
-  defp ci_waiting_required?(%WorkPackage{} = work_package), do: required_gate?(work_package, "ci_waiting")
-
   defp plan_required?(%WorkPackage{} = work_package) do
     case LifecycleService.policy_for(work_package) do
       {:ok, policy} -> get_in(policy, [:constraints, :planning_depth]) == "package"
@@ -727,7 +670,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   end
 
   defp acceptance_missing?(state) do
-    required_gate?(state.work_package, "package_acceptance") and not acceptance_recorded?(state.progress_events)
+    required_gate?(state.work_package, "package_acceptance") and not acceptance_recorded?(state)
   end
 
   defp tests_missing?(state) do
@@ -741,10 +684,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     end
   end
 
-  defp acceptance_recorded?(progress_events) do
-    current_head_sha = latest_current_head_sha(progress_events)
-
-    case latest_review_package_event(progress_events, current_head_sha) do
+  defp acceptance_recorded?(state) do
+    case latest_review_package_event(state.progress_events, review_head_sha_for_readiness(state)) do
       %ProgressEvent{payload: payload} when is_map(payload) -> Map.get(payload, "acceptance_criteria_met") == true
       _event -> false
     end
@@ -1074,14 +1015,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp generic_append_progress_event?(%ProgressEvent{payload: nil}), do: true
   defp generic_append_progress_event?(%ProgressEvent{}), do: false
 
-  defp recommendation_artifact_recorded?(artifacts, work_package_id) do
-    artifact_id = ProgressEvents.recommendation_artifact_id(work_package_id)
-
-    Enum.any?(
-      artifacts,
-      &(&1.id == artifact_id and &1.work_package_id == work_package_id and &1.path == "recommendation.md" and
-          &1.title == "Investigation recommendation" and &1.kind == "recommendation")
-    )
+  defp put_remaining_readiness_gates(repo, %Session{} = session, %{"structuredContent" => payload}) do
+    with {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
+         {:ok, reasons} <- readiness_failure_reasons(repo, state) do
+      result = payload |> Map.put("remaining_readiness_gates", missing_readiness_gates(reasons)) |> ToolResult.agent_tool_result()
+      {:ok, result}
+    end
   end
 
   defp replay_existing_metadata_event(repo, %Session{} = session, arguments, tool, status, payload, progress_events) do

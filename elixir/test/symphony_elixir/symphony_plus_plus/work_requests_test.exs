@@ -363,6 +363,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert DateTime.compare(restored.completed_at, completed.completed_at) in [:gt, :eq]
   end
 
+  test "skipping the final package refreshes WorkRequest completion", %{repo: repo} do
+    assert {:ok, request} = Repository.create(repo, attrs(id: "WR-SKIP-COMPLETES", status: "ready_for_slicing"))
+    assert {:ok, package} = CanonicalWorkPackageFixtures.add_work_package(repo, request.id, work_package_attrs(id: "WRS-SKIP-COMPLETES"))
+
+    assert {:ok, skipped} = Service.skip_work_package(repo, request.id, package.id, "planned")
+    assert skipped.status == "skipped"
+    assert {:ok, completed} = Repository.get(repo, request.id)
+    assert %DateTime{} = completed.completed_at
+  end
+
   test "archive starts best-effort linked worktree cleanup after hiding a completed WorkRequest", %{repo: repo} do
     fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-archive-worktree")
     codex_home = Path.join(fixture.root, "codex-home")
@@ -550,6 +560,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
     assert {:ok, all_requests} = Repository.list(repo, include_archived: true)
     assert Enum.map(all_requests, & &1.id) == [old_request.id, recent_request.id]
+  end
+
+  test "retention emits no writes when no WorkRequest is eligible", %{repo: repo} do
+    now = utc_usec(~U[2026-05-23 12:00:00Z])
+    recent_completed_at = DateTime.add(now, -24 * 60 * 60, :second)
+
+    assert {:ok, _draft} = Repository.create(repo, attrs(id: "WR-RETENTION-INELIGIBLE-DRAFT"))
+    completed_skipped_request!(repo, "WR-RETENTION-INELIGIBLE-RECENT", recent_completed_at)
+
+    assert {{:ok, summary}, queries} = capture_queries(fn -> Service.retention_pass(repo, now: now) end)
+    assert summary.refreshed_count == 0
+    assert summary.archived_count == 0
+    assert summary.deleted_count == 0
+    assert Enum.filter(queries, &Regex.match?(~r/^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/i, &1)) == []
   end
 
   test "retention accepts a custom archive day cutoff", %{repo: repo} do
@@ -1532,6 +1556,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     ExUnit.AssertionError ->
       Process.sleep(25)
       assert_eventually(fun, attempts - 1)
+  end
+
+  defp capture_queries(fun) do
+    handler_id = {__MODULE__, self(), make_ref()}
+    event = Repo.config()[:telemetry_prefix] ++ [:query]
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn _event, _measurements, metadata, test_pid -> send(test_pid, {handler_id, to_string(metadata.query || "")}) end,
+        self()
+      )
+
+    try do
+      result = fun.()
+      {result, drain_queries(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_queries(handler_id, queries) do
+    receive do
+      {^handler_id, query} -> drain_queries(handler_id, [query | queries])
+    after
+      0 -> Enum.reverse(queries)
+    end
   end
 
   defp set_work_package_status!(repo, work_package, status) do

@@ -212,6 +212,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
       case plan_node.status do
         "skipped" -> " _(skipped)_"
         "pending" -> " _(pending)_"
+        "in_progress" -> " _(in progress)_"
         _status -> ""
       end
 

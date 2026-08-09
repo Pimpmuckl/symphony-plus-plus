@@ -77,8 +77,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
 
   @spec skip_work_package(Repository.repo(), String.t(), String.t(), String.t()) ::
           {:ok, WorkPackage.t()} | {:error, error()}
-  def skip_work_package(repo, work_request_id, id, current_status),
-    do: notify_dashboard(Repository.skip_work_package(repo, work_request_id, id, current_status))
+  def skip_work_package(repo, work_request_id, id, current_status) do
+    repo.transaction(fn ->
+      with {:ok, work_package} <- Repository.skip_work_package(repo, work_request_id, id, current_status),
+           {:ok, _work_request} <- Completion.refresh_in_transaction(repo, work_request_id) do
+        work_package
+      else
+        {:error, reason} -> repo.rollback(reason)
+      end
+    end)
+    |> normalize_transaction_result()
+    |> notify_dashboard()
+  rescue
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
 
   @spec list_decisions(Repository.repo(), String.t()) :: {:ok, [DecisionLogEntry.t()]} | {:error, error()}
   def list_decisions(repo, work_request_id), do: Repository.list_decisions(repo, work_request_id)
@@ -105,6 +117,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
           {:ok, Completion.retention_summary()}
           | {:error, error() | :invalid_archive_after_days | :invalid_delete_after_days | :not_completed}
   def retention_pass(repo, opts \\ []), do: Completion.retention_pass(repo, opts)
+
+  defp normalize_transaction_result({:ok, value}), do: {:ok, value}
+  defp normalize_transaction_result({:error, reason}), do: {:error, reason}
+
+  defp normalize_exqlite_error(error) do
+    message = Exception.message(error)
+    normalized_message = String.downcase(message)
+
+    if String.contains?(normalized_message, "busy") or String.contains?(normalized_message, "locked") do
+      {:error, :database_busy}
+    else
+      {:error, {:storage_failed, message}}
+    end
+  end
 
   defp notify_dashboard({:ok, _value} = result) do
     :ok = DashboardPubSub.broadcast_changed()

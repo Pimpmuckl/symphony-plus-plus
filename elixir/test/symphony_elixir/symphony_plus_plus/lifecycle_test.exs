@@ -43,11 +43,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
 
       for status <- [
             "ready_for_worker",
-            "claimed",
-            "planning",
-            "implementing",
-            "reviewing",
-            "ci_waiting",
+            "active",
             "ready_for_merge"
           ] do
         assert {:ok, package} = Service.transition(repo, package.id, status, worker_actor!(repo, package))
@@ -95,8 +91,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert {:ok, investigation} = Templates.expand("investigation")
     assert investigation.constraints.expiry_seconds == nil
     assert investigation.constraints.planning_depth == "findings"
-    assert investigation.required_gates == ["findings_documented", "recommendation_artifact_recorded"]
-    assert investigation.readiness_requirements == ["findings_complete", "recommendation_artifact_recorded"]
+    assert investigation.required_gates == ["findings_documented"]
+    assert investigation.readiness_requirements == ["findings_complete"]
 
     for kind <- ["mcp", "skill", "hooks"] do
       assert {:ok, policy} = Templates.expand(kind)
@@ -162,11 +158,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert {:ok, package} = Repository.create(repo, WorkPackageFactory.attrs(kind: "hotfix"))
 
     assert {:ok, package} = Service.transition(repo, package.id, "ready_for_worker", worker_actor!(repo, package))
-    assert {:ok, package} = Service.transition(repo, package.id, "claimed", worker_actor!(repo, package))
-    assert {:ok, package} = Service.transition(repo, package.id, "planning", worker_actor!(repo, package))
-    assert {:ok, package} = Service.transition(repo, package.id, "implementing", worker_actor!(repo, package))
-    assert {:ok, package} = Service.transition(repo, package.id, "reviewing", worker_actor!(repo, package))
-    assert {:ok, package} = Service.transition(repo, package.id, "ci_waiting", worker_actor!(repo, package))
+    assert {:ok, package} = Service.transition(repo, package.id, "active", worker_actor!(repo, package))
     assert {:ok, package} = Service.transition(repo, package.id, "ready_for_merge", worker_actor!(repo, package))
 
     assert package.status == "ready_for_merge"
@@ -176,11 +168,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert {:ok, package} = Repository.create(repo, WorkPackageFactory.attrs(kind: "phase_child", parent_id: "phase-1"))
 
     assert {:ok, package} = Service.transition(repo, package.id, "ready_for_worker", worker_actor!(repo, package))
-    assert {:ok, package} = Service.transition(repo, package.id, "claimed", worker_actor!(repo, package))
-    assert {:ok, package} = Service.transition(repo, package.id, "planning", worker_actor!(repo, package))
-    assert {:ok, package} = Service.transition(repo, package.id, "implementing", worker_actor!(repo, package))
-    assert {:ok, package} = Service.transition(repo, package.id, "reviewing", worker_actor!(repo, package))
-    assert {:ok, package} = Service.transition(repo, package.id, "ci_waiting", worker_actor!(repo, package))
+    assert {:ok, package} = Service.transition(repo, package.id, "active", worker_actor!(repo, package))
     assert {:ok, package} = Service.transition(repo, package.id, "ready_for_architect_merge", worker_actor!(repo, package))
 
     assert package.status == "ready_for_architect_merge"

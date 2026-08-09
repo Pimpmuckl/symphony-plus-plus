@@ -511,10 +511,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
       )
 
     assert get_in(response, ["error", "data", "reason"]) =~ "forced_reclaim_audit_failure"
-    assert {:error, :not_found} = ClaimLeaseService.current_for_work_package(repo, package.id)
+    assert {:ok, restored_lease} = ClaimLeaseService.current_for_work_package(repo, package.id)
+    assert restored_lease.id == stale_lease.id
+    assert restored_lease.status == "active"
 
-    assert {:ok, revoked_grant} = AccessGrantRepository.get(repo, minted.grant.id)
-    assert revoked_grant.revoked_at != nil
+    assert {:ok, unclaimed_grant} = AccessGrantRepository.get(repo, minted.grant.id)
+    assert unclaimed_grant.claimed_at == nil
+    assert unclaimed_grant.revoked_at == nil
 
     statuses =
       repo.all(
@@ -524,11 +527,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
         )
       )
 
-    assert {stale_lease.id, "reclaimed", nil} in statuses
-    assert Enum.any?(statuses, fn {_id, status, reason} -> status == "released" and reason == "local_assignment_claim_failed" end)
+    assert statuses == [{stale_lease.id, "active", nil}]
   end
 
-  test "claim_local_assignment releases reclaimed leases when grant binding fails", %{repo: repo} do
+  test "claim_local_assignment restores a reclaimed lease when grant binding fails", %{repo: repo} do
     package = create_local_claim_package!(repo, "SYMPP-LOCAL-RECLAIM-FAILS")
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
@@ -555,7 +557,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
       )
 
     assert get_in(response, ["error", "data", "reason"]) == "revoked"
-    assert {:error, :not_found} = ClaimLeaseService.current_for_work_package(repo, package.id)
+    assert {:ok, restored_lease} = ClaimLeaseService.current_for_work_package(repo, package.id)
+    assert restored_lease.status == "active"
+    assert restored_lease.actor_display_name == "stale-worker"
 
     statuses =
       repo.all(
@@ -565,11 +569,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
         )
       )
 
-    assert {"reclaimed", nil} in statuses
-    assert {"released", "local_assignment_claim_failed"} in statuses
+    assert statuses == [{"active", nil}]
   end
 
-  test "claim_local_assignment releases existing heartbeat leases when permanent grant binding fails", %{repo: repo} do
+  test "claim_local_assignment preserves existing heartbeat leases when permanent grant binding fails", %{repo: repo} do
     package = create_local_claim_package!(repo, "SYMPP-LOCAL-HEARTBEAT-FAILS")
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     arguments = local_assignment_claim_args(package)
@@ -600,7 +603,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
       )
 
     assert get_in(response, ["error", "data", "reason"]) == "revoked"
-    assert {:error, :not_found} = ClaimLeaseService.current_for_work_package(repo, package.id)
+    assert {:ok, preserved_lease} = ClaimLeaseService.current_for_work_package(repo, package.id)
+    assert preserved_lease.id == lease_id
+    assert preserved_lease.status == "active"
 
     statuses =
       repo.all(
@@ -610,7 +615,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
         )
       )
 
-    assert {lease_id, "released", "local_assignment_claim_failed"} in statuses
+    assert statuses == [{lease_id, "active", nil}]
 
     assert {:ok, replacement} = AccessGrantService.mint_worker_grant(repo, package.id)
 
@@ -622,11 +627,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
           "method" => "tools/call",
           "params" => %{
             "name" => "claim_local_assignment",
-            "arguments" =>
-              local_assignment_claim_args(package, %{
-                "caller_id" => "codex-local-replacement",
-                "claimed_by" => "replacement-worker"
-              })
+            "arguments" => arguments
           }
         },
         local_mcp_server(local_mcp_config(repo), "local-heartbeat-replacement-state")

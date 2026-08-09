@@ -408,7 +408,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools03Test do
 
     child_id = create_child_work_package(repo, architect_session, "SYMPP-P7-003-FLOW-CHILD")
     worker_session = claim_phase_child_worker(repo, architect_session, child_id)
-    advance_child_worker_to_ci_waiting(repo, worker_session)
+    assert_child_worker_active(repo, worker_session)
     attach_phase_child_ready_evidence(repo, worker_session, child_id, "p7-003-flow-head")
 
     ready_response = mcp_tool(repo, worker_session, "mark_ready", %{})
@@ -491,10 +491,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools03Test do
              get_in(approval_response, ["result", "structuredContent", "approval", "id"])
 
     worker_close_response =
-      mcp_tool(repo, worker_session, "set_status", %{
-        "status" => "closed",
-        "expected_status" => "merging_into_phase",
-        "reason" => "worker cannot close child after architect approval"
+      mcp_tool(repo, worker_session, "abandon", %{
+        "reason" => "worker cannot abandon child after architect approval"
       })
 
     assert get_in(worker_close_response, ["error", "data", "reason"]) == "child_under_architect_control"
@@ -542,10 +540,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools03Test do
     assert get_in(worker_review_package_mutation_response, ["error", "data", "reason"]) == "child_under_architect_control"
 
     worker_merge_response =
-      mcp_tool(repo, worker_session, "set_status", %{
-        "status" => "merged_into_phase",
-        "expected_status" => "merging_into_phase",
-        "reason" => "worker cannot record phase merge"
+      mcp_tool(repo, worker_session, "report_blocker", %{
+        "summary" => "worker cannot block child after architect approval",
+        "idempotency_key" => "late-worker-blocker-after-approval"
       })
 
     assert get_in(worker_merge_response, ["error", "data", "reason"]) == "child_under_architect_control"

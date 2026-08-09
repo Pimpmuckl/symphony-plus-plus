@@ -3,6 +3,17 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildScope
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree
+
+  defmodule BusyParentRepo do
+    def get(_schema, _id), do: raise(%Exqlite.Error{message: "database is locked"})
+  end
+
+  defmodule BrokenParentRepo do
+    def get(_schema, _id), do: raise(%Exqlite.Error{message: "disk I/O failed"})
+  end
+
   test "worker tools update only the scoped planning state and deny sibling mutations", %{repo: repo} do
     assert {:ok, own_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-WORKER-OWN", kind: "adapter"))
     assert {:ok, sibling_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-WORKER-SIBLING", kind: "adapter"))
@@ -27,9 +38,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
             "name" => "update_task_plan",
             "arguments" => %{
               "expected_version" => get_in(read_plan_response, ["result", "structuredContent", "version"]),
-              "id" => " worker-plan-node ",
-              "title" => "Implement MCP worker tools",
-              "status" => "done"
+              "nodes" => [%{"title" => "Implement MCP worker tools", "status" => "done"}]
             }
           }
         },
@@ -38,7 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
       )
 
     assert get_in(plan_response, ["result", "structuredContent", "plan_nodes", Access.at(0), "status"]) == "done"
-    assert get_in(plan_response, ["result", "structuredContent", "plan_nodes", Access.at(0), "id"]) == "worker-plan-node"
+    assert get_in(plan_response, ["result", "structuredContent", "plan_nodes", Access.at(0), "id"]) =~ ~r/^plan_/
 
     finding_response =
       MCPHarness.request(
@@ -377,13 +386,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
           "method" => "tools/call",
           "params" => %{
             "name" => "update_task_plan",
-            "arguments" => %{"work_package_id" => sibling_package.id, "title" => "Mutate sibling"}
+            "arguments" => %{
+              "expected_version" => get_in(plan_response, ["result", "structuredContent", "version"]),
+              "work_package_id" => sibling_package.id,
+              "nodes" => [%{"title" => "Mutate sibling"}]
+            }
           }
         },
         repo: repo,
         session: session
       )
 
+    assert get_in(denied_response, ["error", "code"]) == -32_003
     assert get_in(denied_response, ["error", "data", "reason"]) == "outside_session_scope"
 
     assert {:ok, own_nodes} = PlanningRepository.list_plan_nodes(repo, own_package.id)
@@ -392,6 +406,118 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     assert length(own_nodes) == 1
     assert sibling_nodes == []
     assert Enum.any?(events, &(get_in(&1.payload, ["type"]) == "scope_expansion_request" and get_in(&1.payload, ["approved"]) == false))
+  end
+
+  test "worker context projects only parent goal and direct dependencies through phase-child scope", %{repo: repo} do
+    parent_work_request =
+      create_work_request!(repo,
+        id: "WR-WORKER-CONTEXT",
+        title: "Ship scoped worker context",
+        human_description: "Let workers explain their assigned outcome."
+      )
+
+    assert {:ok, _phase} = PhaseRepository.create(repo, %{id: "phase-worker-context", title: "Worker context"})
+
+    assert {:ok, dependency} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-WORKER-CONTEXT-DEPENDENCY",
+                 work_request_id: parent_work_request.id,
+                 title: "Finish dependency",
+                 repo: parent_work_request.repo,
+                 base_branch: parent_work_request.base_branch,
+                 status: "ready_for_merge"
+               )
+             )
+
+    assert {:ok, parent} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-WORKER-CONTEXT-PARENT",
+                 work_request_id: parent_work_request.id,
+                 title: "Project worker context",
+                 repo: parent_work_request.repo,
+                 base_branch: parent_work_request.base_branch,
+                 allowed_file_globs: ["elixir/**"],
+                 phase_id: "phase-worker-context",
+                 status: "active"
+               )
+             )
+
+    assert {:ok, sibling} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-WORKER-CONTEXT-SIBLING",
+                 work_request_id: parent_work_request.id,
+                 title: "Sibling contract title",
+                 engineering_scope: "sibling-contract-secret",
+                 repo: parent_work_request.repo,
+                 base_branch: parent_work_request.base_branch,
+                 status: "active"
+               )
+             )
+
+    assert {:ok, child} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-WORKER-CONTEXT-CHILD",
+                 kind: "phase_child",
+                 title: "Scoped phase child",
+                 repo: parent.repo,
+                 base_branch: parent.base_branch,
+                 allowed_file_globs: ["elixir/lib/**"],
+                 parent_id: parent.id,
+                 phase_id: parent.phase_id,
+                 status: "active"
+               )
+             )
+
+    assert {:ok, _edge} =
+             ProductTree.create_dependency_edge(repo, %{
+               work_request_id: parent_work_request.id,
+               source_kind: "work_package",
+               source_id: parent.id,
+               target_kind: "work_package",
+               target_id: dependency.id,
+               kind: "depends_on",
+               reason: "Worker needs direct dependency status."
+             })
+
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, child.id)
+    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "phase-child-worker")
+    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+    response = mcp_tool(repo, session, "read_context", %{})
+    context = get_in(response, ["result", "structuredContent"])
+
+    assert context["parent_work_request"] == %{
+             "title" => parent_work_request.title,
+             "goal" => parent_work_request.human_description
+           }
+
+    assert context["direct_dependencies"] == [
+             %{"id" => dependency.id, "title" => dependency.title, "status" => dependency.status}
+           ]
+
+    context_text = get_in(response, ["result", "content", Access.at(0), "text"])
+    assert context_text =~ dependency.id
+    refute context_text =~ sibling.title
+    refute context_text =~ "sibling-contract-secret"
+
+    repo.update_all(from(work_package in WorkPackage, where: work_package.id == ^child.id), set: [repo: "other/repo"])
+    drifted_context = mcp_tool(repo, session, "read_context", %{})
+    assert get_in(drifted_context, ["error", "code"]) == -32_003
+    assert get_in(drifted_context, ["error", "data", "reason"]) == "outside_session_scope"
+  end
+
+  test "phase-child context preserves retryable parent lookup failures" do
+    child = %WorkPackage{kind: "phase_child", parent_id: "SYMPP-PARENT", phase_id: "phase-parent"}
+
+    assert {:error, :database_busy} = PhaseChildScope.context_anchor(BusyParentRepo, child)
+    assert {:error, {:storage_failed, "disk I/O failed"}} = PhaseChildScope.context_anchor(BrokenParentRepo, child)
   end
 
   test "progress metadata tools reject non-string required fields", %{repo: repo} do
@@ -622,9 +748,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
             "name" => "update_task_plan",
             "arguments" => %{
               "expected_version" => get_in(read_plan_response, ["result", "structuredContent", "version"]),
-              "id" => "toon-worker-plan",
-              "title" => "Verify TOON worker context",
-              "status" => "done"
+              "nodes" => [%{"title" => "Verify TOON worker context", "status" => "done"}]
             }
           }
         },
@@ -634,8 +758,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
 
     update_plan_text = get_in(update_plan_response, ["result", "content", Access.at(0), "text"])
     assert update_plan_text =~ "plan_nodes[1]"
-    assert update_plan_text =~ "toon-worker-plan"
-    assert get_in(update_plan_response, ["result", "structuredContent", "plan_nodes", Access.at(0), "id"]) == "toon-worker-plan"
+    assert update_plan_text =~ "Verify TOON worker context"
+    assert get_in(update_plan_response, ["result", "structuredContent", "plan_nodes", Access.at(0), "id"]) =~ ~r/^plan_/
 
     finding_response =
       MCPHarness.request(
@@ -795,7 +919,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
             "name" => "update_task_plan",
             "arguments" => %{
               "expected_version" => version,
-              "patch" => %{"nodes" => [%{"id" => get_in(structured_plan_nodes, [Access.at(0), "id"]), "status" => "done"}]}
+              "nodes" => [%{"id" => get_in(structured_plan_nodes, [Access.at(0), "id"]), "status" => "done"}]
             }
           }
         },

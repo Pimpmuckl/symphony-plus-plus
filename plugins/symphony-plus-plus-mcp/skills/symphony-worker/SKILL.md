@@ -32,6 +32,9 @@ For assigned WorkPackages, use the WorkPackage id as the worker execution
 coordinate. Treat linked WorkRequest/work-package ids as product/audit context
 unless the specific tool call is a delivery closeout, successor, repair, or
 concurrency-protection operation that asks for them.
+The scoped `read_context` projection provides the parent goal and only direct
+dependency id/title/status context. When `next_owner` is `architect`, return
+the package result to that owner without seeking architect-only tools.
 
 ## Scope
 
@@ -56,9 +59,15 @@ concurrency-protection operation that asks for them.
 - Record validation and review evidence in the active Symphony++ state. For
   WorkPackages, that state is the ledger-backed claim opened by the
   WorkPackage skill.
+- Keep the WorkPackage task plan current through its single atomic
+  `expected_version` plus `nodes` write contract; use only `pending`,
+  `in_progress`, `done`, and `skipped`.
 - For WorkPackages, use the shortest valid ready path from the WorkPackage
   skill. Package-depth policies still need terminal package plan evidence; do
   not add lifecycle calls only to restate existing plan, PR, branch, or review
+  evidence.
+- Policy-approved no-PR work may submit evidence and become ready without a
+  branch head. PR-backed or review-required work still needs current exact-head
   evidence.
 
 ## Delivery

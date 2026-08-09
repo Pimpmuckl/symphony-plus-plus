@@ -17,7 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
 
     child_id = create_child_work_package(repo, architect_session, "SYMPP-P7-003-APPROVAL-REPLAY-CHILD")
     worker_session = claim_phase_child_worker(repo, architect_session, child_id)
-    advance_child_worker_to_ci_waiting(repo, worker_session)
+    assert_child_worker_active(repo, worker_session)
     attach_phase_child_ready_evidence(repo, worker_session, child_id, "p7-003-approval-replay-head")
 
     assert get_in(mcp_tool(repo, worker_session, "mark_ready", %{}), ["result", "structuredContent", "ready"]) == true
@@ -31,14 +31,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
 
     assert get_in(approval_response, ["result", "structuredContent", "work_package", "status"]) == "merging_into_phase"
 
-    block_response =
-      mcp_tool(repo, worker_session, "set_status", %{
-        "status" => "blocked",
-        "expected_status" => "merging_into_phase",
-        "reason" => "phase merge is blocked by a conflict"
-      })
+    assert {:ok, blocked_child} =
+             WorkPackageRepository.update_status(repo, child_id, "merging_into_phase", "blocked")
 
-    assert get_in(block_response, ["result", "structuredContent", "work_package", "status"]) == "blocked"
+    assert blocked_child.status == "blocked"
 
     blocker_id = "p7-003-post-approval-blocker"
 
@@ -79,21 +75,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
                }
              })
 
-    [
-      {"blocked", "implementing"},
-      {"implementing", "reviewing"},
-      {"reviewing", "ci_waiting"}
-    ]
-    |> Enum.each(fn {expected_status, status} ->
-      response =
-        mcp_tool(repo, worker_session, "set_status", %{
-          "expected_status" => expected_status,
-          "status" => status,
-          "reason" => "rework phase child after merge blocker"
-        })
+    assert {:ok, reactivated_child} =
+             WorkPackageRepository.update_status(repo, child_id, "blocked", "active")
 
-      assert get_in(response, ["result", "structuredContent", "work_package", "status"]) == status
-    end)
+    assert reactivated_child.status == "active"
 
     attach_phase_child_ready_evidence(repo, worker_session, child_id, "p7-003-approval-replay-head-reworked")
 
@@ -134,22 +119,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
                event.status == "child_ready_approved" and get_in(event.payload, ["request_id"]) == "p7-003-approval-before-blocker"
              end)
 
-    [
-      {"merging_into_phase", "blocked"},
-      {"blocked", "implementing"},
-      {"implementing", "reviewing"},
-      {"reviewing", "ci_waiting"}
-    ]
-    |> Enum.each(fn {expected_status, status} ->
-      response =
-        mcp_tool(repo, worker_session, "set_status", %{
-          "expected_status" => expected_status,
-          "status" => status,
-          "reason" => "rework phase child before a distinct approval request"
-        })
+    assert {:ok, blocked_again} =
+             WorkPackageRepository.update_status(repo, child_id, "merging_into_phase", "blocked")
 
-      assert get_in(response, ["result", "structuredContent", "work_package", "status"]) == status
-    end)
+    assert {:ok, active_again} =
+             WorkPackageRepository.update_status(repo, child_id, blocked_again.status, "active")
+
+    assert active_again.status == "active"
 
     attach_phase_child_ready_evidence(repo, worker_session, child_id, "p7-003-approval-replay-head-second-reworked")
 

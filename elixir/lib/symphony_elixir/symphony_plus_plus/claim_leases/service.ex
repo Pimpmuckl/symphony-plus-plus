@@ -4,6 +4,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service do
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository
 
+  @database_busy_retry_delay_ms 5
+
   @type error :: Repository.error()
 
   @spec claim(Repository.repo(), String.t(), map(), keyword()) :: {:ok, ClaimLease.t()} | {:error, error()}
@@ -22,7 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service do
 
   @spec heartbeat(Repository.repo(), String.t(), keyword()) :: {:ok, ClaimLease.t()} | {:error, error()}
   def heartbeat(repo, claim_lease_id, opts \\ []) when is_atom(repo) and is_binary(claim_lease_id) and is_list(opts) do
-    Repository.heartbeat(repo, claim_lease_id, lease_attrs(opts), opts)
+    retry_database_busy(fn -> Repository.heartbeat(repo, claim_lease_id, lease_attrs(opts), opts) end)
   end
 
   @spec pause(Repository.repo(), String.t(), map(), keyword()) :: {:ok, ClaimLease.t()} | {:error, error()}
@@ -55,7 +57,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service do
         "stale_reason" => Keyword.get(opts, :stale_reason) || Keyword.get(opts, :reason)
       })
 
-    Repository.reclaim_stale(repo, work_package_id, attrs, opts)
+    retry_database_busy(fn -> Repository.reclaim_stale(repo, work_package_id, attrs, opts) end)
+  end
+
+  defp retry_database_busy(operation, retries_left \\ 1)
+
+  defp retry_database_busy(operation, retries_left) do
+    case operation.() do
+      {:error, :database_busy} when retries_left > 0 ->
+        Process.sleep(@database_busy_retry_delay_ms)
+        retry_database_busy(operation, retries_left - 1)
+
+      result ->
+        result
+    end
   end
 
   defp lease_attrs(opts) do

@@ -89,7 +89,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     worker_skill = @mcp_plugin_skill_path |> File.read!() |> normalize_newlines()
     prompt = File.read!(@mcp_plugin_prompt_path)
 
-    refute Map.has_key?(ToolCatalog.worker_tool_input_schema("set_status")["properties"], "blocker_closeout")
+    refute "set_status" in ToolCatalog.worker_tools()
+    assert ToolCatalog.worker_tool_input_schema("report_blocker")["required"] == ["summary", "idempotency_key"]
+    assert ToolCatalog.worker_tool_input_schema("abandon")["required"] == ["reason"]
     assert ToolCatalog.worker_tool_input_schema("mark_ready")["properties"] == %{}
     assert Map.keys(ToolCatalog.worker_tool_input_schema("complete_review")["properties"]) |> Enum.sort() == ["note", "reference"]
     assert ToolCatalog.worker_tool_input_schema("add_comment")["required"] == ["body"]
@@ -97,11 +99,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     assert ToolCatalog.worker_tool_input_schema("sync_pr")["required"] == []
     assert Map.has_key?(ToolCatalog.worker_tool_input_schema("sync_pr")["properties"], "recovery")
 
+    plan_schema = ToolCatalog.worker_tool_input_schema("update_task_plan")
+    assert plan_schema["required"] == ["expected_version", "nodes"]
+    assert Map.keys(plan_schema["properties"]) |> Enum.sort() == ["expected_version", "nodes"]
+    assert get_in(plan_schema, ["properties", "nodes", "items", "properties", "status", "enum"]) == ["pending", "in_progress", "done", "skipped"]
+
     for tool <- [
           "update_task_plan",
           "append_finding",
           "append_progress",
-          "set_status",
+          "report_blocker",
+          "resolve_blocker",
+          "abandon",
           "add_comment",
           "list_comments",
           "resolve_comment",
@@ -123,10 +132,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
       assert content =~ "complete_review(reference?, note?)"
       assert content =~ "sync_pr()"
       assert content =~ "attached PR"
-      assert content =~ "Workers do not create"
+      assert content =~ "report_blocker"
+      assert content =~ "resolve_blocker"
+      assert content =~ "architect-owned"
+      assert content =~ "human blockers"
       refute content =~ "blocker_closeout"
-      refute content =~ "report_blocker"
-      refute content =~ "resolve_blocker"
       refute content =~ "create_guidance_request"
       refute content =~ "sync_pr(metadata, url|number)"
       refute content =~ "sync_pr(url_or_number, metadata)"
@@ -141,8 +151,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
       assert content =~ "Worker branch: <PREPARED_BRANCH>"
       assert content =~ "Worktree path: <PREPARED_WORKTREE_PATH>"
       assert content =~ ~s({"work_package_id":"<WORK_PACKAGE_ID>"})
-      assert content =~ "update_task_plan(patch, expected_version)"
-      refute content =~ "resolve_blocker"
+      assert content =~ ~s|update_task_plan({"expected_version": <read version>, "nodes": [...]})|
+      refute content =~ "update_task_plan(patch"
+      assert content =~ "resolve_blocker"
       assert content =~ "request_scope_expansion(summary, idempotency_key, payload)"
       assert content =~ "attach_pr(url, head_sha)"
       assert content =~ "Do not create local planning files as the WorkPackage source of truth."

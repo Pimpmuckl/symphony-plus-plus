@@ -19,15 +19,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
     alias SymphonyElixir.SymphonyPlusPlus.Repo
 
     @race_key :sympp_claim_reclaim_refresh_race
+    @transaction_opts_key :sympp_claim_reclaim_transaction_opts
 
     def arm(claim_id, last_seen_at), do: Process.put(@race_key, {claim_id, last_seen_at})
-    def disarm, do: Process.delete(@race_key)
+
+    def disarm do
+      Process.delete(@race_key)
+      Process.delete(@transaction_opts_key)
+    end
+
+    def transaction_opts, do: Process.get(@transaction_opts_key)
 
     def get(schema, id), do: Repo.get(schema, id)
     def insert(changeset), do: Repo.insert(changeset)
     def one(query), do: Repo.one(query)
 
-    def transaction(fun) do
+    def transaction(fun, opts \\ []) do
+      Process.put(@transaction_opts_key, opts)
       {:ok, fun.()}
     catch
       {:rollback, reason} -> {:error, reason}
@@ -80,12 +88,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
   setup_all do
     database_path = WorkPackageFactory.database_path()
 
-    start_supervised!({Repo, database: database_path, pool_size: 5})
+    start_supervised!({Repo, database: database_path, pool_size: 5, busy_timeout: 20})
     assert :ok = Repository.migrate(Repo)
 
     on_exit(fn -> File.rm(database_path) end)
 
-    {:ok, repo: Repo}
+    {:ok, repo: Repo, database_path: database_path}
   end
 
   setup %{repo: repo} do
@@ -479,6 +487,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
                  now: reclaim_at,
                  reason: "stale lease"
                )
+
+      assert ReclaimRefreshRaceRepo.transaction_opts() == [mode: :immediate]
     after
       ReclaimRefreshRaceRepo.disarm()
     end
@@ -489,6 +499,87 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
     assert DateTime.compare(current.last_seen_at, refreshed_at) == :eq
     refute ClaimLease.stale?(current, reclaim_at)
     assert repo.aggregate(ClaimLease, :count) == 1
+  end
+
+  test "heartbeat retries one transient writer and persists one renewal", %{repo: repo, database_path: database_path} do
+    now = ~U[2026-05-26 14:00:00Z]
+    heartbeat_at = DateTime.add(now, 500, :millisecond)
+    assert {:ok, work_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-CLAIM-HEARTBEAT-BUSY"))
+    assert {:ok, claim} = Service.claim(repo, work_package.id, %{actor_kind: "agent", actor_id: "agent-1"}, stale_after_ms: 1_000, now: now)
+    writer = hold_write_lock(database_path)
+
+    try do
+      assert {{:ok, renewed}, queries} =
+               capture_queries(
+                 fn -> Service.heartbeat(repo, claim.id, now: heartbeat_at, stale_after_ms: 1_000) end,
+                 fn query ->
+                   if Regex.match?(~r/^UPDATE "sympp_claim_leases"/i, query), do: send(writer.pid, :release)
+                 end
+               )
+
+      assert DateTime.compare(renewed.last_seen_at, heartbeat_at) == :eq
+      assert Enum.count(queries, &Regex.match?(~r/^UPDATE "sympp_claim_leases"/i, &1)) == 2, inspect(queries)
+      assert repo.aggregate(ClaimLease, :count) == 1
+    after
+      release_write_lock(writer)
+    end
+  end
+
+  test "stale reclaim retries one transient writer and leaves one replacement", %{repo: repo, database_path: database_path} do
+    now = ~U[2026-05-26 14:30:00Z]
+    reclaim_at = DateTime.add(now, 1_500, :millisecond)
+    assert {:ok, work_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-CLAIM-RECLAIM-BUSY"))
+    assert {:ok, claim} = Service.claim(repo, work_package.id, %{actor_kind: "agent", actor_id: "agent-1"}, stale_after_ms: 1_000, now: now)
+    writer = hold_write_lock(database_path)
+
+    try do
+      assert {{:ok, replacement}, queries} =
+               capture_queries(
+                 fn ->
+                   Service.reclaim_stale(repo, work_package.id, %{actor_kind: "agent", actor_id: "agent-2"},
+                     now: reclaim_at,
+                     reason: "stale lease"
+                   )
+                 end,
+                 fn query ->
+                   if query == "begin", do: send(writer.pid, :release)
+                 end
+               )
+
+      assert replacement.previous_claim_id == claim.id
+      assert Enum.count(queries, &(&1 == "begin")) == 2, inspect(queries)
+      assert repo.aggregate(ClaimLease, :count) == 2
+      assert {:ok, ^replacement} = Service.current_for_work_package(repo, work_package.id)
+    after
+      release_write_lock(writer)
+    end
+  end
+
+  test "persistent writer returns database_busy after one bounded retry", %{repo: repo, database_path: database_path} do
+    now = ~U[2026-05-26 15:00:00Z]
+    reclaim_at = DateTime.add(now, 1_500, :millisecond)
+    assert {:ok, work_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-CLAIM-RECLAIM-PERSISTENT-BUSY"))
+    assert {:ok, claim} = Service.claim(repo, work_package.id, %{actor_kind: "agent", actor_id: "agent-1"}, stale_after_ms: 1_000, now: now)
+    writer = hold_write_lock(database_path)
+
+    try do
+      started_at = System.monotonic_time(:millisecond)
+
+      assert {{:error, :database_busy}, queries} =
+               capture_queries(fn ->
+                 Service.reclaim_stale(repo, work_package.id, %{actor_kind: "agent", actor_id: "agent-2"},
+                   now: reclaim_at,
+                   reason: "stale lease"
+                 )
+               end)
+
+      assert System.monotonic_time(:millisecond) - started_at < 500
+      assert Enum.count(queries, &(&1 == "begin")) == 2, inspect(queries)
+      assert {:ok, ^claim} = Service.current_for_work_package(repo, work_package.id)
+      assert repo.aggregate(ClaimLease, :count) == 1
+    after
+      release_write_lock(writer)
+    end
   end
 
   test "service defaults and repository error paths return stable errors", %{repo: repo} do
@@ -563,5 +654,65 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
   defp index_names(repo, table) do
     %{rows: rows} = SQL.query!(repo, "PRAGMA index_list(#{table})")
     Enum.map(rows, &Enum.at(&1, 1))
+  end
+
+  defp hold_write_lock(database_path) do
+    test_pid = self()
+
+    task =
+      Task.async(fn ->
+        {:ok, connection} = Exqlite.Sqlite3.open(database_path)
+        :ok = Exqlite.Sqlite3.execute(connection, "BEGIN IMMEDIATE")
+        send(test_pid, {:write_lock_held, self()})
+
+        receive do
+          :release -> :ok
+        end
+
+        :ok = Exqlite.Sqlite3.execute(connection, "ROLLBACK")
+        :ok = Exqlite.Sqlite3.close(connection)
+      end)
+
+    assert_receive {:write_lock_held, writer_pid}, 1_000
+    assert writer_pid == task.pid
+    task
+  end
+
+  defp release_write_lock(task) do
+    if Process.alive?(task.pid), do: send(task.pid, :release)
+    Task.yield(task, 1_000) || Task.shutdown(task, :brutal_kill)
+    :ok
+  end
+
+  defp capture_queries(fun, on_query \\ fn _query -> :ok end) do
+    handler_id = {__MODULE__, self(), make_ref()}
+    event = Repo.config()[:telemetry_prefix] ++ [:query]
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn _event, _measurements, metadata, {test_pid, on_query} ->
+          query = to_string(metadata.query || "")
+          on_query.(query)
+          send(test_pid, {handler_id, query})
+        end,
+        {self(), on_query}
+      )
+
+    try do
+      result = fun.()
+      {result, drain_queries(handler_id, [])}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
+  defp drain_queries(handler_id, queries) do
+    receive do
+      {^handler_id, query} -> drain_queries(handler_id, [query | queries])
+    after
+      0 -> Enum.reverse(queries)
+    end
   end
 end

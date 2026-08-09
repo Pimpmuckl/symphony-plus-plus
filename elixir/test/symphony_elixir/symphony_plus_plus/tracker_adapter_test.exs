@@ -1238,6 +1238,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.TrackerAdapterTest do
 
     alias_status_issue = TrackerAdapter.to_issue(%{work_package | status: "Todo"})
     assert alias_status_issue.state == "ready_for_worker"
+
+    active_issue = TrackerAdapter.to_issue(%{work_package | status: "active"})
+    assert active_issue.state == "active"
+    assert active_issue.assigned_to_worker
+    assert active_issue.assignee_id == "worker-1"
   end
 
   test "marks configured assignee grants as assigned to this worker", %{repo: repo} do
