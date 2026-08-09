@@ -15,6 +15,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   @type repo :: module()
   @type dashboard_error :: term()
 
+  @spec worker_context(repo(), WorkPackage.t()) :: {:ok, map()} | {:error, dashboard_error()}
+  def worker_context(_repo, %WorkPackage{work_request_id: work_request_id}) when work_request_id in [nil, ""] do
+    {:ok, worker_completion()}
+  end
+
+  def worker_context(repo, %WorkPackage{} = work_package) do
+    with {:ok, work_request} <- WorkRequestService.get(repo, work_package.work_request_id),
+         {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
+         {:ok, execution_graph} <- ProductTree.execution_graph(repo, work_request.id) do
+      packages_by_id = Map.new(work_packages, &{&1.id, &1})
+
+      direct_dependencies =
+        execution_graph.effective_edges
+        |> Enum.filter(&(&1.dependent_work_package_id == work_package.id))
+        |> Enum.map(& &1.prerequisite_work_package_id)
+        |> Enum.uniq()
+        |> Enum.sort()
+        |> Enum.map(&Map.fetch!(packages_by_id, &1))
+        |> Enum.map(&worker_dependency/1)
+
+      {:ok,
+       worker_completion()
+       |> Map.put("parent_work_request", %{
+         "title" => Redactor.redact_text(work_request.title),
+         "goal" => Redactor.redact_text(work_request.human_description)
+       })
+       |> Map.put("direct_dependencies", direct_dependencies)}
+    end
+  end
+
   @spec work_request_cards([WorkRequest.t()]) :: [map()]
   def work_request_cards(work_requests) do
     Enum.map(work_requests, &work_request_card/1)
@@ -359,6 +389,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
 
   defp map_get(map, key) when is_map(map) and is_atom(key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
   defp map_get(_value, _key), do: nil
+
+  defp worker_completion do
+    %{"completion" => %{"next_owner" => "architect", "next_action" => "return_ready_or_terminal_work_package"}}
+  end
+
+  defp worker_dependency(%WorkPackage{} = work_package) do
+    %{
+      "id" => work_package.id,
+      "title" => Redactor.redact_text(work_package.title),
+      "status" => work_package.status
+    }
+  end
 
   defp public_group_payload(node) do
     node

@@ -32,6 +32,9 @@ For assigned WorkPackages, use the WorkPackage id as the worker execution
 coordinate. Treat linked WorkRequest/work-package ids as product/audit context
 unless the specific tool call is a delivery closeout, successor, repair, or
 concurrency-protection operation that asks for them.
+The scoped `read_context` projection provides the parent goal and only direct
+dependency id/title/status context. When `next_owner` is `architect`, return
+the package result to that owner without seeking architect-only tools.
 
 ## Scope
 

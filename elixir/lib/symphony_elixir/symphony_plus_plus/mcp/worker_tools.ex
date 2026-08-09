@@ -29,12 +29,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     Auth,
     Config,
     ErrorDetails,
+    PhaseChildScope,
     ProgressEvents,
     PullRequestMetadata,
     ReviewReadiness,
     Session,
     TaskPlanTools,
     ToolResult,
+    WorkRequestPayloads,
     WorktreeScope
   }
 
@@ -254,6 +256,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
       {:ok,
        ToolResult.tool_result(
          %{"work_package" => work_package_payload(work_package), "ready" => true}
+         |> put_architect_next_step()
          |> ReviewReadiness.maybe_put_readiness_warnings(warnings)
        )}
     else
@@ -308,10 +311,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
          work_package_id = Session.work_package_id(session),
          uri = "sympp://work-packages/#{work_package_id}/#{file_name}",
          {:ok, state} <- PlanningRepository.get_render_state(repo, work_package_id),
-         {:ok, markdown} <- PlanningRenderer.render_state(state, file_name) do
+         {:ok, markdown} <- PlanningRenderer.render_state(state, file_name),
+         {:ok, context_anchor} <- PhaseChildScope.context_anchor(repo, state.work_package),
+         {:ok, worker_context} <- WorkRequestPayloads.worker_context(repo, context_anchor) do
       {:ok,
-       ToolResult.agent_tool_result(%{"uri" => uri, "text" => markdown}, fn ->
-         {:ok, toon} = WorkerContext.encode_virtual_file(state, file_name, uri: uri)
+       ToolResult.agent_tool_result(Map.merge(%{"uri" => uri, "text" => markdown}, worker_context), fn ->
+         {:ok, toon} = WorkerContext.encode_virtual_file(state, file_name, uri: uri, worker_context: worker_context)
          toon
        end)}
     else
@@ -370,7 +375,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   defp terminal_sync_result(repo, work_package_id, %{status: status} = result) when status in ["merged", "already_merged"] do
     with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, ToolResult.agent_tool_result(%{"work_package" => work_package_payload(work_package), "pr_sync" => stringify_keys(result)})}
+      {:ok,
+       ToolResult.agent_tool_result(
+         %{"work_package" => work_package_payload(work_package), "pr_sync" => stringify_keys(result)}
+         |> put_architect_next_step()
+       )}
     end
   end
 
@@ -899,6 +908,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   end
 
   defp worker_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
+  defp worker_error({:unauthorized, :work_package_terminal}, resource), do: terminal_auth_error(resource)
   defp worker_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
   defp worker_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
   defp worker_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
@@ -932,8 +942,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp auth_error({:unauthorized, reason}, resource), do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => reason_text(reason)}}
   defp auth_error({:service_unavailable, reason}, resource), do: service_error(reason, resource)
   defp auth_error(:forbidden, resource), do: {:error, -32_003, "Forbidden", %{"resource" => resource, "reason" => "outside_session_scope"}}
+  defp terminal_auth_error(resource), do: {:error, -32_001, "Unauthorized", put_architect_next_step(%{"resource" => resource, "reason" => "work_package_terminal"})}
   defp service_error(_reason, resource), do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
   defp reason_text(reason) when is_binary(reason), do: reason
   defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_text(reason), do: inspect(reason)
+
+  defp put_architect_next_step(payload) do
+    payload
+    |> Map.put("next_owner", "architect")
+    |> Map.put("next_action", "return_to_architect")
+  end
 end

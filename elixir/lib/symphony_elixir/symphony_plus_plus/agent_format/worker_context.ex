@@ -74,7 +74,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
 
   @spec virtual_file_payload(State.t(), String.t(), keyword()) :: {:ok, map()} | {:error, :unknown_virtual_file}
   def virtual_file_payload(%State{} = state, "context.md", opts) do
-    {:ok, base_payload(state, "context.md", opts) |> Map.put("work_package", work_package_context(state.work_package))}
+    payload =
+      state
+      |> base_payload("context.md", opts)
+      |> Map.put("work_package", work_package_context(state.work_package))
+      |> Map.merge(Keyword.get(opts, :worker_context, %{}))
+
+    {:ok, payload}
   end
 
   def virtual_file_payload(%State{} = state, "task_plan.md", opts) do

@@ -15,9 +15,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
 
   @phase_id "phase-p8-001-integration"
@@ -46,6 +49,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     repo.delete_all(Artifact)
     repo.delete_all(AccessGrant)
     repo.delete_all(WorkPackage)
+    repo.delete_all(WorkRequest)
     repo.delete_all(Phase)
 
     :ok
@@ -122,6 +126,134 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     assert {:ok, artifacts} = PlanningRepository.list_artifacts(repo, package.id)
     assert Enum.any?(artifacts, &(&1.kind == "github_pr" and &1.path == "github-pr.json"))
     assert Enum.any?(artifacts, &(&1.kind == "review" and &1.path == "validation/p8-001-local.json"))
+  end
+
+  test "worker receives only parent goal and direct dependencies while broad reads stay denied", %{repo: repo} do
+    assert {:ok, work_request} =
+             WorkRequestRepository.create(repo, %{
+               id: "WR-P8-WORKER-CONTEXT",
+               title: "Ship scoped worker context",
+               repo: "nextide/symphony-plus-plus",
+               base_branch: "symphony-plus-plus/beta",
+               work_type: "feature",
+               human_description: "Let workers explain their assigned outcome.",
+               constraints: %{},
+               desired_dispatch_shape: "single_package",
+               status: "sliced"
+             })
+
+    assert {:ok, unrelated_work_request} =
+             WorkRequestRepository.create(repo, %{
+               id: "WR-P8-WORKER-CONTEXT-UNRELATED",
+               title: "Unrelated WorkRequest title",
+               repo: "nextide/symphony-plus-plus",
+               base_branch: "symphony-plus-plus/beta",
+               work_type: "feature",
+               human_description: "Unrelated WorkRequest goal",
+               constraints: %{},
+               desired_dispatch_shape: "single_package",
+               status: "sliced"
+             })
+
+    assert {:ok, dependency} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-P8-WORKER-CONTEXT-DEPENDENCY",
+                 work_request_id: work_request.id,
+                 title: "Finish dependency",
+                 repo: work_request.repo,
+                 base_branch: work_request.base_branch,
+                 status: "ready_for_merge"
+               )
+             )
+
+    assert {:ok, package} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-P8-WORKER-CONTEXT",
+                 work_request_id: work_request.id,
+                 title: "Project worker context",
+                 repo: work_request.repo,
+                 base_branch: work_request.base_branch,
+                 status: "active"
+               )
+             )
+
+    assert {:ok, sibling} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-P8-WORKER-CONTEXT-SIBLING",
+                 work_request_id: work_request.id,
+                 title: "Sibling contract title",
+                 engineering_scope: "sibling-contract-secret",
+                 repo: work_request.repo,
+                 base_branch: work_request.base_branch,
+                 status: "active"
+               )
+             )
+
+    assert {:ok, _edge} =
+             ProductTree.create_dependency_edge(repo, %{
+               work_request_id: work_request.id,
+               source_kind: "work_package",
+               source_id: package.id,
+               target_kind: "work_package",
+               target_id: dependency.id,
+               kind: "depends_on",
+               reason: "Worker needs direct dependency status."
+             })
+
+    session = minted_worker_session(repo, package.id, "context-worker")
+    response = mcp_tool(repo, session, "read_context", %{})
+    context = get_in(response, ["result", "structuredContent"])
+
+    assert context["parent_work_request"] == %{
+             "title" => work_request.title,
+             "goal" => work_request.human_description
+           }
+
+    assert context["direct_dependencies"] == [
+             %{"id" => dependency.id, "title" => dependency.title, "status" => dependency.status}
+           ]
+
+    assert context["completion"] == %{
+             "next_owner" => "architect",
+             "next_action" => "return_ready_or_terminal_work_package"
+           }
+
+    context_text = get_in(response, ["result", "content", Access.at(0), "text"])
+    refute context_text =~ sibling.title
+    refute context_text =~ unrelated_work_request.title
+    refute context_text =~ "sibling-contract-secret"
+
+    for {tool, arguments} <- [
+          {"list_work_requests", %{}},
+          {"read_work_request", %{"work_request_id" => work_request.id}},
+          {"read_plan", %{"work_request_id" => work_request.id}},
+          {"read_delivery_board", %{"work_request_id" => work_request.id}}
+        ] do
+      denied = mcp_tool(repo, session, tool, arguments)
+      assert get_in(denied, ["error", "code"]) == -32_003
+      assert get_in(denied, ["error", "data", "reason"]) in ["outside_session_scope", "insufficient_role"]
+    end
+
+    sibling_resource =
+      MCPHarness.request(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "integration-worker-context-sibling-resource",
+          "method" => "resources/read",
+          "params" => %{"uri" => "sympp://work-packages/#{sibling.id}/context.md"}
+        },
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(sibling_resource, ["error", "code"]) == -32_003
+    assert get_in(sibling_resource, ["error", "data", "reason"]) == "outside_session_scope"
   end
 
   test "phase architect delegates two packages through ready approval and merge", %{repo: repo} do

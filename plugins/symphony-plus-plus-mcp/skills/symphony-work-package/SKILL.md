@@ -37,6 +37,8 @@ cross-slice target, successor relation, audit closeout, or concurrency guard.
    package resources.
 6. Read current context before coding: `read_context()`, `read_task_plan()`,
    acceptance/review/handoff resources, findings, and progress.
+   `read_context()` includes only the parent WorkRequest title and goal, direct
+   dependency ids/titles/statuses, and the architect-owned completion step.
 7. Do not create local `task_plan.md`, `findings.md`, or `progress.md` files as
    the source of truth.
 
@@ -120,6 +122,8 @@ Before `mark_ready()`:
 
 After `mark_ready()` succeeds, evidence is frozen except idempotent replay of
 already-recorded writes.
+Return ready or terminal packages to the architect named by `next_owner`; the
+worker does not need or receive architect tools for that handoff.
 
 ## Safety
 

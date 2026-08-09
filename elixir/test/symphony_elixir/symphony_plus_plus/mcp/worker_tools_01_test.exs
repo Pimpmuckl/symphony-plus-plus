@@ -3,6 +3,8 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree
+
   test "worker tools update only the scoped planning state and deny sibling mutations", %{repo: repo} do
     assert {:ok, own_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-WORKER-OWN", kind: "adapter"))
     assert {:ok, sibling_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-WORKER-SIBLING", kind: "adapter"))
@@ -395,6 +397,111 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     assert length(own_nodes) == 1
     assert sibling_nodes == []
     assert Enum.any?(events, &(get_in(&1.payload, ["type"]) == "scope_expansion_request" and get_in(&1.payload, ["approved"]) == false))
+  end
+
+  test "worker context projects only parent goal and direct dependencies through phase-child scope", %{repo: repo} do
+    parent_work_request =
+      create_work_request!(repo,
+        id: "WR-WORKER-CONTEXT",
+        title: "Ship scoped worker context",
+        human_description: "Let workers explain their assigned outcome."
+      )
+
+    assert {:ok, _phase} = PhaseRepository.create(repo, %{id: "phase-worker-context", title: "Worker context"})
+
+    assert {:ok, dependency} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-WORKER-CONTEXT-DEPENDENCY",
+                 work_request_id: parent_work_request.id,
+                 title: "Finish dependency",
+                 repo: parent_work_request.repo,
+                 base_branch: parent_work_request.base_branch,
+                 status: "ready_for_merge"
+               )
+             )
+
+    assert {:ok, parent} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-WORKER-CONTEXT-PARENT",
+                 work_request_id: parent_work_request.id,
+                 title: "Project worker context",
+                 repo: parent_work_request.repo,
+                 base_branch: parent_work_request.base_branch,
+                 allowed_file_globs: ["elixir/**"],
+                 phase_id: "phase-worker-context",
+                 status: "active"
+               )
+             )
+
+    assert {:ok, sibling} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-WORKER-CONTEXT-SIBLING",
+                 work_request_id: parent_work_request.id,
+                 title: "Sibling contract title",
+                 engineering_scope: "sibling-contract-secret",
+                 repo: parent_work_request.repo,
+                 base_branch: parent_work_request.base_branch,
+                 status: "active"
+               )
+             )
+
+    assert {:ok, child} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-WORKER-CONTEXT-CHILD",
+                 kind: "phase_child",
+                 title: "Scoped phase child",
+                 repo: parent.repo,
+                 base_branch: parent.base_branch,
+                 allowed_file_globs: ["elixir/lib/**"],
+                 parent_id: parent.id,
+                 phase_id: parent.phase_id,
+                 status: "active"
+               )
+             )
+
+    assert {:ok, _edge} =
+             ProductTree.create_dependency_edge(repo, %{
+               work_request_id: parent_work_request.id,
+               source_kind: "work_package",
+               source_id: parent.id,
+               target_kind: "work_package",
+               target_id: dependency.id,
+               kind: "depends_on",
+               reason: "Worker needs direct dependency status."
+             })
+
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, child.id)
+    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "phase-child-worker")
+    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+    response = mcp_tool(repo, session, "read_context", %{})
+    context = get_in(response, ["result", "structuredContent"])
+
+    assert context["parent_work_request"] == %{
+             "title" => parent_work_request.title,
+             "goal" => parent_work_request.human_description
+           }
+
+    assert context["direct_dependencies"] == [
+             %{"id" => dependency.id, "title" => dependency.title, "status" => dependency.status}
+           ]
+
+    context_text = get_in(response, ["result", "content", Access.at(0), "text"])
+    assert context_text =~ dependency.id
+    refute context_text =~ sibling.title
+    refute context_text =~ "sibling-contract-secret"
+
+    repo.update_all(from(work_package in WorkPackage, where: work_package.id == ^child.id), set: [repo: "other/repo"])
+    drifted_context = mcp_tool(repo, session, "read_context", %{})
+    assert get_in(drifted_context, ["error", "code"]) == -32_003
+    assert get_in(drifted_context, ["error", "data", "reason"]) == "outside_session_scope"
   end
 
   test "progress metadata tools reject non-string required fields", %{repo: repo} do

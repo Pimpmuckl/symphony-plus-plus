@@ -476,12 +476,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   end
 
   defp require_phase_child_scope(%WorkPackage{kind: "phase_child", phase_id: phase_id} = child, anchor, phase_id) do
-    cond do
-      child.parent_id != anchor.id -> {:error, :phase_scope_not_available}
-      not repo_scope_name_matches?(child.repo, anchor.repo, []) -> {:tool_error, "repo_scope_mismatch"}
-      child.base_branch != anchor.base_branch -> {:tool_error, "base_branch_scope_mismatch"}
-      true -> PhaseChildScope.require_file_scope(child, anchor)
-    end
+    PhaseChildScope.require_scope(child, anchor)
   end
 
   defp require_phase_child_scope(%WorkPackage{}, _anchor, _phase_id), do: {:error, :phase_scope_not_available}

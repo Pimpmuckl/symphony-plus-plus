@@ -91,6 +91,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
 
     assert get_in(merged_response, ["result", "structuredContent", "work_package", "status"]) == "merged"
     assert get_in(merged_response, ["result", "structuredContent", "pr_sync", "status"]) == "merged"
+    assert get_in(merged_response, ["result", "structuredContent", "next_owner"]) == "architect"
+    assert get_in(merged_response, ["result", "structuredContent", "next_action"]) == "return_to_architect"
 
     replay_response =
       MCPHarness.request(
@@ -108,6 +110,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
       )
 
     assert get_in(replay_response, ["result", "structuredContent", "pr_sync", "status"]) == "already_merged"
+    assert get_in(replay_response, ["result", "structuredContent", "next_owner"]) == "architect"
+    assert get_in(replay_response, ["result", "structuredContent", "next_action"]) == "return_to_architect"
   end
 
   test "mark_ready does not require ci_waiting when package policy omits CI", %{repo: repo} do

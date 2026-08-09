@@ -46,6 +46,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
       )
 
     assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
+    assert get_in(ready_response, ["result", "structuredContent", "next_owner"]) == "architect"
+    assert get_in(ready_response, ["result", "structuredContent", "next_action"]) == "return_to_architect"
   end
 
   test "mark_ready rejects empty review packages and requires an external blocker resolution", %{repo: repo} do
