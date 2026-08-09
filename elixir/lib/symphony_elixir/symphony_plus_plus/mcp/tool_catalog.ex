@@ -103,6 +103,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "approve_child_ready_state",
     "merge_child_into_phase"
   ]
+  @known_tools Enum.uniq(
+                 [@health_tool, @assignment_release_tool] ++
+                   @solo_tools ++
+                   @bootstrap_tools ++
+                   @local_operator_tools ++
+                   @session_claim_tools ++
+                   @worker_tools ++ @architect_tools
+               )
   @work_request_policy_tools [
     "list_work_requests",
     "read_work_request",
@@ -210,6 +218,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   @spec architect_tools() :: [tool_name()]
   def architect_tools, do: @architect_tools
+
+  @spec known_tool?(term()) :: boolean()
+  def known_tool?(name), do: name in @known_tools
 
   @spec work_request_policy_tools() :: [tool_name()]
   def work_request_policy_tools, do: @work_request_policy_tools

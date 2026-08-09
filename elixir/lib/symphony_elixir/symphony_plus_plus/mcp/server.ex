@@ -100,6 +100,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @architect_product_tree_tools ArchitectProductTreeTools.tools()
   @work_request_policy_tools ToolCatalog.work_request_policy_tools()
   @delivery_policy_tools ToolCatalog.delivery_policy_tools()
+  @safe_diagnostic_failure_reasons ~w(
+    architect_grant_required
+    claim_required
+    dangerous_action_requires_operator
+    insufficient_capability
+    insufficient_role
+    invalid_tool_arguments
+    invalid_transition
+    missing_session
+    outside_session_scope
+    runtime_lease_conflict
+    scope_mismatch
+    target_ambiguous
+    target_not_found
+    unexpected_argument
+    unknown_action
+    worker_grant_required
+  )
   @version_resource "sympp://health/version"
   @assignment_resource "sympp://assignment/current"
   @enforce_keys [:config]
@@ -2215,7 +2233,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp failed_tool_response(%__MODULE__{} = server, %{"name" => tool_name} = params, id, code, message, data)
        when is_binary(tool_name) and is_map(data) do
-    case failed_tool_diagnostic(server, params, tool_name, code) do
+    case failed_tool_diagnostic(server, params, tool_name, code, data) do
       nil -> Response.error(id, code, message, data)
       diagnostic_id -> Response.error(id, code, message, Map.put(data, "diagnostic_id", diagnostic_id))
     end
@@ -2223,7 +2241,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp failed_tool_response(_server, _params, id, code, message, data), do: Response.error(id, code, message, data)
 
-  defp failed_tool_diagnostic(%__MODULE__{config: %Config{repo: repo} = config} = server, params, tool_name, code) do
+  defp failed_tool_diagnostic(%__MODULE__{config: %Config{repo: repo} = config} = server, params, tool_name, code, data) do
     case OperatorSettingsRepository.get(repo) do
       {:ok, %{capture_failed_mcp_calls: true}} ->
         diagnostic_id = "mcpdiag_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
@@ -2235,6 +2253,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
             "diagnostic_id" => diagnostic_id,
             "error_classification" => error_classification(code),
             "event" => "sympp_failed_mcp_call",
+            "failure_reason" => safe_failure_reason(data),
             "source" => Health.source_identity(config),
             "tool_name" => safe_tool_name
           })
@@ -2256,8 +2275,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          %{"name" => safe_tool_name} = spec <- Enum.find(specs, &(&1["name"] == tool_name)) do
       {safe_tool_name, schema_argument_keys(params, spec)}
     else
-      _unknown_or_unavailable -> {"unknown", []}
+      _unknown_or_unavailable -> {if(ToolCatalog.known_tool?(tool_name), do: tool_name, else: "unknown"), []}
     end
+  end
+
+  defp safe_failure_reason(data) do
+    Enum.find([data["reason_code"], data["reason"]], &(&1 in @safe_diagnostic_failure_reasons))
   end
 
   defp schema_argument_keys(
