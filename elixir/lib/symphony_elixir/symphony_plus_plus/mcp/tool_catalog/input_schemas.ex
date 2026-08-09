@@ -976,14 +976,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           "title" => nonblank_string_schema(),
           "body" => nullable_string_schema(),
           "status" => string_enum_schema(PlanNode.statuses())
-        },
-        "anyOf" => [
-          %{"required" => ["title"]},
-          %{
-            "required" => ["id"],
-            "anyOf" => [%{"required" => ["title"]}, %{"required" => ["body"]}, %{"required" => ["status"]}]
-          }
-        ]
+        }
       }
     }
   end

@@ -405,10 +405,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
 
     refute Map.has_key?(get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties"]), "work_package_id")
 
-    assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties", "nodes", "items", "anyOf"]) == [
-             %{"required" => ["title"]},
-             %{"required" => ["id"], "anyOf" => [%{"required" => ["title"]}, %{"required" => ["body"]}, %{"required" => ["status"]}]}
-           ]
+    refute Map.has_key?(get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties", "nodes", "items"]), "anyOf")
 
     assert get_in(tools_by_name, ["set_status", "inputSchema", "required"]) == ["status", "expected_status"]
 
