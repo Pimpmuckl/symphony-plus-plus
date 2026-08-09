@@ -77,8 +77,9 @@ Before ready:
    top-level current-state fields when they changed; use explicit PR identity
    or `recovery` only for repair.
 5. Submit validation evidence with
-   `submit_review_package(summary, tests, artifacts)` after branch metadata is
-   current.
+   `submit_review_package(summary, tests, artifacts)`. Policy-approved no-PR
+   work may omit branch/head metadata; PR-backed or review-required work must
+   use its current exact head.
 6. If `review.md` declares a review requirement, complete it for the current
    exact head and call `complete_review(reference?, note?)`.
 7. Call `mark_ready()` only after acceptance criteria, tests, required review,

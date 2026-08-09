@@ -219,6 +219,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert completion_payload["note"] == "Maintainers approved the exact head."
     assert completion_payload["review_fingerprint"] == ReviewRequirement.fingerprint(review)
     assert String.ends_with?(get_in(completion_payload, ["review", "args", "context"]), "[truncated]")
+    assert get_in(completion, ["result", "structuredContent", "remaining_readiness_gates"]) == []
 
     replay =
       attach_tool(repo, session, "complete_review", %{
@@ -228,6 +229,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
 
     assert get_in(replay, ["result", "structuredContent", "progress_event", "id"]) ==
              get_in(completion, ["result", "structuredContent", "progress_event", "id"])
+
+    assert get_in(replay, ["result", "structuredContent", "remaining_readiness_gates"]) == []
 
     changed_review = %{"type" => "automated", "args" => %{"policy" => "internal"}}
     package |> Ecto.Changeset.change(review_requirement: changed_review) |> repo.update!()

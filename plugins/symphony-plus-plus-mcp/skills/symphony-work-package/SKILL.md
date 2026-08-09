@@ -93,8 +93,9 @@ S++ explicitly gives scoped context.
   state fields such as `head_sha`, `check_summary`, `review_state`, or
   `merge_state` when they changed; use explicit `url`/`number` or `recovery`
   only when repairing missing attachment evidence.
-- `submit_review_package(summary, tests, artifacts)` after branch metadata is
-  current to record validation and acceptance evidence.
+- `submit_review_package(summary, tests, artifacts)` records validation and
+  acceptance evidence. Policy-approved no-PR work may submit without a branch
+  head; PR-backed or review-required work must use its attached exact head.
 - If `review.md` declares a review requirement, use that provider and its
   optional arguments. After it succeeds for the attached exact head, call
   `complete_review(reference?, note?)`. The reference is an opaque provider or

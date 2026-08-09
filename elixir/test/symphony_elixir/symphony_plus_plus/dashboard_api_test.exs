@@ -2414,6 +2414,54 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert "review_artifacts_attached" in missing["missing"]
   end
 
+  test "headless investigation evidence is projected without a recommendation artifact gate", %{repo: repo} do
+    assert {:ok, work_package} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-DASH-HEADLESS-INVESTIGATION",
+                 kind: "investigation",
+                 status: "ready_for_merge"
+               )
+             )
+
+    assert {:ok, _finding} =
+             PlanningRepository.append_finding(repo, %{
+               work_package_id: work_package.id,
+               title: "Recommendation",
+               body: "No code change needed.",
+               idempotency_key: "headless-investigation-finding"
+             })
+
+    assert {:ok, _review_package} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: work_package.id,
+               summary: "Headless evidence submitted",
+               status: "review_package_submitted",
+               payload: %{
+                 type: "review_package",
+                 source_tool: "submit_review_package",
+                 acceptance_criteria_met: true,
+                 tests: ["Investigation evidence reviewed"],
+                 artifacts: []
+               }
+             })
+
+    assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
+
+    assert %{review_package: %{"type" => "review_package"} = review_package} =
+             MetadataProjection.metadata(progress_events, [], work_package.id, nil)
+
+    refute Map.has_key?(review_package, "head_sha")
+
+    secret = create_architect_grant_secret(repo, work_package.id)
+    payload = json_response(get(auth_conn(secret), "/api/v1/sympp/work-packages/#{work_package.id}"), 200)
+    missing = Enum.find(payload["alert_indicators"], &(&1["type"] == "missing_readiness_evidence"))
+
+    assert missing["active"] == false
+    assert missing["missing"] == []
+  end
+
   test "ready phase-child packages without a plan are flagged in API", %{repo: repo} do
     phase_id = "phase-dashboard-ready-plan"
     assert {:ok, _phase} = PhaseRepository.create(repo, %{id: phase_id, title: "Ready plan phase"})

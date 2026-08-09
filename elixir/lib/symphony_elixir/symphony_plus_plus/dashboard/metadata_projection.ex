@@ -46,30 +46,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
     "artifact_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
   end
 
-  @spec recommendation_artifact_recorded?([term()], String.t()) :: boolean()
-  def recommendation_artifact_recorded?(artifacts, work_package_id) do
-    artifact_id = recommendation_artifact_id(work_package_id)
-
-    Enum.any?(
-      artifacts,
-      &(&1.id == artifact_id and &1.work_package_id == work_package_id and &1.path == "recommendation.md" and
-          &1.title == "Investigation recommendation" and &1.kind == "recommendation")
-    )
-  end
-
-  defp recommendation_artifact_id(work_package_id) do
-    material = [work_package_id, "recommendation", "recommendation.md"] |> Enum.join(":")
-    "artifact_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
-  end
-
   @spec filled_string?(term()) :: boolean()
   def filled_string?(value), do: is_binary(value) and String.trim(value) != ""
 
   @spec review_head_matches?(term(), String.t() | :any_head) :: boolean()
-  def review_head_matches?(payload, :any_head) when is_map(payload) do
-    head_sha = Map.get(payload, "head_sha")
-    is_binary(head_sha) and String.trim(head_sha) != ""
-  end
+  def review_head_matches?(payload, :any_head) when is_map(payload), do: true
 
   def review_head_matches?(payload, head_sha) when is_map(payload) and is_binary(head_sha),
     do: PullRequest.head_sha_matches?(Map.get(payload, "head_sha"), head_sha)
@@ -369,8 +350,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
     end
   end
 
-  defp latest_current_payload(progress_events, type, source_tool, :none) do
-    latest_payload(progress_events, type, source_tool, :none)
+  defp latest_current_payload(progress_events, "review_package", "submit_review_package", :none) do
+    progress_events
+    |> chronological_progress_events()
+    |> Enum.reverse()
+    |> Enum.find(fn
+      %ProgressEvent{payload: payload} = event when is_map(payload) ->
+        payload_type?(event, "review_package", "submit_review_package") and is_nil(payload_head_sha(payload))
+
+      %ProgressEvent{} ->
+        false
+    end)
+    |> case do
+      %ProgressEvent{payload: payload} -> Sanitizer.redacted_json(payload || %{})
+      nil -> nil
+    end
   end
 
   defp latest_current_payload(progress_events, type, source_tool, head_filter) do

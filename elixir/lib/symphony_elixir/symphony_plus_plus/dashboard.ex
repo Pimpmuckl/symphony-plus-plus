@@ -719,7 +719,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   end
 
   defp artifact_backed_readiness_gate_required?(%WorkPackage{} = work_package) do
-    merge_required?(work_package) or required_gate?(work_package, "recommendation_artifact_recorded")
+    merge_required?(work_package)
   end
 
   defp readiness_findings(repo, %WorkPackage{status: status, id: work_package_id}) when status in @ready_statuses do
@@ -1956,7 +1956,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   defp merge_required?(%WorkPackage{} = work_package), do: OperationalProjection.merge_required?(work_package)
   defp pr_required?(%WorkPackage{} = work_package), do: OperationalProjection.pr_required?(work_package)
-  defp required_gate?(%WorkPackage{} = work_package, gate), do: OperationalProjection.required_gate?(work_package, gate)
 
   defp context_work_package_status(%{work_package: %WorkPackage{status: status}}), do: status
   defp context_work_package_status(_work_package_context), do: nil

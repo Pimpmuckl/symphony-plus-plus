@@ -63,6 +63,9 @@ concurrency-protection operation that asks for them.
   skill. Package-depth policies still need terminal package plan evidence; do
   not add lifecycle calls only to restate existing plan, PR, branch, or review
   evidence.
+- Policy-approved no-PR work may submit evidence and become ready without a
+  branch head. PR-backed or review-required work still needs current exact-head
+  evidence.
 
 ## Delivery
 

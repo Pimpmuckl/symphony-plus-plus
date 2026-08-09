@@ -861,8 +861,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       {review_artifacts_missing?(context), "review_artifacts_attached"},
       {review_current_head_missing?(context), "review_current_head"},
       {review_completion_missing?(context), "review_complete"},
-      {investigation_findings_missing?(context), "findings_documented"},
-      {investigation_recommendation_missing?(context), "recommendation_artifact_recorded"}
+      {investigation_findings_missing?(context), "findings_documented"}
     ]
     |> Enum.flat_map(fn
       {true, @scope_guard_gate} -> ScopeGuard.failure_reasons(context.work_package, context.progress_events)
@@ -890,7 +889,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   defp readiness_failure_message("review_current_head"), do: "Required review is waiting for an attached exact head."
   defp readiness_failure_message("review_complete"), do: "Required review is not completed for the current exact head and requirement."
   defp readiness_failure_message("findings_documented"), do: "Investigation findings are missing."
-  defp readiness_failure_message("recommendation_artifact_recorded"), do: "Investigation recommendation artifact is missing."
   defp readiness_failure_message(_gate), do: "Readiness gate is not satisfied."
 
   defp merge_metadata_missing?(context, "pr") do
@@ -961,11 +959,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   end
 
   defp investigation_findings_missing?(context), do: context.work_package.kind == "investigation" and context.findings == []
-
-  defp investigation_recommendation_missing?(context) do
-    context.work_package.kind == "investigation" and
-      not recommendation_artifact_recorded?(context.artifacts, context.work_package.id)
-  end
 
   defp incomplete_plan?(context) do
     plan_required?(context.work_package) and
@@ -1176,7 +1169,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   defp normalize_blocker_id(value) when is_binary(value), do: String.trim(value)
   defp normalize_blocker_id(value), do: to_string(value)
 
-  defp recommendation_artifact_recorded?(artifacts, work_package_id), do: MetadataProjection.recommendation_artifact_recorded?(artifacts, work_package_id)
+  defp review_head_matches?(payload, :any_head) when is_map(payload), do: true
   defp review_head_matches?(payload, readiness_head_sha), do: MetadataProjection.review_head_matches?(payload, readiness_head_sha)
   defp latest_current_head_sha(progress_events), do: MetadataProjection.latest_current_head_sha(progress_events)
   defp metadata_present?(progress_events, type, head_sha), do: MetadataProjection.metadata_present?(progress_events, type, head_sha)
