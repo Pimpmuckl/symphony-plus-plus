@@ -430,7 +430,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   end
 
   defp rollback_local_assignment_claim_error({:ok, result, session}, _repo), do: {result, session}
-  defp rollback_local_assignment_claim_error({:error, code, message, data}, repo), do: repo.rollback({:mcp_error, code, message, data})
   defp rollback_local_assignment_claim_error({:tool_error, reason}, repo), do: repo.rollback({:tool_error, reason})
   defp rollback_local_assignment_claim_error({:error, reason}, repo), do: repo.rollback(reason)
 
