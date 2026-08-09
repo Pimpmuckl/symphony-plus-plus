@@ -160,7 +160,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
 
     case result do
       {:ok, plan_node} -> {:cont, {:ok, [plan_node | plan_nodes]}}
-      {:tool_error, reason} -> {:halt, {:tool_error, reason}}
       {:error, reason} -> {:halt, {:error, reason}}
     end
   end
