@@ -700,6 +700,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools01Test do
       mcp_tool(repo, architect_session, "read_child_status", %{"work_package_id" => child_id})
 
     assert get_in(child_status_response, ["result", "structuredContent", "work_package", "id"]) == child_id
-    assert get_in(child_status_response, ["result", "structuredContent", "work_package", "status"]) == "ready_for_worker"
+    assert get_in(child_status_response, ["result", "structuredContent", "work_package", "status"]) == "active"
   end
 end

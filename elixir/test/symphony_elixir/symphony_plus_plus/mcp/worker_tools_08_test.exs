@@ -47,7 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools08Test do
     assert get_in(progress_response, ["error", "data", "reason"]) == "revoked"
 
     assert {:ok, status_package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-REVOKED-STATUS", kind: "mcp", status: "planning"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-REVOKED-STATUS", kind: "mcp", status: "active"))
 
     assert {:ok, status_minted} = AccessGrantService.mint_worker_grant(repo, status_package.id)
     assert {:ok, status_assignment} = AccessGrantService.claim(repo, status_minted.work_key.secret, claimed_by: "worker-1")
@@ -59,7 +59,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools08Test do
           "jsonrpc" => "2.0",
           "id" => "revoked-status",
           "method" => "tools/call",
-          "params" => %{"name" => "set_status", "arguments" => %{"status" => "blocked", "expected_status" => "planning"}}
+          "params" => %{
+            "name" => "report_blocker",
+            "arguments" => %{"summary" => "Should not block", "idempotency_key" => "revoked-blocker"}
+          }
         },
         repo: repo,
         session: MCPHarness.session(status_assignment, proof_hash: status_minted.grant.secret_hash)

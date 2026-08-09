@@ -144,11 +144,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
     assert get_in(ready_response, ["result", "structuredContent", "work_package", "status"]) == "ready_for_merge"
   end
 
-  test "mark_ready still requires ci_waiting when package policy requires CI", %{repo: repo} do
+  test "mark_ready derives CI readiness from evidence without a manual ci_waiting state", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-READY-CI-REQUIRED", kind: "mcp", status: "reviewing", policy_template: "mcp_ci_required")
+               WorkPackageFactory.attrs(id: "SYMPP-READY-CI-REQUIRED", kind: "mcp", status: "active", policy_template: "mcp_ci_required")
              )
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
@@ -156,30 +156,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
     append_merge_ready_evidence(repo, session, package.id, "head-ci-required")
-
-    reviewing_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-ci-required-reviewing", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(reviewing_response, ["error", "data", "reason"]) == "readiness_failed"
-    assert get_in(reviewing_response, ["error", "data", "missing"]) == ["status_ci_waiting"]
-
-    transition_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "ci-required-transition",
-          "method" => "tools/call",
-          "params" => %{"name" => "set_status", "arguments" => %{"expected_status" => "reviewing", "status" => "ci_waiting"}}
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(transition_response, ["result", "structuredContent", "work_package", "status"]) == "ci_waiting"
 
     ready_response =
       MCPHarness.request(
@@ -192,19 +168,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
     assert get_in(ready_response, ["result", "structuredContent", "work_package", "status"]) == "ready_for_merge"
   end
 
-  test "state machine blocks ready transitions from reviewing when package policy requires CI", %{repo: repo} do
+  test "state machine accepts fact-owned readiness from active packages", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-READY-CI-STATE-MACHINE", kind: "mcp", status: "reviewing", policy_template: "mcp_ci_required")
+               WorkPackageFactory.attrs(id: "SYMPP-READY-CI-STATE-MACHINE", kind: "mcp", status: "active", policy_template: "mcp_ci_required")
              )
 
     actor = %{grant_role: "worker", capabilities: ["worker:lifecycle.transition"], work_package_id: package.id}
 
-    assert {:error, :invalid_transition} =
-             StateMachine.validate_ready_transition(package, "ready_for_merge", actor)
-
-    ci_waiting_package = %{package | status: "ci_waiting"}
-    assert :ok = StateMachine.validate_ready_transition(ci_waiting_package, "ready_for_merge", actor)
+    assert :ok = StateMachine.validate_ready_transition(package, "ready_for_merge", actor)
   end
 end

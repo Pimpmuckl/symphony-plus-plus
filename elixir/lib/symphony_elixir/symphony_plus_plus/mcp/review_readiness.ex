@@ -21,7 +21,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @complete_plan_statuses ["done", "completed", "skipped"]
-  @review_promotable_work_package_statuses ["ready_for_worker", "claimed", "planning", "implementing"]
   @scope_guard_gate "scope_guard"
 
   @type repo :: module()
@@ -79,7 +78,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
           :ok | {:error, {:readiness_failed, [String.t()], [map()]}} | {:error, term()}
   def child_ready_approval_gates(repo, state) do
     with {:ok, reasons} <- readiness_failure_reasons(repo, state) do
-      reasons = Enum.reject(reasons, &(Map.get(&1, "gate") in ["status_ci_waiting", "status_reviewing"]))
       missing = missing_readiness_gates(reasons)
 
       if missing == [], do: :ok, else: {:error, {:readiness_failed, missing, reasons}}
@@ -167,7 +165,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {:ok, head_sha} ->
         case ProgressEvents.append_metadata(repo, session, arguments, "submit_review_package", "review_package_submitted", payload) do
           {:ok, result} ->
-            persist_review_artifacts_and_promote_or_rollback(repo, session, artifacts, head_sha, result, work_package)
+            persist_review_artifacts_or_rollback(repo, session, artifacts, head_sha, result)
 
           {:error, code, message, data} ->
             repo.rollback({:mcp_error, code, message, data})
@@ -239,11 +237,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp maybe_put_headless_review_idempotency_key(arguments, _requested_head_sha, _payload), do: arguments
 
-  defp persist_review_artifacts_and_promote_or_rollback(repo, %Session{} = session, artifacts, head_sha, result, %WorkPackage{} = work_package) do
-    with :ok <- append_review_artifacts(repo, session, artifacts, head_sha),
-         :ok <- promote_stale_package_to_reviewing(repo, work_package) do
-      result
-    else
+  defp persist_review_artifacts_or_rollback(repo, %Session{} = session, artifacts, head_sha, result) do
+    case append_review_artifacts(repo, session, artifacts, head_sha) do
+      :ok -> result
       {:error, reason} -> repo.rollback(reason)
     end
   end
@@ -332,8 +328,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
          {:ok, head_sha} <- required_current_review_head(state.progress_events),
          payload <- review_completion_payload(work_package_id, requirement, head_sha, reference, note),
          arguments <- review_completion_arguments(requirement, head_sha, note),
-         {:ok, result} <- ProgressEvents.append_metadata(repo, session, arguments, "complete_review", "review_complete", payload),
-         :ok <- promote_stale_package_to_reviewing(repo, state.work_package) do
+         {:ok, result} <- ProgressEvents.append_metadata(repo, session, arguments, "complete_review", "review_complete", payload) do
       result
     else
       {:tool_error, reason} -> repo.rollback({:mcp_error, -32_602, "Invalid params", %{"tool" => "complete_review", "reason" => reason}})
@@ -379,39 +374,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     "current:" <> digest
   end
 
-  defp promote_stale_package_to_reviewing(repo, %WorkPackage{status: status} = work_package)
-       when status in @review_promotable_work_package_statuses do
-    promote_package_status_to_reviewing(repo, work_package.id, status, 0)
-  end
-
-  defp promote_stale_package_to_reviewing(_repo, %WorkPackage{}), do: :ok
-
-  defp promote_package_status_to_reviewing(repo, work_package_id, expected_status, attempts) do
-    case WorkPackageRepository.update_status(repo, work_package_id, expected_status, "reviewing") do
-      {:ok, %WorkPackage{}} ->
-        :ok
-
-      {:error, :stale_status} when attempts < 3 ->
-        retry_review_promotion_from_latest_status(repo, work_package_id, attempts + 1)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp retry_review_promotion_from_latest_status(repo, work_package_id, attempts) do
-    case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, %WorkPackage{status: status}} when status in @review_promotable_work_package_statuses ->
-        promote_package_status_to_reviewing(repo, work_package_id, status, attempts)
-
-      {:ok, %WorkPackage{}} ->
-        :ok
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
   defp readiness_gates(repo, state) do
     with {:ok, reasons} <- readiness_failure_reasons(repo, state) do
       missing = missing_readiness_gates(reasons)
@@ -434,7 +396,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp base_readiness_failure_reasons(state) do
     [
-      {readiness_status_missing?(state.work_package), readiness_status_gate(state.work_package)},
       {active_blocker?(state.progress_events), "no_active_blockers"},
       {incomplete_plan?(state), "plan_complete"},
       {acceptance_missing?(state), "acceptance_criteria_met"},
@@ -527,8 +488,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     |> drop_nil_values()
   end
 
-  defp readiness_failure_message("status_ci_waiting"), do: "Package must be waiting on validation."
-  defp readiness_failure_message("status_reviewing"), do: "Package must be in review or validation."
   defp readiness_failure_message("no_active_blockers"), do: "Active blockers must be resolved."
   defp readiness_failure_message("plan_complete"), do: "Package plan is missing or still has pending items."
   defp readiness_failure_message("acceptance_criteria_met"), do: "Acceptance criteria evidence is missing."
@@ -707,17 +666,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp missing_meaningful_plan?(%{plan_nodes: []}), do: true
   defp missing_meaningful_plan?(_state), do: false
-
-  defp readiness_status_missing?(%WorkPackage{} = work_package) do
-    if ci_waiting_required?(work_package) do
-      work_package.status != "ci_waiting"
-    else
-      work_package.status not in ["reviewing", "ci_waiting"]
-    end
-  end
-
-  defp readiness_status_gate(%WorkPackage{} = work_package), do: if(ci_waiting_required?(work_package), do: "status_ci_waiting", else: "status_reviewing")
-  defp ci_waiting_required?(%WorkPackage{} = work_package), do: required_gate?(work_package, "ci_waiting")
 
   defp plan_required?(%WorkPackage{} = work_package) do
     case LifecycleService.policy_for(work_package) do

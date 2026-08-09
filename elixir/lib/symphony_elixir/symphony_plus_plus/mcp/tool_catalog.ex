@@ -28,7 +28,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "set_status",
+    "report_blocker",
+    "resolve_blocker",
+    "abandon",
     "add_comment",
     "list_comments",
     "resolve_comment",
@@ -47,7 +49,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "set_status",
+    "report_blocker",
+    "resolve_blocker",
+    "abandon",
     "add_comment",
     "list_comments",
     "resolve_comment",
@@ -60,7 +64,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "complete_review",
     "mark_ready"
   ]
-  @shared_worker_architect_tools ["add_comment", "list_comments", "resolve_comment", "read_guidance_request"]
+  @shared_worker_architect_tools ["add_comment", "list_comments", "resolve_comment", "resolve_blocker", "read_guidance_request"]
   @architect_tools [
     "create_child_work_package",
     "mint_child_worker_key",

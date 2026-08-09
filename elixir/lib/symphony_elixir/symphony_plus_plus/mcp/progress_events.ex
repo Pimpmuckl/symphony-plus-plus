@@ -17,6 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
 
   @finding_replay_retry_attempts 50
   @ready_evidence_tools [
+    "abandon",
     "append_finding",
     "append_progress",
     "attach_branch",

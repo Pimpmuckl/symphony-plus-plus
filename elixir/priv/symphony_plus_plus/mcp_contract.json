@@ -1,6 +1,6 @@
 {
-  "version": 6,
-  "mcp_contract_fingerprint": "e884ca5db6caf84485722fd2434270cf319a5c3a56fa007cbbf4532d916b6ea7",
+  "version": 7,
+  "mcp_contract_fingerprint": "756f75b7e22d2325779c75a5f8cf1436d8f2baa92f8bb7968a1ec6dd635b8e95",
   "tool_sets": {
     "unbound_tools": [
       "sympp.health",
@@ -35,7 +35,9 @@
       "update_task_plan",
       "append_finding",
       "append_progress",
-      "set_status",
+      "report_blocker",
+      "resolve_blocker",
+      "abandon",
       "add_comment",
       "list_comments",
       "resolve_comment",
@@ -94,6 +96,7 @@
       "add_comment",
       "list_comments",
       "resolve_comment",
+      "resolve_blocker",
       "read_guidance_request"
     ]
   }

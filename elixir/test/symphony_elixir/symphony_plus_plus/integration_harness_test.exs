@@ -69,7 +69,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
 
     update_plan(repo, session)
     append_progress(repo, session, "Hotfix regression passed", "tests_passed", "hotfix-tests")
-    advance_worker_to_ci_waiting(repo, session)
+    assert_worker_active(repo, session)
 
     head_sha = "p8-001-hotfix-head"
     attach_branch(repo, session, "agent/SYMPP-P8-001/hotfix", head_sha)
@@ -134,7 +134,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
       worker_session = claim_phase_child_worker(repo, architect_session, child_id, "phase-worker-#{suffix}")
       head_sha = "p8-001-phase-head-#{suffix}"
 
-      advance_worker_to_ci_waiting(repo, worker_session)
+      assert_worker_active(repo, worker_session)
       attach_phase_child_ready_evidence(repo, worker_session, child_id, head_sha)
 
       ready_response = mcp_tool(repo, worker_session, "mark_ready", %{})
@@ -327,6 +327,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
 
     assert {:ok, grant} = AccessGrantRepository.get(repo, grant_id)
     assert {:ok, session} = Auth.session_from_grant(repo, grant, proof_hash: grant.secret_hash)
+    assert {:ok, package} = WorkPackageRepository.get(repo, grant.work_package_id)
+
+    if package.status == "ready_for_worker" do
+      assert {:ok, _active} =
+               WorkPackageRepository.update_status(repo, package.id, "ready_for_worker", "active")
+    end
+
     session
   end
 
@@ -356,24 +363,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
              })
   end
 
-  defp advance_worker_to_ci_waiting(repo, session) do
-    [
-      {"ready_for_worker", "claimed"},
-      {"claimed", "planning"},
-      {"planning", "implementing"},
-      {"implementing", "reviewing"},
-      {"reviewing", "ci_waiting"}
-    ]
-    |> Enum.each(fn {expected_status, status} ->
-      response =
-        mcp_tool(repo, session, "set_status", %{
-          "expected_status" => expected_status,
-          "status" => status,
-          "reason" => "advance P8 integration harness flow"
-        })
-
-      assert get_in(response, ["result", "structuredContent", "work_package", "status"]) == status
-    end)
+  defp assert_worker_active(repo, session) do
+    assert {:ok, package} = WorkPackageRepository.get(repo, session.assignment.work_package_id)
+    assert package.status == "active"
   end
 
   defp attach_phase_child_ready_evidence(repo, session, child_id, head_sha) do

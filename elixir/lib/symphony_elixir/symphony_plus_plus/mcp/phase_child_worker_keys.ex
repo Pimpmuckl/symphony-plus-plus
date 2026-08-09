@@ -25,6 +25,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildWorkerKeys do
   @capabilities ["worker:claim", "worker:lifecycle.transition"]
   @ready_status "ready_for_worker"
   @resettable_statuses [
+    "active",
     "claimed",
     "planning",
     "implementing",

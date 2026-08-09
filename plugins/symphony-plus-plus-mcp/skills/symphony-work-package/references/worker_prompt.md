@@ -21,6 +21,8 @@ Assignment:
 
 Before coding:
 1. Claim the assignment through `claim_local_assignment`.
+   The first successful claim activates the package atomically; reconnecting
+   the same claim does not change lifecycle state.
 2. Call `get_current_assignment()` and treat that assignment as the scope.
 3. If claim fails because the lease is paused, another active owner exists, or
    the local ledger scope mismatches, stop and ask the architect or operator to
@@ -49,8 +51,11 @@ During coding:
 4. Use the worker-scoped MCP comment tools `add_comment`, `list_comments`, and
    `resolve_comment` when package-scoped implementation comments should stay
    visible in the cockpit.
-5. Use comments for ordinary parent-agent coordination. Workers do not create
-   or resolve durable human blockers or guidance.
+5. Use comments for ordinary parent-agent coordination. If execution is
+   blocked, call `report_blocker(summary, idempotency_key, blocker_id?)` and
+   resolve only that same worker-owned blocker with
+   `resolve_blocker(blocker_id, resolution, summary, idempotency_key)`.
+   Architect-owned human blockers and guidance remain architect/operator work.
 6. Use `request_scope_expansion(summary, idempotency_key, payload)` instead of
    silently expanding scope.
 7. Do not create local planning files as the WorkPackage source of truth.
@@ -78,9 +83,9 @@ Before ready:
    exact head and call `complete_review(reference?, note?)`.
 7. Call `mark_ready()` only after acceptance criteria, tests, required review,
    progress, findings, branch/PR evidence, and blockers are settled. Do not add
-   lifecycle calls only to restate existing evidence. Active blockers must be
-   resolved by the architect or trusted local operator before worker finish
-   transitions.
+   lifecycle calls only to restate existing evidence. Resolve worker-owned
+   blockers with `resolve_blocker`; architect-owned human blockers still
+   require the architect or trusted local operator.
 
 Final output:
 - PR URL and final head SHA.

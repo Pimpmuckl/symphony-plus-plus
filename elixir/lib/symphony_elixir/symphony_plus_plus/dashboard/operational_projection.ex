@@ -23,7 +23,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   @complete_plan_statuses ["done", "completed", "skipped"]
   @merge_required_gates ["human_merge", "architect_merge"]
   @runtime_merge_required_kinds ["hotfix", "adapter", "mcp", "skill", "hooks", "phase_child"]
-  @started_package_statuses ["claimed", "planning", "implementing"]
+  @started_package_statuses ["active", "claimed", "planning", "implementing"]
   @prepared_worktree_statuses ["prepared", "already_prepared"]
   @merged_package_statuses ["merged", "merged_into_phase"]
   @closed_package_statuses ["closed", "abandoned", "skipped"]
@@ -316,11 +316,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       status in @ready_statuses ->
         ready_operational_state(work_package, missing_readiness)
 
-      status == "ci_waiting" ->
-        operational_state("ci_waiting", "CI Waiting", "info", "Package is waiting on validation or CI evidence.", status)
-
-      status == "reviewing" or review_activity?(metadata) ->
-        operational_state("reviewing", "Reviewing", "info", "Review evidence or lifecycle status indicates review is active.", status)
+      review_activity?(metadata) ->
+        operational_state("reviewing", "Reviewing", "info", "Durable review evidence indicates review is active.", status)
 
       true ->
         nil
@@ -337,10 +334,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       reason = if missing_readiness == [], do: "Package is ready to finish with closeout evidence.", else: "Package is ready to finish but evidence is incomplete."
       operational_state("ready_to_finish", "Ready To Finish", tone, reason, status)
     end
-  end
-
-  defp pickup_operational_state("ready_for_worker" = status, %{has_active_worker: true}) do
-    operational_state("active", "Active", "info", "Worker grant or runtime evidence indicates work is active now.", status)
   end
 
   defp pickup_operational_state("ready_for_worker" = status, %{has_started: true}) do
@@ -689,7 +682,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   end
 
   defp review_activity?(metadata) do
-    present_metadata_value?(safe_map_get(metadata, :review_completion))
+    Enum.any?([:review_package, :review_completion], &present_metadata_value?(safe_map_get(metadata, &1)))
   end
 
   defp present_metadata_value?(nil), do: false

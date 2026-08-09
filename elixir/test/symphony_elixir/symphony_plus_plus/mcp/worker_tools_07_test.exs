@@ -682,25 +682,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     assert get_in(response, ["error", "data", "reason"]) == "missing_lifecycle_capability"
   end
 
-  test "worker cannot mark merged mint grants or list all packages through MCP", %{repo: repo} do
+  test "worker surface omits general lifecycle mutation, grant minting, and package listing", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-DENIALS", kind: "adapter", status: "ready_for_merge"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    merged_response =
+    tools_response =
       MCPHarness.request(
         %{
           "jsonrpc" => "2.0",
-          "id" => "merged",
-          "method" => "tools/call",
-          "params" => %{"name" => "set_status", "arguments" => %{"status" => "merged", "expected_status" => "ready_for_merge"}}
+          "id" => "worker-tools",
+          "method" => "tools/list",
+          "params" => %{}
         },
         repo: repo,
         session: session
       )
 
-    assert get_in(merged_response, ["error", "data", "reason"]) == "worker_cannot_mark_merged"
+    refute Enum.any?(get_in(tools_response, ["result", "tools"]), &(&1["name"] == "set_status"))
 
     Enum.each(["mint_worker_grant", "list_work_packages"], fn tool ->
       response =

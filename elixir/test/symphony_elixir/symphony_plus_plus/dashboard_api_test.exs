@@ -311,14 +311,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert card.operational_state.has_active_worker == false
 
     assert {:ok, started} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-OP-READY-STARTED", status: "ready_for_worker"))
+             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-OP-READY-STARTED", status: "active"))
 
     create_claimed_worker_grant(repo, started.id, "worker-started")
 
     assert {:ok, started_card} = Dashboard.card(repo, started)
     assert started_card.operational_state.key == "active"
     assert started_card.operational_state.label == "Active"
-    assert started_card.operational_state.raw_status == "ready_for_worker"
+    assert started_card.operational_state.raw_status == "active"
     assert started_card.operational_state.has_started == true
     assert started_card.operational_state.has_active_worker == true
     assert started_card.operational_state.attention_items == []
@@ -481,7 +481,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
              })
 
     assert {:ok, ci_card} = Dashboard.card(repo, ci_waiting)
-    assert ci_card.operational_state.key == "ci_waiting"
+    assert ci_card.operational_state.key == "started_paused"
   end
 
   test "package operational state projects merged PRs while surfacing missing readiness contradictions", %{repo: repo} do

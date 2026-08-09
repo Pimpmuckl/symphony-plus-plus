@@ -1,59 +1,7 @@
 Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 
-defmodule SymphonyElixir.SymphonyPlusPlus.MCP.StatusUpdateRaceRepo do
-  alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-
-  @race_key :sympp_status_update_race
-
-  def arm(work_package_id, status), do: Process.put(@race_key, {work_package_id, status, 0})
-  def disarm, do: Process.delete(@race_key)
-
-  def transaction(fun), do: Repo.transaction(fun)
-  def rollback(value), do: Repo.rollback(value)
-  def database_path, do: Repo.database_path()
-  def in_transaction?, do: Repo.in_transaction?()
-  def get!(schema, id), do: Repo.get!(schema, id)
-  def one(query), do: Repo.one(query)
-  def all(query), do: Repo.all(query)
-  def insert(changeset), do: Repo.insert(changeset)
-  def update(changeset), do: Repo.update(changeset)
-  def query(sql, params, opts), do: Repo.query(sql, params, opts)
-
-  def get(WorkPackage = schema, id) do
-    case Process.get(@race_key) do
-      {^id, status, 1} ->
-        Process.put(@race_key, {id, status, 2})
-        Repo.get(schema, id)
-
-      {^id, status, 2} ->
-        Repo.get(schema, id) |> Map.put(:status, status)
-
-      _race ->
-        Repo.get(schema, id)
-    end
-  end
-
-  def get(schema, id), do: Repo.get(schema, id)
-
-  def update_all(%Ecto.Query{from: %Ecto.Query.FromExpr{source: {_table, WorkPackage}}} = query, updates) do
-    case Process.get(@race_key) do
-      {id, status, 0} ->
-        Process.put(@race_key, {id, status, 1})
-        {0, nil}
-
-      _race ->
-        Repo.update_all(query, updates)
-    end
-  end
-
-  def update_all(query, updates), do: Repo.update_all(query, updates)
-end
-
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
-
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.StatusUpdateRaceRepo
 
   test "server rejects re-initialize after handshake", %{repo: repo} do
     server = Server.new(Config.default(repo: repo))
@@ -579,6 +527,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
 
     refute inspect(claim_response) =~ minted.work_key.secret
     assert get_in(claim_response, ["result", "structuredContent", "assignment", "work_package_id"]) == "SYMPP-P3-002"
+    assert get_in(claim_response, ["result", "structuredContent", "local_claim", "lifecycle_state"]) == "active"
+    assert {:ok, active_package} = WorkPackageRepository.get(repo, package.id)
+    assert active_package.status == "active"
 
     {retry_claim_response, retry_claimed_server} =
       Server.handle_state(
@@ -596,6 +547,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
 
     assert get_in(retry_claim_response, ["result", "structuredContent", "assignment", "work_package_id"]) == "SYMPP-P3-002"
     assert retry_claimed_server.session.assignment.work_package_id == "SYMPP-P3-002"
+    assert {:ok, reconnected_package} = WorkPackageRepository.get(repo, package.id)
+    assert reconnected_package.status == "active"
 
     assignment_response =
       Server.handle(
@@ -605,119 +558,131 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
 
     assert get_in(assignment_response, ["result", "structuredContent", "assignment", "claimed_by"]) == "local-worker-1"
 
-    invalid_reason_response =
+    report_response =
       Server.handle(
         %{
           "jsonrpc" => "2.0",
-          "id" => "invalid-status-reason",
+          "id" => "report-blocker",
           "method" => "tools/call",
-          "params" => %{"name" => "set_status", "arguments" => %{"status" => "claimed", "expected_status" => "ready_for_worker", "reason" => 123}}
+          "params" => %{
+            "name" => "report_blocker",
+            "arguments" => %{
+              "blocker_id" => "worker-blocker",
+              "summary" => "Waiting on scoped evidence",
+              "idempotency_key" => "worker-blocker"
+            }
+          }
         },
         claimed_server
       )
 
-    assert get_in(invalid_reason_response, ["error", "data", "reason"]) == "invalid_reason"
-    assert {:ok, unchanged_package} = WorkPackageRepository.get(repo, package.id)
-    assert unchanged_package.status == "ready_for_worker"
+    assert get_in(report_response, ["result", "structuredContent", "progress_event", "id"])
 
-    status_response =
+    assert {:ok, blocked_package} = WorkPackageRepository.get(repo, package.id)
+    assert blocked_package.status == "blocked"
+
+    resolve_response =
       Server.handle(
         %{
           "jsonrpc" => "2.0",
-          "id" => "status",
+          "id" => "resolve-blocker",
           "method" => "tools/call",
-          "params" => %{"name" => "set_status", "arguments" => %{"status" => "claimed", "expected_status" => "ready_for_worker", "reason" => "Starting work"}}
+          "params" => %{
+            "name" => "resolve_blocker",
+            "arguments" => %{
+              "blocker_id" => "worker-blocker",
+              "resolution" => "Evidence arrived",
+              "summary" => "Scoped evidence received",
+              "idempotency_key" => "worker-blocker-resolved"
+            }
+          }
         },
         claimed_server
       )
 
-    assert get_in(status_response, ["result", "structuredContent", "work_package", "status"]) == "claimed"
-    assert {:ok, status_events} = PlanningRepository.list_progress_events(repo, package.id)
-    assert Enum.any?(status_events, &(&1.body == "Starting work" and &1.payload["type"] == "status_transition"))
+    assert get_in(resolve_response, ["result", "structuredContent", "progress_event", "id"])
+    assert {:ok, unblocked_package} = WorkPackageRepository.get(repo, package.id)
+    assert unblocked_package.status == "active"
 
-    stale_status_response =
+    assert {:ok, blocker_events} = PlanningRepository.list_progress_events(repo, package.id)
+    assert Enum.any?(blocker_events, &(&1.payload["blocker_id"] == "worker-blocker" and &1.payload["active"] == true))
+    assert Enum.any?(blocker_events, &(&1.payload["blocker_id"] == "worker-blocker" and &1.payload["active"] == false))
+
+    abandon_response =
       Server.handle(
         %{
           "jsonrpc" => "2.0",
-          "id" => "stale-status",
+          "id" => "abandon",
           "method" => "tools/call",
-          "params" => %{"name" => "set_status", "arguments" => %{"status" => "implementing", "expected_status" => "ready_for_worker"}}
+          "params" => %{"name" => "abandon", "arguments" => %{"reason" => "Intentional worker closeout"}}
         },
         claimed_server
       )
 
-    assert get_in(stale_status_response, ["error", "data", "reason"]) == "stale_status"
-    assert get_in(stale_status_response, ["error", "data", "current_status"]) == "claimed"
-    assert get_in(stale_status_response, ["error", "data", "allowed_next_statuses"]) == ["planning", "blocked", "abandoned"]
-
-    invalid_transition_response =
-      Server.handle(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "invalid-transition",
-          "method" => "tools/call",
-          "params" => %{"name" => "set_status", "arguments" => %{"status" => "reviewing", "expected_status" => "claimed"}}
-        },
-        claimed_server
-      )
-
-    assert get_in(invalid_transition_response, ["error", "data", "reason"]) == "invalid_transition"
-    assert get_in(invalid_transition_response, ["error", "data", "current_status"]) == "claimed"
-    assert get_in(invalid_transition_response, ["error", "data", "allowed_next_statuses"]) == ["planning", "blocked", "abandoned"]
-
-    assert {:ok, claimed_package} = WorkPackageRepository.get(repo, package.id)
-    repo.update!(Ecto.Changeset.change(claimed_package, status: "ci_waiting"))
-
-    ci_waiting_response =
-      Server.handle(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "ci-waiting-invalid-transition",
-          "method" => "tools/call",
-          "params" => %{"name" => "set_status", "arguments" => %{"status" => "planning", "expected_status" => "ci_waiting"}}
-        },
-        claimed_server
-      )
-
-    assert get_in(ci_waiting_response, ["error", "data", "allowed_next_statuses"]) == ["reviewing", "blocked", "abandoned"]
+    assert get_in(abandon_response, ["result", "structuredContent", "work_package", "status"]) == "abandoned"
+    assert {:ok, abandoned_package} = WorkPackageRepository.get(repo, package.id)
+    assert abandoned_package.status == "abandoned"
   end
 
-  test "set_status reloads lifecycle guidance after a compare-and-swap race", %{repo: repo} do
-    package = create_local_claim_package!(repo, "SYMPP-STATUS-CAS-RACE", status: "planning")
+  test "one of 100 simultaneous owners atomically claims and activates the package", %{repo: repo} do
+    package = create_local_claim_package!(repo, "SYMPP-ATOMIC-CLAIM-100")
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "race-worker")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    StatusUpdateRaceRepo.arm(package.id, "reviewing")
+    responses =
+      1..100
+      |> Task.async_stream(
+        fn attempt ->
+          arguments = local_assignment_claim_args(package, %{"claimed_by" => "claimant-#{attempt}"})
 
-    try do
-      response =
-        MCPHarness.request(
-          %{
-            "jsonrpc" => "2.0",
-            "id" => "status-cas-race",
-            "method" => "tools/call",
-            "params" => %{
-              "name" => "set_status",
-              "arguments" => %{"status" => "implementing", "expected_status" => "planning"}
-            }
-          },
-          repo: StatusUpdateRaceRepo,
-          session: session
-        )
+          Server.handle(
+            %{
+              "jsonrpc" => "2.0",
+              "id" => "claim-#{attempt}",
+              "method" => "tools/call",
+              "params" => %{"name" => "claim_local_assignment", "arguments" => arguments}
+            },
+            local_mcp_server(local_mcp_config(repo), "atomic-claim-#{attempt}")
+          )
+        end,
+        max_concurrency: 100,
+        ordered: false,
+        timeout: 30_000
+      )
+      |> Enum.map(fn {:ok, response} -> response end)
 
-      assert get_in(response, ["error", "data", "reason"]) == "stale_status"
-      assert get_in(response, ["error", "data", "current_status"]) == "reviewing"
+    successful = Enum.filter(responses, &get_in(&1, ["result", "structuredContent", "assignment"]))
+    assert length(successful) == 1
+    assert Enum.all?(responses -- successful, &(get_in(&1, ["result", "structuredContent", "assignment"]) == nil))
 
-      assert get_in(response, ["error", "data", "allowed_next_statuses"]) == [
-               "implementing",
-               "ci_waiting",
-               "blocked",
-               "abandoned"
-             ]
-    after
-      StatusUpdateRaceRepo.disarm()
-    end
+    assert {:ok, active_package} = WorkPackageRepository.get(repo, package.id)
+    assert active_package.status == "active"
+
+    assert [active_lease] =
+             repo.all(
+               from(claim_lease in ClaimLease,
+                 where: claim_lease.work_package_id == ^package.id and claim_lease.status == "active"
+               )
+             )
+
+    assert active_lease.actor_display_name =~ "claimant-"
+
+    assert [claimed_grant] =
+             repo.all(
+               from(grant in AccessGrant,
+                 where: grant.work_package_id == ^package.id and not is_nil(grant.claimed_at) and is_nil(grant.revoked_at)
+               )
+             )
+
+    assert claimed_grant.id == minted.grant.id
+    assert repo.aggregate(from(grant in AccessGrant, where: grant.work_package_id == ^package.id), :count) == 1
+    assert repo.aggregate(from(claim_lease in ClaimLease, where: claim_lease.work_package_id == ^package.id), :count) == 1
+
+    assert [_session_binding] =
+             repo.all(
+               from(binding in SymphonyElixir.SymphonyPlusPlus.MCP.SessionBinding,
+                 where: binding.work_package_id == ^package.id and binding.recoverable == true
+               )
+             )
   end
 
   test "claim_local_assignment claims and reconnects a worker session from scoped local identity", %{repo: repo} do

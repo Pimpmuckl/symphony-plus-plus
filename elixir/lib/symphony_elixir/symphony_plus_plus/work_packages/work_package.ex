@@ -50,6 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     "skipped",
     "created",
     "ready_for_worker",
+    "active",
     "claimed",
     "planning",
     "implementing",

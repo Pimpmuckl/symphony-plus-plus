@@ -16,23 +16,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    bypass_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "ready-bypass",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "set_status",
-            "arguments" => %{"expected_status" => "ci_waiting", "status" => "ready_for_merge"}
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(bypass_response, ["error", "data", "reason"]) == "use_mark_ready"
-
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-READY-PACKAGE-PLAN/worker", "head_sha" => "abc126"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/126", "head_sha" => "abc126"})
 

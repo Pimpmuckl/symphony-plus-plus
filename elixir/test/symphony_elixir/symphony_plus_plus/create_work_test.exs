@@ -600,6 +600,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
 
     assert get_in(claim_response, ["result", "structuredContent", "assignment", "work_package_id"]) == creation.work_package.id
     session = claimed_server.session
+    assert {:ok, active_package} = WorkPackageRepository.get(repo, creation.work_package.id)
+    assert active_package.status == "active"
 
     {reconnect_response, _reconnected_server} =
       Server.handle_state(
@@ -730,12 +732,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
 
     assert get_in(progress_response, ["result", "structuredContent", "progress_event", "status"]) == "tests_passed"
 
-    transition_status(repo, session, "ready_for_worker", "claimed")
-    transition_status(repo, session, "claimed", "planning")
-    transition_status(repo, session, "planning", "implementing")
-    transition_status(repo, session, "implementing", "reviewing")
-    transition_status(repo, session, "reviewing", "ci_waiting")
-
     progress_file_response =
       MCPHarness.request(
         %{
@@ -848,23 +844,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
       )
 
     assert get_in(response, ["result", "structuredContent", "progress_event", "id"])
-    response
-  end
-
-  defp transition_status(repo, session, expected_status, status) do
-    response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "set-status-#{status}",
-          "method" => "tools/call",
-          "params" => %{"name" => "set_status", "arguments" => %{"expected_status" => expected_status, "status" => status}}
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(response, ["result", "structuredContent", "work_package", "status"]) == status
     response
   end
 end

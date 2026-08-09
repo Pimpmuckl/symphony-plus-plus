@@ -13,6 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.HandoffHelpers do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
   alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   @handoff_store_process_key :sympp_mcp_test_handoff_store_dir
 
   def windows? do
@@ -158,24 +159,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.HandoffHelpers do
     MCPHarness.session(architect_assignment, proof_hash: minted.grant.secret_hash)
   end
 
-  def advance_child_worker_to_ci_waiting(repo, worker_session) do
-    [
-      {"ready_for_worker", "claimed"},
-      {"claimed", "planning"},
-      {"planning", "implementing"},
-      {"implementing", "reviewing"},
-      {"reviewing", "ci_waiting"}
-    ]
-    |> Enum.each(fn {expected_status, status} ->
-      response =
-        mcp_tool(repo, worker_session, "set_status", %{
-          "expected_status" => expected_status,
-          "status" => status,
-          "reason" => "advance phase child test flow"
-        })
-
-      assert get_in(response, ["result", "structuredContent", "work_package", "status"]) == status
-    end)
+  def assert_child_worker_active(repo, worker_session) do
+    assert {:ok, package} = WorkPackageRepository.get(repo, worker_session.assignment.work_package_id)
+    assert package.status == "active"
   end
 
   def attach_phase_child_ready_evidence(repo, worker_session, child_id, head_sha) do

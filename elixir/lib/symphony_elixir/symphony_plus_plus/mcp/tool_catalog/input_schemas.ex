@@ -187,9 +187,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(session_scoped_properties(%{"guidance_request_id" => string_schema()}), ["guidance_request_id"])
   end
 
-  def worker_tool_input_schema("set_status") do
-    schema(session_scoped_properties(set_status_schema_properties()), ["status", "expected_status"])
+  def worker_tool_input_schema("report_blocker") do
+    schema(
+      session_scoped_properties(%{
+        "blocker_id" => described_string_schema("Optional stable blocker id. A deterministic id is generated when omitted."),
+        "summary" => string_schema(),
+        "body" => markdown_nullable_string_schema("Optional human-facing Markdown body."),
+        "idempotency_key" => string_schema(),
+        "payload" => object_schema()
+      }),
+      ["summary", "idempotency_key"]
+    )
   end
+
+  def worker_tool_input_schema("resolve_blocker") do
+    schema(
+      session_scoped_properties(%{
+        "blocker_id" => string_schema(),
+        "resolution" => string_schema(),
+        "summary" => string_schema(),
+        "body" => markdown_nullable_string_schema("Optional human-facing Markdown body."),
+        "idempotency_key" => string_schema(),
+        "payload" => object_schema()
+      }),
+      ["blocker_id", "resolution", "summary", "idempotency_key"]
+    )
+  end
+
+  def worker_tool_input_schema("abandon"),
+    do: schema(%{"reason" => markdown_string_schema("Why this work package is being abandoned.")}, ["reason"])
 
   def worker_tool_input_schema("attach_branch") do
     schema(metadata_properties(%{"branch" => string_schema(), "head_sha" => string_schema()}), ["branch", "head_sha"])
@@ -240,14 +266,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     else
       schema
     end
-  end
-
-  defp set_status_schema_properties do
-    %{
-      "status" => string_enum_schema(["claimed", "planning", "implementing", "reviewing", "ci_waiting", "blocked", "abandoned"]),
-      "expected_status" => string_schema(),
-      "reason" => nullable_string_schema()
-    }
   end
 
   @spec architect_tool_input_schema(tool_name()) :: input_schema()

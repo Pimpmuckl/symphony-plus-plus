@@ -8,6 +8,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
+  alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Auth,
@@ -43,15 +45,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
          {:ok, work_package} <- WorkPackageRepository.get(config.repo, claim.work_package_id),
          claim <- hydrate_local_assignment_claim(config.repo, work_package, claim),
          :ok <- validate_local_assignment_scope(config.repo, work_package, claim),
-         {:ok, lease, lease_action} <- ensure_local_assignment_claim_lease(config.repo, work_package, claim) do
-      case claim_local_assignment_session(config.repo, work_package, claim, lease, lease_action) do
-        {:ok, result, new_session, grant_action} ->
-          finalize_local_assignment_rebind(config.repo, server, session, claim, lease, lease_action, {result, new_session, grant_action}, callbacks)
-
-        {:error, reason} ->
-          release_failed_local_assignment_lease(config.repo, lease, lease_action, reason)
-          local_assignment_claim_error(reason, work_package.id)
-      end
+         {:ok, result, new_session} <-
+           claim_local_assignment_transaction(config.repo, work_package, claim, server, session, callbacks) do
+      DashboardPubSub.broadcast_changed()
+      {:ok, result, new_session}
     else
       {:error, code, message, data} -> {:error, code, message, data}
       {:tool_error, reason} -> invalid_params_error(@local_assignment_claim_tool, reason)
@@ -59,30 +56,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
     end
   rescue
     _error -> {:error, -32_000, "Server error", %{"tool" => @local_assignment_claim_tool, "reason" => "ledger_unavailable"}}
-  end
-
-  defp finalize_local_assignment_rebind(
-         repo,
-         %{} = server,
-         old_session,
-         claim,
-         lease,
-         lease_action,
-         {result, new_session, grant_action},
-         callbacks
-       ) do
-    with {:ok, result, new_session} <-
-           finalize_local_assignment_claim(repo, result, new_session, claim, lease, lease_action, grant_action),
-         {:ok, _released_server} <- release_local_assignment_rebind(repo, server, old_session, claim, callbacks) do
-      {:ok, result, new_session}
-    else
-      {:error, code, message, data} ->
-        {:error, code, message, data}
-
-      {:error, reason} ->
-        rollback_failed_local_assignment_claim(repo, new_session, lease, lease_action, grant_action, reason)
-        local_assignment_claim_error(reason)
-    end
   end
 
   defp local_assignment_claim_arguments(arguments, %{} = server) do
@@ -439,38 +412,81 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
 
   defp local_assignment_active_worker_grant_ids(_repo, _work_package_id, _claimed_by, %DateTime{}), do: []
 
-  defp finalize_local_assignment_claim(repo, result, %Session{} = session, claim, %ClaimLease{} = lease, lease_action, grant_action) do
-    session = Session.with_claim_lease(session, lease)
+  defp claim_local_assignment_transaction(repo, %WorkPackage{} = work_package, claim, server, old_session, callbacks) do
+    transaction = fn ->
+      case claim_local_assignment_transaction_body(repo, work_package, claim, server, old_session, callbacks) do
+        {:ok, result, session} -> {result, session}
+        {:error, code, message, data} -> repo.rollback({:mcp_error, code, message, data})
+        {:tool_error, reason} -> repo.rollback({:tool_error, reason})
+        {:error, reason} -> repo.rollback(reason)
+      end
+    end
 
-    case append_local_assignment_claim_event(repo, session, claim, lease, lease_action) do
-      {:ok, claim_event} ->
-        {:ok, Map.put(result, "local_claim", local_assignment_claim_payload(claim, lease, lease_action, claim_event)), session}
-
-      {:error, reason} ->
-        rollback_failed_local_assignment_claim(repo, session, lease, lease_action, grant_action, reason)
-        local_assignment_claim_error(reason)
+    immediate_transaction(repo, transaction)
+    |> case do
+      {:ok, {result, session}} -> {:ok, result, session}
+      {:error, {:mcp_error, code, message, data}} -> {:error, code, message, data}
+      {:error, {:tool_error, reason}} -> {:tool_error, reason}
+      {:error, :worker_grant_required} -> local_assignment_claim_error(:worker_grant_required, work_package.id)
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp rollback_failed_local_assignment_claim(repo, %Session{} = session, %ClaimLease{} = lease, lease_action, grant_action, reason) do
-    release_failed_local_assignment_lease(repo, lease, lease_action, reason)
-    revoke_failed_local_assignment_grant(repo, session, lease_action, grant_action)
+  defp immediate_transaction(repo, transaction) do
+    if function_exported?(repo, :transaction, 2) do
+      repo.transaction(transaction, mode: :immediate)
+    else
+      repo.transaction(transaction)
+    end
   end
 
-  defp revoke_failed_local_assignment_grant(repo, %Session{assignment: %{grant_id: grant_id}}, lease_action, :claimed)
-       when lease_action in [:created, :reclaimed] and is_binary(grant_id) do
-    _result = AccessGrantService.revoke(repo, grant_id)
-    :ok
+  defp claim_local_assignment_transaction_body(repo, %WorkPackage{} = work_package, claim, server, old_session, callbacks) do
+    with {:ok, current_work_package} <- WorkPackageRepository.get(repo, work_package.id),
+         :ok <- validate_local_assignment_scope(repo, current_work_package, claim),
+         {:ok, lease, lease_action} <- ensure_local_assignment_claim_lease(repo, current_work_package, claim),
+         {:ok, result, session, _grant_action} <-
+           claim_local_assignment_session(repo, current_work_package, claim, lease, lease_action),
+         {:ok, active_work_package} <- activate_local_assignment(repo, current_work_package, session),
+         session = Session.with_claim_lease(session, lease),
+         {:ok, claim_event} <- append_local_assignment_claim_event(repo, session, claim, lease, lease_action),
+         {:ok, _released_server} <- release_local_assignment_rebind(repo, server, old_session, claim, callbacks) do
+      local_claim = local_assignment_claim_payload(claim, lease, lease_action, claim_event, active_work_package.status)
+      {:ok, Map.put(result, "local_claim", local_claim), session}
+    end
   end
 
-  defp revoke_failed_local_assignment_grant(repo, %Session{}, :reclaimed, {:recovered, recovery}) do
-    _result = LocalClaimLeases.rollback_worker_grant_recovery(repo, recovery)
-    :ok
+  defp activate_local_assignment(repo, %WorkPackage{status: "ready_for_worker"} = work_package, %Session{} = session) do
+    LifecycleService.transition(repo, work_package, "active", local_assignment_actor(session))
   end
 
-  defp revoke_failed_local_assignment_grant(_repo, %Session{}, _lease_action, _grant_action), do: :ok
+  defp activate_local_assignment(_repo, %WorkPackage{status: status} = work_package, %Session{})
+       when status in [
+              "active",
+              "blocked",
+              "claimed",
+              "planning",
+              "implementing",
+              "reviewing",
+              "ci_waiting",
+              "ready_for_merge",
+              "ready_for_human_merge",
+              "ready_for_architect_merge",
+              "merging_into_phase"
+            ],
+       do: {:ok, work_package}
 
-  defp local_assignment_claim_payload(claim, %ClaimLease{} = lease, lease_action, claim_event) do
+  defp activate_local_assignment(_repo, %WorkPackage{}, %Session{}), do: {:error, :work_package_not_claimable}
+
+  defp local_assignment_actor(%Session{} = session) do
+    %{
+      grant_id: session.assignment.grant_id,
+      grant_role: session.assignment.grant_role,
+      capabilities: session.assignment.capabilities,
+      work_package_id: session.assignment.work_package_id
+    }
+  end
+
+  defp local_assignment_claim_payload(claim, %ClaimLease{} = lease, lease_action, claim_event, lifecycle_state) do
     %{
       "tool" => @local_assignment_claim_tool,
       "mode" => claim.mode,
@@ -485,7 +501,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
       "claim_lease_id" => lease.id,
       "claim_lease_status" => lease.status,
       "claim_lease_action" => Atom.to_string(lease_action),
-      "lifecycle_state" => "active",
+      "lifecycle_state" => lifecycle_state,
       "reason_codes" => local_assignment_claim_reason_codes(lease_action, lease)
     }
     |> drop_nil_values()
@@ -539,20 +555,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
   end
-
-  defp release_failed_local_assignment_lease(repo, %ClaimLease{} = lease, lease_action, _reason)
-       when lease_action in [:created, :reclaimed] do
-    _result = ClaimLeaseService.release(repo, lease.id, reason: "local_assignment_claim_failed")
-    :ok
-  end
-
-  defp release_failed_local_assignment_lease(repo, %ClaimLease{} = lease, :heartbeat, reason)
-       when reason in [:expired, :revoked, :worker_grant_required] do
-    _result = ClaimLeaseService.release(repo, lease.id, reason: "local_assignment_claim_failed")
-    :ok
-  end
-
-  defp release_failed_local_assignment_lease(_repo, %ClaimLease{}, _lease_action, _reason), do: :ok
 
   @spec claim_local_architect_assignment(map(), map(), map()) ::
           {:ok, map(), Session.t()} | {:error, integer(), String.t(), map()}
@@ -1018,8 +1020,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
        "remediation" => "Dispatch WorkPackage #{work_package_id} to create a fresh worker grant, then retry claim_local_assignment for the same WorkPackage."
      }}
   end
-
-  defp local_assignment_claim_error(reason, _work_package_id), do: local_assignment_claim_error(reason)
 
   defp local_architect_assignment_claim_error(:database_busy), do: service_error(:database_busy, @local_architect_assignment_claim_tool)
 
