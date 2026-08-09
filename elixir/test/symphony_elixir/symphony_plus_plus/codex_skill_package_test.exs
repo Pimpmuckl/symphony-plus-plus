@@ -97,6 +97,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
     assert ToolCatalog.worker_tool_input_schema("sync_pr")["required"] == []
     assert Map.has_key?(ToolCatalog.worker_tool_input_schema("sync_pr")["properties"], "recovery")
 
+    plan_schema = ToolCatalog.worker_tool_input_schema("update_task_plan")
+    assert plan_schema["required"] == ["expected_version", "nodes"]
+    assert Map.keys(plan_schema["properties"]) |> Enum.sort() == ["expected_version", "nodes"]
+    assert get_in(plan_schema, ["properties", "nodes", "items", "properties", "status", "enum"]) == ["pending", "in_progress", "done", "skipped"]
+
     for tool <- [
           "update_task_plan",
           "append_finding",
@@ -141,7 +146,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
       assert content =~ "Worker branch: <PREPARED_BRANCH>"
       assert content =~ "Worktree path: <PREPARED_WORKTREE_PATH>"
       assert content =~ ~s({"work_package_id":"<WORK_PACKAGE_ID>"})
-      assert content =~ "update_task_plan(patch, expected_version)"
+      assert content =~ ~s|update_task_plan({"expected_version": <read version>, "nodes": [...]})|
+      refute content =~ "update_task_plan(patch"
       refute content =~ "resolve_blocker"
       assert content =~ "request_scope_expansion(summary, idempotency_key, payload)"
       assert content =~ "attach_pr(url, head_sha)"

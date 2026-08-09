@@ -10,7 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode do
   @primary_key {:id, :string, autogenerate: false}
   @foreign_key_type :string
 
-  @statuses ["pending", "done", "skipped"]
+  @statuses ["pending", "in_progress", "done", "skipped"]
 
   @type t :: %__MODULE__{
           id: String.t() | nil,

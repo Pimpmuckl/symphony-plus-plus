@@ -341,9 +341,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     response =
       mcp_tool(repo, session, "update_task_plan", %{
         "expected_version" => get_in(read_response, ["result", "structuredContent", "version"]),
-        "id" => "p8-001-harness-proof",
-        "title" => "Record deterministic harness proof",
-        "status" => "done"
+        "nodes" => [%{"title" => "Record deterministic harness proof", "status" => "done"}]
       })
 
     assert get_in(response, ["result", "structuredContent", "version"])

@@ -27,7 +27,11 @@ Before coding:
    repair that state. Do not request raw secrets.
 4. Read `read_context()`, `read_task_plan()`, findings, progress,
    acceptance, review, and handoff virtual resources.
-5. Update the virtual task plan with `update_task_plan(patch, expected_version)`.
+5. Update the virtual task plan with
+   `update_task_plan({"expected_version": <read version>, "nodes": [...]})`.
+   Omit a node `id` only to create it with a required `title`; use the
+   returned server-owned `id` for updates. Use `pending`, `in_progress`,
+   `done`, or `skipped`.
 6. Stop and ask the architecture agent if dependency evidence, permission
    grants, or source context are missing.
 7. If you need guidance, ask the parent or architect through ordinary agent

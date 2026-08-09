@@ -27,9 +27,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
             "name" => "update_task_plan",
             "arguments" => %{
               "expected_version" => get_in(read_plan_response, ["result", "structuredContent", "version"]),
-              "id" => " worker-plan-node ",
-              "title" => "Implement MCP worker tools",
-              "status" => "done"
+              "nodes" => [%{"title" => "Implement MCP worker tools", "status" => "done"}]
             }
           }
         },
@@ -38,7 +36,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
       )
 
     assert get_in(plan_response, ["result", "structuredContent", "plan_nodes", Access.at(0), "status"]) == "done"
-    assert get_in(plan_response, ["result", "structuredContent", "plan_nodes", Access.at(0), "id"]) == "worker-plan-node"
+    assert get_in(plan_response, ["result", "structuredContent", "plan_nodes", Access.at(0), "id"]) =~ ~r/^plan_/
 
     finding_response =
       MCPHarness.request(
@@ -377,13 +375,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
           "method" => "tools/call",
           "params" => %{
             "name" => "update_task_plan",
-            "arguments" => %{"work_package_id" => sibling_package.id, "title" => "Mutate sibling"}
+            "arguments" => %{
+              "expected_version" => get_in(plan_response, ["result", "structuredContent", "version"]),
+              "work_package_id" => sibling_package.id,
+              "nodes" => [%{"title" => "Mutate sibling"}]
+            }
           }
         },
         repo: repo,
         session: session
       )
 
+    assert get_in(denied_response, ["error", "code"]) == -32_003
     assert get_in(denied_response, ["error", "data", "reason"]) == "outside_session_scope"
 
     assert {:ok, own_nodes} = PlanningRepository.list_plan_nodes(repo, own_package.id)
@@ -622,9 +625,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
             "name" => "update_task_plan",
             "arguments" => %{
               "expected_version" => get_in(read_plan_response, ["result", "structuredContent", "version"]),
-              "id" => "toon-worker-plan",
-              "title" => "Verify TOON worker context",
-              "status" => "done"
+              "nodes" => [%{"title" => "Verify TOON worker context", "status" => "done"}]
             }
           }
         },
@@ -634,8 +635,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
 
     update_plan_text = get_in(update_plan_response, ["result", "content", Access.at(0), "text"])
     assert update_plan_text =~ "plan_nodes[1]"
-    assert update_plan_text =~ "toon-worker-plan"
-    assert get_in(update_plan_response, ["result", "structuredContent", "plan_nodes", Access.at(0), "id"]) == "toon-worker-plan"
+    assert update_plan_text =~ "Verify TOON worker context"
+    assert get_in(update_plan_response, ["result", "structuredContent", "plan_nodes", Access.at(0), "id"]) =~ ~r/^plan_/
 
     finding_response =
       MCPHarness.request(
@@ -795,7 +796,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
             "name" => "update_task_plan",
             "arguments" => %{
               "expected_version" => version,
-              "patch" => %{"nodes" => [%{"id" => get_in(structured_plan_nodes, [Access.at(0), "id"]), "status" => "done"}]}
+              "nodes" => [%{"id" => get_in(structured_plan_nodes, [Access.at(0), "id"]), "status" => "done"}]
             }
           }
         },

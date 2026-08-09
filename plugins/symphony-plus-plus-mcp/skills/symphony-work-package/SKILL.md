@@ -50,7 +50,10 @@ machine-readable response.
 
 Keep S++ current as the work changes:
 
-- `update_task_plan(patch, expected_version)`.
+- `update_task_plan({"expected_version": <read version>, "nodes": [...]})`.
+  Each node is `{id?, title?, body?, status?}`. Omit `id` to create a node
+  with a required `title`; use the returned server-owned `id` for updates.
+  Statuses are `pending`, `in_progress`, `done`, and `skipped`.
 - `append_finding(finding, idempotency_key)`.
 - `append_progress(event, idempotency_key)`.
 - `add_comment(body)`, `list_comments()`, and

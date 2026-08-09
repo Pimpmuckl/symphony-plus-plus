@@ -668,10 +668,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
             "name" => "update_task_plan",
             "arguments" => %{
               "expected_version" => get_in(read_plan_response, ["result", "structuredContent", "version"]),
-              "id" => "hotfix-worker-note",
-              "title" => "Record hotfix proof",
-              "body" => "Worker updated the virtual plan through MCP.",
-              "status" => "done"
+              "nodes" => [
+                %{
+                  "title" => "Record hotfix proof",
+                  "body" => "Worker updated the virtual plan through MCP.",
+                  "status" => "done"
+                }
+              ]
             }
           }
         },
@@ -681,7 +684,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
 
     assert Enum.any?(
              get_in(plan_response, ["result", "structuredContent", "plan_nodes"]),
-             &(&1["id"] == "hotfix-worker-note" and &1["status"] == "done")
+             &(&1["id"] =~ ~r/^plan_/ and &1["title"] == "Record hotfix proof" and &1["status"] == "done")
            )
 
     finding_response =

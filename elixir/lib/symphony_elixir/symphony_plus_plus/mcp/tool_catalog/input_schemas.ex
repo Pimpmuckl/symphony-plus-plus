@@ -125,25 +125,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
 
   def worker_tool_input_schema("update_task_plan") do
     schema(
-      session_scoped_properties(%{
-        "body" => nullable_string_schema(),
+      %{
         "expected_version" => integer_schema(),
-        "id" => string_schema(),
-        "patch" => plan_patch_schema(),
-        "status" => string_enum_schema(PlanNode.statuses()),
-        "title" => string_schema()
-      }),
-      ["expected_version"]
+        "nodes" => plan_nodes_schema()
+      },
+      ["expected_version", "nodes"]
     )
-    |> always_validate(%{
-      "oneOf" => [
-        %{
-          "required" => ["patch"],
-          "not" => %{"anyOf" => [%{"required" => ["id"]}, %{"required" => ["title"]}, %{"required" => ["body"]}, %{"required" => ["status"]}]}
-        },
-        %{"required" => ["title"], "not" => %{"required" => ["patch"]}}
-      ]
-    })
   end
 
   def worker_tool_input_schema("append_finding") do
@@ -243,6 +230,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   end
 
   @spec unbound_worker_tool_input_schema(tool_name()) :: input_schema()
+  def unbound_worker_tool_input_schema("update_task_plan"), do: worker_tool_input_schema("update_task_plan")
+
   def unbound_worker_tool_input_schema(name) do
     schema = worker_tool_input_schema(name)
 
@@ -975,34 +964,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     }
   end
 
-  defp plan_patch_schema do
+  defp plan_nodes_schema do
     %{
-      "type" => "object",
-      "additionalProperties" => false,
-      "properties" => %{
-        "nodes" => %{
-          "type" => "array",
-          "minItems" => 1,
-          "items" => %{
-            "type" => "object",
-            "additionalProperties" => false,
-            "properties" => %{
-              "id" => string_schema(),
-              "title" => string_schema(),
-              "body" => nullable_string_schema(),
-              "status" => string_enum_schema(PlanNode.statuses())
-            },
-            "anyOf" => [
-              %{"required" => ["title"]},
-              %{
-                "required" => ["id"],
-                "anyOf" => [%{"required" => ["title"]}, %{"required" => ["body"]}, %{"required" => ["status"]}]
-              }
-            ]
+      "type" => "array",
+      "minItems" => 1,
+      "items" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "id" => nonblank_string_schema(),
+          "title" => nonblank_string_schema(),
+          "body" => nullable_string_schema(),
+          "status" => string_enum_schema(PlanNode.statuses())
+        },
+        "anyOf" => [
+          %{"required" => ["title"]},
+          %{
+            "required" => ["id"],
+            "anyOf" => [%{"required" => ["title"]}, %{"required" => ["body"]}, %{"required" => ["status"]}]
           }
-        }
-      },
-      "required" => ["nodes"]
+        ]
+      }
     }
   end
 end
