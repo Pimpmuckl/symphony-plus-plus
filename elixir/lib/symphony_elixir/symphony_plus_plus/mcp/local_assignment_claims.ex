@@ -414,12 +414,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
 
   defp claim_local_assignment_transaction(repo, %WorkPackage{} = work_package, claim, server, old_session, callbacks) do
     transaction = fn ->
-      case claim_local_assignment_transaction_body(repo, work_package, claim, server, old_session, callbacks) do
-        {:ok, result, session} -> {result, session}
-        {:error, code, message, data} -> repo.rollback({:mcp_error, code, message, data})
-        {:tool_error, reason} -> repo.rollback({:tool_error, reason})
-        {:error, reason} -> repo.rollback(reason)
-      end
+      repo
+      |> claim_local_assignment_transaction_body(work_package, claim, server, old_session, callbacks)
+      |> rollback_local_assignment_claim_error(repo)
     end
 
     immediate_transaction(repo, transaction)
@@ -431,6 +428,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp rollback_local_assignment_claim_error({:ok, result, session}, _repo), do: {result, session}
+  defp rollback_local_assignment_claim_error({:error, code, message, data}, repo), do: repo.rollback({:mcp_error, code, message, data})
+  defp rollback_local_assignment_claim_error({:tool_error, reason}, repo), do: repo.rollback({:tool_error, reason})
+  defp rollback_local_assignment_claim_error({:error, reason}, repo), do: repo.rollback(reason)
 
   defp immediate_transaction(repo, transaction) do
     if function_exported?(repo, :transaction, 2) do

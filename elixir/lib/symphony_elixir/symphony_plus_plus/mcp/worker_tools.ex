@@ -38,8 +38,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     WorktreeScope
   }
 
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -500,9 +500,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     with {:ok, %WorkPackage{status: "blocked"} = work_package} <-
            WorkPackageRepository.get(repo, Session.work_package_id(session)),
          {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package.id),
-         :ok <- require_worker_owned_active_blocker(progress_events, blocker_id, session.assignment.grant_id),
+         :ok <-
+           require_worker_owned_active_blocker(
+             progress_events,
+             blocker_id,
+             session.assignment.grant_id
+           ),
          {:ok, result} <- ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, "resolve_blocker"),
-         {:ok, _work_package} <- maybe_unblock_worker_package(repo, session, work_package, progress_events, blocker_id) do
+         {:ok, _work_package} <-
+           maybe_unblock_worker_package(
+             repo,
+             session,
+             work_package,
+             progress_events,
+             blocker_id
+           ) do
       {:ok, result}
     else
       {:ok, %WorkPackage{}} -> {:tool_error, "work_package_not_blocked"}
@@ -576,8 +588,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     }
 
     case ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, "abandon") do
-      {:ok, _result} -> PlanningRepository.get_progress_event_by_idempotency_key(repo, session.assignment.work_package_id, idempotency_key, session.assignment.grant_id)
-      error -> error
+      {:ok, _result} ->
+        PlanningRepository.get_progress_event_by_idempotency_key(
+          repo,
+          session.assignment.work_package_id,
+          idempotency_key,
+          session.assignment.grant_id
+        )
+
+      error ->
+        error
     end
   end
 
