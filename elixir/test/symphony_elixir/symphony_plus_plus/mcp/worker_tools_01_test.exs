@@ -3,7 +3,16 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildScope
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
+
+  defmodule BusyParentRepo do
+    def get(_schema, _id), do: raise(%Exqlite.Error{message: "database is locked"})
+  end
+
+  defmodule BrokenParentRepo do
+    def get(_schema, _id), do: raise(%Exqlite.Error{message: "disk I/O failed"})
+  end
 
   test "worker tools update only the scoped planning state and deny sibling mutations", %{repo: repo} do
     assert {:ok, own_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-WORKER-OWN", kind: "adapter"))
@@ -502,6 +511,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     drifted_context = mcp_tool(repo, session, "read_context", %{})
     assert get_in(drifted_context, ["error", "code"]) == -32_003
     assert get_in(drifted_context, ["error", "data", "reason"]) == "outside_session_scope"
+  end
+
+  test "phase-child context preserves retryable parent lookup failures" do
+    child = %WorkPackage{kind: "phase_child", parent_id: "SYMPP-PARENT", phase_id: "phase-parent"}
+
+    assert {:error, :database_busy} = PhaseChildScope.context_anchor(BusyParentRepo, child)
+    assert {:error, {:storage_failed, "disk I/O failed"}} = PhaseChildScope.context_anchor(BrokenParentRepo, child)
   end
 
   test "progress metadata tools reject non-string required fields", %{repo: repo} do

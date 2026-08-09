@@ -23,7 +23,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   def worker_context(repo, %WorkPackage{} = work_package) do
     with {:ok, work_request} <- WorkRequestService.get(repo, work_package.work_request_id),
          {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
-         {:ok, execution_graph} <- ProductTree.execution_graph(repo, work_request.id) do
+         {:ok, execution_graph} <- ProductTree.execution_graph(repo, work_request.id, work_packages) do
       packages_by_id = Map.new(work_packages, &{&1.id, &1})
 
       direct_dependencies =

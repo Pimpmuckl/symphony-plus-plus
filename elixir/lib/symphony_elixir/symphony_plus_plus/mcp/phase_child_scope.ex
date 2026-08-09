@@ -17,7 +17,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildScope do
          :ok <- require_scope(child, anchor) do
       {:ok, anchor}
     else
-      _error -> {:error, :forbidden}
+      {:error, :not_found} -> {:error, :forbidden}
+      {:error, :phase_scope_not_available} -> {:error, :forbidden}
+      {:tool_error, _reason} -> {:error, :forbidden}
+      {:error, reason} -> {:error, reason}
     end
   end
 
