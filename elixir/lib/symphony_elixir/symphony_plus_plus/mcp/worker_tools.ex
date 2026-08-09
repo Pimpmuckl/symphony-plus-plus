@@ -414,14 +414,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
         })
     }
 
-    run_worker_transaction(repo, fn ->
+    repo
+    |> run_worker_transaction(fn ->
       with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
            :ok <- lock_work_package(repo, Session.work_package_id(session)),
            :ok <- ProgressEvents.reject_ready_evidence_mutation(repo, session, "report_blocker") do
         append_or_replay_blocker_report(repo, session, attrs, idempotency_key)
       end
     end)
+    |> put_reported_blocker_id(blocker_id)
   end
+
+  defp put_reported_blocker_id({:ok, %{"structuredContent" => payload}}, blocker_id) when is_map(payload) do
+    {:ok, ToolResult.agent_tool_result(Map.put(payload, "blocker_id", blocker_id))}
+  end
+
+  defp put_reported_blocker_id(result, _blocker_id), do: result
 
   defp append_or_replay_blocker_report(repo, %Session{} = session, attrs, idempotency_key) do
     case ProgressEvents.existing(repo, session, idempotency_key) do

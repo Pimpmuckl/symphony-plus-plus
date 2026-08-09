@@ -567,7 +567,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
           "params" => %{
             "name" => "report_blocker",
             "arguments" => %{
-              "blocker_id" => "worker-blocker",
               "summary" => "Waiting on scoped evidence",
               "idempotency_key" => "worker-blocker"
             }
@@ -577,6 +576,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
       )
 
     assert get_in(report_response, ["result", "structuredContent", "progress_event", "id"])
+    blocker_id = get_in(report_response, ["result", "structuredContent", "blocker_id"])
+    assert is_binary(blocker_id)
 
     assert {:ok, blocked_package} = WorkPackageRepository.get(repo, package.id)
     assert blocked_package.status == "blocked"
@@ -590,7 +591,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
           "params" => %{
             "name" => "resolve_blocker",
             "arguments" => %{
-              "blocker_id" => "worker-blocker",
+              "blocker_id" => blocker_id,
               "resolution" => "Evidence arrived",
               "summary" => "Scoped evidence received",
               "idempotency_key" => "worker-blocker-resolved"
@@ -605,8 +606,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
     assert unblocked_package.status == "active"
 
     assert {:ok, blocker_events} = PlanningRepository.list_progress_events(repo, package.id)
-    assert Enum.any?(blocker_events, &(&1.payload["blocker_id"] == "worker-blocker" and &1.payload["active"] == true))
-    assert Enum.any?(blocker_events, &(&1.payload["blocker_id"] == "worker-blocker" and &1.payload["active"] == false))
+    assert Enum.any?(blocker_events, &(&1.payload["blocker_id"] == blocker_id and &1.payload["active"] == true))
+    assert Enum.any?(blocker_events, &(&1.payload["blocker_id"] == blocker_id and &1.payload["active"] == false))
 
     abandon_blocker_response =
       Server.handle(
