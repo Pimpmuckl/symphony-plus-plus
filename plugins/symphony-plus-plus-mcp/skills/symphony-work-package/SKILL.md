@@ -99,9 +99,22 @@ S++ explicitly gives scoped context.
   acceptance evidence. Policy-approved no-PR work may submit without a branch
   head; PR-backed or review-required work must use its attached exact head.
 - If `review.md` declares a review requirement, use that provider and its
-  optional arguments. After it succeeds for the attached exact head, call
-  `complete_review(reference?, note?)`. The reference is an opaque provider or
-  human review id; Symphony++ does not interpret provider-specific results.
+  optional arguments. Classify its provider-neutral structured result first.
+  Call `complete_review(reference?, note?)` only after accepting a terminal
+  review result for the attached exact head. The reference is an opaque
+  provider or human review id; Symphony++ does not interpret provider-specific
+  results.
+- When that provider is Review Suite, derive one concise Markdown brief from
+  the already-scoped WorkPackage resources. Treat the available WorkPackage
+  title, engineering scope, allowed file scope, and acceptance criteria as the
+  PR-level contract. Include stop conditions only when the assignment context
+  supplies them, and the parent title and goal only to explain intent. Pass the
+  brief through Review Suite's ordinary `--review-brief` or structured input.
+  Do not persist a duplicate goal or add a Review Suite-specific API.
+- A worker may commit `CONTINUE` only while the frozen WorkPackage contract is
+  unchanged. Return findings, contract ambiguity, `REPLAN`, or `RESLICE` to
+  the architect without calling `complete_review`. Do not create a replacement
+  cycle or package.
 - If `review.md` says no review is required, do not invent one.
 
 ## Ready

@@ -67,6 +67,11 @@ plain.
 
 Before ready:
 1. Run relevant validation.
+   For a Review Suite requirement, build a concise Markdown `review_brief`
+   from the available WorkPackage title, engineering scope, allowed file scope,
+   and acceptance criteria. Include stop conditions only when the assignment
+   context supplies them. Add the parent title and goal only as intent, never
+   as broader authority. Pass it through Review Suite's ordinary interface.
 2. Attach branch metadata with `attach_branch(head_sha)` when the package
    branch pattern is literal; pass `branch` only when the pattern is templated
    or absent.
@@ -80,8 +85,12 @@ Before ready:
    `submit_review_package(summary, tests, artifacts)`. Policy-approved no-PR
    work may omit branch/head metadata; PR-backed or review-required work must
    use its current exact head.
-6. If `review.md` declares a review requirement, complete it for the current
-   exact head and call `complete_review(reference?, note?)`.
+6. If `review.md` declares a review requirement, consume and classify its
+   provider-neutral structured result. Call `complete_review(reference?, note?)`
+   only after accepting a terminal result for the current exact head.
+   Use bounded `CONTINUE` only while the package contract is unchanged; return
+   findings, contract ambiguity, `REPLAN`, or `RESLICE` to the architect
+   without calling `complete_review`.
 7. Call `mark_ready()` only after acceptance criteria, tests, required review,
    progress, findings, branch/PR evidence, and blockers are settled. Do not add
    lifecycle calls only to restate existing evidence. Resolve worker-owned
