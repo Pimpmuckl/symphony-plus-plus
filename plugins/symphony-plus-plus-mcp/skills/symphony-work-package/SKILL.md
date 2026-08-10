@@ -102,6 +102,16 @@ S++ explicitly gives scoped context.
   optional arguments. After it succeeds for the attached exact head, call
   `complete_review(reference?, note?)`. The reference is an opaque provider or
   human review id; Symphony++ does not interpret provider-specific results.
+- When that provider is Review Suite, derive one concise Markdown brief from
+  the already-scoped WorkPackage resources. Treat the WorkPackage title, goal,
+  engineering scope, acceptance criteria, and stop conditions as the PR-level
+  contract; include the parent title and goal only to explain intent. Pass it
+  through Review Suite's ordinary `--review-brief` or structured input. Do not
+  persist a duplicate goal or add a Review Suite-specific API.
+- Read the ordinary structured result. A worker may commit `CONTINUE` only
+  while the frozen WorkPackage contract is unchanged. Stop and return
+  `DECISION_REQUIRED` recommendations for `REPLAN` or `RESLICE`, and contract
+  ambiguity, to the architect. Do not create a replacement cycle or package.
 - If `review.md` says no review is required, do not invent one.
 
 ## Ready
