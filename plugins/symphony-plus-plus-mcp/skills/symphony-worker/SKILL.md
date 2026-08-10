@@ -55,9 +55,10 @@ the package result to that owner without seeking architect-only tools.
 - Run focused validation first, then broader assigned validation.
 - For a WorkPackage Review Suite requirement, pass a concise Markdown brief
   through its ordinary provider-neutral `--review-brief` or structured input.
-  Use the WorkPackage title, goal, engineering scope, acceptance criteria, and
-  stop conditions as the PR contract. Add the parent title and goal only as
-  product intent; they never expand worker authority. Do not require a brief
+  Use the available WorkPackage title, engineering scope, allowed file scope,
+  and acceptance criteria as the PR contract. Include stop conditions only
+  when the assignment context supplies them. Add the parent title and goal only
+  as product intent; they never expand worker authority. Do not require a brief
   for briefless or non-Symphony++ use.
 - If CI/checks exist, make sure they are green or report the exact blocker. If
   no CI exists, say so.
@@ -75,10 +76,11 @@ the package result to that owner without seeking architect-only tools.
 - Policy-approved no-PR work may submit evidence and become ready without a
   branch head. PR-backed or review-required work still needs current exact-head
   evidence.
-- Consume Review Suite's ordinary structured result. A worker may select a
-  bounded `CONTINUE` only when the WorkPackage contract remains unchanged.
-  Return `DECISION_REQUIRED` with `REPLAN` or `RESLICE`, or any contract
-  ambiguity, to the architect without broadening scope.
+- Classify Review Suite's ordinary structured result before recording review
+  completion. Call `complete_review` only for an accepted terminal result on
+  the exact head. A worker may select bounded `CONTINUE` only while the
+  WorkPackage contract is unchanged. Return findings, contract ambiguity,
+  `REPLAN`, or `RESLICE` to the architect without calling `complete_review`.
 
 ## Delivery
 
