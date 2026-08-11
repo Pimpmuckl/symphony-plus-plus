@@ -1,5 +1,5 @@
 import type { ExecutionGraphGroup, ExecutionGraphWorkPackageRef, GraphOrientation } from "./model";
-import { isForwardAdjacentColumn } from "./layout";
+import { isForwardAdjacentColumn, orderWithinRanks } from "./layout";
 
 type EntitySize = { width: number; height: number };
 type ChildDependency = { source: string; target: string };
@@ -47,8 +47,9 @@ export function layoutGroupChildren(
   const depths = orientation === "desktop" && internal.length ? dependencyDepths(keys, internal) : undefined;
   const candidates = [verticalLayout(keys, sizes, metrics)];
   if (depths) {
-    candidates.push(horizontalLayout(keys, sizes, depths, linkedKeys, 2, metrics));
-    candidates.push(horizontalLayout(keys, sizes, depths, linkedKeys, 3, metrics));
+    const rankedKeys = orderWithinRanks(keys, depths, internal);
+    candidates.push(horizontalLayout(rankedKeys, sizes, depths, linkedKeys, 2, metrics));
+    candidates.push(horizontalLayout(rankedKeys, sizes, depths, linkedKeys, 3, metrics));
   }
   return candidates
     .map((candidate) => reserveLocalLanes(candidate, dependencies, childKeys, parentKey, orientation))
@@ -174,10 +175,11 @@ export function projectGroupDependencies(
   groups: Map<string, ExecutionGraphGroup>,
   refs: Map<string, ExecutionGraphWorkPackageRef>,
 ) {
-  return dependencies.map(({ source, target }) => ({
+  const projected = dependencies.map(({ source, target }) => ({
     source: directChildKey(groupId, source, groups, refs),
     target: directChildKey(groupId, target, groups, refs),
   }));
+  return [...new Map(projected.map((dependency) => [JSON.stringify(dependency), dependency])).values()];
 }
 
 function directChildKey(
