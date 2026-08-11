@@ -205,8 +205,11 @@ function directOptions(candidate: RouteCandidate, routing?: ExecutionGraphLayout
     ? candidate.start.count - candidate.start.index - 1
     : candidate.start.index;
   const fanoutLane = routing && sourceFanoutLane(candidate, routing, laneIndex);
+  const trackStart = start.x + BRANCH_STUB;
+  const trackEnd = end.x - BRANCH_STUB;
+  const trackCount = Math.min(Math.max(2, candidate.start.count, candidate.end.count), Math.max(2, Math.floor((trackEnd - trackStart) / WIRE_CLEARANCE) + 1));
   const tracks = fanoutLane === undefined
-    ? spread(start.x + BRANCH_STUB, end.x - BRANCH_STUB, 8)
+    ? spread(trackStart, trackEnd, trackCount)
     : [fanoutLane];
   return tracks
     .map((track) => routeFromPoints([...sourceLeg, { x: track, y: start.y }, { x: track, y: end.y }, ...targetLeg]));

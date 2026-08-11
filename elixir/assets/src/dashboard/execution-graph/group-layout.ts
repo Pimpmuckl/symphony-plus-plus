@@ -1,4 +1,5 @@
 import type { ExecutionGraphGroup, ExecutionGraphWorkPackageRef, GraphOrientation } from "./model";
+import { isForwardAdjacentColumn, orderWithinRanks } from "./layout";
 
 type EntitySize = { width: number; height: number };
 type ChildDependency = { source: string; target: string };
@@ -46,8 +47,9 @@ export function layoutGroupChildren(
   const depths = orientation === "desktop" && internal.length ? dependencyDepths(keys, internal) : undefined;
   const candidates = [verticalLayout(keys, sizes, metrics)];
   if (depths) {
-    candidates.push(horizontalLayout(keys, sizes, depths, linkedKeys, 2, metrics));
-    candidates.push(horizontalLayout(keys, sizes, depths, linkedKeys, 3, metrics));
+    const rankedKeys = orderWithinRanks(keys, depths, internal);
+    candidates.push(horizontalLayout(rankedKeys, sizes, depths, linkedKeys, 2, metrics));
+    candidates.push(horizontalLayout(rankedKeys, sizes, depths, linkedKeys, 3, metrics));
   }
   return candidates
     .map((candidate) => reserveLocalLanes(candidate, dependencies, childKeys, parentKey, orientation))
@@ -135,7 +137,16 @@ function reserveLocalLanes(layout: GroupLayout, dependencies: ChildDependency[],
     if (!childKeys.has(source) || !childKeys.has(target)) return false;
     const from = placements.get(source);
     const to = placements.get(target);
-    return !from || !to || to.row !== from.row || to.column !== from.column + 1;
+    return !from || !to || !isForwardAdjacentColumn(from, to);
+  });
+  const directTrackCounts = new Map<string, number>();
+  dependencies.forEach(({ source, target }) => {
+    const from = placements.get(source);
+    const to = placements.get(target);
+    if (!from || !to || !isForwardAdjacentColumn(from, to)) return;
+    for (const key of [`source:${source}`, `target:${target}`]) {
+      directTrackCounts.set(key, (directTrackCounts.get(key) ?? 0) + 1);
+    }
   });
   const laneCount = local.length;
   const usesBottomLanes = local.some(({ source, target }) => placements.get(source)?.column !== placements.get(target)?.column);
@@ -144,10 +155,11 @@ function reserveLocalLanes(layout: GroupLayout, dependencies: ChildDependency[],
   const leftGutter = leftTracks ? LOCAL_GUTTER + leftTracks * LOCAL_LANE_PITCH : 0;
   const rightGutter = rightTracks ? LOCAL_GUTTER + rightTracks * LOCAL_LANE_PITCH : 0;
   const innerTracks = Math.max(leftTracks, rightTracks);
-  const gapExtra = layout.columnGap === undefined ? 0 : innerTracks * LOCAL_LANE_PITCH;
+  const directTracks = Math.max(0, ...directTrackCounts.values());
+  const gapExtra = layout.columnGap === undefined ? 0 : Math.max(innerTracks, directTracks - 1) * LOCAL_LANE_PITCH;
   const maxColumn = Math.max(0, ...layout.items.map(({ column }) => column));
   const topGutter = orientation === "desktop" ? Math.max(incoming, outgoing) * LOCAL_LANE_PITCH : 0;
-  if (!laneCount && !leftGutter && !rightGutter) return { ...layout, laneCount };
+  if (!laneCount && !leftGutter && !rightGutter && !gapExtra) return { ...layout, laneCount };
   return {
     ...layout,
     items: layout.items.map((item) => ({ ...item, x: item.x + leftGutter + item.column * gapExtra, y: item.y + topGutter })),
@@ -162,11 +174,20 @@ export function projectGroupDependencies(
   dependencies: ChildDependency[],
   groups: Map<string, ExecutionGraphGroup>,
   refs: Map<string, ExecutionGraphWorkPackageRef>,
+  expandedGroupIds: Set<string>,
 ) {
-  return dependencies.map(({ source, target }) => ({
+  const projected = dependencies.map(({ source, target }) => ({
     source: directChildKey(groupId, source, groups, refs),
     target: directChildKey(groupId, target, groups, refs),
   }));
+  const seen = new Set<string>();
+  return projected.filter((dependency) => {
+    if ([dependency.source, dependency.target].some((key) => key.startsWith("group:") && expandedGroupIds.has(key.slice(6)))) return true;
+    const key = JSON.stringify(dependency);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function directChildKey(
