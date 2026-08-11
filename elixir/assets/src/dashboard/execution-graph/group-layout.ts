@@ -138,6 +138,15 @@ function reserveLocalLanes(layout: GroupLayout, dependencies: ChildDependency[],
     const to = placements.get(target);
     return !from || !to || !isForwardAdjacentColumn(from, to);
   });
+  const directTrackCounts = new Map<string, number>();
+  dependencies.forEach(({ source, target }) => {
+    const from = placements.get(source);
+    const to = placements.get(target);
+    if (!from || !to || !isForwardAdjacentColumn(from, to)) return;
+    for (const key of [`source:${source}`, `target:${target}`]) {
+      directTrackCounts.set(key, (directTrackCounts.get(key) ?? 0) + 1);
+    }
+  });
   const laneCount = local.length;
   const usesBottomLanes = local.some(({ source, target }) => placements.get(source)?.column !== placements.get(target)?.column);
   const leftTracks = incoming + laneCount;
@@ -145,10 +154,11 @@ function reserveLocalLanes(layout: GroupLayout, dependencies: ChildDependency[],
   const leftGutter = leftTracks ? LOCAL_GUTTER + leftTracks * LOCAL_LANE_PITCH : 0;
   const rightGutter = rightTracks ? LOCAL_GUTTER + rightTracks * LOCAL_LANE_PITCH : 0;
   const innerTracks = Math.max(leftTracks, rightTracks);
-  const gapExtra = layout.columnGap === undefined ? 0 : innerTracks * LOCAL_LANE_PITCH;
+  const directTracks = Math.max(0, ...directTrackCounts.values());
+  const gapExtra = layout.columnGap === undefined ? 0 : Math.max(innerTracks, directTracks - 1) * LOCAL_LANE_PITCH;
   const maxColumn = Math.max(0, ...layout.items.map(({ column }) => column));
   const topGutter = orientation === "desktop" ? Math.max(incoming, outgoing) * LOCAL_LANE_PITCH : 0;
-  if (!laneCount && !leftGutter && !rightGutter) return { ...layout, laneCount };
+  if (!laneCount && !leftGutter && !rightGutter && !gapExtra) return { ...layout, laneCount };
   return {
     ...layout,
     items: layout.items.map((item) => ({ ...item, x: item.x + leftGutter + item.column * gapExtra, y: item.y + topGutter })),

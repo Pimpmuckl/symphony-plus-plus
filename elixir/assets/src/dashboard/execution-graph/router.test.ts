@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { auditWireGeometry, routeSegments } from "./geometry-audit";
+import { auditWireGeometry, routeConflicts, routeSegments } from "./geometry-audit";
 import { buildExecutionGraphLayout } from "./model";
 import { graphWireRoutes } from "./router";
 
@@ -26,5 +26,6 @@ describe("execution graph router", () => {
       expect(bottom).toBeLessThanOrEqual(Math.max(source.y + source.height, target.y + target.height));
     }
     expect(auditWireGeometry(model, routes.paths).fatal).toEqual([]);
+    expect(routeConflicts(routes.paths)).toEqual([]);
   });
 });
