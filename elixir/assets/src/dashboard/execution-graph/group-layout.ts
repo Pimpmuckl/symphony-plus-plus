@@ -174,12 +174,20 @@ export function projectGroupDependencies(
   dependencies: ChildDependency[],
   groups: Map<string, ExecutionGraphGroup>,
   refs: Map<string, ExecutionGraphWorkPackageRef>,
+  expandedGroupIds: Set<string>,
 ) {
   const projected = dependencies.map(({ source, target }) => ({
     source: directChildKey(groupId, source, groups, refs),
     target: directChildKey(groupId, target, groups, refs),
   }));
-  return [...new Map(projected.map((dependency) => [JSON.stringify(dependency), dependency])).values()];
+  const seen = new Set<string>();
+  return projected.filter((dependency) => {
+    if ([dependency.source, dependency.target].some((key) => key.startsWith("group:") && expandedGroupIds.has(key.slice(6)))) return true;
+    const key = JSON.stringify(dependency);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function directChildKey(

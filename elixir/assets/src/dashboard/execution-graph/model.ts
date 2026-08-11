@@ -448,7 +448,7 @@ function entitySize(
 
 function expandedGroupLayout(groupId: string, orientation: GraphOrientation, expandedGroupIds: Set<string>, context: GraphContext, seen = new Set<string>()) {
   const nextSeen = new Set(seen).add(groupId);
-  const dependencies = projectGroupDependencies(groupId, context.childDependencies, context.groups, context.refs);
+  const dependencies = projectGroupDependencies(groupId, context.childDependencies, context.groups, context.refs, expandedGroupIds);
   return layoutGroupChildren(directChildKeys(groupId, context), (child) => entitySize(child, orientation, expandedGroupIds, context, nextSeen), dependencies, groupKey(groupId), orientation, metrics[orientation]);
 }
 

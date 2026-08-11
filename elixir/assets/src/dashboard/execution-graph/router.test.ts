@@ -10,7 +10,7 @@ describe("execution graph router", () => {
     const { model, routes, sources, target } = adjacentFanIn(5);
     for (const sourceId of sources) {
       const source = model.visibleRects.find(({ key }) => key === `work_package:${sourceId}`)!;
-      const route = routes.paths.find(({ intentIds }) => intentIds.includes(`${sourceId}-0-target`));
+      const route = routes.paths.find(({ intentIds }) => intentIds.includes(`${sourceId}-target`));
       const bottom = Math.max(...routeSegments(route?.path ?? "").flatMap(({ y1, y2 }) => [y1, y2]));
       expect(bottom).toBeLessThanOrEqual(Math.max(source.y + source.height, target.y + target.height));
     }
@@ -34,25 +34,27 @@ describe("execution graph router", () => {
     expect(routeConflicts(routes.paths)).toEqual([]);
   });
 
-  it("does not widen the Group for duplicate projected intents", () => {
-    const single = adjacentFanIn(1);
-    const duplicates = adjacentFanIn(1, 10);
-    const width = ({ model }: ReturnType<typeof adjacentFanIn>) => model.visibleRects.find(({ key }) => key === "group:portal")?.width;
+  it("sizes projected routes from the rendered child expansion state", () => {
+    const width = (model: ReturnType<typeof nestedFanIn>) => model.visibleRects.find(({ key }) => key === "group:parent")?.width;
+    const collapsed = [nestedFanIn(1, false), nestedFanIn(5, false)];
+    const expanded = [nestedFanIn(1, true), nestedFanIn(5, true)];
 
-    expect(width(duplicates)).toBe(width(single));
+    expect(width(collapsed[1])).toBe(width(collapsed[0]));
+    expect(width(expanded[1])).toBeGreaterThan(width(expanded[0]) ?? 0);
+    expect(auditWireGeometry(expanded[1], graphWireRoutes(expanded[1], "desktop").paths).fatal).toEqual([]);
   });
 });
 
-function adjacentFanIn(count: number, copies = 1) {
+function adjacentFanIn(count: number) {
   const sources = Array.from({ length: count }, (_, index) => `source-${index}`);
   const model = buildExecutionGraphLayout({
     groups: [{ id: "portal", title: "Portal", work_package_ids: [...sources, "target"] }],
     work_packages: [...sources, "target"].map((id) => ({ id, group_id: "portal", title: id })),
-    dependency_intents: sources.flatMap((id) => Array.from({ length: copies }, (_, index) => ({
-      id: `${id}-${index}-target`,
+    dependency_intents: sources.map((id) => ({
+      id: `${id}-target`,
       prerequisite: { kind: "work_package" as const, id },
       dependent: { kind: "work_package" as const, id: "target" },
-    }))),
+    })),
   }, "desktop", new Set(["portal"]));
   return {
     model,
@@ -75,4 +77,21 @@ function adjacentMatching(count: number) {
     })),
   }, "desktop", new Set(["portal"]));
   return { model, routes: graphWireRoutes(model, "desktop") };
+}
+
+function nestedFanIn(count: number, expandChildren: boolean) {
+  const sources = Array.from({ length: count }, (_, index) => `source-${index}`);
+  return buildExecutionGraphLayout({
+    groups: [
+      { id: "parent", title: "Parent" },
+      { id: "sources", parent_group_id: "parent", title: "Sources", work_package_ids: sources },
+      { id: "targets", parent_group_id: "parent", title: "Targets", work_package_ids: ["target"] },
+    ],
+    work_packages: [...sources.map((id) => ({ id, group_id: "sources", title: id })), { id: "target", group_id: "targets", title: "target" }],
+    dependency_intents: sources.map((id) => ({
+      id: `${id}-nested-target`,
+      prerequisite: { kind: "work_package" as const, id },
+      dependent: { kind: "work_package" as const, id: "target" },
+    })),
+  }, "desktop", new Set(["parent", ...(expandChildren ? ["sources", "targets"] : [])]));
 }
