@@ -2,23 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { auditWireGeometry, routeConflicts, routeSegments } from "./geometry-audit";
 import { buildExecutionGraphLayout } from "./model";
+import { WIRE_CLEARANCE } from "./portals";
 import { graphWireRoutes } from "./router";
 
 describe("execution graph router", () => {
-  it("keeps vertically stacked adjacent-column fan-in out of the Group's bottom gutter", () => {
-    const sources = ["one", "two", "three", "four", "five"];
-    const model = buildExecutionGraphLayout({
-      groups: [{ id: "portal", title: "Portal", work_package_ids: [...sources, "target"] }],
-      work_packages: [...sources, "target"].map((id) => ({ id, group_id: "portal", title: id })),
-      dependency_intents: sources.map((id) => ({
-        id: `${id}-target`,
-        prerequisite: { kind: "work_package" as const, id },
-        dependent: { kind: "work_package" as const, id: "target" },
-      })),
-    }, "desktop", new Set(["portal"]));
-    const target = model.visibleRects.find(({ key }) => key === "work_package:target")!;
-    const routes = graphWireRoutes(model, "desktop");
-
+  it("keeps adjacent-column fan-in clear of the Group's bottom gutter", () => {
+    const { model, routes, sources, target } = adjacentFanIn(5);
     for (const sourceId of sources) {
       const source = model.visibleRects.find(({ key }) => key === `work_package:${sourceId}`)!;
       const route = routes.paths.find(({ intentIds }) => intentIds.includes(`${sourceId}-target`));
@@ -28,4 +17,32 @@ describe("execution graph router", () => {
     expect(auditWireGeometry(model, routes.paths).fatal).toEqual([]);
     expect(routeConflicts(routes.paths)).toEqual([]);
   });
+
+  it("provides clearance-spaced tracks beyond the old eight-track cap", () => {
+    const { routes, sources } = adjacentFanIn(10);
+    const trackXs = routes.paths.map(({ path }) => routeSegments(path).find(({ x1, x2 }) => x1 === x2)?.x1);
+    const sorted = [...new Set(trackXs)].sort((left, right) => (left ?? 0) - (right ?? 0));
+
+    expect(sorted).toHaveLength(sources.length);
+    expect(Math.min(...sorted.slice(1).map((x, index) => (x ?? 0) - (sorted[index] ?? 0)))).toBeGreaterThanOrEqual(WIRE_CLEARANCE);
+  });
 });
+
+function adjacentFanIn(count: number) {
+  const sources = Array.from({ length: count }, (_, index) => `source-${index}`);
+  const model = buildExecutionGraphLayout({
+    groups: [{ id: "portal", title: "Portal", work_package_ids: [...sources, "target"] }],
+    work_packages: [...sources, "target"].map((id) => ({ id, group_id: "portal", title: id })),
+    dependency_intents: sources.map((id) => ({
+      id: `${id}-target`,
+      prerequisite: { kind: "work_package" as const, id },
+      dependent: { kind: "work_package" as const, id: "target" },
+    })),
+  }, "desktop", new Set(["portal"]));
+  return {
+    model,
+    routes: graphWireRoutes(model, "desktop"),
+    sources,
+    target: model.visibleRects.find(({ key }) => key === "work_package:target")!,
+  };
+}
