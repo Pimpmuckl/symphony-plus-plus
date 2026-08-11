@@ -1,6 +1,7 @@
 import type { ExecutionGraphRouting, GraphEntityRect, GraphOrientation } from "./model";
 
 type EntitySize = { width: number; height: number };
+type ColumnPlacement = { column: number; x: number };
 type LayoutMetrics = {
   cardWidth: number;
   cardHeight: number;
@@ -12,6 +13,10 @@ type LayoutMetrics = {
 
 const RANKS_PER_BAND = 3;
 const BAND_GAP = 112;
+
+export function isForwardAdjacentColumn(source: ColumnPlacement, target: ColumnPlacement) {
+  return target.column === source.column + 1 && target.x > source.x;
+}
 
 export function layoutRootEntities(
   order: string[],

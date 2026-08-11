@@ -1,4 +1,5 @@
 import type { ExecutionGraphGroup, ExecutionGraphWorkPackageRef, GraphOrientation } from "./model";
+import { isForwardAdjacentColumn } from "./layout";
 
 type EntitySize = { width: number; height: number };
 type ChildDependency = { source: string; target: string };
@@ -135,7 +136,7 @@ function reserveLocalLanes(layout: GroupLayout, dependencies: ChildDependency[],
     if (!childKeys.has(source) || !childKeys.has(target)) return false;
     const from = placements.get(source);
     const to = placements.get(target);
-    return !from || !to || to.row !== from.row || to.column !== from.column + 1;
+    return !from || !to || !isForwardAdjacentColumn(from, to);
   });
   const laneCount = local.length;
   const usesBottomLanes = local.some(({ source, target }) => placements.get(source)?.column !== placements.get(target)?.column);

@@ -1,5 +1,6 @@
 import { graphGroupHeaderSize } from "./model";
 import type { GraphEntityRect, GraphOrientation } from "./model";
+import { isForwardAdjacentColumn } from "./layout";
 
 export type Point = { x: number; y: number };
 
@@ -164,9 +165,7 @@ export function portalRouteKind(source: GraphEntityRect, target: GraphEntityRect
 function sameRootRouteKind(source: GraphEntityRect, target: GraphEntityRect) {
   return source.parent_group_id
     && source.parent_group_id === target.parent_group_id
-    && target.row === source.row
-    && target.column === source.column + 1
-    && target.x > source.x
+    && isForwardAdjacentColumn(source, target)
     ? "direct"
     : source.parent_group_id === target.parent_group_id && source.column === target.column && source.y !== target.y
       ? "vertical"
