@@ -89,4 +89,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeLifecyclePreMigrationTest do
     assert cleared.worktree_path == nil
     assert cleared.worktree_target_repo_root == nil
   end
+
+  test "cleanup clears missing managed worktree records after the source checkout is removed", %{repo: repo} do
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-worktree-lifecycle")
+    codex_home = Path.join(fixture.root, "codex-home")
+    worktree_path = Path.join([codex_home, "worktrees", "spp_worktrees", "removed-source", "SYMPP-WT-REMOVED-SOURCE"])
+
+    assert {:ok, package} =
+             Repository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-WT-REMOVED-SOURCE",
+                 kind: "mcp",
+                 repo: Path.join(fixture.root, "removed-source-checkout"),
+                 base_branch: "main",
+                 worktree_path: worktree_path
+               )
+             )
+
+    assert {:ok, cleanup} = WorktreeLifecycle.cleanup(repo, package.id, codex_home: codex_home, force: true)
+    assert cleanup.status == "stale_record_cleared"
+    assert cleanup.repo_root == nil
+    assert {:ok, %{worktree_path: nil, worktree_target_repo_root: nil}} = Repository.get(repo, package.id)
+  end
 end

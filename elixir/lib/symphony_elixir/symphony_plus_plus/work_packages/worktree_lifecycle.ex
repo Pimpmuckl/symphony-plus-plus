@@ -602,22 +602,43 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
   end
 
   defp clear_missing_recorded_worktree(repo, %WorkPackage{} = work_package, worktree_path, opts) do
-    with {:ok, repo_root} <- cleanup_repo_root(opts),
-         opts <- cleanup_context_opts(opts, repo_root, worktree_path),
-         compact_owner? <- compact_worktree_owner?(work_package, repo_root, worktree_path),
-         :ok <- require_missing_recorded_worktree_owner(repo_root, worktree_path, opts, compact_owner?),
-         :ok <- git(repo_root, ["worktree", "prune"], opts),
-         {:ok, updated_work_package} <- Repository.update(repo, work_package.id, cleared_worktree_attrs()) do
-      {:ok, result(updated_work_package, "stale_record_cleared", nil, nil, nil, repo_root)}
+    case cleanup_repo_root(opts) do
+      {:ok, repo_root} ->
+        with opts <- cleanup_context_opts(opts, repo_root, worktree_path),
+             compact_owner? <- compact_worktree_owner?(work_package, repo_root, worktree_path),
+             :ok <- require_missing_recorded_worktree_owner(repo_root, worktree_path, opts, compact_owner?),
+             :ok <- git(repo_root, ["worktree", "prune"], opts) do
+          clear_recorded_worktree(repo, work_package, repo_root)
+        end
+
+      {:error, :invalid_target_repo_root} ->
+        clear_recorded_worktree(repo, work_package, nil)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   defp validate_missing_recorded_worktree_cleanup(%WorkPackage{} = work_package, worktree_path, opts) do
-    with {:ok, repo_root} <- cleanup_repo_root(opts),
-         opts <- cleanup_context_opts(opts, repo_root, worktree_path),
-         compact_owner? <- compact_worktree_owner?(work_package, repo_root, worktree_path),
-         :ok <- require_missing_recorded_worktree_owner(repo_root, worktree_path, opts, compact_owner?) do
-      {:ok, result(work_package, "stale_record_cleared", nil, nil, nil, repo_root)}
+    case cleanup_repo_root(opts) do
+      {:ok, repo_root} ->
+        with opts <- cleanup_context_opts(opts, repo_root, worktree_path),
+             compact_owner? <- compact_worktree_owner?(work_package, repo_root, worktree_path),
+             :ok <- require_missing_recorded_worktree_owner(repo_root, worktree_path, opts, compact_owner?) do
+          {:ok, result(work_package, "stale_record_cleared", nil, nil, nil, repo_root)}
+        end
+
+      {:error, :invalid_target_repo_root} ->
+        {:ok, result(work_package, "stale_record_cleared", nil, nil, nil, nil)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp clear_recorded_worktree(repo, work_package, repo_root) do
+    with {:ok, updated_work_package} <- Repository.update(repo, work_package.id, cleared_worktree_attrs()) do
+      {:ok, result(updated_work_package, "stale_record_cleared", nil, nil, nil, repo_root)}
     end
   end
 
