@@ -34,7 +34,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
           deleted_count: non_neg_integer(),
           deleted_ids: [String.t()]
         }
-  @type delete_error :: Repository.error() | WorkPackageService.error()
+  @type delete_error :: Repository.error() | WorkPackageService.error() | {:worktree_cleanup_failed, WorkPackageService.error()}
   @type retention_error ::
           delete_error()
           | :active_runtime
@@ -248,7 +248,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
   def delete(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
     with {:ok, %WorkRequest{}} <- Repository.get(repo, work_request_id),
          work_package_ids <- archived_work_package_ids(repo, [work_request_id]),
-         :ok <- cleanup_work_package_worktrees(repo, work_package_ids, force: true) do
+         :ok <- cleanup_work_package_worktrees_for_delete(repo, work_package_ids) do
       delete_work_request_with_dependents(repo, work_request_id, work_package_ids)
     end
   rescue
@@ -1024,6 +1024,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
         {:error, reason} -> {:halt, {:error, closeout_worktree_cleanup_error(reason)}}
       end
     end)
+  end
+
+  defp cleanup_work_package_worktrees_for_delete(repo, work_package_ids) do
+    case cleanup_work_package_worktrees(repo, work_package_ids, force: true) do
+      {:error, reason} ->
+        if hard_archived_cleanup_error?(reason),
+          do: {:error, reason},
+          else: {:error, {:worktree_cleanup_failed, reason}}
+
+      :ok ->
+        :ok
+    end
   end
 
   defp closeout_worktree_cleanup_error(:database_busy), do: :database_busy

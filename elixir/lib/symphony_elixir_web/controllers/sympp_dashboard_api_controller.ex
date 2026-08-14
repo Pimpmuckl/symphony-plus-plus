@@ -1608,6 +1608,10 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     error_response(conn, 503, "storage_failed", "Dashboard ledger storage failed")
   end
 
+  defp error_response(conn, {:worktree_cleanup_failed, _reason}) do
+    error_response(conn, 409, "request_delete_cleanup_failed", "Request could not be deleted safely")
+  end
+
   defp error_response(conn, _reason), do: error_response(conn, 500, "dashboard_unavailable", "Dashboard API unavailable")
 
   defp changeset_error_message(%Ecto.Changeset{} = changeset) do
