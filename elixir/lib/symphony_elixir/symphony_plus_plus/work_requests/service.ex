@@ -12,7 +12,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
-  @type error :: Repository.error() | DeliveryCloseout.error() | WorkPackageService.error()
+  @type error ::
+          Repository.error()
+          | DeliveryCloseout.error()
+          | WorkPackageService.error()
+          | {:worktree_cleanup_failed, WorkPackageService.error()}
 
   @spec create(Repository.repo(), map()) :: {:ok, WorkRequest.t()} | {:error, error()}
   def create(repo, attrs), do: notify_dashboard(Repository.create(repo, attrs))
