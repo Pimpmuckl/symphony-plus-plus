@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 function Invoke-LoggedSetupProcess([string]$FilePath, [string[]]$ArgumentList, [string]$WorkingDirectory, [hashtable]$Environment, [string]$LogPrefix, [string]$LogDir, [int]$TimeoutSec) {
+  $TimeoutSec = Get-SymppRemainingTimeoutSec $TimeoutSec $LogPrefix
   New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
   $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
   $stdoutPath = Join-Path $LogDir "$LogPrefix-$stamp.out.log"
@@ -249,7 +250,8 @@ function Get-ArtifactBackendCommand($ArtifactRuntime, $Plan, [string]$DashboardO
   }
 }
 
-function Start-Backend($Plan, [string]$DashboardOrigin, [string]$ElixirDir, [string]$Launcher, [string]$MixCommand, [string]$MiseCommand, [string]$LogDir, [int]$TimeoutSec, [string]$ExpectedContractFingerprint, $ArtifactRuntime = $null, [bool]$ShutdownOnIdle = $false) {
+function Start-Backend($Plan, [string]$DashboardOrigin, [string]$ElixirDir, [string]$Launcher, [string]$MixCommand, [string]$MiseCommand, [string]$LogDir, [int]$TimeoutSec, [string]$ExpectedContractFingerprint, $ArtifactRuntime = $null, [bool]$ShutdownOnIdle = $false, [scriptblock]$OnStarted = $null) {
+  $TimeoutSec = Get-SymppRemainingTimeoutSec $TimeoutSec "backend startup"
   $args = @("sympp.cockpit", "--host", "127.0.0.1", "--port", [string]$Plan.port)
   if (-not [string]::IsNullOrWhiteSpace($DashboardOrigin)) {
     $args += @("--dashboard-origin", $DashboardOrigin)
@@ -278,7 +280,24 @@ function Start-Backend($Plan, [string]$DashboardOrigin, [string]$ElixirDir, [str
   }
 
   $launch = Start-LoggedProcess $command.file $command.args $command.working_directory $command.environment "backend-$($Plan.port)" $LogDir
-  $ready = Wait-Until { Test-HealthySymppBackend $Plan.url } $TimeoutSec
+  $reportedPid = [int]$launch.process.Id
+  if ($OnStarted) {
+    & $OnStarted $reportedPid (Get-ProcessStartIdentity $launch.process)
+  }
+  $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
+  $ready = $false
+  while ([DateTimeOffset]::UtcNow -lt $deadline) {
+    $listenerPid = Get-ManagedListenerPid "backend" ([int]$Plan.port)
+    if ($listenerPid -and [int]$listenerPid -ne $reportedPid) {
+      $reportedPid = [int]$listenerPid
+      if ($OnStarted) {
+        $listenerProcess = Get-Process -Id $reportedPid -ErrorAction SilentlyContinue
+        & $OnStarted $reportedPid (Get-ProcessStartIdentity $listenerProcess)
+      }
+    }
+    if (Test-HealthySymppBackend $Plan.url) { $ready = $true; break }
+    Start-Sleep -Milliseconds 250
+  }
   if (-not $ready) {
     $portOwners = @(Get-TcpPortOwners ([int]$Plan.port))
     $portDetail = "portOwners=$(Format-PortOwners $portOwners)"
@@ -321,6 +340,7 @@ function Test-FrontendDependenciesAvailable([string]$AssetsDir) {
 }
 
 function Install-FrontendDependencies([string]$AssetsDir, [string]$LogDir, [int]$TimeoutSec) {
+  $TimeoutSec = Get-SymppRemainingTimeoutSec $TimeoutSec "frontend dependency installation"
   if (Test-FrontendDependenciesAvailable $AssetsDir) {
     return $null
   }
@@ -356,6 +376,7 @@ function Install-FrontendDependencies([string]$AssetsDir, [string]$LogDir, [int]
 }
 
 function Start-Frontend($Plan, [string]$BackendUrl, [string]$AssetsDir, [string]$LogDir, [int]$TimeoutSec) {
+  $TimeoutSec = Get-SymppRemainingTimeoutSec $TimeoutSec "frontend startup"
   $npm = Resolve-NpmCommand
   $args = @("run", "dev", "--", "--host", "127.0.0.1", "--port", [string]$Plan.port)
   $launch = Start-LoggedProcess $npm $args $AssetsDir @{ SYMPP_API_ORIGIN = $BackendUrl } "frontend-$($Plan.port)" $LogDir

@@ -75,8 +75,9 @@ function Get-SymppArtifactDirectoryFingerprint([string]$Root) {
   }
 
   $lines = New-Object System.Collections.Generic.List[string]
+  $rootPrefix = ([System.IO.Path]::GetFullPath($Root)).TrimEnd("\", "/") + [System.IO.Path]::DirectorySeparatorChar
   foreach ($file in @(Get-ChildItem -LiteralPath $Root -File -Recurse | Sort-Object FullName)) {
-    $relativePath = [System.IO.Path]::GetRelativePath($Root, $file.FullName).Replace("\", "/")
+    $relativePath = ([System.IO.Path]::GetFullPath($file.FullName)).Substring($rootPrefix.Length).Replace("\", "/")
     $lines.Add("$relativePath $(Get-FileSha256 $file.FullName)")
   }
 
@@ -153,7 +154,7 @@ function Copy-SymppArtifactArchive([string]$SourceUri, [string]$TargetPath) {
       if ($uri.Scheme -eq "file") {
         Copy-Item -LiteralPath $uri.LocalPath -Destination $tempPath -Force
       } elseif ($uri.Scheme -eq "https" -or ($uri.Scheme -eq "http" -and $uri.IsLoopback)) {
-        Invoke-WebRequest -Uri $SourceUri -OutFile $tempPath -UseBasicParsing
+        Invoke-SymppBoundedDownload $SourceUri $tempPath 180 "runtime artifact download"
       } else {
         throw "artifact_download_blocked: Symphony++ runtime artifacts must use https, file, or loopback http URLs."
       }
@@ -176,6 +177,9 @@ function Remove-SymppArtifactExtractionStaging([string]$ExtractRoot) {
 }
 
 function Expand-SymppArtifactArchive([string]$ArchivePath, [string]$ExtractRoot, [string]$Entrypoint, [string]$Sha256, [string]$Platform, [string]$SourceRevision, [string]$PluginVersion, [string]$ManifestPath, [string]$DashboardRoot, [string]$DashboardFingerprint) {
+  if (-not ("System.IO.Compression.ZipFile" -as [type])) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+  }
   $parent = Split-Path -Parent $ExtractRoot
   $staging = "$ExtractRoot.extracting-$PID"
   Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
@@ -183,7 +187,7 @@ function Expand-SymppArtifactArchive([string]$ArchivePath, [string]$ExtractRoot,
   try {
     Write-Diagnostic "artifact_extracting: extracting verified Symphony++ runtime artifact to $ExtractRoot."
     $extractWatch = [System.Diagnostics.Stopwatch]::StartNew()
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $staging, $true)
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $staging)
     $extractWatch.Stop()
     $entrypointPath = Join-Path $staging $Entrypoint
     if (-not (Test-Path -LiteralPath $entrypointPath -PathType Leaf)) {
@@ -261,9 +265,11 @@ function Ensure-SymppArtifactPrepared(
   }
 
   $lockWatch = [System.Diagnostics.Stopwatch]::StartNew()
-  $lock = Enter-FileLock (Join-Path $CacheRoot "artifact.lock") 600
+  $lock = Enter-FileLock (Join-Path $CacheRoot "artifact.lock") (Get-SymppRemainingTimeoutSec 600 "artifact cache lock")
   $lockWatch.Stop()
   try {
+    Get-ChildItem -LiteralPath $CacheRoot -File -Filter "artifact.zip.tmp-*" -ErrorAction SilentlyContinue |
+      Remove-Item -Force -ErrorAction SilentlyContinue
     Remove-SymppArtifactExtractionStaging $ExtractRoot
     $readyWatch.Restart()
     $cacheReady = Test-SymppArtifactCacheReady $ExtractRoot $Entrypoint $Sha256 $DashboardRoot $DashboardFingerprint
@@ -279,6 +285,7 @@ function Ensure-SymppArtifactPrepared(
       $sourceUri = Resolve-SymppArtifactSourceUri $Artifact $ManifestPath
       Assert-SymppArtifactSourceUsable $sourceUri
       Write-Diagnostic "artifact_downloading: downloading Symphony++ runtime artifact for $Platform."
+      Write-SymppLauncherTrace "artifact_prepare_begin"
       $downloadWatch = [System.Diagnostics.Stopwatch]::StartNew()
       Copy-SymppArtifactArchive $sourceUri $ArchivePath
       $downloadWatch.Stop()
@@ -311,6 +318,7 @@ function Ensure-SymppArtifactPrepared(
     }
 
     $extraction = Expand-SymppArtifactArchive $ArchivePath $ExtractRoot $Entrypoint $Sha256 $Platform $SourceRevision $PluginVersion $ManifestPath $DashboardRoot $DashboardFingerprint
+    Write-SymppLauncherTrace "artifact_prepare_end"
     $totalWatch.Stop()
     Write-Diagnostic "artifact_phases: cache=miss lock_wait_ms=$([Math]::Round($lockWatch.Elapsed.TotalMilliseconds, 2)) download_ms=$([Math]::Round($downloadMs, 2)) hash_ms=$([Math]::Round($hashMs, 2)) extract_ms=$($extraction.extract_ms) dashboard_proof_ms=$($extraction.dashboard_proof_ms) promotion_ms=$($extraction.promotion_ms) total_ms=$([Math]::Round($totalWatch.Elapsed.TotalMilliseconds, 2))"
     return "cache_prepared"
@@ -442,7 +450,9 @@ function Resolve-LaunchArtifactSelection(
         $ArtifactProbe
       } elseif ($ArtifactProbe.PSObject.Properties["selected_artifact"] -and $ArtifactProbe.selected_artifact -and $ArtifactProbe.runtime) {
         $runtime = $ArtifactProbe.runtime
-        $dashboardRoot = [System.IO.Path]::GetRelativePath([string]$runtime.root, [string]$runtime.dashboard_root)
+        $runtimeRoot = ([System.IO.Path]::GetFullPath([string]$runtime.root)).TrimEnd("\", "/")
+        $dashboardPath = ([System.IO.Path]::GetFullPath([string]$runtime.dashboard_root)).TrimEnd("\", "/")
+        $dashboardRoot = if ([System.StringComparer]::OrdinalIgnoreCase.Equals($runtimeRoot, $dashboardPath)) { "." } else { $dashboardPath.Substring($runtimeRoot.Length + 1) }
         $prepareDetail = Ensure-SymppArtifactPrepared $ArtifactProbe.selected_artifact $ArtifactProbe.manifest_path $ArtifactProbe.cache_root (Join-Path $ArtifactProbe.cache_root "artifact.zip") $runtime.root $runtime.entrypoint_relative $runtime.sha256 $runtime.platform $runtime.source_revision $runtime.plugin_version $dashboardRoot $runtime.dashboard_fingerprint
         if ($prepareDetail -eq "cache_ready") {
           Write-Diagnostic "ready: reusing verified Symphony++ runtime artifact at $($runtime.root)."

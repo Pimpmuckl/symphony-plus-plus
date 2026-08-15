@@ -6,10 +6,11 @@ const http = require("http");
 const net = require("net");
 const path = require("path");
 const readline = require("readline");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const WARM_MISS = 42;
 const POWERSHELL_FALLBACK = 43;
+const COLD_TIMEOUT = 44;
 const GENERATION_SETTLE_MS = 100;
 const HEALTH_CACHE_TTL_MS = 10000;
 const EXTERNAL_HEALTH_CACHE_TTL_MS = 2000;
@@ -306,10 +307,23 @@ function prepareCleanupScript(identity) {
   if (!identity || !/^[0-9a-f]{40}$/i.test(String(identity.revision || "")) ||
       !/^[0-9a-f]{64}$/i.test(String(identity.generationKey || ""))) return null;
   try {
-    const names = fs.readdirSync(__dirname).filter((name) => name.toLowerCase().endsWith(".ps1"));
+    const names = fs.readdirSync(__dirname).filter((name) => name.toLowerCase().endsWith(".ps1")).sort();
     const directory = path.join(resolveHome(), "runtime", "launcher-cleanup", `${identity.revision}-${identity.generationKey.slice(0, 12)}`);
     const marketplaceScripts = path.join(identity.sourceRoot, "plugins", path.basename(path.dirname(identity.pluginRoot)), "scripts");
     fs.mkdirSync(directory, { recursive: true });
+    const script = path.join(directory, "start-sympp-mcp.ps1");
+    const markerFile = path.join(directory, "validated.json");
+    const marker = readJson(markerFile);
+    const fileStamps = () => Object.fromEntries(names.map((name) => [name, [
+      path.join(__dirname, name), path.join(marketplaceScripts, name), path.join(directory, name),
+    ].map((file) => { const stat = fs.statSync(file); return `${stat.size}:${stat.mtimeMs}`; }).join("|")]));
+    let currentStamps = null;
+    try { if (marker) currentStamps = fileStamps(); } catch (_) { }
+    if (marker && marker.generation_key === identity.generationKey && generationStillValid(identity) &&
+        JSON.stringify(marker.files) === JSON.stringify(currentStamps)) {
+      trace("cleanup_scripts_cached");
+      return script;
+    }
     for (const name of names) {
       const source = path.join(__dirname, name);
       const destination = path.join(directory, name);
@@ -331,8 +345,11 @@ function prepareCleanupScript(identity) {
       }
       if (sha256(fs.readFileSync(destination)) !== sourceHash) return null;
     }
-    const script = path.join(directory, "start-sympp-mcp.ps1");
     if (!fs.existsSync(script)) return null;
+    const markerTemp = `${markerFile}.${process.pid}.tmp`;
+    fs.writeFileSync(markerTemp, `${JSON.stringify({ generation_key: identity.generationKey, files: fileStamps() })}\n`);
+    try { fs.unlinkSync(markerFile); } catch (_) { }
+    fs.renameSync(markerTemp, markerFile);
     trace("cleanup_scripts_staged");
     return script;
   } catch (_) {
@@ -636,6 +653,9 @@ async function bridge(identity, state, runtimeFile) {
       return false;
     }
     localLease = createLocalLease(runtimeFile, state, identity);
+    fs.closeSync(startupLock);
+    startupLock = null;
+    trace("generation_attach_lock_released");
     const confirmedState = readJson(runtimeFile);
     const confirmed = resolveStateIdentity(confirmedState, path.resolve(__dirname, ".."), identity);
     if (!confirmed || confirmed.runtimeKey.toLowerCase() !== identity.runtimeKey.toLowerCase()) {
@@ -667,8 +687,6 @@ async function bridge(identity, state, runtimeFile) {
     if (!generationValidForAttachment(identity)) return false;
     closeGenerationWatchers();
     trace("generation_attach_handles_released");
-    fs.closeSync(startupLock);
-    startupLock = null;
     const requestedHeartbeat = Math.max(5, Math.min(540, Number(process.env.SYMPP_MCP_CLIENT_HEARTBEAT_SEC || 300))) * 1000;
     const stale = Number(attachedResponse && attachedResponse.stale_after_ms) || 0;
     const heartbeatMs = stale > 1000 ? Math.min(requestedHeartbeat, Math.max(1000, stale - Math.min(60000, Math.max(1000, Math.floor(stale / 10))))) : requestedHeartbeat;
@@ -719,6 +737,60 @@ async function bridge(identity, state, runtimeFile) {
   }
 }
 
+function runPreparation(executable, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, args, { env: process.env, stdio: ["ignore", "ignore", "inherit"], windowsHide: true });
+    child.once("error", reject);
+    child.once("exit", (code) => resolve(code ?? 1));
+  });
+}
+
+async function prepareColdRuntime() {
+  const configured = process.env.SYMPP_POWERSHELL;
+  const candidates = configured ? [configured] : (process.platform === "win32" ? ["pwsh.exe", "powershell.exe"] : ["pwsh"]);
+  const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "start-sympp-mcp.ps1"), "-PrepareRuntimeOnly", ...process.argv.slice(2)];
+  for (const executable of candidates) {
+    try {
+      const code = await runPreparation(executable, args);
+      if (code !== 0) throw new Error(`Symphony++ cold runtime preparation failed with exit code ${code}.`);
+      return;
+    } catch (error) {
+      if (error && error.code === "ENOENT" && executable !== candidates[candidates.length - 1]) continue;
+      throw error;
+    }
+  }
+}
+
+async function resolveColdRuntime(runtimeFile, pluginRoot) {
+  const lockFile = `${runtimeFile}.cold.lock`;
+  const configuredSeconds = Number(process.env.SYMPP_COLD_START_TIMEOUT_SEC || 300);
+  const deadline = Date.now() + (Number.isFinite(configuredSeconds) ? Math.max(30, Math.min(330, configuredSeconds)) : 300) * 1000;
+  while (Date.now() < deadline) {
+    const state = readJson(runtimeFile);
+    if (state && (!state.publication || state.publication.status === "ready")) {
+      const cachedIdentity = await resolveCachedIdentity(pluginRoot);
+      const identity = resolveStateIdentity(state, pluginRoot, cachedIdentity);
+      if (identity) return { state, identity };
+    }
+    const lock = tryAcquireProcessLock(lockFile);
+    if (lock) {
+      try {
+        const confirmed = readJson(runtimeFile);
+        let confirmedIdentity = null;
+        if (confirmed && (!confirmed.publication || confirmed.publication.status === "ready")) {
+          confirmedIdentity = resolveStateIdentity(confirmed, pluginRoot, await resolveCachedIdentity(pluginRoot));
+        }
+        if (!confirmedIdentity) await prepareColdRuntime();
+      } finally {
+        releaseProcessLock(lockFile, lock);
+      }
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 100 + Math.floor(Math.random() * 201)));
+    }
+  }
+  return null;
+}
+
 async function main() {
   if (Number(process.versions.node.split(".")[0]) < 18) process.exit(POWERSHELL_FALLBACK);
   if (process.argv.includes("--runtime-supported")) {
@@ -728,12 +800,10 @@ async function main() {
 
   await ensureLivenessProbe();
   const runtimeFile = resolveRuntimeFile();
-  const state = readJson(runtimeFile);
-  if (!state) { trace("warm_miss_state"); process.exit(WARM_MISS); }
   const pluginRoot = path.resolve(__dirname, "..");
-  const cachedIdentity = await resolveCachedIdentity(pluginRoot);
-  const identity = resolveStateIdentity(state, pluginRoot, cachedIdentity);
-  if (!identity) { trace("warm_miss_state"); process.exit(WARM_MISS); }
+  const runtime = await resolveColdRuntime(runtimeFile, pluginRoot);
+  if (!runtime) { trace("cold_start_timeout"); process.exit(COLD_TIMEOUT); }
+  const { state, identity } = runtime;
   trace("generation_identity_resolved");
   if (!await bridge(identity, state, runtimeFile)) process.exit(WARM_MISS);
 }

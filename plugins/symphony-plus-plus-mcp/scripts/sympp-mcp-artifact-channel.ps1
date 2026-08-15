@@ -1,5 +1,10 @@
 $ErrorActionPreference = "Stop"
 
+function Invoke-SymppBoundedDownload([string]$SourceUri, [string]$OutFile, [int]$TimeoutSec, [string]$Phase) {
+  $effectiveTimeout = Get-SymppRemainingTimeoutSec $TimeoutSec $Phase
+  Invoke-WebRequest -Uri $SourceUri -OutFile $OutFile -TimeoutSec $effectiveTimeout -UseBasicParsing -ErrorAction Stop
+}
+
 function Resolve-SymppManifestReferenceUri($Reference, [string]$ManifestPath) {
   $value = [string](Get-JsonFirstPathValue $Reference @(
       @("url"),
@@ -35,7 +40,9 @@ function Read-SymppManifestReferenceContent([string]$SourceUri, [string]$Expecte
         $readPath = $uri.LocalPath
       } elseif ($uri.Scheme -eq "https" -or ($uri.Scheme -eq "http" -and $uri.IsLoopback)) {
         $tempPath = Join-Path ([System.IO.Path]::GetTempPath()) "sympp-artifact-manifest-$PID-$([guid]::NewGuid().ToString('N')).json"
-        Invoke-WebRequest -Uri $SourceUri -OutFile $tempPath -UseBasicParsing
+        Write-SymppLauncherTrace "manifest_fetch_begin"
+        Invoke-SymppBoundedDownload $SourceUri $tempPath 45 "artifact manifest download"
+        Write-SymppLauncherTrace "manifest_fetch_end"
         $readPath = $tempPath
       } else {
         throw "artifact_download_blocked: Symphony++ runtime artifact manifests must use https, file, or loopback http URLs."

@@ -1,0 +1,368 @@
+"use strict";
+
+const assert = require("assert/strict");
+const crypto = require("crypto");
+const fs = require("fs");
+const http = require("http");
+const net = require("net");
+const os = require("os");
+const path = require("path");
+const { spawn, spawnSync } = require("child_process");
+
+const pluginRoot = path.resolve(__dirname, "../..");
+const revision = "b".repeat(40);
+const contract = "c".repeat(64);
+const expectedTools = ["fixture.echo", "fixture.health", "fixture.status"];
+
+function sha256(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
+function writeJson(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `${JSON.stringify(value)}\n`); }
+function readJson(file) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (_) { return null; } }
+function delay(milliseconds) { return new Promise((resolve) => setTimeout(resolve, milliseconds)); }
+function percentile(values, ratio) { return values.slice().sort((a, b) => a - b)[Math.ceil(values.length * ratio) - 1]; }
+async function waitFor(predicate, message, timeout = 90000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) { const value = await predicate(); if (value) return value; await delay(25); }
+  throw new Error(message);
+}
+async function terminate(pid) {
+  if (!pid) return;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try { process.kill(pid); } catch (_) { return; }
+    await delay(25);
+  }
+  throw new Error(`Test-owned process ${pid} did not terminate.`);
+}
+async function stopBackend(port, pid) {
+  if (!pid) return;
+  await new Promise((resolve) => {
+    const request = http.get({ hostname: "127.0.0.1", port, path: "/shutdown", timeout: 1000 }, (response) => { response.resume(); response.on("end", resolve); });
+    request.on("error", resolve);
+    request.on("timeout", () => { request.destroy(); resolve(); });
+  });
+  await terminate(pid);
+}
+function terminateTrees(pids) {
+  if (!pids.length) return;
+  spawnSync("taskkill.exe", [...pids.flatMap((pid) => ["/PID", String(pid)]), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+}
+async function removeTree(root) {
+  let lastError;
+  for (let attempt = 0; attempt < 40; attempt++) {
+    try { fs.rmSync(root, { recursive: true, force: true }); return; }
+    catch (error) {
+      if (!["EBUSY", "ENOTEMPTY", "EPERM"].includes(error.code)) throw error;
+      lastError = error;
+      await delay(250);
+    }
+  }
+  throw lastError;
+}
+async function freePort() {
+  const server = net.createServer();
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  const port = server.address().port;
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
+
+async function barrierClient() {
+  const [, , , barrier, launcher] = process.argv;
+  process.stderr.write("BARRIER_READY\n");
+  await waitFor(() => fs.existsSync(barrier), "Client barrier was not released.");
+  const child = spawn("cmd.exe", ["/d", "/s", "/c", launcher], { env: process.env, stdio: "inherit", windowsHide: true });
+  child.on("exit", (code) => process.exit(code ?? 1));
+}
+
+function backendFixture() {
+  return [
+    '"use strict";',
+    'const crypto=require("crypto"),fs=require("fs"),http=require("http"),path=require("path");',
+    'const a=process.argv.slice(2),arg=(n)=>a[a.indexOf(n)+1],port=Number(arg("--port")),stateFile=arg("--state"),release=arg("--release"),bindRelease=arg("--bind-release"),contract=arg("--contract"),revision=arg("--revision"),ledger=arg("--ledger");',
+    'const tools=JSON.parse(Buffer.from(arg("--tools"),"base64").toString("utf8")),leases=new Set();',
+    'const state={pid:process.pid,starts:1,started_at:Date.now(),initialize:0,tools_list:0,attach:0,detach:0,lease_peak:0,active_leases:0};',
+    'function save(){state.active_leases=leases.size;const t=stateFile+".tmp";fs.mkdirSync(path.dirname(stateFile),{recursive:true});fs.writeFileSync(t,JSON.stringify(state));fs.renameSync(t,stateFile);}',
+    'function body(r){return new Promise(q=>{const c=[];r.on("data",x=>c.push(x));r.on("end",()=>q(Buffer.concat(c).toString("utf8")));});}',
+    'function send(r,s,v,h={}){const b=typeof v==="string"?v:JSON.stringify(v);r.writeHead(s,{"Content-Type":"application/json","Content-Length":Buffer.byteLength(b),...h});r.end(b);}',
+    'const server=http.createServer(async(req,res)=>{',
+    ' if(req.url==="/shutdown"){send(res,200,{status:"stopping"});server.close(()=>process.exit(0));return;}',
+    ' if(req.url==="/mcp/readiness"){if(release&&!fs.existsSync(release))return send(res,503,{status:"starting"});return send(res,200,{status:"ok",ledger:{reachable:true},dashboard:{ready:true},source:{revision,mcp_contract:{fingerprint:contract}}});}',
+    ' if(req.url==="/sympp/board")return send(res,200,"<title>Symphony++ Dashboard</title>",{"Content-Type":"text/html"});',
+    ' if(req.url==="/mcp/client-lease"){const p=JSON.parse(await body(req));if(p.action==="attach"){state.attach++;leases.add(p.client_id);}if(p.action==="detach"){state.detach++;leases.delete(p.client_id);}state.lease_peak=Math.max(state.lease_peak,leases.size);save();return send(res,200,{stale_after_ms:600000});}',
+    ' if(req.url==="/mcp"){const p=JSON.parse(await body(req));let result;if(p.method==="initialize"){state.initialize++;result={protocolVersion:"2025-03-26",capabilities:{},serverInfo:{name:"cold-fixture",version:"1"}};}else if(p.method==="tools/list"){state.tools_list++;result={tools:tools.map(name=>({name,description:"fixture",inputSchema:{type:"object"}}))};}else return send(res,404,{error:"missing"});save();return send(res,200,{jsonrpc:"2.0",id:p.id,result},{"Mcp-Session-Id":crypto.randomUUID()});}',
+    ' send(res,404,{error:"not found"});',
+    '});',
+    'fs.mkdirSync(path.dirname(ledger),{recursive:true});fs.writeFileSync(ledger,"fixture");function listen(){if(bindRelease&&!fs.existsSync(bindRelease))return setTimeout(listen,25);server.listen(port,"127.0.0.1",save);}listen();'
+  ].join("\n");
+}
+
+function createArchive(root, shell, backendPort, backendState, releaseFile, bindReleaseFile, ledgerFile) {
+  const source = path.join(root, "artifact-source");
+  const archive = path.join(root, "artifact.zip");
+  fs.mkdirSync(path.join(source, "dashboard"), { recursive: true });
+  fs.writeFileSync(path.join(source, "backend.js"), backendFixture());
+  fs.writeFileSync(path.join(source, "start-runtime.cmd"), '@echo off\r\nnode "%~dp0backend.js" %*\r\n');
+  fs.writeFileSync(path.join(source, "dashboard", "index.html"), "<title>Symphony++ Dashboard</title>");
+  const environment = { ...process.env, FIXTURE_SOURCE: source, FIXTURE_ARCHIVE: archive };
+  const zipped = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem -LiteralPath $env:FIXTURE_SOURCE | Compress-Archive -DestinationPath $env:FIXTURE_ARCHIVE -Force"], { env: environment, windowsHide: true, encoding: "utf8" });
+  assert.equal(zipped.status, 0, zipped.stderr);
+  const dashboardHash = sha256(`index.html ${sha256(fs.readFileSync(path.join(source, "dashboard", "index.html")))}`);
+  return {
+    archive,
+    sha: sha256(fs.readFileSync(archive)),
+    dashboardHash,
+    runtimeArgs: ["--port", "{port}", "--state", backendState, "--release", releaseFile, "--bind-release", bindReleaseFile, "--contract", contract, "--revision", revision, "--ledger", ledgerFile, "--tools", Buffer.from(JSON.stringify(expectedTools)).toString("base64"), "start-runtime.ps1"],
+    backendPort,
+  };
+}
+
+async function createChannelServer(mode, manifestBody, archive) {
+  const counts = { manifest_attempts: 0, manifest_successes: 0, archive_attempts: 0, archive_successes: 0 };
+  let releaseManifest;
+  let releaseArchive;
+  const manifestGate = new Promise((resolve) => { releaseManifest = resolve; });
+  const archiveGate = new Promise((resolve) => { releaseArchive = resolve; });
+  let manifestTail = Promise.resolve();
+  const server = http.createServer((request, response) => {
+    if (request.url === "/manifest.json") {
+      counts.manifest_attempts++;
+      const attempt = counts.manifest_attempts;
+      manifestTail = manifestTail.then(async () => {
+        if (mode === "manifest_death" && attempt === 1) await manifestGate;
+        await delay(250);
+        if (response.destroyed) return;
+        counts.manifest_successes++;
+        response.end(manifestBody());
+      });
+      return;
+    }
+    if (request.url === "/artifact.zip") {
+      counts.archive_attempts++;
+      const attempt = counts.archive_attempts;
+      (async () => {
+        if (mode === "artifact_death" && attempt === 1) await archiveGate;
+        if (response.destroyed) return;
+        counts.archive_successes++;
+        response.end(fs.readFileSync(archive));
+      })();
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  return { server, counts, origin: `http://127.0.0.1:${server.address().port}`, releaseManifest, releaseArchive };
+}
+
+function tracePid(traceDir, event) {
+  if (!fs.existsSync(traceDir)) return 0;
+  for (const name of fs.readdirSync(traceDir)) {
+    if (!name.endsWith(".log")) continue;
+    if (fs.readFileSync(path.join(traceDir, name), "utf8").split(/\r?\n/).includes(event)) return Number(path.basename(name, ".log"));
+  }
+  return 0;
+}
+function traceCount(traceDir, event) {
+  if (!fs.existsSync(traceDir)) return 0;
+  return fs.readdirSync(traceDir).filter((n) => n.endsWith(".log")).reduce((sum, name) => sum + fs.readFileSync(path.join(traceDir, name), "utf8").split(/\r?\n/).filter((line) => line === event).length, 0);
+}
+function traceOrder(traceDir, before, after) {
+  return fs.readdirSync(traceDir).some((name) => {
+    const lines = fs.readFileSync(path.join(traceDir, name), "utf8").split(/\r?\n/);
+    return lines.indexOf(before) >= 0 && lines.indexOf(before) < lines.indexOf(after);
+  });
+}
+
+function startClient(barrier, launcher, environment, clients, latencies, readyTarget) {
+  const child = spawn(process.execPath, [__filename, "--barrier-client", barrier, launcher], { env: environment, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  const client = { child, stderr: "", stdout: "", ready: false, result: null };
+  clients.push(client);
+  child.stderr.on("data", (chunk) => { client.stderr += chunk; });
+  child.stdin.on("error", (error) => { client.stderr += `${error.code || error.message}\n`; });
+  child.stdout.on("data", (chunk) => {
+    client.stdout += chunk;
+    const lines = client.stdout.split(/\r?\n/); client.stdout = lines.pop();
+    for (const line of lines) {
+      if (!line) continue;
+      const response = JSON.parse(line);
+      if (response.id === 1) {
+        latencies.push(Date.now() - readyTarget.startedAt);
+        child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n`);
+      } else if (response.id === 2) {
+        if (!response.result?.tools) { client.stderr += `tools/list failed: ${line}\n`; continue; }
+        assert.deepEqual(response.result.tools.map((tool) => tool.name), expectedTools);
+        client.ready = true;
+        readyTarget.count++;
+        if (readyTarget.count === readyTarget.target) readyTarget.resolve();
+      }
+    }
+  });
+  client.result = new Promise((resolve) => child.on("exit", (code) => resolve({ code, stderr: client.stderr })));
+  return client;
+}
+
+function assertLockFree(shell, startupLock, artifactLock) {
+  const environment = { ...process.env, LOCK_PATHS: `${startupLock}|${artifactLock}` };
+  const result = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", "$env:LOCK_PATHS.Split('|') | ForEach-Object { $f=[IO.File]::Open($_,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None);$f.Dispose() }"], { env: environment, windowsHide: true, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+}
+
+async function runCase(clientCount, shell, mode = "normal") {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `sympp-cold-${mode}-`));
+  const codexHome = path.join(root, "codex");
+  const symppHome = path.join(root, "sympp");
+  const installedRoot = path.join(codexHome, "plugins", "cache", "test-market", "symphony-plus-plus-mcp", "0.1.9");
+  const sourceRoot = path.join(codexHome, ".tmp", "marketplaces", "test-market");
+  const sourcePluginRoot = path.join(sourceRoot, "plugins", "symphony-plus-plus-mcp");
+  const runtimeFile = path.join(symppHome, "runtime", "codex-plugin.json");
+  const traceDir = path.join(root, "trace");
+  const backendState = path.join(root, "backend-state.json");
+  const releaseFile = path.join(root, "backend-ready");
+  const bindReleaseFile = path.join(root, "backend-bind-ready");
+  const ledgerFile = path.join(root, "ledger", "fixture.sqlite3");
+  const barrier = path.join(root, "barrier");
+  const backendPort = await freePort();
+  const clients = [];
+  let channel;
+  let backendPid = 0;
+  try {
+    fs.mkdirSync(traceDir, { recursive: true });
+    for (const destination of [installedRoot, sourcePluginRoot]) {
+      fs.mkdirSync(destination, { recursive: true });
+      fs.cpSync(path.join(pluginRoot, "scripts"), path.join(destination, "scripts"), { recursive: true });
+    }
+    fs.mkdirSync(path.join(installedRoot, "assets"), { recursive: true });
+    fs.cpSync(path.join(pluginRoot, ".codex-plugin"), path.join(installedRoot, ".codex-plugin"), { recursive: true });
+    fs.mkdirSync(path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus"), { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, "elixir", "mix.exs"), "[]");
+    writeJson(path.join(sourceRoot, ".codex-marketplace-install.json"), { revision });
+    writeJson(path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus", "mcp_contract.json"), { mcp_contract_fingerprint: contract });
+    if (mode !== "backend_death") fs.writeFileSync(releaseFile, "ready");
+    if (mode !== "backend_prebind_death") fs.writeFileSync(bindReleaseFile, "ready");
+    const artifact = createArchive(root, shell, backendPort, backendState, releaseFile, bindReleaseFile, ledgerFile);
+    let resolvedManifest;
+    channel = await createChannelServer(mode, () => JSON.stringify(resolvedManifest), artifact.archive);
+    resolvedManifest = {
+      schema_version: 1, source_revision: revision, plugin: { name: "symphony-plus-plus-mcp", version: "0.1.9" },
+      launcher_contract: { mcp_contract_fingerprint: contract },
+      artifacts: [{ platform: "windows-x86_64", source_revision: revision, mcp_contract_fingerprint: contract,
+        url: `${channel.origin}/artifact.zip`, sha256: artifact.sha, entrypoint: "start-runtime.cmd", runtime_args: artifact.runtimeArgs,
+        dashboard: { asset_root: "dashboard", fingerprint: artifact.dashboardHash } }],
+    };
+    const resolvedText = JSON.stringify(resolvedManifest);
+    writeJson(path.join(installedRoot, "assets", "sympp-runtime-artifacts.json"), { schema_version: 1, channel: "test", manifest: { url: `${channel.origin}/manifest.json`, sha256: sha256(resolvedText) } });
+
+    const environment = { ...process.env, SYMPP_HOME: symppHome, SYMPP_RUNTIME_FILE: runtimeFile, SYMPP_LOG_DIR: path.join(root, "logs"), SYMPP_LAUNCHER_TRACE_DIR: traceDir,
+      SYMPP_BACKEND_PORT: String(backendPort), SYMPP_DASHBOARD_PORT: String(backendPort), SYMPP_POWERSHELL: shell,
+      SYMPP_COLD_START_TIMEOUT_SEC: "90", SYMPP_BACKEND_STARTUP_TIMEOUT_SEC: "60", SYMPP_BACKEND_PORT_RELEASE_TIMEOUT_SEC: "1",
+      SYMPP_ELIXIR_SETUP_TIMEOUT_SEC: "30", SYMPP_AUTOSTART_FRONTEND: "0", SYMPP_MCP_HTTP_TIMEOUT_SEC: "30", TEMP: path.join(root, "tmp"), TMP: path.join(root, "tmp") };
+    if (mode === "powershell_fallback") environment.SYMPP_NODE_BRIDGE = "0";
+    for (const name of ["SYMPP_REPO_ROOT", "SYMPP_BACKEND_URL", "SYMPP_DASHBOARD_ORIGIN", "SYMPP_DATABASE", "SYMPP_SOURCE_FALLBACK", "SYMPP_ARTIFACT_RUNTIME"]) delete environment[name];
+    fs.mkdirSync(environment.TEMP, { recursive: true });
+
+    let readyResolve;
+    const readyTarget = { count: 0, target: clientCount, startedAt: 0, resolve: () => readyResolve() };
+    const allReady = new Promise((resolve) => { readyResolve = resolve; });
+    const latencies = [];
+    for (let index = 0; index < clientCount; index++) startClient(barrier, path.join(installedRoot, "scripts", "start-sympp-mcp.cmd"), environment, clients, latencies, readyTarget);
+    await waitFor(() => clients.every((client) => client.stderr.includes("BARRIER_READY")), "Clients did not reach the start barrier.");
+    readyTarget.startedAt = Date.now();
+    for (const client of clients) client.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "cold-herd", version: "1" } } })}\n`);
+    fs.writeFileSync(barrier, "go");
+
+    if (mode === "manifest_death") {
+      const leader = await waitFor(() => channel.counts.manifest_attempts && tracePid(traceDir, "manifest_fetch_begin"), "Manifest leader was not observed.");
+      await terminate(leader); await delay(250); channel.releaseManifest();
+      const replacement = startClient(barrier, path.join(installedRoot, "scripts", "start-sympp-mcp.cmd"), environment, clients, latencies, readyTarget);
+      replacement.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "replacement", version: "1" } } })}\n`);
+    } else if (mode === "artifact_death") {
+      const leader = await waitFor(() => channel.counts.archive_attempts && tracePid(traceDir, "artifact_prepare_begin"), "Artifact leader was not observed.");
+      await terminate(leader); await delay(250); channel.releaseArchive();
+      const replacement = startClient(barrier, path.join(installedRoot, "scripts", "start-sympp-mcp.cmd"), environment, clients, latencies, readyTarget);
+      replacement.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "replacement", version: "1" } } })}\n`);
+    } else if (mode === "backend_death") {
+      const starting = await waitFor(() => { const state = readJson(runtimeFile); const backend = readJson(backendState); return state?.publication?.backend?.pid && backend?.pid === state.publication.backend.pid && state; }, "Bound backend was not published before readiness.");
+      await terminate(Number(starting.publication.leader_pid)); fs.writeFileSync(releaseFile, "ready");
+      const replacement = startClient(barrier, path.join(installedRoot, "scripts", "start-sympp-mcp.cmd"), environment, clients, latencies, readyTarget);
+      replacement.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "replacement", version: "1" } } })}\n`);
+    } else if (mode === "backend_prebind_death") {
+      const starting = await waitFor(() => { const state = readJson(runtimeFile); return state?.publication?.status === "starting" && state.publication.backend?.pid && state; }, "Pre-bind backend process was not published.");
+      await terminate(Number(starting.publication.leader_pid)); fs.writeFileSync(bindReleaseFile, "ready");
+      const replacement = startClient(barrier, path.join(installedRoot, "scripts", "start-sympp-mcp.cmd"), environment, clients, latencies, readyTarget);
+      replacement.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "replacement", version: "1" } } })}\n`);
+    }
+
+    let readyTimeout;
+    try {
+      await Promise.race([allReady, new Promise((_, reject) => { readyTimeout = setTimeout(() => reject(new Error(`Only ${readyTarget.count}/${clientCount} clients completed. ${clients.map((c) => c.stderr).join("\n")}`)), 90000); })]);
+    } finally {
+      clearTimeout(readyTimeout);
+    }
+    for (const client of clients) { try { client.child.stdin.end(); } catch (_) { } }
+    const results = await Promise.all(clients.map((client) => client.result));
+    const expectedFailures = mode.endsWith("_death") ? 1 : 0;
+    assert.equal(results.filter((result) => result.code !== 0).length, expectedFailures, results.map((result) => result.stderr).join("\n"));
+    assert.equal(results.filter((result) => result.code === 0).length, clientCount);
+    await waitFor(() => readJson(backendState)?.active_leases === 0, "Backend leases did not drain.");
+    const state = readJson(runtimeFile);
+    const backend = readJson(backendState);
+    backendPid = backend.pid;
+    const ownersResult = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", "@(Get-NetTCPConnection -LocalPort $env:FIXTURE_PORT -State Listen -ErrorAction Stop | Select-Object -ExpandProperty OwningProcess -Unique) | ConvertTo-Json -Compress"], { env: { ...process.env, FIXTURE_PORT: String(backendPort) }, encoding: "utf8", windowsHide: true });
+    assert.equal(ownersResult.status, 0, ownersResult.stderr);
+    const owners = JSON.parse(ownersResult.stdout.trim());
+    assert.deepEqual([].concat(owners), [backendPid]);
+    assert.equal(state.publication.status, "ready");
+    assert.equal(state.backend.pid, backendPid);
+    assert.equal(backend.starts, 1);
+    assert.equal(backend.initialize, clientCount);
+    assert.equal(backend.tools_list, clientCount);
+    assert.equal(backend.lease_peak, clientCount);
+    assert.equal(backend.active_leases, 0);
+    assert.equal(fs.readdirSync(path.join(symppHome, "runtime", "codex-plugin-leases"), { withFileTypes: true }).filter((entry) => entry.isFile()).length, 0);
+    assert.equal(channel.counts.manifest_successes, mode === "artifact_death" ? 2 : 1);
+    assert.equal(channel.counts.archive_successes, 1);
+    assert.equal(traceCount(traceDir, "artifact_prepare_end"), 1);
+    assert.equal(traceCount(traceDir, "runtime_ready_published"), 1);
+    if (mode === "normal") assert.deepEqual(channel.counts, { manifest_attempts: 1, manifest_successes: 1, archive_attempts: 1, archive_successes: 1 });
+    if (mode === "manifest_death") assert.equal(channel.counts.manifest_attempts, 2);
+    if (mode === "artifact_death") assert.equal(channel.counts.archive_attempts, 2);
+    if (["backend_death", "backend_prebind_death"].includes(mode)) assert.equal(traceCount(traceDir, "backend_adopted"), 1);
+    if (mode === "powershell_fallback") {
+      assert.equal(traceCount(traceDir, "installed_identity_full_validation"), 1);
+      assert.ok(traceOrder(traceDir, "cold_leader_acquired", "installed_identity_full_validation"));
+    }
+    const cacheRoot = path.dirname(state.artifact.root);
+    assertLockFree(shell, path.join(path.dirname(runtimeFile), "codex-plugin.lock"), path.join(cacheRoot, "artifact.lock"));
+    const leftovers = [];
+    for (const directory of [symppHome, environment.TEMP]) if (fs.existsSync(directory)) for (const entry of fs.readdirSync(directory, { recursive: true })) if (/artifact\.zip\.tmp-|\.extracting-|codex-plugin\.json\.tmp-/.test(String(entry))) leftovers.push(entry);
+    assert.deepEqual(leftovers, []);
+    assert.ok(percentile(latencies, 0.95) < 60000 && Math.max(...latencies) < 90000);
+    return { mode, shell: path.basename(shell), clients: clientCount, p95_ms: percentile(latencies, 0.95), max_ms: Math.max(...latencies), manifest: channel.counts.manifest_successes, manifest_attempts: channel.counts.manifest_attempts, artifact: channel.counts.archive_successes, artifact_attempts: channel.counts.archive_attempts, preparations: traceCount(traceDir, "artifact_prepare_end"), backends: backend.starts, pids: 1, listeners: 1, initializes: backend.initialize, tools_list: backend.tools_list, lease_peak: backend.lease_peak, leases_after: backend.active_leases, adopted: traceCount(traceDir, "backend_adopted") };
+  } finally {
+    terminateTrees(clients.filter((client) => client.child.exitCode === null).map((client) => client.child.pid));
+    if (!backendPid) backendPid = readJson(backendState)?.pid || 0;
+    await stopBackend(backendPort, backendPid);
+    if (channel) { channel.server.closeAllConnections?.(); await new Promise((resolve) => channel.server.close(resolve)); }
+    await removeTree(root);
+  }
+}
+
+async function main() {
+  const pwsh = spawnSync("where.exe", ["pwsh.exe"], { encoding: "utf8" }).stdout.trim().split(/\r?\n/)[0];
+  const windowsPowerShell = spawnSync("where.exe", ["powershell.exe"], { encoding: "utf8" }).stdout.trim().split(/\r?\n/)[0];
+  assert.ok(pwsh && windowsPowerShell, "Both pwsh and Windows PowerShell 5.1 are required.");
+  if (process.env.SYMPP_COLD_ONLY) {
+    const result = await runCase(Number(process.env.SYMPP_COLD_CLIENTS || 3), process.env.SYMPP_COLD_SHELL === "powershell" ? windowsPowerShell : pwsh, process.env.SYMPP_COLD_ONLY);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
+  const results = [];
+  results.push(await runCase(30, windowsPowerShell));
+  results.push(await runCase(100, pwsh));
+  results.push(await runCase(200, pwsh));
+  const powershellFallback = await runCase(30, windowsPowerShell, "powershell_fallback");
+  for (const mode of ["manifest_death", "artifact_death", "backend_death", "backend_prebind_death"]) results.push(await runCase(30, pwsh, mode));
+  process.stdout.write(`${JSON.stringify({ matrix: results.slice(0, 3), powershell_fallback: powershellFallback, leader_death: results.slice(3), powershell_5_1: true, pwsh: true, cleanup: true })}\n`);
+}
+
+if (process.argv[2] === "--barrier-client") barrierClient().catch((error) => { process.stderr.write(`${error.stack || error}\n`); process.exit(1); });
+else main().catch((error) => { process.stderr.write(`${error.stack || error}\n`); process.exit(1); });
