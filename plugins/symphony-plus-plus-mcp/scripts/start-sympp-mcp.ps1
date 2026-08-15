@@ -73,7 +73,7 @@ function Test-SymppBackendCommandLine([string]$CommandLine) {
   }
 
   return $CommandLine -match "(?i)(^|[\\/])artifacts[\\/]mcp[\\/]" -and
-    $CommandLine -match "(?i)(start-runtime\.ps1|symphony_elixir(\.bat)?|[\\/]erts-[^\\/]+[\\/]bin[\\/]erl(\.exe)?)"
+    $CommandLine -match "(?i)(start-runtime\.ps1|start-runtime\.(cmd|bat)|symphony_elixir(\.bat)?|[\\/]erts-[^\\/]+[\\/]bin[\\/]erl(\.exe)?)"
 }
 
 function Test-ManagedRuntimeCommandLine([string]$Role, [string]$CommandLine) {
@@ -941,10 +941,18 @@ function Read-RuntimeState([string]$Path) {
     return $null
   }
 
+  $stream = $null
+  $reader = $null
   try {
-    return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+    $stream = [System.IO.FileStream]::new($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+    $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8, $true)
+    return $reader.ReadToEnd() | ConvertFrom-Json
   } catch {
     return $null
+  } finally {
+    if ($null -ne $reader) { $reader.Dispose() }
+    elseif ($null -ne $stream) { $stream.Dispose() }
   }
 }
 
@@ -953,7 +961,181 @@ function Write-RuntimeState([string]$Path, $State) {
   New-Item -ItemType Directory -Path $directory -Force | Out-Null
   $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
   $json = $State | ConvertTo-Json -Depth 12
-  [System.IO.File]::WriteAllText($Path, "$json`n", $utf8NoBom)
+  $temporary = "$Path.tmp-$PID-$([guid]::NewGuid().ToString('N'))"
+  Get-ChildItem -LiteralPath $directory -File -Filter "$(Split-Path -Leaf $Path).tmp-*" -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
+  try {
+    [System.IO.File]::WriteAllText($temporary, "$json`n", $utf8NoBom)
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+      $backup = "$Path.backup-$PID-$([guid]::NewGuid().ToString('N'))"
+      try {
+        [System.IO.File]::Replace($temporary, $Path, $backup)
+      } finally {
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+      }
+    } else {
+      [System.IO.File]::Move($temporary, $Path)
+    }
+  } finally {
+    Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function New-SymppPublicationControls([int]$BackendPort, [int]$DashboardPort, [bool]$BackendPortExplicit, [bool]$DashboardPortExplicit, [string]$BackendUrl, [string]$DashboardOrigin) {
+  return [pscustomobject]@{
+    backend_port = $BackendPort
+    dashboard_port = $DashboardPort
+    backend_port_explicit = $BackendPortExplicit
+    dashboard_port_explicit = $DashboardPortExplicit
+    backend_url = if ([string]::IsNullOrWhiteSpace($BackendUrl)) { $null } else { $BackendUrl.TrimEnd("/") }
+    dashboard_origin = if ([string]::IsNullOrWhiteSpace($DashboardOrigin)) { $null } else { $DashboardOrigin.TrimEnd("/") }
+  }
+}
+
+function Test-SymppPublicationControlsMatch($Recorded, $Expected) {
+  if ($null -eq $Recorded -or $null -eq $Expected) { return $false }
+  foreach ($name in @("backend_port", "dashboard_port", "backend_port_explicit", "dashboard_port_explicit", "backend_url", "dashboard_origin")) {
+    if ([string]$Recorded.$name -ne [string]$Expected.$name) { return $false }
+  }
+  return $true
+}
+
+function Set-SymppRuntimePublication($State, [string]$Status, $InstalledIdentity, $Controls, $BackendPlan, [string]$RuntimeRoot, [string]$BackendStartIdentity = $null) {
+  $backendPid = if ($null -ne $BackendPlan) { $BackendPlan.pid } else { $null }
+  $publication = [pscustomobject]@{
+    status = $Status
+    generation_key = [string]$InstalledIdentity.generation_key
+    installed_revision = [string]$InstalledIdentity.revision
+    leader_pid = $PID
+    leader_process_start_time_utc_ticks = Get-ProcessStartIdentity (Get-Process -Id $PID -ErrorAction SilentlyContinue)
+    published_at = [DateTimeOffset]::UtcNow.ToString("o")
+    controls = $Controls
+    backend = [pscustomobject]@{
+      pid = $backendPid
+      process_start_time_utc_ticks = $BackendStartIdentity
+      port = if ($null -ne $BackendPlan) { $BackendPlan.port } else { $null }
+      runtime_root = $RuntimeRoot
+    }
+  }
+  $State | Add-Member -NotePropertyName schema_version -NotePropertyValue 2 -Force
+  $State | Add-Member -NotePropertyName publication -NotePropertyValue $publication -Force
+  return $State
+}
+
+function Test-SymppPublishedRuntimeReadyLocally($State, [string]$PluginRoot, $InstalledIdentity, $Controls) {
+  if ($null -eq $State -or $null -eq $State.publication -or
+      [string]$State.publication.status -ne "ready" -or
+      -not (Test-SymppPublicationControlsMatch $State.publication.controls $Controls) -or
+      $null -eq $State.backend -or [string]::IsNullOrWhiteSpace([string]$State.backend.url)) {
+    return $false
+  }
+  if ($null -ne $InstalledIdentity -and
+      -not [System.StringComparer]::Ordinal.Equals([string]$State.publication.generation_key, [string]$InstalledIdentity.generation_key)) { return $false }
+  try {
+    if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals([System.IO.Path]::GetFullPath([string]$State.plugin_root), [System.IO.Path]::GetFullPath($PluginRoot))) { return $false }
+    Assert-LoopbackHttpOrigin ([string]$State.backend.url) "published Symphony++ backend"
+  } catch { return $false }
+  if ($null -ne $InstalledIdentity -and
+      (-not [System.StringComparer]::OrdinalIgnoreCase.Equals([string]$State.backend.expected_contract_fingerprint, [string]$InstalledIdentity.contract_fingerprint) -or
+      -not [System.StringComparer]::OrdinalIgnoreCase.Equals([string]$State.backend.contract_fingerprint, [string]$InstalledIdentity.contract_fingerprint))) {
+    return $false
+  }
+  if ($State.backend.managed -eq $true) {
+    $backendPid = 0
+    if (-not [int]::TryParse([string]$State.backend.pid, [ref]$backendPid) -or $backendPid -le 0 -or
+        -not [System.StringComparer]::Ordinal.Equals([string]$State.publication.backend.process_start_time_utc_ticks, (Get-ProcessStartIdentity (Get-Process -Id $backendPid -ErrorAction SilentlyContinue))) -or
+        -not (Test-ProcessOwnsTcpPort $backendPid ([int]$State.backend.port))) {
+      return $false
+    }
+  }
+  return $true
+}
+
+function Enter-SymppColdLeadership([string]$RuntimeFile, [string]$PluginRoot, $InstalledIdentity, $Controls, [DateTime]$Deadline, [bool]$RequireLeadership = $false) {
+  $lockPath = Resolve-StartupLockFile $RuntimeFile
+  $waitTraced = $false
+  while ([DateTime]::UtcNow -lt $Deadline) {
+    if (-not $RequireLeadership -and (Test-SymppPublishedRuntimeReadyLocally (Read-RuntimeState $RuntimeFile) $PluginRoot $InstalledIdentity $Controls)) {
+      Write-SymppLauncherTrace "cold_follower_ready"
+      return [pscustomobject]@{ leader = $false; lock = $null }
+    }
+    $lock = Try-Enter-FileLock $lockPath
+    if ($null -ne $lock) {
+      if (-not $RequireLeadership -and (Test-SymppPublishedRuntimeReadyLocally (Read-RuntimeState $RuntimeFile) $PluginRoot $InstalledIdentity $Controls)) {
+        Exit-FileLock $lock
+        Write-SymppLauncherTrace "cold_follower_ready"
+        return [pscustomobject]@{ leader = $false; lock = $null }
+      }
+      Write-SymppLauncherTrace "cold_leader_acquired"
+      return [pscustomobject]@{ leader = $true; lock = $lock }
+    }
+    if (-not $waitTraced) {
+      Write-SymppLauncherTrace "cold_follower_wait"
+      $waitTraced = $true
+    }
+    Start-Sleep -Milliseconds (Get-Random -Minimum 200 -Maximum 501)
+  }
+  throw "cold_start_timeout: timed out waiting for Symphony++ cold runtime publication."
+}
+
+function Resolve-SymppPendingBackendProcess($State) {
+  $leaderPid = 0
+  if ($null -eq $State.publication -or
+      -not [int]::TryParse([string]$State.publication.leader_pid, [ref]$leaderPid) -or $leaderPid -le 0 -or
+      [string]::IsNullOrWhiteSpace([string]$State.publication.backend.runtime_root)) { return $null }
+  $leader = Get-Process -Id $leaderPid -ErrorAction SilentlyContinue
+  if ($leader -and [System.StringComparer]::Ordinal.Equals(
+      [string]$State.publication.leader_process_start_time_utc_ticks, (Get-ProcessStartIdentity $leader))) { return $null }
+  $cim = Get-Command Get-CimInstance -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $cim) { return $null }
+  $publishedAt = [DateTimeOffset]::MinValue
+  [void][DateTimeOffset]::TryParse([string]$State.publication.published_at, [ref]$publishedAt)
+  $runtimeRoot = ([System.IO.Path]::GetFullPath([string]$State.publication.backend.runtime_root)).Replace("/", "\")
+  $backendPort = [int]$State.publication.backend.port
+  $publishedPid = 0
+  [void][int]::TryParse([string]$State.publication.backend.pid, [ref]$publishedPid)
+  $parentIds = @($leaderPid, $publishedPid) | Where-Object { $_ -gt 0 } | Select-Object -Unique
+  $matches = @($parentIds | ForEach-Object { Get-CimInstance Win32_Process -Filter "ParentProcessId=$_" -ErrorAction SilentlyContinue } | Where-Object {
+      $created = [DateTimeOffset]$_.CreationDate
+      $commandLine = [string]$_.CommandLine
+      $created -ge $publishedAt.AddSeconds(-1) -and (Test-SymppBackendCommandLine $commandLine) -and
+        ($commandLine.Replace("/", "\").IndexOf($runtimeRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+         (Test-ManagedRuntimePortCommandLine "backend" $commandLine $backendPort))
+    })
+  if ($matches.Count -ne 1) { return $null }
+  $process = Get-Process -Id ([int]$matches[0].ProcessId) -ErrorAction SilentlyContinue
+  if (-not $process) { return $null }
+  return [pscustomobject]@{ pid = [int]$process.Id; process_start_time_utc_ticks = Get-ProcessStartIdentity $process }
+}
+
+function Test-SymppStartingBackendOwned($State, $InstalledIdentity, $Controls) {
+  if ($null -eq $State -or $null -eq $State.publication -or [string]$State.publication.status -ne "starting" -or
+      -not [System.StringComparer]::Ordinal.Equals([string]$State.publication.generation_key, [string]$InstalledIdentity.generation_key) -or
+      -not (Test-SymppPublicationControlsMatch $State.publication.controls $Controls)) { return $false }
+  $backendPid = 0
+  $publishedProcess = $null
+  $publishedIdentityMatches = [int]::TryParse([string]$State.publication.backend.pid, [ref]$backendPid) -and $backendPid -gt 0
+  if ($publishedIdentityMatches) {
+    $publishedProcess = Get-Process -Id $backendPid -ErrorAction SilentlyContinue
+    $publishedIdentityMatches = $publishedProcess -and [System.StringComparer]::Ordinal.Equals(
+      [string]$State.publication.backend.process_start_time_utc_ticks, (Get-ProcessStartIdentity $publishedProcess))
+  }
+  if (-not $publishedIdentityMatches) {
+    $pending = Resolve-SymppPendingBackendProcess $State
+    if ($null -eq $pending) { return $false }
+    $backendPid = [int]$pending.pid
+    $State.publication.backend.pid = $backendPid
+    $State.publication.backend.process_start_time_utc_ticks = [string]$pending.process_start_time_utc_ticks
+    $State.backend.pid = $backendPid
+    Write-SymppLauncherTrace "backend_pending_launch_recovered"
+  }
+  if (-not [System.StringComparer]::Ordinal.Equals([string]$State.publication.backend.process_start_time_utc_ticks, (Get-ProcessStartIdentity (Get-Process -Id $backendPid -ErrorAction SilentlyContinue)))) { return $false }
+  $commandLine = Get-ProcessCommandLine $backendPid
+  if (-not (Test-SymppBackendCommandLine $commandLine)) { return $false }
+  $runtimeRoot = [string]$State.publication.backend.runtime_root
+  return -not [string]::IsNullOrWhiteSpace($runtimeRoot) -and
+    ($commandLine.Replace("/", "\").IndexOf(([System.IO.Path]::GetFullPath($runtimeRoot)).Replace("/", "\"), [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+     (Test-ManagedRuntimePortCommandLine "backend" $commandLine ([int]$State.publication.backend.port)))
 }
 
 function Get-ProcessCommandLine([int]$ProcessId) {
@@ -1477,7 +1659,7 @@ function Start-LoggedProcess([string]$FilePath, [string[]]$ArgumentList, [string
   }
 
   try {
-    "" | Set-Content -LiteralPath $stdinPath -Encoding utf8NoBOM
+    [System.IO.File]::WriteAllBytes($stdinPath, [byte[]]@())
     $startArgs = @{
       FilePath = $startCommand.file
       ArgumentList = (Join-ProcessArgumentList @($startCommand.args))
@@ -1975,6 +2157,85 @@ function Resolve-DashboardPlan([int]$PreferredPort, [string]$ConfiguredOrigin, [
   }
 }
 
+function Resolve-SymppLauncherRuntimeInputs([string]$PluginRoot, [string]$BridgeMode, [bool]$Validate, [string]$ExpectedContractFingerprint = $null, [string]$ExpectedSourceRevision = $null) {
+  if ([string]::IsNullOrWhiteSpace($ExpectedContractFingerprint)) {
+    $ExpectedContractFingerprint = Resolve-ExpectedMcpContractFingerprint $PluginRoot
+  }
+  if ([string]::IsNullOrWhiteSpace($ExpectedContractFingerprint)) {
+    throw "Symphony++ MCP launcher expected MCP contract fingerprint could not be resolved from contract JSON or runtime artifact manifest."
+  }
+  if ([string]::IsNullOrWhiteSpace($ExpectedSourceRevision)) {
+    $ExpectedSourceRevision = Resolve-ExpectedSourceRevision $PluginRoot
+  }
+  $artifactRuntimeAllowed = if ($BridgeMode -eq "direct_stdio") { $false } else { Test-ArtifactRuntimeAllowed $PluginRoot }
+  $repoRoot = $null
+  $explicitRepoRoot = -not [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT)
+  $sourceFallbackAllowed = Test-SourceFallbackAllowed $PluginRoot
+  try {
+    $repoRoot = Resolve-RepoRoot
+    $sourceFallbackAllowed = $sourceFallbackAllowed -or ($explicitRepoRoot -and (Test-SymphonySourceRoot $repoRoot))
+  } catch {
+    if ($explicitRepoRoot) { throw }
+  }
+
+  $artifactProbe = $null
+  $artifactProbeError = $null
+  try {
+    $artifactProbe = Resolve-SymppArtifactProbe $PluginRoot $ExpectedSourceRevision $ExpectedContractFingerprint $artifactRuntimeAllowed $sourceFallbackAllowed -ValidateOnly -PrepareArtifact:$Validate
+  } catch { $artifactProbeError = $_ }
+  if ($null -ne $artifactProbeError -or $null -eq $artifactProbe -or @("ready", "artifact_selected") -notcontains $artifactProbe.status) {
+    try {
+      $repoRoot = Resolve-RepoRoot
+      $sourceFallbackAllowed = $sourceFallbackAllowed -or ($explicitRepoRoot -and (Test-SymphonySourceRoot $repoRoot))
+      if ($null -ne $artifactProbeError -and $sourceFallbackAllowed) {
+        $artifactProbe = Resolve-SymppArtifactProbe $PluginRoot $ExpectedSourceRevision $ExpectedContractFingerprint $artifactRuntimeAllowed $sourceFallbackAllowed -ValidateOnly -PrepareArtifact:$Validate
+        $artifactProbeError = $null
+      }
+    } catch {
+      if ($null -ne $artifactProbeError) { throw $artifactProbeError }
+      if ($sourceFallbackAllowed) { throw }
+    }
+  }
+  if ($null -ne $artifactProbeError) { throw $artifactProbeError }
+
+  $artifactValidationLaunchable = @("ready", "artifact_selected") -contains $artifactProbe.status
+  if (-not $artifactValidationLaunchable -and $sourceFallbackAllowed -and [string]::IsNullOrWhiteSpace($repoRoot)) {
+    $repoRoot = Resolve-RepoRoot
+  }
+  $elixirDir = if ([string]::IsNullOrWhiteSpace($repoRoot)) { $null } else { Join-Path $repoRoot "elixir" }
+  $assetsDir = if ([string]::IsNullOrWhiteSpace($elixirDir)) { $null } else { Join-Path $elixirDir "assets" }
+  $mix = if ([string]::IsNullOrWhiteSpace($env:SYMPP_MIX)) { "mix" } else { $env:SYMPP_MIX }
+  $mise = if ([string]::IsNullOrWhiteSpace($env:SYMPP_MISE)) { "mise" } else { $env:SYMPP_MISE }
+  $defaultLauncher = if ($sourceFallbackAllowed -and $elixirDir -and (Test-Path -LiteralPath $elixirDir)) { Resolve-SymppDefaultLauncher $elixirDir $mise } else { "direct" }
+  $launcher = Get-EnvMode "SYMPP_LAUNCHER" $defaultLauncher @("direct", "mise")
+  Set-SymppSourceRevisionEnvironment $ExpectedSourceRevision
+  Set-SymppWindowsNativeTargetEnvironment
+  $defaultMixBuildRoot = if ($sourceFallbackAllowed -and $elixirDir -and (Test-Path -LiteralPath $elixirDir)) { Resolve-SymppDefaultMixBuildRoot $repoRoot $launcher "mcp" $PluginRoot } else { $null }
+  if (-not $Validate -and $sourceFallbackAllowed -and $elixirDir -and (Test-Path -LiteralPath $elixirDir)) {
+    Set-SymppDefaultMixBuildRoot $repoRoot $launcher "mcp" $PluginRoot
+  }
+
+  if ($artifactValidationLaunchable) {
+    $artifactLaunchBlockReason = if ($BridgeMode -eq "direct_stdio") { "direct_stdio_unsupported" } elseif (-not [string]::IsNullOrWhiteSpace($env:SYMPP_DATABASE)) { "database_unsupported" } else { $null }
+    if ($artifactLaunchBlockReason) {
+      Write-Diagnostic "artifact_skipped: verified artifact runtime is not launchable in this configuration. detail=$artifactLaunchBlockReason"
+      $artifactValidationLaunchable = $false
+      $artifactProbe = [pscustomobject]@{ status = "artifact_unavailable"; detail = $artifactLaunchBlockReason; platform = $artifactProbe.platform; manifest_path = $artifactProbe.manifest_path; runtime = $null }
+    }
+  }
+  if (-not $artifactValidationLaunchable -and $sourceFallbackAllowed -and [string]::IsNullOrWhiteSpace($ExpectedSourceRevision) -and $repoRoot) {
+    $ExpectedSourceRevision = Resolve-SymppSourceRevision $repoRoot $PluginRoot
+  }
+  return [pscustomobject]@{
+    expected_contract_fingerprint = $ExpectedContractFingerprint; expected_source_revision = $ExpectedSourceRevision
+    artifact_runtime_allowed = $artifactRuntimeAllowed; source_fallback_allowed = $sourceFallbackAllowed
+    artifact_probe = $artifactProbe; artifact_validation_launchable = $artifactValidationLaunchable
+    repo_root = $repoRoot; elixir_dir = $elixirDir; assets_dir = $assetsDir
+    mix = $mix; mise = $mise; launcher = $launcher; default_mix_build_root = $defaultMixBuildRoot
+    log_dir = Resolve-LogDir
+  }
+}
+
 if ($Help) {
   Write-Usage
   exit 0
@@ -1997,7 +2258,6 @@ if ($CleanupPreparedRuntime) {
 }
 
 $pluginRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-if ($PrepareRuntimeOnly) { [void](Resolve-SymppInstalledMarketplaceIdentity $pluginRoot) }
 $runtimeFile = Resolve-RuntimeFile
 $bridgeMode = Get-EnvMode "SYMPP_MCP_BRIDGE_MODE" "http" @("http", "direct_stdio")
 if (-not $ValidateOnly -and -not $PrepareRuntimeOnly -and $bridgeMode -eq "http" -and [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT)) {
@@ -2012,99 +2272,26 @@ if (-not $ValidateOnly -and -not $PrepareRuntimeOnly -and $bridgeMode -eq "http"
   }
 }
 
-$expectedContractFingerprint = Resolve-ExpectedMcpContractFingerprint $pluginRoot
-if ([string]::IsNullOrWhiteSpace($expectedContractFingerprint)) {
-  throw "Symphony++ MCP launcher expected MCP contract fingerprint could not be resolved from contract JSON or runtime artifact manifest."
-}
-$expectedSourceRevision = Resolve-ExpectedSourceRevision $pluginRoot
-$artifactRuntimeAllowed = if ($bridgeMode -eq "direct_stdio") { $false } else { Test-ArtifactRuntimeAllowed $pluginRoot }
+$installedHttpCold = -not $ValidateOnly -and $bridgeMode -eq "http" -and
+  [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT) -and (Test-SymppInstalledMarketplacePluginRoot $pluginRoot)
+$installedIdentity = $null
+$runtimeInputs = if ($installedHttpCold) { $null } else { Resolve-SymppLauncherRuntimeInputs $pluginRoot $bridgeMode ([bool]$ValidateOnly) }
+$expectedContractFingerprint = if ($installedHttpCold) { $null } else { [string]$runtimeInputs.expected_contract_fingerprint }
+$expectedSourceRevision = if ($installedHttpCold) { $null } else { [string]$runtimeInputs.expected_source_revision }
+$artifactRuntimeAllowed = if ($installedHttpCold) { $true } else { [bool]$runtimeInputs.artifact_runtime_allowed }
 $artifactRuntime = $null
 $runtimeMode = "source"
-
-$repoRoot = $null
-$explicitRepoRoot = -not [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT)
-$sourceFallbackAllowed = Test-SourceFallbackAllowed $pluginRoot
-try {
-  $repoRoot = Resolve-RepoRoot
-  $sourceFallbackAllowed = $sourceFallbackAllowed -or ($explicitRepoRoot -and (Test-SymphonySourceRoot $repoRoot))
-} catch {
-  if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT)) {
-    throw
-  }
-  $repoRoot = $null
-}
-$artifactProbe = $null
-$artifactProbeError = $null
-try {
-  $artifactProbe = Resolve-SymppArtifactProbe $pluginRoot $expectedSourceRevision $expectedContractFingerprint $artifactRuntimeAllowed $sourceFallbackAllowed -ValidateOnly -PrepareArtifact:$ValidateOnly
-} catch {
-  $artifactProbeError = $_
-}
-
-if ($null -ne $artifactProbeError -or $null -eq $artifactProbe -or @("ready", "artifact_selected") -notcontains $artifactProbe.status) {
-  try {
-    $repoRoot = Resolve-RepoRoot
-    $sourceFallbackAllowed = $sourceFallbackAllowed -or ($explicitRepoRoot -and (Test-SymphonySourceRoot $repoRoot))
-    if ($null -ne $artifactProbeError -and $sourceFallbackAllowed) {
-      $artifactProbe = Resolve-SymppArtifactProbe $pluginRoot $expectedSourceRevision $expectedContractFingerprint $artifactRuntimeAllowed $sourceFallbackAllowed -ValidateOnly -PrepareArtifact:$ValidateOnly
-      $artifactProbeError = $null
-    }
-  } catch {
-    if ($null -ne $artifactProbeError) {
-      throw $artifactProbeError
-    }
-    if ($sourceFallbackAllowed) {
-      throw
-    }
-  }
-}
-if ($null -ne $artifactProbeError) {
-  throw $artifactProbeError
-}
-$artifactValidationLaunchable = @("ready", "artifact_selected") -contains $artifactProbe.status
-if (-not $artifactValidationLaunchable -and $sourceFallbackAllowed -and [string]::IsNullOrWhiteSpace($repoRoot)) {
-  $repoRoot = Resolve-RepoRoot
-}
-
-$elixirDir = if ([string]::IsNullOrWhiteSpace($repoRoot)) { $null } else { Join-Path $repoRoot "elixir" }
-$assetsDir = if ([string]::IsNullOrWhiteSpace($elixirDir)) { $null } else { Join-Path $elixirDir "assets" }
-$mix = if ([string]::IsNullOrWhiteSpace($env:SYMPP_MIX)) { "mix" } else { $env:SYMPP_MIX }
-$mise = if ([string]::IsNullOrWhiteSpace($env:SYMPP_MISE)) { "mise" } else { $env:SYMPP_MISE }
-$defaultLauncher = if ($sourceFallbackAllowed -and -not [string]::IsNullOrWhiteSpace($elixirDir) -and (Test-Path -LiteralPath $elixirDir)) { Resolve-SymppDefaultLauncher $elixirDir $mise } else { "direct" }
-$launcher = Get-EnvMode "SYMPP_LAUNCHER" $defaultLauncher @("direct", "mise")
-Set-SymppSourceRevisionEnvironment $expectedSourceRevision
-Set-SymppWindowsNativeTargetEnvironment
-$defaultMixBuildRoot = if ($sourceFallbackAllowed -and -not [string]::IsNullOrWhiteSpace($elixirDir) -and (Test-Path -LiteralPath $elixirDir)) { Resolve-SymppDefaultMixBuildRoot $repoRoot $launcher "mcp" $pluginRoot } else { $null }
-if (-not $ValidateOnly) {
-  if ($sourceFallbackAllowed -and -not [string]::IsNullOrWhiteSpace($elixirDir) -and (Test-Path -LiteralPath $elixirDir)) {
-    Set-SymppDefaultMixBuildRoot $repoRoot $launcher "mcp" $pluginRoot
-  }
-}
-$logDir = Resolve-LogDir
-
-if ($artifactValidationLaunchable) {
-  $artifactLaunchBlockReason = $null
-  if ($bridgeMode -eq "direct_stdio") {
-    $artifactLaunchBlockReason = "direct_stdio_unsupported"
-  } elseif (-not [string]::IsNullOrWhiteSpace($env:SYMPP_DATABASE)) {
-    $artifactLaunchBlockReason = "database_unsupported"
-  }
-
-  if ($artifactLaunchBlockReason) {
-    Write-Diagnostic "artifact_skipped: verified artifact runtime is not launchable in this configuration. detail=$artifactLaunchBlockReason"
-    $artifactValidationLaunchable = $false
-    $artifactProbe = [pscustomobject]@{
-      status = "artifact_unavailable"
-      detail = $artifactLaunchBlockReason
-      platform = $artifactProbe.platform
-      manifest_path = $artifactProbe.manifest_path
-      runtime = $null
-    }
-  }
-}
-if (-not $artifactValidationLaunchable -and $sourceFallbackAllowed -and [string]::IsNullOrWhiteSpace($expectedSourceRevision) -and -not [string]::IsNullOrWhiteSpace($repoRoot)) {
-  $expectedSourceRevision = Resolve-SymppSourceRevision $repoRoot $pluginRoot
-}
+$repoRoot = if ($runtimeInputs) { $runtimeInputs.repo_root } else { $null }
+$sourceFallbackAllowed = if ($runtimeInputs) { [bool]$runtimeInputs.source_fallback_allowed } else { $false }
+$artifactProbe = if ($runtimeInputs) { $runtimeInputs.artifact_probe } else { [pscustomobject]@{ status = "not_probed"; detail = "cold_leader_pending"; runtime = $null } }
+$artifactValidationLaunchable = if ($runtimeInputs) { [bool]$runtimeInputs.artifact_validation_launchable } else { $false }
+$elixirDir = if ($runtimeInputs) { $runtimeInputs.elixir_dir } else { $null }
+$assetsDir = if ($runtimeInputs) { $runtimeInputs.assets_dir } else { $null }
+$mix = if ($runtimeInputs) { $runtimeInputs.mix } else { if ([string]::IsNullOrWhiteSpace($env:SYMPP_MIX)) { "mix" } else { $env:SYMPP_MIX } }
+$mise = if ($runtimeInputs) { $runtimeInputs.mise } else { if ([string]::IsNullOrWhiteSpace($env:SYMPP_MISE)) { "mise" } else { $env:SYMPP_MISE } }
+$launcher = if ($runtimeInputs) { $runtimeInputs.launcher } else { "direct" }
+$defaultMixBuildRoot = if ($runtimeInputs) { $runtimeInputs.default_mix_build_root } else { $null }
+$logDir = if ($runtimeInputs) { $runtimeInputs.log_dir } else { Resolve-LogDir }
 
 if ($ValidateOnly) {
   $validationRuntimeMode = if ($artifactValidationLaunchable) { "artifact" } elseif ($sourceFallbackAllowed) { "source" } else { "blocked" }
@@ -2206,6 +2393,9 @@ $startupLockTimeout = Get-EnvInteger "SYMPP_STARTUP_LOCK_TIMEOUT_SEC" $startupLo
 if (-not [string]::IsNullOrWhiteSpace($env:SYMPP_STARTUP_LOCK_TIMEOUT_SEC) -and $startupLockTimeout -lt $startupLockMinimum) {
   throw "SYMPP_STARTUP_LOCK_TIMEOUT_SEC must be at least $startupLockMinimum for the configured backend/frontend startup waits."
 }
+$coldStartTimeout = Get-EnvInteger "SYMPP_COLD_START_TIMEOUT_SEC" 300 30 330
+$coldStartDeadline = [DateTime]::UtcNow.AddSeconds($coldStartTimeout)
+$publicationControls = New-SymppPublicationControls $backendPort $dashboardPort $backendPortExplicit $dashboardPortExplicit $env:SYMPP_BACKEND_URL $env:SYMPP_DASHBOARD_ORIGIN
 
 $backendLaunch = $null
 $frontendLaunch = $null
@@ -2217,9 +2407,55 @@ $bridgeLeasePath = $null
 $runtimeKey = $null
 $supersededStates = @()
 
-$startupLock = Enter-FileLock (Resolve-StartupLockFile $runtimeFile) $startupLockTimeout
+$startupLock = $null
+if ($installedHttpCold) {
+  Start-SymppColdStartDeadline $coldStartTimeout
+  $requireColdRepair = $false
+  while ($null -eq $startupLock) {
+    $leadership = Enter-SymppColdLeadership $runtimeFile $pluginRoot $installedIdentity $publicationControls $coldStartDeadline $requireColdRepair
+    if ($leadership.leader) {
+      $startupLock = $leadership.lock
+      $installedIdentity = Resolve-SymppInstalledMarketplaceIdentity $pluginRoot
+      $expectedContractFingerprint = [string]$installedIdentity.contract_fingerprint
+      $expectedSourceRevision = [string]$installedIdentity.revision
+      break
+    }
+    if ($PrepareRuntimeOnly) {
+      $installedIdentity = Resolve-SymppInstalledMarketplaceIdentity $pluginRoot -ReadOnly
+      if (Test-SymppPublishedRuntimeReadyLocally (Read-RuntimeState $runtimeFile) $pluginRoot $installedIdentity $publicationControls) { exit 0 }
+      $requireColdRepair = $true
+      continue
+    }
+    if (Invoke-WarmAttachFromRuntimeState $runtimeFile $pluginRoot $backendPort $dashboardPort $backendPortExplicit $dashboardPortExplicit $env:SYMPP_BACKEND_URL $env:SYMPP_DASHBOARD_ORIGIN $bridgeTimeout $clientHeartbeatInterval) { exit 0 }
+    $requireColdRepair = $true
+  }
+} else {
+  $startupLock = Enter-FileLock (Resolve-StartupLockFile $runtimeFile) $startupLockTimeout
+}
 try {
   $runtimeState = Read-RuntimeState $runtimeFile
+  $recoveredBackendPlan = $null
+  if ($installedHttpCold -and $null -ne $runtimeState -and $null -ne $runtimeState.publication -and [string]$runtimeState.publication.status -eq "starting") {
+    if (Test-SymppStartingBackendOwned $runtimeState $installedIdentity $publicationControls) {
+      Write-RuntimeState $runtimeFile $runtimeState
+      $recoveryTimeout = Get-SymppRemainingTimeoutSec $backendTimeout "owned backend recovery"
+      $recoveryHealth = $null
+      $recoveryListenerPid = $null
+      if (Wait-Until {
+          $script:recoveryHealth = Get-SymppBackendHealthWithRetry ([string]$runtimeState.backend.url) 1 0 $true
+          $script:recoveryListenerPid = Get-ManagedListenerPid "backend" ([int]$runtimeState.backend.port)
+          (Test-BackendLaunchCompatible $script:recoveryHealth $expectedContractFingerprint) -and $script:recoveryListenerPid
+        } $recoveryTimeout) {
+        $recoveredBackendPlan = New-ReusedBackendPlan "recovered" ([string]$runtimeState.backend.url) $script:recoveryHealth $true $script:recoveryListenerPid
+        Write-SymppLauncherTrace "backend_adopted"
+      } else {
+        [void](Stop-ManagedRuntimeProcess "backend" $runtimeState.backend.pid ([int]$runtimeState.backend.port))
+        $runtimeState = $null
+      }
+    } else {
+      $runtimeState = $null
+    }
+  }
   $activeLeasesAtStart = @(Get-ActiveBridgeLeases $runtimeFile)
   if ($activeLeasesAtStart.Count -eq 0 -and $null -ne $runtimeState -and $null -ne $runtimeState.backend) {
     $runtimeHealth = Get-SymppBackendHealthWithRetry ([string]$runtimeState.backend.url)
@@ -2237,11 +2473,42 @@ try {
     }
   }
 
-  $backendPlan = Resolve-BackendPlan $backendPort $env:SYMPP_BACKEND_URL $runtimeState $backendPortReleaseTimeout $expectedSourceRevision $expectedContractFingerprint $backendPortExplicit @($dashboardPort)
+  $backendPlan = if ($recoveredBackendPlan) { $recoveredBackendPlan } else {
+    $backendPortReleaseBudget = if ($installedHttpCold) { Get-SymppRemainingTimeoutSec $backendPortReleaseTimeout "backend port release" } else { $backendPortReleaseTimeout }
+    Resolve-BackendPlan $backendPort $env:SYMPP_BACKEND_URL $runtimeState $backendPortReleaseBudget $expectedSourceRevision $expectedContractFingerprint $backendPortExplicit @($dashboardPort)
+  }
+  if ($installedHttpCold -and -not $backendPlan.should_start -and $autostartFrontend -and [string]::IsNullOrWhiteSpace($env:SYMPP_DASHBOARD_ORIGIN)) {
+    $runtimeInputs = Resolve-SymppLauncherRuntimeInputs $pluginRoot $bridgeMode $false $expectedContractFingerprint $expectedSourceRevision
+    $artifactRuntimeAllowed = [bool]$runtimeInputs.artifact_runtime_allowed
+    $sourceFallbackAllowed = [bool]$runtimeInputs.source_fallback_allowed
+    $artifactProbe = $runtimeInputs.artifact_probe
+    $repoRoot = $runtimeInputs.repo_root; $elixirDir = $runtimeInputs.elixir_dir; $assetsDir = $runtimeInputs.assets_dir
+    $mix = $runtimeInputs.mix; $mise = $runtimeInputs.mise; $launcher = $runtimeInputs.launcher; $defaultMixBuildRoot = $runtimeInputs.default_mix_build_root; $logDir = $runtimeInputs.log_dir
+  }
   if ($backendPlan.should_start -and -not $autostartBackend) {
     throw "Backend autostart is disabled and no reusable Symphony++ backend was found at $($backendPlan.url)."
   }
   if ($backendPlan.should_start) {
+    if ($installedHttpCold) {
+      $startingState = [pscustomobject]@{
+        generated_at = [DateTimeOffset]::UtcNow.ToString("o"); plugin_root = $pluginRoot; runtime_mode = "pending"; runtime_kind = "pending"
+        artifact = [pscustomobject]@{ status = "not_probed"; detail = "cold_leader" }
+        backend = [pscustomobject]@{ status = "starting"; url = $backendPlan.url; mcp_url = $backendPlan.mcp_url; port = $backendPlan.port; managed = $true; pid = $null; expected_source_revision = $expectedSourceRevision; expected_contract_fingerprint = $expectedContractFingerprint; contract_fingerprint = $null }
+        frontend = [pscustomobject]@{ status = "starting"; origin = $null; url = $null; port = $null; managed = $false; pid = $null }
+      }
+      [void](Set-SymppRuntimePublication $startingState "starting" $installedIdentity $publicationControls $backendPlan $null)
+      Write-RuntimeState $runtimeFile $startingState
+      Write-SymppLauncherTrace "runtime_starting_published"
+      $runtimeInputs = Resolve-SymppLauncherRuntimeInputs $pluginRoot $bridgeMode $false $expectedContractFingerprint $expectedSourceRevision
+      $expectedContractFingerprint = [string]$runtimeInputs.expected_contract_fingerprint
+      $expectedSourceRevision = [string]$runtimeInputs.expected_source_revision
+      $artifactRuntimeAllowed = [bool]$runtimeInputs.artifact_runtime_allowed
+      $sourceFallbackAllowed = [bool]$runtimeInputs.source_fallback_allowed
+      $artifactProbe = $runtimeInputs.artifact_probe
+      $artifactValidationLaunchable = [bool]$runtimeInputs.artifact_validation_launchable
+      $repoRoot = $runtimeInputs.repo_root; $elixirDir = $runtimeInputs.elixir_dir; $assetsDir = $runtimeInputs.assets_dir
+      $mix = $runtimeInputs.mix; $mise = $runtimeInputs.mise; $launcher = $runtimeInputs.launcher; $defaultMixBuildRoot = $runtimeInputs.default_mix_build_root; $logDir = $runtimeInputs.log_dir
+    }
     $artifactSelection = Resolve-LaunchArtifactSelection $pluginRoot $repoRoot $artifactProbe $expectedSourceRevision $expectedContractFingerprint $artifactRuntimeAllowed $sourceFallbackAllowed
     $artifactRuntime = $artifactSelection.artifact_runtime
     $runtimeMode = [string]$artifactSelection.runtime_mode
@@ -2283,7 +2550,24 @@ try {
     }
     $backendDashboardOrigin = if ($runtimeMode -eq "artifact" -and [string]$dashboardPlan.status -eq "artifact_static") { $null } else { $dashboardPlan.origin }
     $backendShutdownOnIdle = Test-BackendShouldShutdownOnIdle $backendPlan $dashboardPlan $runtimeMode
-    $backendLaunch = Start-Backend $backendPlan $backendDashboardOrigin $elixirDir $launcher $mix $mise $logDir $backendTimeout $expectedContractFingerprint $artifactRuntime $backendShutdownOnIdle
+    $startingRuntimeRoot = if ($runtimeMode -eq "artifact") { [string]$artifactRuntime.root } else { [string]$repoRoot }
+    if ($installedHttpCold) {
+      $startingState.runtime_mode = $runtimeMode; $startingState.runtime_kind = $runtimeMode
+      $startingState.artifact = if ($artifactRuntime) { [pscustomobject]@{ status = "ready"; root = $artifactRuntime.root; entrypoint = $artifactRuntime.entrypoint; sha256 = $artifactRuntime.sha256; platform = $artifactRuntime.platform; manifest_path = $artifactRuntime.manifest_path } } else { $artifactProbe }
+      $startingState.frontend.status = if ($runtimeMode -eq "artifact") { "artifact_static" } else { "starting" }
+      $startingState.frontend.origin = if ($runtimeMode -eq "artifact") { $backendPlan.url } else { $dashboardPlan.origin }
+      [void](Set-SymppRuntimePublication $startingState "starting" $installedIdentity $publicationControls $backendPlan $startingRuntimeRoot)
+      Write-RuntimeState $runtimeFile $startingState
+    }
+    $onBackendStarted = if ($installedHttpCold) { {
+        param($StartedPid, $StartIdentity)
+        $backendPlan.pid = $StartedPid; $startingState.backend.pid = $StartedPid
+        [void](Set-SymppRuntimePublication $startingState "starting" $installedIdentity $publicationControls $backendPlan $startingRuntimeRoot $StartIdentity)
+        Write-RuntimeState $runtimeFile $startingState
+      } } else { $null }
+    Write-SymppLauncherTrace "backend_start_begin"
+    $backendLaunch = Start-Backend $backendPlan $backendDashboardOrigin $elixirDir $launcher $mix $mise $logDir $backendTimeout $expectedContractFingerprint $artifactRuntime $backendShutdownOnIdle $onBackendStarted
+    Write-SymppLauncherTrace "backend_start_end"
     $backendPlan.status = "started"
     $backendPlan.pid = $backendLaunch.pid
     $backendPlan.source_revision = $backendLaunch.source_revision
@@ -2337,6 +2621,8 @@ try {
         platform = $artifactRuntime.platform
         manifest_path = $artifactRuntime.manifest_path
       }
+    } elseif ($null -ne $runtimeState -and $null -ne $runtimeState.artifact) {
+      $runtimeState.artifact
     } else {
       [pscustomobject]@{
         status = $artifactProbe.status
@@ -2385,7 +2671,13 @@ try {
     superseded = if ($supersededStates.Count -gt 0) { $supersededStates[0] } else { $null }
     superseded_runtimes = $supersededStates
   }
+  if ($installedHttpCold) {
+    $readyRoot = if ($runtimeMode -eq "artifact" -and $artifactRuntime) { [string]$artifactRuntime.root } elseif ($repoRoot) { [string]$repoRoot } else { [string]$state.artifact.root }
+    $readyStartIdentity = Get-ProcessStartIdentity (Get-Process -Id ([int]$state.backend.pid) -ErrorAction SilentlyContinue)
+    [void](Set-SymppRuntimePublication $state "ready" $installedIdentity $publicationControls $backendPlan $readyRoot $readyStartIdentity)
+  }
   Write-RuntimeState $runtimeFile $state
+  if ($installedHttpCold) { Write-SymppLauncherTrace "runtime_ready_published" }
   if (-not $PrepareRuntimeOnly) {
     $bridgeLeasePath = New-BridgeLease $runtimeFile $backendPlan $dashboardPlan $runtimeKey
   }

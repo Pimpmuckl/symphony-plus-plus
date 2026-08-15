@@ -127,6 +127,14 @@ function Get-SymppInstalledIdentityCachePath([string]$PluginRoot) {
   return Join-Path (Resolve-SymppPluginHome) "runtime/launcher-validation/$key.json"
 }
 
+function Test-SymppInstalledMarketplacePluginRoot([string]$PluginRoot) {
+  $packageRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($PluginRoot))
+  $marketplaceRoot = Split-Path -Parent $packageRoot
+  $cacheRoot = Split-Path -Parent $marketplaceRoot
+  $pluginsRoot = Split-Path -Parent $cacheRoot
+  return (Split-Path -Leaf $cacheRoot) -eq "cache" -and (Split-Path -Leaf $pluginsRoot) -eq "plugins"
+}
+
 function Read-SymppInstalledIdentityCache([string]$CachePath, [string]$PluginRoot, [string]$SourceRoot, [string]$GenerationKey) {
   if ([string]::IsNullOrWhiteSpace($GenerationKey) -or -not (Test-Path -LiteralPath $CachePath -PathType Leaf)) { return $null }
   try {
@@ -158,13 +166,13 @@ function Write-SymppInstalledIdentityCache([string]$CachePath, $Identity) {
   }
 }
 
-function Resolve-SymppInstalledMarketplaceIdentity([string]$PluginRoot) {
+function Resolve-SymppInstalledMarketplaceIdentity([string]$PluginRoot, [switch]$ReadOnly) {
   $versionRoot = [System.IO.Path]::GetFullPath($PluginRoot)
   $packageRoot = Split-Path -Parent $versionRoot
   $marketplaceRoot = Split-Path -Parent $packageRoot
   $cacheRoot = Split-Path -Parent $marketplaceRoot
   $pluginsRoot = Split-Path -Parent $cacheRoot
-  if ((Split-Path -Leaf $cacheRoot) -ne "cache" -or (Split-Path -Leaf $pluginsRoot) -ne "plugins") { return $null }
+  if (-not (Test-SymppInstalledMarketplacePluginRoot $PluginRoot)) { return $null }
 
   $codexHome = Split-Path -Parent $pluginsRoot
   $marketplaceName = Split-Path -Leaf $marketplaceRoot
@@ -204,7 +212,9 @@ function Resolve-SymppInstalledMarketplaceIdentity([string]$PluginRoot) {
     revision = $marketplaceRevision.ToLowerInvariant()
     contract_fingerprint = $contractFingerprint.ToLowerInvariant()
   }
-  Write-SymppInstalledIdentityCache $cachePath $identity
+  if (-not $ReadOnly) {
+    Write-SymppInstalledIdentityCache $cachePath $identity
+  }
   $script:SymppPreparedInstalledIdentity = $identity
   return $identity
 }
@@ -478,20 +488,45 @@ function Get-ActiveBridgeLeases([string]$RuntimeFile) {
   return @($active)
 }
 
-function Enter-FileLock([string]$LockPath, [int]$TimeoutSec) {
+function Try-Enter-FileLock([string]$LockPath) {
   $lockDir = Split-Path -Parent $LockPath
   New-Item -ItemType Directory -Force -Path $lockDir | Out-Null
-  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
-
-  while ([DateTime]::UtcNow -lt $deadline) {
-    try {
-      return [System.IO.File]::Open($LockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
-    } catch [System.IO.IOException] {
-      Start-Sleep -Milliseconds 200
+  try {
+    return [System.IO.File]::Open($LockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+  } catch [System.IO.IOException] {
+    $nativeCode = $_.Exception.HResult -band 0xffff
+    if ($nativeCode -in @(11, 32, 33, 35)) {
+      return $null
     }
+    throw
+  }
+}
+
+function Enter-FileLock([string]$LockPath, [int]$TimeoutSec) {
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
+  while ([DateTime]::UtcNow -lt $deadline) {
+    $lock = Try-Enter-FileLock $LockPath
+    if ($null -ne $lock) { return $lock }
+    Start-Sleep -Milliseconds 200
   }
 
   throw "Timed out waiting for Symphony++ launcher startup lock: $LockPath"
+}
+
+function Start-SymppColdStartDeadline([int]$TimeoutSec) {
+  $script:SymppColdStartDeadlineUtc = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
+}
+
+function Get-SymppRemainingTimeoutSec([int]$RequestedTimeoutSec, [string]$Phase) {
+  if ($null -eq $script:SymppColdStartDeadlineUtc) {
+    return $RequestedTimeoutSec
+  }
+
+  $remaining = [int][Math]::Floor(($script:SymppColdStartDeadlineUtc - [DateTime]::UtcNow).TotalSeconds)
+  if ($remaining -le 0) {
+    throw "cold_start_timeout: Symphony++ cold startup exhausted its overall budget before $Phase."
+  }
+  return [Math]::Min($RequestedTimeoutSec, [Math]::Max(1, $remaining))
 }
 
 function Exit-FileLock($Lock) {
