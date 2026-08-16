@@ -4,23 +4,34 @@ Code.require_file("../../support/symphony_plus_plus/mcp_session_helpers.exs", __
 defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   import SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers,
     only: [create_phase_architect_session: 4]
+
+  defmodule CheckoutTimeoutRepo do
+    use Ecto.Repo,
+      otp_app: :symphony_elixir,
+      adapter: Ecto.Adapters.SQLite3
+  end
 
   alias SymphonyElixir.MCPHarness
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.GrantScope
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Session}
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Revision
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle
 
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{
     ArchitectHandoff,
@@ -28,6 +39,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
+  alias SymphonyElixir.TestSupport
   alias SymphonyElixir.WorkPackageFactory
 
   setup_all do
@@ -202,6 +214,112 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              evidence_query_value
 
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
+  end
+
+  @tag timeout: 15_000
+  test "delivery and product revision commit before slow worktree cleanup" do
+    repo = CheckoutTimeoutRepo
+    database_path = WorkPackageFactory.database_path()
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-mcp-closeout-post-commit")
+    codex_home = Path.join(fixture.root, "codex-home")
+    previous_codex_home = System.get_env("CODEX_HOME")
+
+    start_supervised!({repo, database: database_path, pool_size: 2, timeout: 1_000})
+    assert :ok = WorkPackageRepository.migrate(repo)
+    on_exit(fn -> File.rm(database_path) end)
+
+    try do
+      System.put_env("CODEX_HOME", codex_home)
+
+      {work_request, work_package, linked_package} =
+        linked_slice!(repo,
+          work_request_id: "WR-MCP-DELIVERY-POST-COMMIT",
+          work_package_status: "reviewing"
+        )
+
+      assert {:ok, prepared} =
+               WorktreeLifecycle.prepare(
+                 repo,
+                 linked_package.id,
+                 %{
+                   "repo_root" => fixture.repo_root,
+                   "base_branch" => linked_package.base_branch,
+                   "branch" => "fix/mcp-delivery-post-commit"
+                 },
+                 codex_home: codex_home
+               )
+
+      cleanup_started = Path.join(fixture.root, "cleanup-started")
+      cleanup_release = Path.join(fixture.root, "cleanup-release")
+
+      install_blocking_fsmonitor!(
+        prepared.worktree_path,
+        Path.join(fixture.root, "block-cleanup.sh"),
+        cleanup_started,
+        cleanup_release
+      )
+
+      successor_slice = create_work_package!(repo, work_request, id: "WRS-MCP-DELIVERY-POST-COMMIT-SUCCESSOR")
+      approved_successor = approve_slice!(successor_slice, repo, work_request)
+
+      successor_package =
+        create_matching_work_package!(repo, work_request, approved_successor,
+          id: "WP-MCP-DELIVERY-POST-COMMIT-SUCCESSOR",
+          status: "reviewing"
+        )
+
+      assert {:ok, _successor} =
+               CanonicalWorkPackageFixtures.dispatch_work_package(
+                 repo,
+                 work_request.id,
+                 approved_successor.id,
+                 "approved",
+                 successor_package.id
+               )
+
+      session = create_work_request_architect_session(repo, work_request, ["write:work_request"])
+
+      args =
+        superseded_args(
+          work_request,
+          work_package,
+          "delivery-mcp-post-commit",
+          successor_package.id,
+          "A narrower successor owns the remaining work."
+        )
+
+      assert :ok = DashboardPubSub.subscribe()
+
+      logs =
+        capture_log([level: :error], fn ->
+          task = Task.async(fn -> record_delivery(repo, session, args) end)
+
+          try do
+            await_file!(cleanup_started)
+            assert_receive :operator_dashboard_changed
+            Process.sleep(3_000)
+            assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
+            assert repo.aggregate(Revision, :count, :id) == 1
+            assert repo.get!(WorkPackage, linked_package.id).status == "closed"
+            assert repo.get!(WorkPackage, successor_package.id).status == "reviewing"
+            assert File.dir?(prepared.worktree_path)
+          after
+            File.write!(cleanup_release, "continue")
+          end
+
+          response = Task.await(task, 5_000)
+          assert get_in(response, ["result", "structuredContent", "work_package_delivery", "outcome"]) == "superseded"
+          refute response["error"]
+        end)
+
+      refute logs =~ "DBConnection.ConnectionError"
+      assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
+      assert repo.one(WorkPackageDelivery).successor_work_package_id == successor_package.id
+      refute File.exists?(prepared.worktree_path)
+      assert repo.get!(WorkPackage, linked_package.id).worktree_path == nil
+    after
+      if previous_codex_home, do: System.put_env("CODEX_HOME", previous_codex_home), else: System.delete_env("CODEX_HOME")
+    end
   end
 
   test "WR architect reads and closes linked package on work-package delivery base", %{
@@ -1427,6 +1545,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     get_in(response, ["error", "code"]) in [-32_001, -32_003] and
       get_in(response, ["error", "data", "reason"]) == "insufficient_capability" and
       get_in(response, ["error", "data", "reason_code"]) in [nil, "insufficient_capability"]
+  end
+
+  defp install_blocking_fsmonitor!(worktree_path, hook_path, started_path, release_path) do
+    File.write!(
+      hook_path,
+      """
+      #!/bin/sh
+      : > #{TestSupport.shell_path(started_path)}
+      while [ ! -e #{TestSupport.shell_path(release_path)} ]; do sleep 0.01; done
+      printf 'cleanup-release\\0'
+      """
+    )
+
+    File.chmod!(hook_path, 0o755)
+    TestSupport.git_output!(worktree_path, ["config", "core.fsmonitorHookVersion", "2"])
+    TestSupport.git_output!(worktree_path, ["config", "core.fsmonitor", TestSupport.shell_script_command(hook_path)])
+  end
+
+  defp await_file!(path, attempts \\ 200)
+  defp await_file!(_path, 0), do: flunk("cleanup did not reach the fsmonitor barrier")
+
+  defp await_file!(path, attempts) do
+    if File.exists?(path) do
+      :ok
+    else
+      Process.sleep(10)
+      await_file!(path, attempts - 1)
+    end
   end
 
   defp mcp_tool(repo, %Session{} = session, name, arguments) do

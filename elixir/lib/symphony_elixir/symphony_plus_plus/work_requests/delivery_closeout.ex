@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   @moduledoc false
 
+  require Logger
+
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository, as: ClaimLeaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -66,6 +68,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   def record(repo, work_request_id, work_package_id, attrs)
       when is_atom(repo) and is_binary(work_request_id) and is_binary(work_package_id) and
              is_map(attrs) do
+    with {:ok, {delivery, work_package, closeout_context}} <-
+           commit_record(repo, work_request_id, work_package_id, attrs) do
+      cleanup_after_commit(repo, work_package, delivery, closeout_context)
+      {:ok, delivery}
+    end
+  end
+
+  defp commit_record(repo, work_request_id, work_package_id, attrs) do
+    repo.transaction(fn ->
+      repo
+      |> record_in_transaction(work_request_id, work_package_id, attrs)
+      |> rollback_record_result(repo)
+    end)
+    |> normalize_transaction_result()
+  rescue
+    error in Ecto.ConstraintError -> normalize_constraint_error(error)
+    error in Exqlite.Error -> normalize_exqlite_error(error)
+  end
+
+  @doc false
+  @spec record_in_transaction(Repository.repo(), String.t(), String.t(), map()) ::
+          {:ok, {WorkPackageDelivery.t(), WorkPackage.t(), map()}} | {:error, error()}
+  def record_in_transaction(repo, work_request_id, work_package_id, attrs)
+      when is_atom(repo) and is_binary(work_request_id) and is_binary(work_package_id) and
+             is_map(attrs) do
     with {:ok, work_package} <-
            Repository.get_work_package(repo, work_request_id, work_package_id),
          {:ok, delivery} <- validate_delivery_input(work_request_id, work_package_id, attrs),
@@ -76,23 +103,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
              delivery,
              delivery_closeout_opts(attrs)
            ),
-         {:ok, {delivery, closeout_context}} <-
-           repo.transaction(fn ->
-             record_in_transaction(repo, work_request_id, work_package_id, attrs)
-           end)
-           |> normalize_transaction_result() do
-      best_effort_cleanup_linked_worktree(repo, work_package, delivery, closeout_context)
-      {:ok, delivery}
-    end
-  rescue
-    error in Ecto.ConstraintError -> normalize_constraint_error(error)
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp record_in_transaction(repo, work_request_id, work_package_id, attrs) do
-    with {:ok, work_request} <- Repository.get(repo, work_request_id),
-         {:ok, work_package} <-
-           Repository.get_work_package(repo, work_request_id, work_package_id),
+         {:ok, work_request} <- Repository.get(repo, work_request_id),
          {:ok, delivery} <-
            Repository.record_work_package_delivery_in_transaction(
              repo,
@@ -103,11 +114,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
          closeout_opts = delivery_closeout_opts(attrs),
          {:ok, {delivery, closeout_context}} <-
            complete_closeout(repo, work_request, work_package, delivery, closeout_opts) do
-      {delivery, closeout_context}
-    else
-      {:error, reason} -> repo.rollback(reason)
+      {:ok, {delivery, work_package, closeout_context}}
     end
+  rescue
+    error in Ecto.ConstraintError -> normalize_constraint_error(error)
+    error in Exqlite.Error -> normalize_exqlite_error(error)
   end
+
+  @doc false
+  @spec cleanup_after_commit(Repository.repo(), WorkPackage.t(), WorkPackageDelivery.t(), map()) :: :ok
+  def cleanup_after_commit(repo, %WorkPackage{} = work_package, %WorkPackageDelivery{} = delivery, closeout_context)
+      when is_atom(repo) and is_map(closeout_context) do
+    best_effort_cleanup_linked_worktree(repo, work_package, delivery, closeout_context)
+  rescue
+    error ->
+      Logger.warning("Worktree cleanup failed after delivery commit for #{work_package.id}: #{Exception.message(error)}")
+
+      :ok
+  end
+
+  defp rollback_record_result({:ok, result}, _repo), do: result
+  defp rollback_record_result({:error, reason}, repo), do: repo.rollback(reason)
 
   defp validate_delivery_input(work_request_id, work_package_id, attrs) do
     attrs =
