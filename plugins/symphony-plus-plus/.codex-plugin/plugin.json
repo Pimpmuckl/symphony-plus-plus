@@ -1,6 +1,6 @@
 {
   "name": "symphony-plus-plus",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "MCP-free Symphony++ Solo Session planning plus baseline worker/coordinator playbooks for Codex.",
   "skills": "./skills/",
   "interface": {

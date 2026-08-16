@@ -1,6 +1,6 @@
 {
   "name": "symphony-plus-plus-mcp",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Full Symphony++ MCP-backed planning, WorkPackage, and architect workflows for dedicated Codex sessions.",
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
