@@ -305,6 +305,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     Agent.stop(Process.whereis(store))
     blocker = spawn(fn -> receive do: ({:"$gen_call", _from, _request} -> :ok) end)
     Process.register(blocker, store)
+    on_exit(fn -> Process.exit(blocker, :kill) end)
 
     assert FailedCall.summary() == %{
              "durability" => "process_local",
