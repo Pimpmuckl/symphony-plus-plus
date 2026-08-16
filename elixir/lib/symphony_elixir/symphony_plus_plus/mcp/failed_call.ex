@@ -104,11 +104,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
   @spec observe_response(Config.t() | map(), term(), term(), atom(), integer()) :: term()
   def observe_response(context, payload, response, layer, started_at) do
     cond do
-      not tool_call?(payload) -> response
-      diagnostic_response?(response) -> response
-      failure = remembered_failure() -> attach_diagnostic(response, failure)
-      descriptor = descriptor_from_response(response, layer) -> capture_response(context, payload, response, descriptor, started_at)
-      true -> response
+      not tool_call?(payload) ->
+        response
+
+      diagnostic_response?(response) ->
+        response
+
+      failure = remembered_failure() ->
+        attach_diagnostic(response, failure)
+
+      descriptor = descriptor_from_response(response, layer) ->
+        capture_response(context, payload, response, descriptor, started_at)
+
+      true ->
+        response
     end
   end
 
@@ -118,17 +127,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
     if remembered_failure() == nil do
       payload
       |> tool_call_items()
-      |> Enum.each(fn item ->
-        descriptor = descriptor(code, data, layer)
-
-        case capture(context, item, descriptor, started_at) do
-          nil -> :ok
-          failure -> remember_failure(failure)
-        end
-      end)
+      |> Enum.each(&observe_error_item(context, &1, code, data, layer, started_at))
     end
 
     :ok
+  end
+
+  defp observe_error_item(context, item, code, data, layer, started_at) do
+    case capture(context, item, descriptor(code, data, layer), started_at) do
+      nil -> :ok
+      failure -> remember_failure(failure)
+    end
   end
 
   @spec summary() :: map()
