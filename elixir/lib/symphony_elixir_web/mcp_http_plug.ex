@@ -85,7 +85,18 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
         send_transport_result(conn, result, state_key)
       else
         {:error, :batch_not_supported} ->
-          send_observed_json_rpc_error(conn, config, payload, started_at, 400, :batch_not_supported)
+          :ok =
+            FailedCall.observe_error(
+              config,
+              payload,
+              -32_600,
+              "Invalid Request",
+              %{"reason" => "batch_not_supported"},
+              :endpoint,
+              started_at
+            )
+
+          send_json_rpc_error(conn, 400, :batch_not_supported)
 
         {:error, :invalid_session_id, ^payload} ->
           send_observed_json_rpc_error(conn, config, payload, started_at, 400, :invalid_session_id)

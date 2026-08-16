@@ -1082,6 +1082,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert :sys.get_state(HTTPStateStore).entries == %{}
   end
 
+  test "POST /mcp observes each failed tool item in a rejected batch once" do
+    assert {:ok, _settings} = OperatorSettingsRepository.update(Repo, %{"capture_failed_mcp_calls" => true})
+
+    payload = [
+      tool_call_request("private-batch-id", "sympp.health", %{"bearer" => "request-secret"}),
+      tool_call_notification("sympp.health", %{"bearer" => "notification-secret"}),
+      tools_list_request("ignored-protocol-item")
+    ]
+
+    {conn, log} = with_log(fn -> post_json(payload) end)
+
+    assert json_response(conn, 400) == json_rpc_error(nil, -32_600, "Invalid Request", "batch_not_supported")
+    assert events = diagnostic_events(log)
+    assert length(events) == 2
+    assert Enum.all?(events, &(&1["failure_layer"] == "endpoint"))
+    assert Enum.all?(events, &(&1["failure_reason"] == "batch_not_supported"))
+    assert events |> Enum.map(& &1["diagnostic_id"]) |> Enum.uniq() |> length() == 2
+    refute log =~ "private-batch-id"
+    refute log =~ "request-secret"
+    refute log =~ "notification-secret"
+  end
+
   test "POST /mcp rejects JSON-RPC batches before Mcp-Session-Id continuity" do
     init = post_json(initialize_request("init"))
     [session_id] = get_resp_header(init, "mcp-session-id")

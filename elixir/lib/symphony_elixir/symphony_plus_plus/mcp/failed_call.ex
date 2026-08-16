@@ -441,6 +441,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
   end
 
   defp default_reason("method_not_found"), do: "method_not_found"
+  defp default_reason("invalid_request"), do: "invalid_request"
   defp default_reason("invalid_params"), do: "invalid_params"
   defp default_reason("unauthorized"), do: "missing_session"
   defp default_reason("forbidden"), do: "outside_session_scope"
