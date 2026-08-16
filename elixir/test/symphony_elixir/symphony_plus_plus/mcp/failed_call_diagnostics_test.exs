@@ -325,10 +325,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     assert {:ok, initialized} = HTTPTransport.handle(config, initialize_request(), client_key: client_key)
 
     assert {:ok, failed} =
-             HTTPTransport.handle(config, failed_health_request("summary-secret"),
-               client_key: client_key,
-               state_key: initialized.state_key
-             )
+             Task.async(fn ->
+               HTTPTransport.handle(config, failed_health_request("summary-secret"),
+                 client_key: client_key,
+                 state_key: initialized.state_key
+               )
+             end)
+             |> Task.await()
 
     assert is_binary(failed.response["error"]["data"]["diagnostic_id"])
 

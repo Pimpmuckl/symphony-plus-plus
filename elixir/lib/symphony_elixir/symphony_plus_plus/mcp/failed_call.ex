@@ -273,7 +273,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
 
   defp record(envelope) do
     case store() do
-      pid when is_pid(pid) -> Agent.cast(pid, &record_envelope(&1, envelope))
+      pid when is_pid(pid) -> Agent.update(pid, &record_envelope(&1, envelope), 1_000)
       _unavailable -> :ok
     end
   rescue
