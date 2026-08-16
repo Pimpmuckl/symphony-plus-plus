@@ -20,6 +20,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.GrantScope
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
+  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Session}
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
@@ -287,12 +288,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
           "A narrower successor owns the remaining work."
         )
 
+      assert :ok = DashboardPubSub.subscribe()
+
       logs =
         capture_log([level: :error], fn ->
           task = Task.async(fn -> record_delivery(repo, session, args) end)
 
           try do
             await_file!(cleanup_started)
+            assert_receive :operator_dashboard_changed
             Process.sleep(3_000)
             assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
             assert repo.aggregate(Revision, :count, :id) == 1
@@ -308,7 +312,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
           refute response["error"]
         end)
 
-      refute logs =~ "DBConnection.ConnectionError) [Elixir.#{inspect(repo)}]"
+      refute logs =~ "DBConnection.ConnectionError"
       assert repo.aggregate(WorkPackageDelivery, :count, :id) == 1
       assert repo.one(WorkPackageDelivery).successor_work_package_id == successor_package.id
       refute File.exists?(prepared.worktree_path)

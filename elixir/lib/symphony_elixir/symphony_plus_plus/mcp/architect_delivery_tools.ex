@@ -155,6 +155,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
                )
              end
            ),
+         _delivery_broadcast_result <- DashboardPubSub.broadcast_changed(),
          :ok <-
            DeliveryCloseout.cleanup_after_commit(
              config.repo,
@@ -162,7 +163,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
              delivery,
              closeout_context
            ),
-         :ok <- DashboardPubSub.broadcast_changed(),
+         _cleanup_broadcast_result <- DashboardPubSub.broadcast_changed(),
          {:ok, work_packages} <- WorkRequestService.list_work_packages(config.repo, work_request_id),
          {:ok, delivery_board} <-
            WorkRequestScope.scoped_delivery_board(config.repo, work_request, work_packages, filters) do
