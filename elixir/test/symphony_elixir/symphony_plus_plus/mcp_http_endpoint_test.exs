@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   use ExUnit.Case, async: false
 
   import Ecto.Query, only: [from: 2]
+  import ExUnit.CaptureLog
   import Phoenix.ConnTest
   import Plug.Conn, only: [get_resp_header: 2, put_req_header: 3]
 
@@ -12,6 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     ClientLeases,
     Config,
+    FailedCall,
     HTTPStateStore,
     Session,
     SessionBinding,
@@ -20,6 +22,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Repository, as: SoloSessionRepository
@@ -90,6 +94,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     reset_server_response_state()
     if Process.whereis(HTTPStateStore) == nil, do: start_supervised!(HTTPStateStore)
     HTTPStateStore.reset!()
+    Repo.delete_all(OperatorSettings)
+    FailedCall.reset()
     :ok
   end
 
@@ -1039,6 +1045,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert :sys.get_state(HTTPStateStore).entries == %{}
   end
 
+  test "POST /mcp observes failed tool requests and notifications once at the endpoint boundary" do
+    assert {:ok, _settings} = OperatorSettingsRepository.update(Repo, %{"capture_failed_mcp_calls" => true})
+
+    {request, request_log} =
+      with_log(fn -> post_json(tool_call_request("private-endpoint-id", "sympp.health", %{"bearer" => "request-secret"})) end)
+
+    request_error = json_response(request, 400)
+    diagnostic_id = get_in(request_error, ["error", "data", "diagnostic_id"])
+    assert diagnostic_id =~ ~r/^mcpdiag_[0-9a-f]{16}$/
+    assert [request_event] = diagnostic_events(request_log)
+    assert request_event["failure_layer"] == "endpoint"
+    assert request_event["failure_reason"] == "missing_session_id"
+    assert request_event["diagnostic_id"] == diagnostic_id
+
+    {notification, notification_log} =
+      with_log(fn -> post_json(tool_call_notification("sympp.health", %{"bearer" => "notification-secret"})) end)
+
+    assert get_in(json_response(notification, 400), ["error", "data", "reason"]) == "missing_session_id"
+    assert [notification_event] = diagnostic_events(notification_log)
+    assert notification_event["failure_layer"] == "endpoint"
+    refute request_log =~ "private-endpoint-id"
+    refute request_log =~ "request-secret"
+    refute notification_log =~ "notification-secret"
+  end
+
   test "POST /mcp rejects JSON-RPC batches before session handling" do
     init_batch = post_json([initialize_request("init")])
     mixed_batch = post_json([initialize_request("init"), tools_list_request("tools")])
@@ -1236,6 +1267,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     |> get_in(["result", "tools"])
     |> Enum.map(& &1["name"])
     |> Enum.sort()
+  end
+
+  defp diagnostic_events(log) do
+    log
+    |> String.split("\n")
+    |> Enum.filter(&String.contains?(&1, ~s("event":"sympp_failed_mcp_call")))
+    |> Enum.map(fn line ->
+      {json_start, 1} = :binary.match(line, "{")
+      line |> binary_part(json_start, byte_size(line) - json_start) |> Jason.decode!()
+    end)
   end
 
   defp stored_http_server do

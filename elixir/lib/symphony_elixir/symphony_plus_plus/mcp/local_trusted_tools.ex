@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedTools do
 
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, ToolCatalog}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, FailedCall, ToolCatalog}
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -64,6 +64,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedTools do
        }}
     end
   end
+
+  @spec failed_call_summary() :: map()
+  def failed_call_summary, do: FailedCall.summary()
 
   @spec require_database(Config.t()) :: :ok | {:error, atom()}
   def require_database(%Config{repo: repo, database: database}) do

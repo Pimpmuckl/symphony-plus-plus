@@ -138,6 +138,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
     "Record a redacted local-operator decision on a WorkRequest by id. Requires an unbound trusted local HTTP MCP session with an explicit state key and a file-backed local ledger; does not require ownership of that WorkRequest."
   end
 
+  defp local_operator_tool_description("summarize_failed_mcp_calls") do
+    "Summarize process-local redacted failed MCP call envelopes without exposing raw requests or durable history. Requires an unbound trusted local HTTP MCP session."
+  end
+
   defp unbound_scoped_tool_specs do
     shared = ToolCatalog.shared_worker_architect_tools()
 

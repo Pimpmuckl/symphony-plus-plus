@@ -83,6 +83,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
+  def local_operator_tool_input_schema("summarize_failed_mcp_calls"), do: schema(%{}, [])
+
   @spec local_architect_assignment_claim_tool_input_schema() :: input_schema()
   def local_architect_assignment_claim_tool_input_schema do
     schema(

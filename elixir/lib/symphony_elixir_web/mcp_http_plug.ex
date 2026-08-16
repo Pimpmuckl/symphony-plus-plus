@@ -2,7 +2,7 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
   @moduledoc false
 
   alias Plug.Conn
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{ClientLeases, Config, Health, HTTPStateStore, HTTPTransport}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{ClientLeases, Config, FailedCall, Health, HTTPStateStore, HTTPTransport}
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixirWeb.Endpoint
   alias SymphonyElixirWeb.SymppBoardLive
@@ -62,25 +62,42 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
   def call(%Conn{} = conn, _opts), do: conn
 
   defp dispatch(%Conn{method: "POST"} = conn, local_daemon_trusted?) do
-    with {:ok, payload, conn} <- read_json_body(conn),
-         :ok <- reject_batch_payload(payload),
-         {:ok, state_key} <- request_state_key(conn, payload),
-         :ok <- require_session_for_followup(payload, state_key),
-         {:ok, result} <- handle_payload(payload, state_key, local_daemon_trusted?) do
-      send_transport_result(conn, result, state_key)
-    else
+    case read_json_body(conn) do
+      {:ok, payload, conn} -> dispatch_payload(conn, payload, local_daemon_trusted?)
       {:error, :invalid_json, conn} -> send_json_rpc_error(conn, 400, :invalid_json)
       {:error, :body_too_large, conn} -> send_json_rpc_error(conn, 413, :body_too_large)
       {:error, :body_read_failed, conn} -> send_json_rpc_error(conn, 400, :body_read_failed)
-      {:error, :batch_not_supported} -> send_json_rpc_error(conn, 400, :batch_not_supported)
-      {:error, :invalid_session_id, payload} -> send_json_rpc_error(conn, 400, :invalid_session_id, request_id(payload))
-      {:error, :missing_session_id, payload} -> send_json_rpc_error(conn, 400, :missing_session_id, request_id(payload))
-      {:error, :ledger_unavailable, payload} -> send_json_rpc_error(conn, 503, :ledger_unavailable, request_id(payload))
     end
   end
 
   defp dispatch(%Conn{method: "GET"} = conn, _local_daemon_trusted?), do: send_method_not_allowed(conn)
   defp dispatch(%Conn{} = conn, _local_daemon_trusted?), do: send_method_not_allowed(conn)
+
+  defp dispatch_payload(conn, payload, local_daemon_trusted?) do
+    config = mcp_config(configured_repo(), local_daemon_trusted?)
+    started_at = FailedCall.monotonic_now()
+
+    FailedCall.protect(config, payload, :endpoint, started_at, fn ->
+      with :ok <- reject_batch_payload(payload),
+           {:ok, state_key} <- request_state_key(conn, payload),
+           :ok <- require_session_for_followup(payload, state_key),
+           {:ok, result} <- handle_payload(payload, state_key, local_daemon_trusted?) do
+        send_transport_result(conn, result, state_key)
+      else
+        {:error, :batch_not_supported} ->
+          send_observed_json_rpc_error(conn, config, payload, started_at, 400, :batch_not_supported)
+
+        {:error, :invalid_session_id, ^payload} ->
+          send_observed_json_rpc_error(conn, config, payload, started_at, 400, :invalid_session_id)
+
+        {:error, :missing_session_id, ^payload} ->
+          send_observed_json_rpc_error(conn, config, payload, started_at, 400, :missing_session_id)
+
+        {:error, :ledger_unavailable, ^payload} ->
+          send_observed_json_rpc_error(conn, config, payload, started_at, 503, :ledger_unavailable)
+      end
+    end)
+  end
 
   defp read_json_body(conn) do
     case Conn.read_body(conn, length: @max_body_bytes, read_length: @max_body_bytes) do
@@ -193,6 +210,16 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
 
   defp send_json_rpc_error(conn, status, reason, id \\ nil) do
     send_json(conn, status, json_rpc_error(id, reason))
+  end
+
+  defp send_observed_json_rpc_error(conn, config, payload, started_at, status, reason) do
+    response =
+      payload
+      |> request_id()
+      |> json_rpc_error(reason)
+      |> then(&FailedCall.observe_response(config, payload, &1, :endpoint, started_at))
+
+    send_json(conn, status, response)
   end
 
   defp send_json(conn, status, payload) do
