@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
   current-alias, explicit reconnect, or browser auth semantics.
   """
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, HTTPStateStore, Server, Session, SessionRecovery}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, FailedCall, HTTPStateStore, Server, Session, SessionRecovery}
 
   @assignment_resource "sympp://assignment/current"
   @work_package_resource_prefix "sympp://work-packages/"
@@ -51,16 +51,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
 
   @spec handle(Config.t(), term(), keyword()) :: handle_result()
   def handle(%Config{} = config, payload, opts \\ []) when is_list(opts) do
-    with {:ok, client_key} <- normalize_client_key(Keyword.get(opts, :client_key)),
-         {:ok, state_key} <- normalize_state_key(Keyword.get(opts, :state_key)) do
-      handle_payload(config, payload, client_key, state_key, Keyword.get(opts, :live_handle))
-    else
-      {:error, :invalid_client_key} ->
-        {:error, :invalid_client_key}
+    started_at = FailedCall.monotonic_now()
 
-      {:error, reason} ->
-        {:ok, result(json_rpc_error(payload, -32_600, "Invalid Request", %{"reason" => Atom.to_string(reason)}), nil)}
-    end
+    FailedCall.protect(config, payload, :bridge, started_at, fn ->
+      result =
+        with {:ok, client_key} <- normalize_client_key(Keyword.get(opts, :client_key)),
+             {:ok, state_key} <- normalize_state_key(Keyword.get(opts, :state_key)) do
+          handle_payload(config, payload, client_key, state_key, Keyword.get(opts, :live_handle))
+        else
+          {:error, :invalid_client_key} ->
+            {:error, :invalid_client_key}
+
+          {:error, reason} ->
+            {:ok, result(json_rpc_error(payload, -32_600, "Invalid Request", %{"reason" => Atom.to_string(reason)}), nil)}
+        end
+
+      observe_result(config, payload, result, started_at)
+    end)
+  end
+
+  defp observe_result(config, payload, {:ok, %Result{} = result}, started_at) do
+    response = FailedCall.observe_response(config, payload, result.response, :bridge, started_at)
+    {:ok, %{result | response: response, status: response_status(response)}}
+  end
+
+  defp observe_result(config, payload, {:error, :invalid_client_key} = result, started_at) do
+    :ok = FailedCall.observe_error(config, payload, -32_600, "Invalid Request", %{"reason" => "invalid_client_key"}, :bridge, started_at)
+    result
+  end
+
+  defp observe_result(config, payload, {:error, :ledger_unavailable, _payload} = result, started_at) do
+    :ok = FailedCall.observe_error(config, payload, -32_000, "Server error", %{"reason" => "ledger_unavailable"}, :bridge, started_at)
+    result
   end
 
   defp handle_payload(%Config{} = config, payload, client_key, nil, _live_handle) do

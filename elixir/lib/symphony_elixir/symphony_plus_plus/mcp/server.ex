@@ -1,8 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @moduledoc false
 
-  require Logger
-
   import Ecto.Query, only: [from: 2]
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
@@ -43,6 +41,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     Auth,
     Config,
     ErrorDetails,
+    FailedCall,
     GuidanceTools,
     HandleStateStore,
     HandoffDatabase,
@@ -64,8 +63,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     WorkRequestPayloads,
     WorkRequestScope
   }
-
-  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
@@ -100,24 +97,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @architect_product_tree_tools ArchitectProductTreeTools.tools()
   @work_request_policy_tools ToolCatalog.work_request_policy_tools()
   @delivery_policy_tools ToolCatalog.delivery_policy_tools()
-  @safe_diagnostic_failure_reasons ~w(
-    architect_grant_required
-    claim_required
-    dangerous_action_requires_operator
-    insufficient_capability
-    insufficient_role
-    invalid_tool_arguments
-    invalid_transition
-    missing_session
-    outside_session_scope
-    runtime_lease_conflict
-    scope_mismatch
-    target_ambiguous
-    target_not_found
-    unexpected_argument
-    unknown_action
-    worker_grant_required
-  )
   @version_resource "sympp://health/version"
   @assignment_resource "sympp://assignment/current"
   @enforce_keys [:config]
@@ -230,21 +209,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         %__MODULE__{initialized: true} = server
       )
       when valid_request_id(id) do
-    payload
-    |> request_params()
-    |> handle_tool_call_request(id, server)
+    observe_tool_call(payload, server, fn ->
+      payload
+      |> request_params()
+      |> handle_tool_call_request(id, server)
+    end)
   end
 
   def handle_state(%{"jsonrpc" => "2.0", "id" => id, "method" => "tools/call"} = payload, %__MODULE__{initialized: true} = server)
       when invalid_request_id(id) do
-    {do_handle(payload, server), server}
+    observe_tool_call(payload, server, fn -> {do_handle(payload, server), server} end)
   end
 
   def handle_state(%{"jsonrpc" => "2.0", "method" => "tools/call"} = payload, %__MODULE__{initialized: true} = server) do
-    payload
-    |> request_params()
-    |> handle_tool_call_notification(server)
+    {_response, updated_server} =
+      observe_tool_call(payload, server, fn ->
+        payload
+        |> request_params()
+        |> handle_tool_call_request(nil, server)
+      end)
+
+    {nil, updated_server}
   end
+
+  def handle_state(%{"jsonrpc" => "2.0", "method" => "tools/call"} = payload, %__MODULE__{} = server),
+    do: observe_tool_call(payload, server, fn -> {do_handle(payload, server), server} end)
 
   def handle_state(%{"jsonrpc" => "2.0", "id" => id, "method" => method} = payload, %__MODULE__{initialized: true} = server)
       when is_binary(method) and valid_request_id(id) do
@@ -264,14 +253,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp handle_tool_call_request(params_result, id, %__MODULE__{} = server),
     do: dispatch_request_state(params_result, "tools/call", id, server)
 
-  defp handle_tool_call_notification({:ok, %{"name" => name} = params}, %__MODULE__{} = server) when name in @session_claim_tools,
-    do: handle_session_claim_tool_notification(name, params, server)
+  defp observe_tool_call(payload, %__MODULE__{} = server, fun) when is_function(fun, 0) do
+    started_at = FailedCall.monotonic_now()
 
-  defp handle_tool_call_notification({:ok, %{"name" => @assignment_release_tool} = params}, %__MODULE__{} = server),
-    do: handle_assignment_release_tool_notification(params, server)
-
-  defp handle_tool_call_notification(params_result, %__MODULE__{} = server),
-    do: {nil, dispatch_notification(params_result, "tools/call", server)}
+    FailedCall.protect(server, payload, :tool, started_at, fn ->
+      {response, updated_server} = fun.()
+      {FailedCall.observe_response(server, payload, response, :tool, started_at), updated_server}
+    end)
+  end
 
   defp do_handle(%{"id" => id}, %__MODULE__{}) when invalid_request_id(id) do
     Response.error(nil, -32_600, "Invalid Request", %{"reason" => "invalid_request_id"})
@@ -722,11 +711,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
           {:tool_error, reason} ->
             {:error, code, message, data} = invalid_params_error(@assignment_release_tool, reason)
-            {failed_tool_response(server, params, id, code, message, data), server}
+            {Response.error(id, code, message, data), server}
         end
 
       {:error, code, message, data} ->
-        {failed_tool_response(server, params, id, code, message, data), server}
+        {Response.error(id, code, message, data), server}
     end
   end
 
@@ -741,7 +730,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         }
 
       {:error, code, message, data} ->
-        {failed_tool_response(server, params, id, code, message, data), server}
+        {Response.error(id, code, message, data), server}
     end
   end
 
@@ -756,34 +745,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         }
 
       {:error, code, message, data} ->
-        {failed_tool_response(server, params, id, code, message, data), server}
-    end
-  end
-
-  defp handle_assignment_release_tool_notification(params, %__MODULE__{} = server) do
-    case prepare_assignment_release_tool_call(server, params) do
-      {:ok, arguments} ->
-        case release_current_assignment(arguments, server) do
-          {:ok, _result, updated_server} -> {nil, updated_server}
-          {:tool_error, _reason} -> {nil, server}
-        end
-
-      {:error, _code, _message, _data} ->
-        {nil, server}
-    end
-  end
-
-  defp handle_session_claim_tool_notification(@local_assignment_claim_tool, params, %__MODULE__{} = server) do
-    case claim_local_assignment(params, server) do
-      {:ok, _result, session} -> {nil, %{server | session: session, session_refresh_required: false}}
-      {:error, _code, _message, _data} -> {nil, server}
-    end
-  end
-
-  defp handle_session_claim_tool_notification(@local_architect_assignment_claim_tool, params, %__MODULE__{} = server) do
-    case claim_local_architect_assignment(params, server) do
-      {:ok, _result, session} -> {nil, %{server | session: session, session_refresh_required: false}}
-      {:error, _code, _message, _data} -> {nil, server}
+        {Response.error(id, code, message, data), server}
     end
   end
 
@@ -1175,6 +1137,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:error, :not_found} -> not_found_error("add_work_request_comment")
       {:error, reason} -> local_operator_error(reason, "add_work_request_comment")
     end
+  end
+
+  defp local_operator_tool("summarize_failed_mcp_calls", _arguments, %__MODULE__{}) do
+    {:ok, ToolResult.tool_result(LocalTrustedTools.failed_call_summary())}
   end
 
   defp local_operator_tool("record_work_request_operator_decision", arguments, %__MODULE__{config: config}) do
@@ -2213,96 +2179,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
             {Response.response(id, result), updated_server}
 
           {:error, code, message, data} ->
-            {failed_dispatch_response(server, method, params, id, code, message, data), server}
+            {Response.error(id, code, message, data), server}
         end
 
       {:error, code, message, data, %__MODULE__{} = updated_server} ->
-        {failed_dispatch_response(server, method, params, id, code, message, data), updated_server}
+        {Response.error(id, code, message, data), updated_server}
     end
   end
 
   defp dispatch_request_state({:error, code, message, data}, _method, id, %__MODULE__{} = server) do
     {Response.error(id, code, message, data), server}
   end
-
-  defp failed_dispatch_response(server, "tools/call", params, id, code, message, data),
-    do: failed_tool_response(server, params, id, code, message, data)
-
-  defp failed_dispatch_response(_server, _method, _params, id, code, message, data),
-    do: Response.error(id, code, message, data)
-
-  defp failed_tool_response(%__MODULE__{} = server, %{"name" => tool_name} = params, id, code, message, data)
-       when is_binary(tool_name) and is_map(data) do
-    case failed_tool_diagnostic(server, params, tool_name, code, data) do
-      nil -> Response.error(id, code, message, data)
-      diagnostic_id -> Response.error(id, code, message, Map.put(data, "diagnostic_id", diagnostic_id))
-    end
-  end
-
-  defp failed_tool_response(_server, _params, id, code, message, data), do: Response.error(id, code, message, data)
-
-  defp failed_tool_diagnostic(%__MODULE__{config: %Config{repo: repo} = config} = server, params, tool_name, code, data) do
-    case OperatorSettingsRepository.get(repo) do
-      {:ok, %{capture_failed_mcp_calls: true}} ->
-        diagnostic_id = "mcpdiag_" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
-        {safe_tool_name, safe_argument_keys} = safe_tool_metadata(params, tool_name, server)
-
-        Logger.warning(
-          Jason.encode!(%{
-            "argument_keys" => safe_argument_keys,
-            "diagnostic_id" => diagnostic_id,
-            "error_classification" => error_classification(code),
-            "event" => "sympp_failed_mcp_call",
-            "failure_reason" => safe_failure_reason(data),
-            "source" => Health.source_identity(config),
-            "tool_name" => safe_tool_name
-          })
-        )
-
-        diagnostic_id
-
-      _disabled_or_unavailable ->
-        nil
-    end
-  rescue
-    _diagnostic_failure -> nil
-  catch
-    _kind, _reason -> nil
-  end
-
-  defp safe_tool_metadata(params, tool_name, %__MODULE__{} = server) do
-    with {:ok, specs} <- Surface.tool_specs_for_server(server),
-         %{"name" => safe_tool_name} = spec <- Enum.find(specs, &(&1["name"] == tool_name)) do
-      {safe_tool_name, schema_argument_keys(params, spec)}
-    else
-      _unknown_or_unavailable -> {if(ToolCatalog.known_tool?(tool_name), do: tool_name, else: "unknown"), []}
-    end
-  end
-
-  defp safe_failure_reason(data) do
-    Enum.find([data["reason_code"], data["reason"]], &(&1 in @safe_diagnostic_failure_reasons))
-  end
-
-  defp schema_argument_keys(
-         %{"arguments" => arguments},
-         %{"inputSchema" => %{"properties" => properties}}
-       )
-       when is_map(arguments) and is_map(properties) do
-    properties
-    |> Map.keys()
-    |> Enum.filter(&Map.has_key?(arguments, &1))
-    |> Enum.sort()
-  end
-
-  defp schema_argument_keys(_params, _spec), do: []
-
-  defp error_classification(-32_601), do: "method_not_found"
-  defp error_classification(-32_602), do: "invalid_params"
-  defp error_classification(-32_001), do: "unauthorized"
-  defp error_classification(-32_003), do: "forbidden"
-  defp error_classification(-32_004), do: "not_found"
-  defp error_classification(-32_009), do: "precondition_failed"
-  defp error_classification(_code), do: "server_error"
 
   defp dispatch_with_text_profile(method, params, %__MODULE__{} = server) do
     build_tool_result(server, fn -> dispatch(method, params, server) end)
@@ -2318,27 +2205,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp response_text_profile(%__MODULE__{config: %Config{mode: :stdio, surface_profile: :full}}), do: :full
   defp response_text_profile(%__MODULE__{}), do: :canonical
-
-  defp dispatch_notification({:ok, params}, method, %__MODULE__{} = server) do
-    case require_current_session_claim_for_bound_call(server, method, params) do
-      {:ok, server} ->
-        case dispatch_with_text_profile(method, params, server) do
-          {:ok, _result} ->
-            server
-
-          {:ok, _result, %__MODULE__{} = updated_server} ->
-            updated_server
-
-          {:error, _code, _message, _data} ->
-            server
-        end
-
-      {:error, _code, _message, _data, %__MODULE__{} = updated_server} ->
-        updated_server
-    end
-  end
-
-  defp dispatch_notification({:error, _code, _message, _data}, _method, %__MODULE__{} = server), do: server
 
   defp initialize_request?(%{"jsonrpc" => "2.0", "method" => "initialize"}), do: true
   defp initialize_request?(_payload), do: false

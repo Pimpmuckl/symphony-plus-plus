@@ -18,7 +18,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @solo_tools SoloTools.tool_names()
   @assignment_release_tool "release_current_assignment"
   @bootstrap_tools ["create_work_request"]
-  @local_operator_tools ["add_work_request_comment", "record_work_request_operator_decision"]
+  @local_operator_tools ["add_work_request_comment", "record_work_request_operator_decision", "summarize_failed_mcp_calls"]
   @blocker_closeout_decisions ["resolved", "still_active"]
   @local_assignment_claim_tool "claim_local_assignment"
   @local_architect_assignment_claim_tool "claim_local_architect_assignment"
@@ -204,7 +204,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   def contract_unbound_tools, do: [@health_tool, @assignment_release_tool] ++ @solo_tools ++ @session_claim_tools
 
   @spec contract_trusted_local_http_extra_tools() :: [tool_name()]
-  def contract_trusted_local_http_extra_tools, do: @bootstrap_tools ++ ["add_work_request_comment", "list_comments", "record_work_request_operator_decision"]
+  def contract_trusted_local_http_extra_tools, do: @bootstrap_tools ++ @local_operator_tools ++ ["list_comments"]
 
   @spec contract_bound_worker_tools() :: [tool_name()]
   def contract_bound_worker_tools, do: [@health_tool, @assignment_release_tool] ++ @worker_tools

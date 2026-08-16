@@ -225,6 +225,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
              "create_work_request",
              "list_comments",
              "record_work_request_operator_decision",
+             "summarize_failed_mcp_calls",
              "sympp.health"
            ]
 

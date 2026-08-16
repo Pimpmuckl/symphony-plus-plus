@@ -1,6 +1,6 @@
 {
   "version": 7,
-  "mcp_contract_fingerprint": "756f75b7e22d2325779c75a5f8cf1436d8f2baa92f8bb7968a1ec6dd635b8e95",
+  "mcp_contract_fingerprint": "178fccae24c3e3a54b1a9a919cb8ada8eca635a64b4f956603301f37493d8f18",
   "tool_sets": {
     "unbound_tools": [
       "sympp.health",
@@ -25,8 +25,9 @@
     "trusted_local_http_extra_tools": [
       "create_work_request",
       "add_work_request_comment",
-      "list_comments",
-      "record_work_request_operator_decision"
+      "record_work_request_operator_decision",
+      "summarize_failed_mcp_calls",
+      "list_comments"
     ],
     "worker_tools": [
       "get_current_assignment",
