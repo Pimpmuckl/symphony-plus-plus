@@ -52,6 +52,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryReconciler
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup, as: WorkRequestRuntimeCleanup
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
@@ -139,14 +140,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
              "record_work_package_delivery"
            ),
          :ok <- require_work_package_delivery_scope(config.repo, work_request, work_package, attrs, filters),
-         {:ok, delivery} <-
+         {:ok, {delivery, cleanup_work_package, closeout_context}} <-
            mutate_product_tree(
              config.repo,
              work_request_id,
              "record_work_package_delivery",
              recorded_by,
              fn ->
-               WorkRequestService.record_work_package_delivery(
+               DeliveryCloseout.record_in_transaction(
                  config.repo,
                  work_request_id,
                  work_package_id,
@@ -154,6 +155,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
                )
              end
            ),
+         :ok <-
+           DeliveryCloseout.cleanup_after_commit(
+             config.repo,
+             cleanup_work_package,
+             delivery,
+             closeout_context
+           ),
+         :ok <- DashboardPubSub.broadcast_changed(),
          {:ok, work_packages} <- WorkRequestService.list_work_packages(config.repo, work_request_id),
          {:ok, delivery_board} <-
            WorkRequestScope.scoped_delivery_board(config.repo, work_request, work_packages, filters) do
@@ -1059,14 +1068,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     }
   end
 
-  defp run_architect_transaction(repo, fun) do
-    case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do
-      {:ok, result} -> {:ok, result}
-      {:error, {:tool_error, reason}} -> {:tool_error, reason}
-      {:error, {:error, reason}} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
-    end
-    |> DashboardPubSub.broadcast_changed_on_success()
+  defp run_architect_transaction(repo, fun, notify? \\ true) do
+    result =
+      case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do
+        {:ok, result} -> {:ok, result}
+        {:error, {:tool_error, reason}} -> {:tool_error, reason}
+        {:error, {:error, reason}} -> {:error, reason}
+        {:error, reason} -> {:error, reason}
+      end
+
+    if notify?, do: DashboardPubSub.broadcast_changed_on_success(result), else: result
   end
 
   defp rollback_architect_transaction_result(_repo, {:ok, result}), do: result
@@ -1074,12 +1085,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp rollback_architect_transaction_result(repo, {:error, reason}), do: repo.rollback({:error, reason})
 
   defp mutate_product_tree(repo, work_request_id, tool, created_by, mutation_fun) do
-    run_architect_transaction(repo, fn ->
-      with {:ok, result} <- mutation_fun.(),
-           {:ok, _revision} <- record_current_product_tree_revision(repo, work_request_id, tool, created_by) do
-        {:ok, result}
-      end
-    end)
+    run_architect_transaction(
+      repo,
+      fn ->
+        with {:ok, result} <- mutation_fun.(),
+             {:ok, _revision} <- record_current_product_tree_revision(repo, work_request_id, tool, created_by) do
+          {:ok, result}
+        end
+      end,
+      false
+    )
   end
 
   defp record_current_product_tree_revision(repo, work_request_id, tool, created_by) do
