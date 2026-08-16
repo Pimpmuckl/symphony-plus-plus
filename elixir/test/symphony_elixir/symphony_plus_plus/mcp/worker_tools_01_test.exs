@@ -408,7 +408,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     assert Enum.any?(events, &(get_in(&1.payload, ["type"]) == "scope_expansion_request" and get_in(&1.payload, ["approved"]) == false))
   end
 
-  test "worker context projects only parent goal and direct dependencies through phase-child scope", %{repo: repo} do
+  test "worker context projects only its package, parent summary, selected decisions, and direct dependencies", %{repo: repo} do
     parent_work_request =
       create_work_request!(repo,
         id: "WR-WORKER-CONTEXT",
@@ -476,6 +476,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
                )
              )
 
+    assert {:ok, selected_decision} =
+             WorkRequestRepository.record_decision(
+               repo,
+               parent_work_request.id,
+               work_request_decision_attrs(
+                 id: "WRD-WORKER-CONTEXT-SELECTED",
+                 decision: "Use the direct dependency contract.",
+                 rationale: "It controls this worker's sequencing.",
+                 scope_impact: "Read only the selected decision."
+               )
+             )
+
+    assert {:ok, _unrelated_decision} =
+             WorkRequestRepository.record_decision(
+               repo,
+               parent_work_request.id,
+               work_request_decision_attrs(
+                 id: "WRD-WORKER-CONTEXT-UNRELATED",
+                 decision: "Sibling-only decision must stay hidden."
+               )
+             )
+
     assert {:ok, _edge} =
              ProductTree.create_dependency_edge(repo, %{
                work_request_id: parent_work_request.id,
@@ -484,7 +506,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
                target_kind: "work_package",
                target_id: dependency.id,
                kind: "depends_on",
-               reason: "Worker needs direct dependency status."
+               reason: "Worker needs direct dependency status.",
+               decision_ref: %{"id" => selected_decision.id}
              })
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, child.id)
@@ -494,18 +517,55 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     context = get_in(response, ["result", "structuredContent"])
 
     assert context["parent_work_request"] == %{
+             "id" => parent_work_request.id,
              "title" => parent_work_request.title,
-             "goal" => parent_work_request.human_description
+             "goal" => parent_work_request.human_description,
+             "status" => parent_work_request.status
            }
 
     assert context["direct_dependencies"] == [
              %{"id" => dependency.id, "title" => dependency.title, "status" => dependency.status}
            ]
 
+    assert context["selected_decisions"] == [
+             %{
+               "id" => selected_decision.id,
+               "decision" => selected_decision.decision,
+               "rationale" => selected_decision.rationale,
+               "scope_impact" => selected_decision.scope_impact
+             }
+           ]
+
+    assert context["work_package"] == %{
+             "id" => child.id,
+             "status" => child.status,
+             "contract_revision" => child.contract_revision,
+             "repo" => child.repo,
+             "base_branch" => child.base_branch,
+             "branch" => child.branch_pattern,
+             "goal" => child.goal,
+             "product_description" => child.product_description,
+             "engineering_scope" => child.engineering_scope,
+             "allowed_file_globs" => child.allowed_file_globs,
+             "forbidden_file_globs" => child.forbidden_file_globs,
+             "acceptance_criteria" => child.acceptance_criteria,
+             "validation_steps" => child.validation_steps,
+             "stop_conditions" => child.stop_conditions,
+             "review" => child.review_requirement
+           }
+
+    assert context["current_binding"] == %{
+             "state" => "bound",
+             "role" => "worker",
+             "surface_profile" => "full",
+             "next_action" => "continue_current_assignment"
+           }
+
     context_text = get_in(response, ["result", "content", Access.at(0), "text"])
     assert context_text =~ dependency.id
     refute context_text =~ sibling.title
     refute context_text =~ "sibling-contract-secret"
+    refute context_text =~ "Sibling-only decision must stay hidden."
 
     repo.update_all(from(work_package in WorkPackage, where: work_package.id == ^child.id), set: [repo: "other/repo"])
     drifted_context = mcp_tool(repo, session, "read_context", %{})

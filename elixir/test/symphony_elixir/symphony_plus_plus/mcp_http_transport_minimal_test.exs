@@ -77,7 +77,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     assert %Server{local_daemon_trusted: true} = HTTPStateStore.get(trusted_config, "trusted-client", trusted.state_key)
   end
 
-  test "tools/list after initialize exposes unbound claim and scoped schemas", %{config: config} do
+  test "tools/list after initialize exposes only callable unbound tools", %{config: config} do
     {:ok, init} = HTTPTransport.handle(config, initialize_request("init"), client_key: "client-a")
 
     assert {:ok, tools} =
@@ -92,14 +92,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
           "claim_local_assignment",
           "claim_local_architect_assignment",
           "get_current_assignment",
-          "append_progress",
-          "mark_ready",
-          "read_work_request",
-          "list_guidance_requests",
-          "slice_work_request",
-          "update_work_package",
-          "dispatch_work_package",
-          "read_delivery_board",
+          "release_current_assignment",
           "solo_attach",
           "solo_list",
           "solo_record_task_plan",
@@ -120,7 +113,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     end
   end
 
-  test "trusted local HTTP advertises scoped schemas before local claim and enforces claim on writes", %{config: config} do
+  test "trusted local HTTP advertises callable bootstrap and recovery tools before claim", %{config: config} do
     trusted_config = %{config | local_daemon_trusted: true}
     package_id = "SYMPP-HTTP-TRUSTED-LOCAL-CLAIM"
 
@@ -153,14 +146,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
           "claim_local_architect_assignment",
           "create_work_request",
           "get_current_assignment",
-          "append_progress",
-          "mark_ready",
-          "read_work_request",
-          "list_guidance_requests",
-          "slice_work_request",
-          "update_work_package",
-          "dispatch_work_package",
-          "read_delivery_board",
+          "release_current_assignment",
           "sympp.health"
         ] do
       assert tool in names
@@ -212,7 +198,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     claimed_names = tool_names(claimed_tools.response)
     assert "get_current_assignment" in claimed_names
     assert "append_progress" in claimed_names
-    refute "claim_local_assignment" in claimed_names
+    assert "claim_local_assignment" in claimed_names
+    refute "claim_local_architect_assignment" in claimed_names
     refute "claim_private_handoff" in claimed_names
 
     assert {:ok, assignment} =
@@ -591,7 +578,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     assert {:ok, tools} =
              HTTPTransport.handle(local_config, tools_list_request("tools-after-claim"), client_key: "client-a", state_key: init.state_key)
 
-    refute "claim_local_assignment" in tool_names(tools.response)
+    assert "claim_local_assignment" in tool_names(tools.response)
+    refute "claim_local_architect_assignment" in tool_names(tools.response)
     assert "get_current_assignment" in tool_names(tools.response)
 
     assert {:ok, assignment} =

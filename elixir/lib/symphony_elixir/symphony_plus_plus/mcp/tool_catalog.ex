@@ -226,6 +226,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @spec known_tool?(term()) :: boolean()
   def known_tool?(name), do: name in @known_tools
 
+  @spec known_tools() :: [tool_name()]
+  def known_tools, do: @known_tools
+
   @spec work_request_policy_tools() :: [tool_name()]
   def work_request_policy_tools, do: @work_request_policy_tools
 
@@ -263,8 +266,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   @spec claimable_tool_specs(Config.t()) :: [tool_spec()]
   defdelegate claimable_tool_specs(config), to: SurfaceSpecs
 
+  @spec callable_claim_tool_specs(Config.t()) :: [tool_spec()]
+  defdelegate callable_claim_tool_specs(config), to: SurfaceSpecs
+
   @spec unbound_tool_specs_for_config(Config.t()) :: [tool_spec()]
   defdelegate unbound_tool_specs_for_config(config), to: SurfaceSpecs
+
+  @spec callable_unbound_tool_specs_for_config(Config.t()) :: [tool_spec()]
+  defdelegate callable_unbound_tool_specs_for_config(config), to: SurfaceSpecs
 
   @spec startup_tool_specs(:full | :worker | :architect | :coordinator | :solo, Config.t()) :: [tool_spec()]
   defdelegate startup_tool_specs(profile, config), to: SurfaceSpecs

@@ -110,7 +110,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     assert is_list(get_in(post_init_response, ["result", "tools"]))
   end
 
-  test "tools list exposes scoped schemas before binding while write calls stay claim-gated", %{repo: repo} do
+  test "tools list exposes only callable schemas before binding while handcrafted writes stay claim-gated", %{repo: repo} do
     unbound_server = Server.new(Config.default(repo: repo), initialized: true)
 
     unbound_response =
@@ -125,6 +125,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     for tool <- [
           "claim_local_assignment",
           "claim_local_architect_assignment",
+          "get_current_assignment",
+          "release_current_assignment",
           "solo_attach",
           "solo_list",
           "solo_record_task_plan",
@@ -160,11 +162,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     assert Map.has_key?(trusted_local_tools_by_name, "create_work_request")
 
     for tool <- ToolCatalog.architect_tools() do
-      assert Map.has_key?(unbound_tools_by_name, tool)
+      refute Map.has_key?(unbound_tools_by_name, tool)
     end
 
-    for tool <- ToolCatalog.worker_tools() do
-      assert Map.has_key?(unbound_tools_by_name, tool)
+    for tool <- ToolCatalog.worker_tools(), tool != "get_current_assignment" do
+      refute Map.has_key?(unbound_tools_by_name, tool)
     end
 
     assert get_in(unbound_tools_by_name, ["claim_local_assignment", "inputSchema", "required"]) == ["work_package_id"]
@@ -189,104 +191,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
 
     assert get_in(trusted_local_tools_by_name, ["create_work_request", "inputSchema", "properties", "description", "description"]) =~ "Markdown"
     assert get_in(trusted_local_tools_by_name, ["create_work_request", "inputSchema", "properties", "human_description", "description"]) =~ "Markdown"
-    assert get_in(unbound_tools_by_name, ["read_work_request", "inputSchema", "required"]) == ["work_request_id"]
-    assert get_in(unbound_tools_by_name, ["append_progress", "inputSchema", "required"]) == ["summary", "idempotency_key"]
-    assert get_in(unbound_tools_by_name, ["add_comment", "inputSchema", "required"]) == ["target_kind", "target_id", "body"]
-    assert get_in(unbound_tools_by_name, ["list_comments", "inputSchema", "required"]) == ["target_kind", "target_id"]
-
-    for tool <- ["resolve_blocker", "add_comment", "list_comments", "resolve_comment", "read_guidance_request"] do
-      assert get_in(unbound_tools_by_name, [tool, "inputSchema", "properties", "work_package_id", "type"]) == "string"
-    end
-
-    for tool <- [
-          "append_finding",
-          "append_progress",
-          "report_blocker",
-          "abandon",
-          "request_scope_expansion",
-          "attach_branch",
-          "attach_pr",
-          "sync_pr",
-          "submit_review_package",
-          "complete_review"
-        ] do
-      assert get_in(unbound_tools_by_name, [tool, "inputSchema", "properties", "work_package_id", "type"]) == "string"
-    end
-
-    refute Map.has_key?(get_in(unbound_tools_by_name, ["update_task_plan", "inputSchema", "properties"]), "work_package_id")
-
     refute Map.has_key?(unbound_tools_by_name, "upsert_plan_node")
     refute Map.has_key?(unbound_tools_by_name, "move_plan_node")
     refute Map.has_key?(unbound_tools_by_name, "set_plan_node_completion")
-
-    assert get_in(unbound_tools_by_name, ["upsert_group", "inputSchema", "required"]) == [
-             "work_request_id"
-           ]
-
-    group_schema = get_in(unbound_tools_by_name, ["upsert_group", "inputSchema"])
-    group_properties = get_in(group_schema, ["properties"])
-    assert get_in(group_properties, ["work_request_id", "description"]) =~ "Required WorkRequest id"
-    assert Map.has_key?(group_properties, "group_id")
-    assert Map.has_key?(group_properties, "title")
-    assert Map.has_key?(group_properties, "parent_group_id")
-    assert Map.has_key?(group_properties, "position")
-    refute Map.has_key?(group_properties, "completion_mark")
-
-    assert get_in(group_schema, ["then", "allOf"]) == [
-             %{"anyOf" => [%{"required" => ["group_id"]}, %{"required" => ["title"]}]},
-             %{
-               "anyOf" => [
-                 %{"required" => ["title"]},
-                 %{"required" => ["description"]},
-                 %{"required" => ["kind"]},
-                 %{"required" => ["parent_group_id"]},
-                 %{"required" => ["position"]}
-               ]
-             }
-           ]
-
-    assert get_in(unbound_tools_by_name, ["upsert_group", "description"]) =~ "explicit WorkRequest"
-    assert get_in(unbound_tools_by_name, ["upsert_group", "description"]) =~ "no lifecycle"
-
-    assert get_in(unbound_tools_by_name, ["delete_group", "inputSchema", "required"]) == [
-             "work_request_id",
-             "group_id"
-           ]
-
-    assert get_in(unbound_tools_by_name, ["upsert_dependency", "inputSchema", "required"]) == [
-             "work_request_id",
-             "dependent",
-             "prerequisite"
-           ]
-
-    dependency_properties = get_in(unbound_tools_by_name, ["upsert_dependency", "inputSchema", "properties"])
-    assert get_in(dependency_properties, ["dependent", "properties", "kind", "enum"]) == ["work_package", "group"]
-    assert get_in(dependency_properties, ["prerequisite", "properties", "id", "pattern"]) == "\\S"
-    assert get_in(dependency_properties, ["reason", "type"]) == "string"
-
-    assert get_in(unbound_tools_by_name, ["delete_dependency", "inputSchema", "required"]) == [
-             "work_request_id",
-             "dependency_id"
-           ]
-
-    assert get_in(unbound_tools_by_name, ["update_work_package", "inputSchema", "required"]) == [
-             "work_request_id",
-             "work_package_id",
-             "expected_contract_revision",
-             "patch"
-           ]
-
-    assert get_in(unbound_tools_by_name, ["resolve_blocker", "inputSchema", "required"]) == [
-             "blocker_id",
-             "resolution",
-             "summary",
-             "idempotency_key"
-           ]
-
-    assert get_in(unbound_tools_by_name, ["dispatch_work_package", "inputSchema", "required"]) == [
-             "work_request_id",
-             "work_package_id"
-           ]
 
     unclaimed_read_response =
       Server.handle(

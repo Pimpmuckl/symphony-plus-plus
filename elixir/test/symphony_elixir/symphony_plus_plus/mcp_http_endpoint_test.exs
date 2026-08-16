@@ -17,8 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     HTTPStateStore,
     Session,
     SessionBinding,
-    SessionRecovery,
-    ToolCatalog
+    SessionRecovery
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
@@ -250,15 +249,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     names = tool_names(json_response(conn, 200))
     assert length(names) == length(Enum.uniq(names))
 
-    expected_names =
-      Config.default(repo: Repo)
-      |> ToolCatalog.unbound_tool_specs_for_config()
-      |> Kernel.++(ToolCatalog.local_operator_tool_specs())
-      |> Enum.map(& &1["name"])
-      |> Enum.uniq()
-
-    for tool <- expected_names do
+    for tool <- [
+          "sympp.health",
+          "get_current_assignment",
+          "claim_local_assignment",
+          "claim_local_architect_assignment",
+          "solo_attach",
+          "create_work_request",
+          "add_work_request_comment"
+        ] do
       assert tool in names
+    end
+
+    for tool <- ["read_context", "read_work_request", "create_child_work_package", "list_work_requests"] do
+      refute tool in names
     end
   end
 
@@ -346,7 +350,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     assert "get_current_assignment" in tool_names
     assert "append_progress" in tool_names
-    refute "claim_local_assignment" in tool_names
+    assert "claim_local_assignment" in tool_names
+    refute "claim_local_architect_assignment" in tool_names
     refute "claim_private_handoff" in tool_names
     refute "solo_attach" in tool_names
 
@@ -577,7 +582,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assignment =
       post_json(tool_call_request("stale-binding-assignment", "get_current_assignment", %{}), [{"mcp-session-id", session_id}])
 
-    assert get_in(json_response(assignment, 200), ["error", "data", "reason"]) == "claim_required"
+    assignment_payload = get_in(json_response(assignment, 200), ["result", "structuredContent"])
+    assert assignment_payload["assignment"] == nil
+    assert get_in(assignment_payload, ["binding", "state"]) == "unbound"
+    assert assignment_payload["next_action"] == "claim_assignment"
     assert [%ClaimLease{id: ^claim_lease_id, actor_display_name: "local-worker-http-stale-binding"}] = active_claim_leases(work_package.id)
   end
 
@@ -764,13 +772,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     tool_names = tool_names(json_response(tools, 200))
 
     assert "claim_local_assignment" in tool_names
-    assert "claim_local_architect_assignment" in tool_names
-    refute "get_current_assignment" in tool_names
+    refute "claim_local_architect_assignment" in tool_names
+    assert "get_current_assignment" in tool_names
 
     assignment_tool =
       post_json(tool_call_request("revoked-assignment", "get_current_assignment", %{}), [{"mcp-session-id", session_id}])
 
-    assert get_in(json_response(assignment_tool, 200), ["error", "data", "reason"]) == "revoked"
+    assignment_payload = get_in(json_response(assignment_tool, 200), ["result", "structuredContent"])
+    assert assignment_payload["assignment"] == nil
+    assert get_in(assignment_payload, ["binding", "state"]) == "stale"
+    assert get_in(assignment_payload, ["recovery", "tools"]) == ["claim_local_assignment"]
 
     progress =
       post_json(
