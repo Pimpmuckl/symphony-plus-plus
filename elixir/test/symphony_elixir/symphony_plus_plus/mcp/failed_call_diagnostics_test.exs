@@ -171,6 +171,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
 
     assert get_in(claimed.response, ["result", "structuredContent", "assignment", "work_package_id"]) == package.id
 
+    {solo_response, solo_log} =
+      capture_response(fn ->
+        assert {:ok, result} =
+                 HTTPTransport.handle(config, tool_call("solo_show", %{"session_id" => "private-solo-session"}),
+                   client_key: client_key,
+                   state_key: initialized.state_key
+                 )
+
+        result.response
+      end)
+
+    recovery = solo_response["error"]["data"]["recovery"]
+    assert recovery["tool"] == "release_current_assignment"
+    assert recovery["next_action"] == "call_release_current_assignment_then_retry_solo_tool"
+    assert is_binary(recovery["fallback"])
+    assert [solo_event] = diagnostic_events(solo_log)
+    assert solo_event["recovery"] == Map.take(recovery, ["fresh_mcp_session_required", "next_action", "tool"])
+    refute diagnostic_event_line(solo_log) =~ "private-solo-session"
+    refute Map.has_key?(solo_event["recovery"], "fallback")
+
     secret = "Bearer C:/private/branch/wp_identifier_secret"
 
     request = %{

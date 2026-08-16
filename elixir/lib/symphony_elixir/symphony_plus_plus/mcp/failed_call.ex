@@ -204,13 +204,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
   defp descriptor(code, data, layer) do
     classification = classification(code)
     reason = failure_reason(data, classification)
-    recovery = recovery(classification, reason)
+    default_recovery = recovery(classification, reason)
+    recovery = safe_existing_recovery(data["recovery"]) || default_recovery
 
     %Descriptor{
       classification: classification,
       reason: reason,
       layer: Atom.to_string(layer),
-      public_data: Map.put(data, "recovery", recovery),
+      public_data: Map.put_new(data, "recovery", default_recovery),
       recovery: recovery
     }
   end
@@ -464,6 +465,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
   defp recovery("not_found", _reason), do: %{"next_action" => "verify_target"}
   defp recovery("precondition_failed", _reason), do: %{"next_action" => "satisfy_precondition"}
   defp recovery(_classification, _reason), do: %{"next_action" => "retry_or_check_health"}
+
+  defp safe_existing_recovery(%{
+         "fresh_mcp_session_required" => fresh_session?,
+         "next_action" => "call_release_current_assignment_then_retry_solo_tool",
+         "tool" => "release_current_assignment"
+       })
+       when is_boolean(fresh_session?) do
+    %{
+      "fresh_mcp_session_required" => fresh_session?,
+      "next_action" => "call_release_current_assignment_then_retry_solo_tool",
+      "tool" => "release_current_assignment"
+    }
+  end
+
+  defp safe_existing_recovery(_recovery), do: nil
 
   defp attach_diagnostic(response, {diagnostic_id, %Descriptor{} = descriptor}) do
     case response do
