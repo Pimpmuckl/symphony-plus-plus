@@ -337,6 +337,7 @@ async function runCase(clientCount, shell, mode = "normal") {
       assert.deepEqual([].concat(JSON.parse(ownersResult.stdout.trim())), [activeBackend.pid]);
       await terminate(activeBackend.pid);
       recoveryClients[0].child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3300, method: "tools/list", params: {} })}\n`);
+      recoveryClients[0].child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3301, method: "tools/list", params: {} })}\n`);
       await waitFor(() => channel.counts.manifest_attempts === 3 && traceCount(traceDir, "fallback_recovery_begin") > recoveryClients.length, "Fallback recovery did not block in test-owned manifest fetch.");
       for (const client of clients) { try { client.child.stdin.end(); } catch (_) { } }
       const results = await Promise.all(clients.map((client) => client.result));
