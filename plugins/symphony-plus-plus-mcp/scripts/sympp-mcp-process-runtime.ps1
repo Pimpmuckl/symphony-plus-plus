@@ -564,11 +564,11 @@ function Test-McpToolCall([string]$Line) {
   try { return [string](($Line | ConvertFrom-Json).method) -eq "tools/call" } catch { return $false }
 }
 
-function Invoke-McpBackendRecovery([scriptblock]$Recover, [string]$McpUrl, [string]$ClientId, [int]$HeartbeatIntervalSec) {
+function Invoke-McpBackendRecovery([scriptblock]$Recover, [string]$McpUrl, [string]$ClientId, [int]$HeartbeatIntervalSec, $PendingReadTask) {
   if ($null -eq $Recover) { return $null }
   try {
     Write-SymppLauncherTrace "fallback_recovery_begin"
-    $replacement = & $Recover
+    $replacement = & $Recover $PendingReadTask
     Write-SymppLauncherTrace "fallback_recovery_callback"
     $nextMcpUrl = [string]$replacement.mcp_url
     if ([string]::IsNullOrWhiteSpace($nextMcpUrl)) { return $null }
@@ -582,7 +582,7 @@ function Invoke-McpBackendRecovery([scriptblock]$Recover, [string]$McpUrl, [stri
       heartbeat_interval_ms = Resolve-McpClientHeartbeatIntervalMs $HeartbeatIntervalSec $lease
     }
   } catch {
-    Write-Diagnostic "Symphony++ fallback backend recovery failed: $($_.Exception.Message)"
+    if ($_.Exception -isnot [System.OperationCanceledException]) { Write-Diagnostic "Symphony++ fallback backend recovery failed: $($_.Exception.Message)" }
     return $null
   }
 }
@@ -602,7 +602,7 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
       if (-not $readTask.Wait($heartbeatIntervalMs)) {
         $heartbeat = Invoke-McpClientLease $McpUrl $ClientId "heartbeat"
         if ($null -eq $heartbeat -and -not (Test-LoopbackHttpTcpOpen $McpUrl)) {
-          $recovered = Invoke-McpBackendRecovery $Recover $McpUrl $ClientId $HeartbeatIntervalSec
+          $recovered = Invoke-McpBackendRecovery $Recover $McpUrl $ClientId $HeartbeatIntervalSec $readTask
           if ($null -ne $recovered) {
             $McpUrl = $recovered.mcp_url; $heartbeatIntervalMs = $recovered.heartbeat_interval_ms
             $sessionId = $null; $protocolVersion = $null; $needsInitialize = $true
@@ -631,7 +631,7 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
       $lastHeartbeatMs = Invoke-McpClientHeartbeatIfDue $McpUrl $ClientId $lastHeartbeatMs $heartbeatIntervalMs
       $requestProtocolVersion = Get-InitializeProtocolVersion $line
       if ($null -ne $Recover -and -not (Test-LoopbackHttpTcpOpen $McpUrl)) {
-        $recovered = Invoke-McpBackendRecovery $Recover $McpUrl $ClientId $HeartbeatIntervalSec
+        $recovered = Invoke-McpBackendRecovery $Recover $McpUrl $ClientId $HeartbeatIntervalSec $readTask
         if ($null -eq $recovered) {
           Write-JsonRpcErrorLine (Get-RequestIdForError $line) -32000 "Symphony++ HTTP MCP bridge request failed." @{ detail = "Backend recovery failed before request transmission." }
           continue
@@ -656,7 +656,7 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
 
       if (Test-McpRecoverableSessionNotFound $response $sessionId $requestProtocolVersion) {
         if ($null -ne $Recover) {
-          $recovered = Invoke-McpBackendRecovery $Recover $McpUrl $ClientId $HeartbeatIntervalSec
+          $recovered = Invoke-McpBackendRecovery $Recover $McpUrl $ClientId $HeartbeatIntervalSec $readTask
           if ($null -ne $recovered) {
             $McpUrl = $recovered.mcp_url
             $heartbeatIntervalMs = $recovered.heartbeat_interval_ms
@@ -678,7 +678,7 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
 
       $requestMayHaveReachedBackend = -not ($response.PSObject.Properties["may_have_reached_backend"] -and $response.may_have_reached_backend -eq $false)
       if ((Test-McpBackendUnavailableResponse $response) -and -not (Test-LoopbackHttpTcpOpen $McpUrl)) {
-        $recovered = Invoke-McpBackendRecovery $Recover $McpUrl $ClientId $HeartbeatIntervalSec
+        $recovered = Invoke-McpBackendRecovery $Recover $McpUrl $ClientId $HeartbeatIntervalSec $readTask
         if ($null -ne $recovered) {
           $McpUrl = $recovered.mcp_url; $heartbeatIntervalMs = $recovered.heartbeat_interval_ms
           $sessionId = $null; $protocolVersion = $null; $needsInitialize = $true

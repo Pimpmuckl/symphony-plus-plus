@@ -2040,7 +2040,8 @@ function Invoke-PowerShellFallbackRuntimeRecovery {
   param(
     [string]$RuntimeFile, [string]$PluginRoot, [int]$BackendPort, [int]$DashboardPort,
     [bool]$BackendPortExplicit, [bool]$DashboardPortExplicit,
-    [string]$ConfiguredBackendUrl, [string]$ConfiguredDashboardOrigin, [string]$LauncherPath
+    [string]$ConfiguredBackendUrl, [string]$ConfiguredDashboardOrigin, [string]$LauncherPath,
+    $PendingReadTask
   )
 
   $previousOwnerPid = $env:SYMPP_BACKEND_OWNER_PID
@@ -2055,20 +2056,39 @@ function Invoke-PowerShellFallbackRuntimeRecovery {
     }
     if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) { $preparationArgs["WindowStyle"] = "Hidden" }
     $preparation = Start-Process @preparationArgs
-    $preparation.WaitForExit()
+    while (-not $preparation.WaitForExit(100)) {
+      $stdinClosed = $false
+      if ($null -ne $PendingReadTask -and $PendingReadTask.IsCompleted) {
+        try { $stdinClosed = $null -eq $PendingReadTask.Result } catch { $stdinClosed = $true }
+      }
+      if ($stdinClosed) {
+        if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+          & taskkill.exe /PID $preparation.Id /T /F 2>$null | Out-Null
+        } else {
+          Stop-Process -Id $preparation.Id -Force -ErrorAction SilentlyContinue
+        }
+        throw [System.OperationCanceledException]::new("STDIO closed during fallback backend recovery.")
+      }
+    }
   } finally {
     $env:SYMPP_BACKEND_OWNER_PID = $previousOwnerPid
   }
   Write-SymppLauncherTrace "fallback_recovery_prepared"
 
-  $state = Read-RuntimeState $RuntimeFile
-  $identity = Resolve-LocalWarmAttachIdentity $state $PluginRoot $BackendPort $DashboardPort $BackendPortExplicit $DashboardPortExplicit $ConfiguredBackendUrl $ConfiguredDashboardOrigin
-  if ($null -eq $identity) { throw "Replacement runtime identity was unavailable." }
-  Write-SymppLauncherTrace "fallback_recovery_identity"
-  $plan = Resolve-FastAttachRuntimePlan $state $identity.source_revision $identity.contract_fingerprint 0 0 $false $false $null $null
-  if ($null -eq $plan) { throw "Replacement runtime was not healthy." }
-  Write-SymppLauncherTrace "fallback_recovery_plan"
-  return $plan
+  try {
+    $state = Read-RuntimeState $RuntimeFile
+    $identity = Resolve-LocalWarmAttachIdentity $state $PluginRoot $BackendPort $DashboardPort $BackendPortExplicit $DashboardPortExplicit $ConfiguredBackendUrl $ConfiguredDashboardOrigin
+    if ($null -eq $identity) { throw "Replacement runtime identity was unavailable." }
+    Write-SymppLauncherTrace "fallback_recovery_identity"
+    $plan = Resolve-FastAttachRuntimePlan $state $identity.source_revision $identity.contract_fingerprint 0 0 $false $false $null $null
+    if ($null -eq $plan) { throw "Replacement runtime was not healthy." }
+    Write-SymppLauncherTrace "fallback_recovery_plan"
+    return $plan
+  } catch {
+    $failedKey = Get-RuntimeStateKey (Read-RuntimeState $RuntimeFile)
+    if (-not [string]::IsNullOrWhiteSpace($failedKey)) { Stop-ManagedServersIfUnused $RuntimeFile $failedKey }
+    throw
+  }
 }
 
 function Invoke-WarmAttachFromRuntimeState {
@@ -2116,8 +2136,8 @@ function Invoke-WarmAttachFromRuntimeState {
 
     $attached = $true
     Write-Diagnostic "Symphony++ MCP bridge attached: backend=$($confirmedPlan.backend_plan.url) dashboard=$($confirmedPlan.dashboard_plan.url) runtime=$RuntimeFile"
-    $fallbackRecovery = {
-      $plan = Invoke-PowerShellFallbackRuntimeRecovery $RuntimeFile $PluginRoot $BackendPort $DashboardPort $BackendPortExplicit $DashboardPortExplicit $ConfiguredBackendUrl $ConfiguredDashboardOrigin $PSCommandPath
+    $fallbackRecovery = { param($pendingReadTask)
+      $plan = Invoke-PowerShellFallbackRuntimeRecovery $RuntimeFile $PluginRoot $BackendPort $DashboardPort $BackendPortExplicit $DashboardPortExplicit $ConfiguredBackendUrl $ConfiguredDashboardOrigin $PSCommandPath $pendingReadTask
       if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($leaseState.runtime_key, $plan.runtime_key)) {
         $replacementLeasePath = New-BridgeLease $RuntimeFile $plan.backend_plan $plan.dashboard_plan $plan.runtime_key
         Remove-BridgeLease $leaseState.path
@@ -2748,8 +2768,8 @@ if ($PrepareRuntimeOnly) {
 }
 try {
   $leaseState = [pscustomobject]@{ path = $bridgeLeasePath; runtime_key = $runtimeKey }
-  $fallbackRecovery = {
-    $recoveryPlan = Invoke-PowerShellFallbackRuntimeRecovery $runtimeFile $pluginRoot $backendPort $dashboardPort $backendPortExplicit $dashboardPortExplicit $env:SYMPP_BACKEND_URL $env:SYMPP_DASHBOARD_ORIGIN $PSCommandPath
+  $fallbackRecovery = { param($pendingReadTask)
+    $recoveryPlan = Invoke-PowerShellFallbackRuntimeRecovery $runtimeFile $pluginRoot $backendPort $dashboardPort $backendPortExplicit $dashboardPortExplicit $env:SYMPP_BACKEND_URL $env:SYMPP_DASHBOARD_ORIGIN $PSCommandPath $pendingReadTask
     if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($leaseState.runtime_key, $recoveryPlan.runtime_key)) {
       $replacementLeasePath = New-BridgeLease $runtimeFile $recoveryPlan.backend_plan $recoveryPlan.dashboard_plan $recoveryPlan.runtime_key
       Remove-BridgeLease $leaseState.path

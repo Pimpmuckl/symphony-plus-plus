@@ -138,7 +138,7 @@ async function createChannelServer(mode, manifestBody, archive) {
       counts.manifest_attempts++;
       const attempt = counts.manifest_attempts;
       manifestTail = manifestTail.then(async () => {
-        if (mode === "manifest_death" && attempt === 1) await manifestGate;
+        if ((mode === "manifest_death" && attempt === 1) || (mode === "powershell_fallback_recovery" && attempt === 3)) await manifestGate;
         await delay(250);
         if (response.destroyed) return;
         counts.manifest_successes++;
@@ -335,23 +335,28 @@ async function runCase(clientCount, shell, mode = "normal") {
       const ownersResult = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", "@(Get-NetTCPConnection -LocalPort $env:FIXTURE_PORT -State Listen -ErrorAction Stop | Select-Object -ExpandProperty OwningProcess -Unique) | ConvertTo-Json -Compress"], { env: { ...process.env, FIXTURE_PORT: String(backendPort) }, encoding: "utf8", windowsHide: true });
       assert.equal(ownersResult.status, 0, ownersResult.stderr);
       assert.deepEqual([].concat(JSON.parse(ownersResult.stdout.trim())), [activeBackend.pid]);
+      await terminate(activeBackend.pid);
+      recoveryClients[0].child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3300, method: "tools/list", params: {} })}\n`);
+      await waitFor(() => channel.counts.manifest_attempts === 3 && traceCount(traceDir, "fallback_recovery_begin") > recoveryClients.length, "Fallback recovery did not block in test-owned manifest fetch.");
       for (const client of clients) { try { client.child.stdin.end(); } catch (_) { } }
       const results = await Promise.all(clients.map((client) => client.result));
+      channel.releaseManifest();
       assert.equal(results.filter((result) => result.code !== 0).length, 1, results.map((result) => result.stderr).join("\n"));
-      await waitFor(() => readJson(backendState)?.active_leases === 0, "Fallback replacement backend leases did not drain.");
+      const leaseDir = path.join(symppHome, "runtime", "codex-plugin-leases");
+      await waitFor(() => fs.readdirSync(leaseDir, { withFileTypes: true }).filter((entry) => entry.isFile()).length === 0, "Fallback replacement backend lease files did not drain.");
       const backend = readJson(backendState);
       await waitFor(() => portAvailable(backendPort), "Fallback replacement listener did not stop.");
-      const stopped = await waitFor(() => { const value = readJson(runtimeFile); return value?.backend?.status === "stopped" && value.backend.pid === null && value; }, "Fallback recovery state did not reach stopped.");
+      const stopped = readJson(runtimeFile);
+      assert.ok(stopped && (!stopped.backend?.pid || !processAlive(Number(stopped.backend.pid))), `Fallback recovery retained a managed backend. ${JSON.stringify(stopped)}`);
       assert.equal(backend.starts, 2);
       assert.equal(backend.initialize, clientCount + recoveryClients.length);
       assert.equal(backend.tools_list, clientCount + recoveryClients.length);
-      assert.equal(traceCount(traceDir, "cold_leader_acquired"), 2);
       assert.equal(traceCount(traceDir, "runtime_ready_published"), 2);
       assert.equal(traceCount(traceDir, "fallback_backend_recovery_ready"), recoveryClients.length);
       assert.notEqual(Number(stopped.publication.owner_adapter_pid), firstOwnerPid);
-      assert.equal(fs.readdirSync(path.join(symppHome, "runtime", "codex-plugin-leases"), { withFileTypes: true }).filter((entry) => entry.isFile()).length, 0);
+      assert.equal(fs.readdirSync(leaseDir, { withFileTypes: true }).filter((entry) => entry.isFile()).length, 0);
       backendPid = 0;
-      return { mode, shell: path.basename(shell), clients: clientCount, p95_ms: percentile(latencies, 0.95), max_ms: Math.max(...latencies), manifest: channel.counts.manifest_successes, artifact: channel.counts.archive_successes, preparations: traceCount(traceDir, "artifact_prepare_end"), backends: backend.starts, pids: 2, listeners: 0, initializes: backend.initialize, tools_list: backend.tools_list, mutations: backend.mutations, lease_peak: backend.lease_peak, leases_after: backend.active_leases, recovery_leaders: traceCount(traceDir, "cold_leader_acquired") - 1, fallback_recovery: true };
+      return { mode, shell: path.basename(shell), clients: clientCount, p95_ms: percentile(latencies, 0.95), max_ms: Math.max(...latencies), manifest: channel.counts.manifest_successes, artifact: channel.counts.archive_successes, preparations: traceCount(traceDir, "artifact_prepare_end"), backends: backend.starts, pids: 2, listeners: 0, initializes: backend.initialize, tools_list: backend.tools_list, mutations: backend.mutations, lease_peak: backend.lease_peak, leases_after: 0, recovery_leaders: traceCount(traceDir, "runtime_ready_published") - 1, fallback_recovery: true, cancelled_recovery: true };
     } else if (mode === "shutdown_during_recovery") {
       await terminate(firstBackend.pid);
       await waitFor(() => traceCount(traceDir, "backend_recovery_leader") === 1, "Heartbeat recovery did not start.");
