@@ -75,8 +75,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubGhCliClientTest do
     assert {:error, :provider_malformed} = PullRequest.provider_snapshot(metadata, ref, "head-a")
   end
 
-  test "rejects gh file entries that cannot prove rename identity" do
-    for {number, file} <- [{24, %{"path" => "lib/unknown.ex"}}, {26, %{"path" => "lib/new.ex", "changeType" => "RENAMED"}}] do
+  test "rejects incomplete or malformed gh file identity" do
+    files = [
+      {24, %{"path" => "lib/unknown.ex"}},
+      {26, %{"path" => "lib/new.ex", "changeType" => "RENAMED"}},
+      {27, %{"path" => "lib/invalid.ex", "changeType" => %{}}}
+    ]
+
+    for {number, file} <- files do
       assert {:ok, ref} = PullRequest.parse(%{"url" => "https://github.com/nextide/repo/pull/#{number}"}, nil)
 
       response =

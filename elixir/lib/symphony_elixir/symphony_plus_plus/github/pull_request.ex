@@ -188,8 +188,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
   defp provider_changed_files_complete(_metadata, _payload), do: :ok
 
   defp provider_file_complete?(%{"path" => path, "changeType" => change_type} = file) do
-    filled_string?(path) and
-      (String.downcase(to_string(change_type)) != "renamed" or
+    filled_string?(path) and is_binary(change_type) and
+      (String.downcase(change_type) != "renamed" or
          filled_string?(Map.get(file, "previous_path") || Map.get(file, "previous_filename")))
   end
 
