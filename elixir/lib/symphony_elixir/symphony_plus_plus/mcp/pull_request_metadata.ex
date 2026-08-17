@@ -40,10 +40,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
 
       case ProgressEvents.existing(repo, session, idempotency_key) do
         {:ok, %ProgressEvent{payload: %{"type" => "pr", "source_tool" => "sync_pr"} = payload} = event} ->
-          with :ok <- validate_replay_pr_identity(arguments, payload),
-               {:ok, ^idempotency_key, attrs} <- ProgressEvents.metadata_attrs(session, arguments, "sync_pr", "pr_synced", payload) do
-            ProgressEvents.replay_existing(repo, session, event, attrs, "sync_pr")
-          end
+          replay_provider_sync_event(repo, session, arguments, idempotency_key, event, payload)
 
         {:ok, %ProgressEvent{}} ->
           :not_found
@@ -56,6 +53,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
       end
     else
       :not_found
+    end
+  end
+
+  defp replay_provider_sync_event(repo, session, arguments, idempotency_key, event, payload) do
+    with :ok <- validate_replay_pr_identity(arguments, payload),
+         {:ok, ^idempotency_key, attrs} <- ProgressEvents.metadata_attrs(session, arguments, "sync_pr", "pr_synced", payload) do
+      ProgressEvents.replay_existing(repo, session, event, attrs, "sync_pr")
     end
   end
 
