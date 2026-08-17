@@ -76,9 +76,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
   end
 
   defp pr_payload(_repo, %Session{}, arguments, "attach_pr", ref) do
-    with {:ok, metadata_input} <- pr_metadata_input(arguments, "attach_pr"),
+    with {:ok, metadata_input} <- pr_metadata_input(arguments),
          {:ok, metadata} <- Client.fetch_pull_request(DryClient, ref, metadata: metadata_input) do
-      PullRequest.metadata(metadata, ref, pr_fallback_head_sha(arguments, "attach_pr"))
+      PullRequest.metadata(metadata, ref, Map.get(arguments, "head_sha"))
     end
   end
 
@@ -193,8 +193,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
 
   defp maybe_put_filled_string(payload, _key, _value), do: payload
 
-  defp pr_fallback_head_sha(arguments, tool) when tool in ["attach_pr", "sync_pr"], do: Map.get(arguments, "head_sha")
-
   defp pr_reference_arguments(repo, %Session{} = session, arguments, "sync_pr") do
     arguments = drop_blank_pr_identity_arguments(arguments)
 
@@ -220,24 +218,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
   end
 
   defp validated_sync_pr_reference_arguments(arguments, attached_ref) do
-    with {:ok, candidate_arguments} <- sync_pr_candidate_arguments(arguments, attached_ref),
+    with {:ok, candidate_arguments} <- sync_pr_reference_arguments(arguments, attached_ref),
          {:ok, candidate_ref} <- PullRequest.parse(candidate_arguments, nil),
          true <- normalized_pr_ref(candidate_ref.repository, candidate_ref.number) == attached_ref do
       sync_pr_reference_arguments(arguments, attached_ref)
     else
       false -> {:tool_error, "pr_mismatch"}
       {:error, reason} -> {:tool_error, reason_text(reason)}
-      {:tool_error, reason} -> {:tool_error, reason}
-    end
-  end
-
-  defp sync_pr_candidate_arguments(arguments, attached_ref) do
-    if sync_pr_recovery_arguments?(arguments) do
-      with {:ok, recovery_arguments} <- recovery_pr_reference_arguments(arguments) do
-        sync_pr_reference_arguments(recovery_arguments, attached_ref)
-      end
-    else
-      sync_pr_reference_arguments(arguments, attached_ref)
     end
   end
 
@@ -541,7 +528,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
     _error in URI.Error -> {:url, url}
   end
 
-  defp pr_metadata_input(arguments, "attach_pr") do
+  defp pr_metadata_input(arguments) do
     case Map.get(arguments, "metadata") do
       metadata when is_map(metadata) -> {:ok, metadata}
       nil -> {:ok, %{"head_sha" => Map.get(arguments, "head_sha")}}
