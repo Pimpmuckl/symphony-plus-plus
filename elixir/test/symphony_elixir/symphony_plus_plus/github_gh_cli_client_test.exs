@@ -1,12 +1,13 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.GitHubGhCliClientTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.FakeGhCli
+  alias SymphonyElixir.{FakeAuthenticatedGitHubClient, FakeGhCli, FakeGitHubClient}
   alias SymphonyElixir.GitHubPullRequestFixtures
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{GhCliClient, PullRequest}
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{DefaultClient, GhCliClient, PullRequest}
 
   setup do
     FakeGhCli.clear()
+    FakeGitHubClient.clear()
     :ok
   end
 
@@ -22,7 +23,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubGhCliClientTest do
           %{"path" => "lib/two.ex", "changeType" => "ADDED"},
           %{"path" => "test/one_test.exs", "changeType" => "MODIFIED"}
         ],
-        "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "SUCCESS"}],
+        "statusCheckRollup" => [
+          %{"status" => "COMPLETED", "conclusion" => "SUCCESS"},
+          %{"__typename" => "StatusContext", "state" => "SUCCESS"}
+        ],
         "reviewDecision" => "APPROVED"
       })
 
@@ -69,6 +73,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubGhCliClientTest do
 
     assert {:ok, metadata} = GhCliClient.fetch_pull_request(ref, command_runner: &FakeGhCli.run/3)
     assert {:error, :provider_malformed} = PullRequest.provider_snapshot(metadata, ref, "head-a")
+  end
+
+  test "rejects renamed gh files when the old path is unavailable" do
+    assert {:ok, ref} = PullRequest.parse(%{"url" => "https://github.com/nextide/repo/pull/24"}, nil)
+
+    response =
+      GitHubPullRequestFixtures.gh_view(24, "head-a", changed_files: 1)
+      |> Map.merge(%{
+        "id" => "PR_provider_24",
+        "files" => [%{"path" => "lib/new.ex", "changeType" => "RENAMED"}],
+        "statusCheckRollup" => [],
+        "reviewDecision" => ""
+      })
+
+    FakeGhCli.put_response("nextide/repo", 24, response)
+
+    assert {:ok, metadata} = GhCliClient.fetch_pull_request(ref, command_runner: &FakeGhCli.run/3)
+    assert {:error, :provider_malformed} = PullRequest.provider_snapshot(metadata, ref, "head-a")
+  end
+
+  test "provider snapshot mode does not use the incomplete HTTP fallback" do
+    assert {:ok, ref} = PullRequest.parse(%{"url" => "https://github.com/nextide/repo/pull/25"}, nil)
+    FakeGhCli.put_error("nextide/repo", 25, :gh_unavailable)
+    FakeGitHubClient.put_response("nextide/repo", 25, GitHubPullRequestFixtures.metadata(25, "head-a"))
+
+    assert {:error, :gh_unavailable} =
+             DefaultClient.fetch_pull_request(ref,
+               command_runner: &FakeGhCli.run/3,
+               fallback_client: FakeAuthenticatedGitHubClient,
+               provider_snapshot: true
+             )
   end
 
   test "maps gh errors to stable client reasons without surfacing command output" do

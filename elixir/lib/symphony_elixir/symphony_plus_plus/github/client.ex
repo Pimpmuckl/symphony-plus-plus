@@ -330,7 +330,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.DefaultClient do
     case GhCliClient.fetch_pull_request(ref, opts) do
       {:error, reason}
       when reason in [:gh_not_found, :gh_unauthorized, :gh_unavailable, :request_failed, :invalid_github_response] ->
-        fetch_with_http_fallback(ref, opts, reason)
+        if Keyword.get(opts, :provider_snapshot, false),
+          do: {:error, reason},
+          else: fetch_with_http_fallback(ref, opts, reason)
 
       result ->
         result

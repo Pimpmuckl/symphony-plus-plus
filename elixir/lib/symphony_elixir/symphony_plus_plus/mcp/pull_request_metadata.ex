@@ -96,7 +96,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
     if manual_sync_state?(arguments) do
       {:tool_error, "manual_pr_state_requires_recovery"}
     else
-      case Client.fetch_pull_request(github_client(), ref) do
+      case Client.fetch_pull_request(github_client(), ref, provider_snapshot: true) do
         {:ok, %{} = metadata} -> normalize_provider_snapshot(metadata, ref, expected_head_sha)
         {:ok, _metadata} -> {:tool_error, :provider_malformed}
         {:error, _reason} -> {:tool_error, :provider_unavailable}

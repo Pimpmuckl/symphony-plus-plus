@@ -174,16 +174,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
   defp provider_snapshot_complete(%{"provider_snapshot_complete" => false}), do: {:error, :provider_incomplete}
   defp provider_snapshot_complete(_metadata), do: :ok
 
-  defp provider_changed_files_complete(%{"provider_snapshot_complete" => true}, payload) do
+  defp provider_changed_files_complete(%{"provider_snapshot_complete" => true} = metadata, payload) do
     files = Map.get(payload, "changed_files", [])
     count = Map.get(payload, "changed_files_count")
+    provider_files = Map.get(metadata, "changed_files")
 
-    if Map.get(payload, "changed_files_available") == true and is_integer(count) and count == length(files),
-      do: :ok,
-      else: {:error, :provider_incomplete}
+    if Map.get(payload, "changed_files_available") == true and is_integer(count) and count == length(files) and
+         is_list(provider_files) and Enum.all?(provider_files, &provider_file_complete?/1),
+       do: :ok,
+       else: {:error, :provider_incomplete}
   end
 
   defp provider_changed_files_complete(_metadata, _payload), do: :ok
+
+  defp provider_file_complete?(%{"path" => path, "changeType" => change_type} = file) do
+    filled_string?(path) and
+      (String.downcase(to_string(change_type)) != "renamed" or
+         filled_string?(Map.get(file, "previous_path") || Map.get(file, "previous_filename")))
+  end
+
+  defp provider_file_complete?(%{"path" => path}), do: filled_string?(path)
+  defp provider_file_complete?(_file), do: false
 
   defp imported_observed_at(metadata) do
     case clean_string(Map.get(metadata, "observed_at")) do
@@ -333,18 +344,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
   defp check_rollup_state(_checks), do: {:error, :provider_malformed}
 
   defp check_rollup_status(%{} = check) do
-    conclusion = Map.get(check, "conclusion")
-    status = Map.get(check, "status")
+    result = normalize_check_value(Map.get(check, "conclusion") || Map.get(check, "state"))
+    execution = normalize_check_value(Map.get(check, "status"))
 
     cond do
-      is_binary(conclusion) and String.downcase(conclusion) in ~w(success neutral skipped) -> "passing"
-      is_binary(conclusion) and String.downcase(conclusion) in ~w(failure cancelled timed_out action_required stale) -> "failing"
-      is_binary(status) and String.downcase(status) in ~w(queued in_progress pending requested waiting) -> "pending"
+      result in ~w(success neutral skipped) -> "passing"
+      result in ~w(failure error cancelled timed_out action_required stale) -> "failing"
+      result in ~w(pending expected) or execution in ~w(queued in_progress pending requested waiting) -> "pending"
       true -> "unknown"
     end
   end
 
   defp check_rollup_status(_check), do: "unknown"
+
+  defp normalize_check_value(value) when is_binary(value), do: String.downcase(value)
+  defp normalize_check_value(_value), do: nil
 
   defp imported_state(metadata, key, allowed) do
     case Map.get(metadata, key) do
