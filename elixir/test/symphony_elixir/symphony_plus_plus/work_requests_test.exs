@@ -225,6 +225,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, scopes} = Repository.list_repo_scopes(repo, request.id)
     primary_scope = Enum.find(scopes, &(&1.repo == "service-a"))
     repo.update!(Ecto.Changeset.change(primary_scope, base_branch: "origin/main", scope_key: "repo:service-a:origin/main"))
+
+    repo.insert!(%RepoScope{
+      id: "WR-MULTI-REPO-UPDATE-LEGACY-ALIAS",
+      work_request_id: request.id,
+      repo: "service-a",
+      base_branch: "refs/heads/main",
+      scope_key: "repo:service-a:refs/heads/main"
+    })
+
     request = repo.update!(Ecto.Changeset.change(request, base_branch: "origin/main"))
 
     assert {:ok, updated} =
@@ -234,7 +243,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
 
     assert {:ok, scopes} = Repository.list_repo_scopes(repo, request.id)
     assert Enum.map(scopes, &{&1.repo, &1.base_branch}) == [{"service-a-renamed", "main"}, {"service-b", "release"}]
-    refute Enum.any?(scopes, &(&1.scope_key == "repo:service-a:origin/main"))
+    refute Enum.any?(scopes, &(&1.repo == "service-a"))
   end
 
   test "repo scope primary attrs support repo-only scopes" do

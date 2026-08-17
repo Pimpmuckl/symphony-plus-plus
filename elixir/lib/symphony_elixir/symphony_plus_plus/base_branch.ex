@@ -11,6 +11,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.BaseBranch do
 
   def canonicalize(value), do: value
 
+  @spec equivalent_refs(term()) :: [term()]
+  def equivalent_refs(value) do
+    case canonicalize(value) do
+      "main" -> @main_refs
+      canonical -> [canonical]
+    end
+  end
+
   @spec canonicalize_attrs(map()) :: map()
   def canonicalize_attrs(attrs) when is_map(attrs) do
     case Map.fetch(attrs, "base_branch") do
