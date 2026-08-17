@@ -270,6 +270,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     assert Enum.count(events, &(&1.status == "pr_synced")) == 4
   end
 
+  test "default sync_pr retries replay before fetching the provider", %{repo: repo} do
+    {_package, session} = sync_package(repo, "SYMPP-PROVIDER-REPLAY", 48, "head-a")
+    SymphonyElixir.FakeGitHubClient.put_response("nextide/repo", 48, provider_metadata(48, "head-a"))
+    arguments = %{"idempotency_key" => "provider-retry"}
+
+    first = attach_tool(repo, session, "sync_pr", arguments)
+    event_id = get_in(first, ["result", "structuredContent", "progress_event", "id"])
+    assert_receive {:provider_fetch, "nextide/repo", 48}
+
+    SymphonyElixir.FakeGitHubClient.put_response("nextide/repo", 48, {:error, :request_failed})
+    replay = attach_tool(repo, session, "sync_pr", arguments)
+
+    assert get_in(replay, ["result", "structuredContent", "progress_event", "id"]) == event_id
+    refute_receive {:provider_fetch, _, _}
+  end
+
   test "sync_pr provider failures preserve the previous snapshot", %{repo: repo} do
     {package, session} = sync_package(repo, "SYMPP-PROVIDER-FAILURE", 43, "head-a")
     SymphonyElixir.FakeGitHubClient.put_response("nextide/repo", 43, provider_metadata(43, "head-a"))

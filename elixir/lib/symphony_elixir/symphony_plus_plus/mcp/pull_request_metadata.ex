@@ -10,7 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
     PullRequestProgress
   }
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{ProgressEvents, Session}
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -20,12 +20,47 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
   @type tool_error :: {:tool_error, term()}
 
   @spec payload(repo(), Session.t(), map(), String.t()) :: {:ok, map()} | tool_error() | {:error, term()}
-  def payload(repo, %Session{} = session, arguments, source_tool) do
+  def payload(repo, %Session{} = session, arguments, "sync_pr" = source_tool) do
+    case default_sync_pr_replay_payload(repo, session, arguments) do
+      {:ok, payload} -> {:ok, payload}
+      :not_found -> build_payload(repo, session, arguments, source_tool)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def payload(repo, %Session{} = session, arguments, source_tool), do: build_payload(repo, session, arguments, source_tool)
+
+  defp build_payload(repo, %Session{} = session, arguments, source_tool) do
     case legacy_attach_pr_payload(arguments, source_tool) do
       {:ok, payload} -> {:ok, payload}
       {:tool_error, reason} -> {:tool_error, reason}
       :error -> github_pr_metadata_payload(repo, session, arguments, source_tool)
     end
+  end
+
+  defp default_sync_pr_replay_payload(repo, %Session{} = session, arguments) do
+    if default_sync_pr_replay_arguments?(arguments) do
+      idempotency_key =
+        ProgressEvents.scoped_idempotency_key(
+          "sync_pr",
+          String.trim(Map.fetch!(arguments, "idempotency_key")),
+          session
+        )
+
+      case ProgressEvents.existing(repo, session, idempotency_key) do
+        {:ok, %ProgressEvent{payload: %{"type" => "pr", "source_tool" => "sync_pr"} = payload}} -> {:ok, payload}
+        {:ok, %ProgressEvent{}} -> :not_found
+        {:error, :not_found} -> :not_found
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :not_found
+    end
+  end
+
+  defp default_sync_pr_replay_arguments?(arguments) do
+    filled_string?(Map.get(arguments, "idempotency_key")) and
+      Enum.all?(Map.keys(arguments), &(&1 in ~w(idempotency_key work_package_id summary status body payload)))
   end
 
   @spec validate_sync_target_unless_replay(repo(), Session.t(), map(), map(), String.t(), boolean()) ::
