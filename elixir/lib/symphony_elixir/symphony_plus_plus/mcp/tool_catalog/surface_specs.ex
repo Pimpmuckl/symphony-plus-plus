@@ -224,6 +224,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("read_delivery_board"), do: "Read the scoped WorkRequest delivery-board projection for visible work-package closeout without broad package visibility."
   defp architect_tool_description("reconcile_work_request"), do: "Dry-run or apply deterministic WorkRequest delivery closeout repairs from structured PR/GitHub evidence."
 
+  defp architect_tool_description("accept_review_rework") do
+    "Accept one verified typed changes-required finding for an ordinary ready-for-merge WorkPackage's current attached PR and exact head, preserve immutable evidence, and atomically return it to active rework."
+  end
+
   defp architect_tool_description("record_work_package_delivery") do
     "Record an idempotent work-package delivery closeout. Required evidence depends on outcome: pr_merged needs PR evidence, completed_no_pr needs direct evidence, superseded needs successor and reason, and abandoned needs rationale. Use abandoned for cleaned no-code failed dispatches that never reached implementation. Terminal delivery clears any active blocker residue."
   end

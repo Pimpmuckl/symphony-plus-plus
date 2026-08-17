@@ -1,7 +1,33 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.GitHubPullRequestTest do
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Client, DryClient, PullRequest}
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{Client, DryClient, PullRequest, PullRequestProgress}
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
+
+  test "orders provider head evidence by the DateTime instant across second boundaries" do
+    earlier = %ProgressEvent{
+      id: "earlier",
+      sequence: 1,
+      created_at: ~U[2026-08-17 11:44:17.975000Z],
+      payload: %{"type" => "branch", "source_tool" => "attach_branch", "head_sha" => "head-a"}
+    }
+
+    later = %ProgressEvent{
+      id: "later",
+      sequence: 2,
+      created_at: ~U[2026-08-17 11:44:18.427000Z],
+      payload: %{"type" => "branch", "source_tool" => "attach_branch", "head_sha" => "head-b"}
+    }
+
+    assert PullRequestProgress.chronological_events([later, earlier]) == [earlier, later]
+    assert PullRequestProgress.expected_head_sha([later, earlier], %{}) == "head-b"
+
+    subsecond_earlier = %{earlier | id: "subsecond-earlier", sequence: 4, created_at: ~U[2026-08-17 11:44:17.427000Z]}
+    subsecond_later = %{later | id: "subsecond-later", sequence: 3, created_at: ~U[2026-08-17 11:44:17.975000Z]}
+
+    assert PullRequestProgress.chronological_events([subsecond_later, subsecond_earlier]) ==
+             [subsecond_earlier, subsecond_later]
+  end
 
   test "parses GitHub PR URLs" do
     assert {:ok, ref} = PullRequest.parse(%{"url" => "https://github.com/nextide/symphony-plus-plus/pull/42"}, nil)

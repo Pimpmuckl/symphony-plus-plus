@@ -1263,6 +1263,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_tool(name, arguments, %__MODULE__{config: config, session: session})
        when name in [
               "reconcile_work_request",
+              "accept_review_rework",
               "record_work_package_delivery",
               "cleanup_work_request_work_package_runtime",
               "revoke_work_package_worker_key"
@@ -1752,8 +1753,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_tool_capability("read_delivery_board"), do: "read:work_request"
   defp architect_tool_capability("reconcile_work_request"), do: "read:work_request"
 
-  defp architect_tool_capability(tool) when tool in ["cleanup_work_request_work_package_runtime", "record_work_package_delivery", "revoke_work_package_worker_key"],
-    do: "write:work_request"
+  defp architect_tool_capability(tool)
+       when tool in ["accept_review_rework", "cleanup_work_request_work_package_runtime", "record_work_package_delivery", "revoke_work_package_worker_key"],
+       do: "write:work_request"
 
   defp architect_tool_capability("list_guidance_requests"), do: "read:guidance_request"
   defp architect_tool_capability("read_guidance_request"), do: "read:guidance_request"

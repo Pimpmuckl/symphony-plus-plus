@@ -141,7 +141,11 @@ Before `mark_ready()`:
   blockers still require the architect or trusted local operator.
 
 After `mark_ready()` succeeds, evidence is frozen except idempotent replay of
-already-recorded writes.
+already-recorded writes. If an architect accepts a verified review finding and
+returns the package to `active`, advance to a different exact head, run
+`sync_pr` for fresh provider state, submit a new review package, and complete
+the required review. Evidence for the old head remains immutable but cannot
+satisfy readiness again.
 Return ready or terminal packages to the architect named by `next_owner`; the
 worker does not need or receive architect tools for that handoff.
 

@@ -65,6 +65,10 @@ seeking architect-only tools.
 - If CI/checks exist, make sure they are green or report the exact blocker. If
   no CI exists, say so.
 - After material changes, rerun any declared review for the new exact head.
+- If an architect accepts review rework after readiness, keep the old evidence
+  as history and advance to a different exact head. Refresh the attached PR
+  with `sync_pr`, submit a new review package, and complete the required review
+  before calling `mark_ready` again.
 - Record validation and review evidence in the active Symphony++ state. For
   WorkPackages, that state is the ledger-backed claim opened by the
   WorkPackage skill.

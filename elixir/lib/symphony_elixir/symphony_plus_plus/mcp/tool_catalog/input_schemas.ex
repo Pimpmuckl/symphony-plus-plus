@@ -364,6 +364,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
+  def architect_tool_input_schema("accept_review_rework") do
+    schema(
+      %{
+        "work_request_id" => current_work_request_id_schema(),
+        "work_package_id" => described_string_schema("Ordinary ready-for-merge WorkPackage with the accepted finding."),
+        "idempotency_key" => described_string_schema("Opaque stable key for this accepted finding."),
+        "evidence" =>
+          schema(
+            %{
+              "provider" => described_string_schema("Provider or review system that produced the typed finding."),
+              "reference" => described_string_schema("Opaque provider reference for the immutable evidence."),
+              "head_sha" => described_string_schema("Exact current head of the attached PR."),
+              "finding" => markdown_string_schema("Verified nonempty changes-required finding in Markdown.")
+            },
+            ["provider", "reference", "head_sha", "finding"]
+          )
+      },
+      ["work_package_id", "idempotency_key", "evidence"]
+    )
+  end
+
   def architect_tool_input_schema("add_comment") do
     schema(
       scoped_properties(%{
