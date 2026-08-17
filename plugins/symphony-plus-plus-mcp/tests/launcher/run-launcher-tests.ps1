@@ -98,8 +98,7 @@ Assert-True ($null -eq (Resolve-LocalWarmAttachIdentity $staleState $pluginRoot 
 $health = [pscustomobject]@{ healthy = $true; source_revision = $state.backend.source_revision; contract_fingerprint = $fingerprint }
 $plan = Resolve-FastAttachRuntimePlan $state $state.backend.source_revision $fingerprint 0 0 $false $false $null $null $health $true $true
 Assert-True ($null -ne $plan -and -not $plan.dashboard_plan.managed) "Artifact-static runtime should produce an unmanaged-dashboard fallback plan"
-Assert-True (-not (Test-BackendShouldShutdownOnIdle $state.backend $state.frontend "artifact")) "Artifact-static backends must remain resident after transient bridge churn"
-Assert-True (Test-BackendShouldShutdownOnIdle $state.backend $state.frontend "source") "Source backends without a managed dashboard must remain idle-disposable"
+Assert-True (Test-BackendShouldShutdownOnIdle $state.backend $state.frontend) "Managed backends without a managed dashboard must shut down on idle in source and artifact modes"
 Assert-True (Test-SymppBackendCommandLine 'cmd.exe /c C:\cache\artifacts\mcp\windows-x86_64\abc\runtime\start-runtime.cmd') "Supported artifact command wrappers must remain recoverable before binding"
 $sourceState = [pscustomobject]@{ runtime_kind = "managed"; backend = [pscustomobject]@{ url = "http://127.0.0.1:20000" } }
 $reusedSourcePlan = [pscustomobject]@{ reused = $true; should_start = $false; url = "http://127.0.0.1:20000" }
@@ -166,7 +165,7 @@ try {
   Assert-True ([int]$pendingState.publication.backend.pid -eq $ownedPid -and [int]$pendingState.publication.backend.pid -ne $unrelated.Id) "Pending recovery must not adopt an unrelated loopback process"
 } finally {
   foreach ($processId in @($(if ($unrelated) { $unrelated.Id }), $ownedPid, $wrapperPid, $(if ($leader) { $leader.Id }))) {
-    if ($processId) { & taskkill.exe /PID $processId /T /F 2>$null | Out-Null }
+    if ($processId -and (Get-Process -Id $processId -ErrorAction SilentlyContinue)) { & taskkill.exe /PID $processId /T /F 2>$null | Out-Null }
   }
   Remove-Item Env:SYMPP_TEST_WRAPPER_READY,Env:SYMPP_TEST_WRAPPER_RELEASE,Env:SYMPP_TEST_RUNTIME_CMD,Env:SYMPP_TEST_RUNTIME_ROOT -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $pendingBase -Recurse -Force -ErrorAction SilentlyContinue
@@ -491,11 +490,11 @@ $coldSmokeJson = & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $P
 $coldExitCode = $LASTEXITCODE
 Assert-True ($coldExitCode -eq 0) "Installed cold-herd matrix and leader-death suite must pass"
 $coldSmoke = $coldSmokeJson | ConvertFrom-Json
-Assert-True ((@($coldSmoke.matrix.clients) -join ",") -eq "30,100,200" -and @($coldSmoke.matrix | Where-Object { $_.manifest -ne 1 -or $_.artifact -ne 1 -or $_.backends -ne 1 }).Count -eq 0) "30/100/200 shipped-command matrices must preserve singleton manifest, artifact, and backend work"
+Assert-True ((@($coldSmoke.matrix.clients) -join ",") -eq "30,100,200" -and @($coldSmoke.matrix | Where-Object { $_.manifest -ne 1 -or $_.artifact -ne 1 -or $_.backends -ne 1 -or $_.listeners -ne 0 }).Count -eq 0) "30/100/200 shipped-command matrices must preserve singleton cold work and release the backend listener after the final client"
 Assert-True ($coldSmoke.powershell_5_1 -and $coldSmoke.pwsh -and $coldSmoke.cleanup -and @($coldSmoke.leader_death).Count -eq 4) "Cold-herd coverage must prove both PowerShell shells, cleanup, and all leader-death phases"
 Assert-True ($coldSmoke.powershell_fallback.clients -eq 30 -and $coldSmoke.powershell_fallback.preparations -eq 1 -and $coldSmoke.powershell_fallback.backends -eq 1) "Direct PowerShell fallback must elect one cold leader before installed identity and runtime work"
 $persistentRuntime = @(& (Join-Path $PSScriptRoot "persistent-artifact-runtime-smoke.ps1"))[-1] | ConvertFrom-Json
-Assert-True ($persistentRuntime.artifact_waves -eq 2 -and $persistentRuntime.initialize_and_tools_list -eq 2 -and $persistentRuntime.artifact_pid_reused) "Installed artifact-static runtime must survive idle detach and serve a second real MCP bridge wave on the same backend PID"
-Assert-True ($persistentRuntime.stale_cleanup_preserved_current -and $persistentRuntime.explicit_cleanup_stopped_exact -and $persistentRuntime.source_last_detach_stopped -and $persistentRuntime.isolated_runtime_ledger_ports) "Cleanup must remain exact, explicit, disposable for source runtimes, and isolated from the main runtime"
+Assert-True ($persistentRuntime.installed_waves -eq 2 -and $persistentRuntime.initialize_and_tools_list -eq 3 -and $persistentRuntime.installed_pids_distinct) "Installed command must stop the artifact-static runtime and start a new backend PID for the next wave"
+Assert-True ($persistentRuntime.artifact_last_detach_stopped -and $persistentRuntime.listeners_closed -and $persistentRuntime.source_last_detach_stopped -and $persistentRuntime.isolated_runtime_ledger_ports) "Source and installed artifact cleanup must stop their managed listeners and remain isolated from the main runtime"
 
 Write-Host "Launcher bootstrap, contract freshness, cold singleton, and lease identity regressions passed."

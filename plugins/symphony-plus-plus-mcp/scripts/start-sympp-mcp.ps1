@@ -3,7 +3,6 @@ param(
   [switch]$ValidateOnly,
   [switch]$PrepareRuntimeOnly,
   [switch]$CleanupPreparedRuntime,
-  [switch]$PreserveCurrentArtifactRuntime,
   [string]$CleanupRuntimeKey
 )
 
@@ -1307,10 +1306,9 @@ function Test-RuntimeStateExternalLoopback($RuntimeState) {
     [string]$RuntimeState.frontend.status -eq "external_loopback"
 }
 
-function Test-BackendShouldShutdownOnIdle($BackendPlan, $DashboardPlan, [string]$RuntimeMode) {
+function Test-BackendShouldShutdownOnIdle($BackendPlan, $DashboardPlan) {
   return ($BackendPlan.managed -eq $true) -and
-    ($DashboardPlan.managed -ne $true) -and
-    -not ($RuntimeMode -eq "artifact" -and [string]$DashboardPlan.status -eq "artifact_static")
+    ($DashboardPlan.managed -ne $true)
 }
 
 function Test-RuntimeEntryEndpointMatches([string]$Role, $Entry, [string]$Endpoint) {
@@ -1613,7 +1611,7 @@ function Get-ManagedListenerPid([string]$Role, [int]$Port) {
   return $null
 }
 
-function Stop-ManagedServersIfUnused([string]$RuntimeFile, [string]$RuntimeKey, [bool]$PreserveCurrentArtifactRuntime = $false) {
+function Stop-ManagedServersIfUnused([string]$RuntimeFile, [string]$RuntimeKey) {
   $lock = Enter-FileLock (Resolve-StartupLockFile $RuntimeFile) 30
   try {
     $activeLeases = @(Get-ActiveBridgeLeases $RuntimeFile)
@@ -1631,11 +1629,7 @@ function Stop-ManagedServersIfUnused([string]$RuntimeFile, [string]$RuntimeKey, 
     if ((Test-ActiveLegacyBridgeLease $activeLeases) -or (Test-ActiveBridgeLeaseForRuntimeKey $activeLeases $RuntimeKey)) {
       return
     }
-    $preserveCurrent = $PreserveCurrentArtifactRuntime -and
-      [string]$state.runtime_kind -eq "artifact" -and
-      [string]$state.runtime_mode -eq "artifact" -and
-      [string]$state.frontend.status -eq "artifact_static"
-    if ([System.StringComparer]::OrdinalIgnoreCase.Equals($stateKey, $RuntimeKey) -and -not $preserveCurrent) {
+    if ([System.StringComparer]::OrdinalIgnoreCase.Equals($stateKey, $RuntimeKey)) {
       [void](Stop-CurrentManagedRuntimeStateEntries $state $activeLeases)
     }
     $supersededStates = Stop-SupersededRuntimeStatesIfUnused $RuntimeFile (Get-SupersededRuntimeStates $state)
@@ -2078,7 +2072,7 @@ function Invoke-WarmAttachFromRuntimeState {
   } finally {
     Remove-BridgeLease $leasePath
     if ($attached) {
-      Stop-ManagedServersIfUnused $RuntimeFile $identity.runtime_key $true
+      Stop-ManagedServersIfUnused $RuntimeFile $identity.runtime_key
     }
   }
 }
@@ -2245,7 +2239,7 @@ if ($Help) {
 }
 
 if (-not [string]::IsNullOrWhiteSpace($CleanupRuntimeKey)) {
-  Stop-ManagedServersIfUnused (Resolve-RuntimeFile) $CleanupRuntimeKey ([bool]$PreserveCurrentArtifactRuntime)
+  Stop-ManagedServersIfUnused (Resolve-RuntimeFile) $CleanupRuntimeKey
   exit 0
 }
 if ($CleanupPreparedRuntime) {
@@ -2552,7 +2546,7 @@ try {
       [void](Initialize-ElixirRuntime $elixirDir $launcher $mix $mise $logDir $elixirSetupTimeout)
     }
     $backendDashboardOrigin = if ($runtimeMode -eq "artifact" -and [string]$dashboardPlan.status -eq "artifact_static") { $null } else { $dashboardPlan.origin }
-    $backendShutdownOnIdle = Test-BackendShouldShutdownOnIdle $backendPlan $dashboardPlan $runtimeMode
+    $backendShutdownOnIdle = Test-BackendShouldShutdownOnIdle $backendPlan $dashboardPlan
     $startingRuntimeRoot = if ($runtimeMode -eq "artifact") { [string]$artifactRuntime.root } else { [string]$repoRoot }
     if ($installedHttpCold) {
       $startingState.runtime_mode = $runtimeMode; $startingState.runtime_kind = $runtimeMode
@@ -2698,5 +2692,5 @@ try {
   Invoke-HttpMcpBridge $backendPlan.mcp_url $bridgeTimeout (New-McpClientLeaseId) $clientHeartbeatInterval
 } finally {
   Remove-BridgeLease $bridgeLeasePath
-  Stop-ManagedServersIfUnused $runtimeFile $runtimeKey $true
+  Stop-ManagedServersIfUnused $runtimeFile $runtimeKey
 }
