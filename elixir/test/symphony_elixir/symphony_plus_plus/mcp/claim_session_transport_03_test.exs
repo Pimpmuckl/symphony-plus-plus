@@ -3,12 +3,22 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  test "claim_local_architect_assignment claims and reconnects a WorkRequest architect session with only the WorkRequest id", %{repo: repo} do
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope
+
+  test "claim_local_architect_assignment claims and reconnects a legacy-main WorkRequest with only its id", %{repo: repo} do
     work_request =
       create_work_request!(repo,
         id: "WR-MCP-LOCAL-ARCHITECT-CLAIM",
         status: "ready_for_clarification"
       )
+      |> Ecto.Changeset.change(base_branch: "origin/main")
+      |> repo.update!()
+
+    assert {1, nil} =
+             repo.update_all(
+               from(scope in RepoScope, where: scope.work_request_id == ^work_request.id),
+               set: [base_branch: "origin/main", scope_key: "repo:#{work_request.repo}:origin/main"]
+             )
 
     assert {:ok, handoff} =
              ArchitectHandoff.create_or_replay(repo, work_request.id,
@@ -18,6 +28,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
 
     assert {:ok, unclaimed_grant} = AccessGrantRepository.get(repo, handoff.grant.id)
     assert is_nil(unclaimed_grant.claimed_at)
+    assert handoff.work_request.base_branch == "origin/main"
+    assert handoff.anchor_package.base_branch == "main"
+    assert unclaimed_grant.scope_base_branch == "main"
     repo.delete_all(from(scope in GrantScope, where: scope.access_grant_id == ^handoff.grant.id))
     assert {:ok, []} = AccessGrantRepository.list_scopes(repo, handoff.grant.id)
 

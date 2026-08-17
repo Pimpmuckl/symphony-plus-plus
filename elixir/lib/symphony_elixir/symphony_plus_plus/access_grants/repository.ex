@@ -478,11 +478,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
          now,
          terminal_statuses
        ) do
+    scope_base_branches = BaseBranch.equivalent_refs(scope_base_branch)
+
     query =
       from(grant in AccessGrant,
         where: grant.work_package_id == ^work_package_id,
         where: grant.phase_id == ^phase_id,
         where: grant.grant_role == "architect",
+        where: grant.scope_base_branch in ^scope_base_branches,
         where: not is_nil(grant.claimed_at),
         where: grant.claimed_by != ^claimed_by,
         where: is_nil(grant.revoked_at),
@@ -558,11 +561,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   end
 
   defp local_reconnect_architect_grant(repo, work_package_id, phase_id, scope_repo, scope_base_branch, claimed_by, now, terminal_statuses) do
+    scope_base_branches = BaseBranch.equivalent_refs(scope_base_branch)
+
     query =
       from(grant in AccessGrant,
         where: grant.work_package_id == ^work_package_id,
         where: grant.phase_id == ^phase_id,
         where: grant.grant_role == "architect",
+        where: grant.scope_base_branch in ^scope_base_branches,
         where: grant.claimed_by == ^claimed_by,
         where: not is_nil(grant.claimed_at),
         where: is_nil(grant.revoked_at),
@@ -628,11 +634,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
          now,
          terminal_statuses
        ) do
+    scope_base_branches = BaseBranch.equivalent_refs(scope_base_branch)
+
     query =
       from(grant in AccessGrant,
         where: grant.work_package_id == ^work_package_id,
         where: grant.phase_id == ^phase_id,
         where: grant.grant_role == "architect",
+        where: grant.scope_base_branch in ^scope_base_branches,
         where: is_nil(grant.claimed_at),
         where: is_nil(grant.revoked_at),
         where: is_nil(grant.expires_at) or grant.expires_at > ^now,
@@ -672,11 +681,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   end
 
   defp inactive_architect_grant_reason(repo, work_package_id, phase_id, scope_repo, scope_base_branch) do
+    scope_base_branches = BaseBranch.equivalent_refs(scope_base_branch)
+
     query =
       from(grant in AccessGrant,
         where: grant.work_package_id == ^work_package_id,
         where: grant.phase_id == ^phase_id,
         where: grant.grant_role == "architect",
+        where: grant.scope_base_branch in ^scope_base_branches,
         select: grant
       )
 

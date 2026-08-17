@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Scope
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Target
+  alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
 
   @read_actions [
@@ -215,7 +216,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
 
   defp scope_matches_target?(%Scope{type: :phase, id: scope_id, repo: repo, base_branch: base_branch}, %Target{} = target)
        when is_binary(scope_id) and is_binary(repo) and is_binary(base_branch) do
-    target.phase_id == scope_id and target.repo == repo and target.base_branch == base_branch
+    target.phase_id == scope_id and target.repo == repo and BaseBranch.equivalent?(target.base_branch, base_branch)
   end
 
   defp scope_matches_target?(%Scope{}, %Target{}), do: false
@@ -229,12 +230,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
 
   defp target_primary_repo_scope_matches?(repo, base_branch, %Target{} = target, trusted_remotes) do
     repo_scope_name_matches?(repo, target.repo, trusted_remotes) and
-      (is_nil(base_branch) or target.base_branch == base_branch)
+      (is_nil(base_branch) or BaseBranch.equivalent?(target.base_branch, base_branch))
   end
 
   defp repo_scope_matches?(repo, base_branch, %{repo: scope_repo, base_branch: scope_base_branch}, trusted_remotes) do
     repo_scope_name_matches?(repo, scope_repo, trusted_remotes) and
-      (is_nil(base_branch) or scope_base_branch == base_branch)
+      (is_nil(base_branch) or BaseBranch.equivalent?(scope_base_branch, base_branch))
   end
 
   defp repo_scope_matches?(_repo, _base_branch, _scope, _trusted_remotes), do: false

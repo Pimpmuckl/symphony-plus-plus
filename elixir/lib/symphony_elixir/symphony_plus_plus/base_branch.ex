@@ -11,6 +11,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.BaseBranch do
 
   def canonicalize(value), do: value
 
+  @spec equivalent?(term(), term()) :: boolean()
+  def equivalent?(left, right) when is_binary(left) and is_binary(right) do
+    canonicalize(left) == canonicalize(right)
+  end
+
+  def equivalent?(_left, _right), do: false
+
   @spec equivalent_refs(term()) :: [term()]
   def equivalent_refs(value) do
     case canonicalize(value) do
