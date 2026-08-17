@@ -59,11 +59,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTreeTest do
                work_request.id,
                package.id,
                package.contract_revision,
-               %{product_tree_node_id: second.id}
+               %{product_tree_node_id: second.id, base_branch: "origin/main"}
              )
 
     assert moved.id == package.id
     assert moved.product_tree_node_id == second.id
+    assert moved.base_branch == "main"
 
     assert {:ok, direct} =
              WorkRequestRepository.update_work_package(
@@ -89,7 +90,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTreeTest do
                  title: "Atom-keyed package",
                  goal: "Own the canonical package boundary.",
                  kind: "mcp",
-                 base_branch: work_request.base_branch,
+                 base_branch: " refs/remotes/origin/main ",
                  branch_pattern: "refactor/canonical-work-packages",
                  allowed_file_globs: ["elixir/lib/**"],
                  acceptance_criteria: ["The package has one identity."]
@@ -98,6 +99,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTreeTest do
 
     assert package.goal == "Own the canonical package boundary."
     assert package.engineering_scope == package.goal
+    assert package.base_branch == "main"
   end
 
   test "validates the effective file scope when a package becomes docs work", %{repo: repo} do

@@ -5,7 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope do
 
   import Ecto.Changeset
 
-  alias SymphonyElixir.SymphonyPlusPlus.Id
+  alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, Id}
 
   @primary_key {:id, :string, autogenerate: false}
   @foreign_key_type :string
@@ -85,7 +85,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope do
   defp normalize_scope_values(attrs) do
     attrs
     |> normalize_string_value("repo")
-    |> normalize_string_value("base_branch")
+    |> BaseBranch.canonicalize_attrs()
   end
 
   defp normalize_string_value(attrs, key) do

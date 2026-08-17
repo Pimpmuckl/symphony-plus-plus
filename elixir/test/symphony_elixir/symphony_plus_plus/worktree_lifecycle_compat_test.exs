@@ -54,6 +54,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeLifecycleCompatTest do
     assert replayed.worktree_path == Path.expand(previous_path)
   end
 
+  test "prepares legacy frozen origin/main contracts without rewriting them", %{repo: repo} do
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-worktree-legacy-base")
+    codex_home = Path.join(fixture.root, "codex-home")
+
+    assert {:ok, package} =
+             Repository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-WT-LEGACY-BASE", kind: "mcp", base_branch: "main"))
+
+    package = repo.update!(Ecto.Changeset.change(package, base_branch: "origin/main", status: "active"))
+
+    assert {:ok, prepared} =
+             WorktreeLifecycle.prepare(
+               repo,
+               package.id,
+               %{"repo_root" => fixture.repo_root, "base_branch" => "origin/main", "branch" => "feat/legacy-base"},
+               codex_home: codex_home
+             )
+
+    assert prepared.status == "prepared"
+    assert prepared.base_branch == "main"
+    assert File.exists?(Path.join(prepared.worktree_path, "README.md"))
+    assert repo.get!(WorkPackage, package.id).base_branch == "origin/main"
+  end
+
   test "stores nullable worktree metadata through SQLite", %{repo: repo} do
     assert {:ok, package} = Repository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-P1-001"))
     assert package.worktree_path == nil
