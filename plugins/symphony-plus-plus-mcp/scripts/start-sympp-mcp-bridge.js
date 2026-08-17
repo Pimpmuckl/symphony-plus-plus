@@ -635,7 +635,11 @@ function cleanupLastDetach(runtimeFile, key, cleanupScript) {
 }
 
 function backendUnavailable(response) {
-  return !response.ok && (!Number.isInteger(response.status) || [502, 503, 504].includes(response.status));
+  return !response.ok && !Number.isInteger(response.status);
+}
+
+function replayProvablyUnsent(response) {
+  return response.mayHaveReachedBackend === false;
 }
 
 function indeterminateToolCall(id) {
@@ -869,7 +873,7 @@ async function bridge(identity, state, runtimeFile) {
           process.stdout.write(`${JSON.stringify(indeterminateToolCall(parsed.id))}\n`);
           continue;
         }
-        if (recovered) {
+        if (recovered && replayProvablyUnsent(response)) {
           try {
             if (!requestProtocol) await initializeSession();
             response = await mcpPost(current.mcpUrl, line, sessionId, protocol, timeoutMs);
@@ -991,5 +995,5 @@ if (require.main === module) {
     process.exit(1);
   });
 } else {
-  module.exports = { generationFromMarker, generationKey, resolveStateIdentity };
+  module.exports = { backendUnavailable, generationFromMarker, generationKey, replayProvablyUnsent, resolveStateIdentity };
 }
