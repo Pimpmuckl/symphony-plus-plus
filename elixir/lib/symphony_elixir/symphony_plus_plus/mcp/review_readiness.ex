@@ -207,7 +207,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     current_head_sha = latest_current_head_sha(progress_events)
 
     cond do
-      is_binary(current_head_sha) and PullRequest.head_sha_matches?(head_sha, current_head_sha) ->
+      is_binary(current_head_sha) and PullRequest.head_sha_matches?(head_sha, String.downcase(current_head_sha)) ->
         {:ok, head_sha, nil}
 
       is_binary(current_head_sha) and is_binary(head_sha) ->

@@ -73,14 +73,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+    head_a = String.duplicate("a", 40)
 
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-REVIEW-REPLAY/worker", "head_sha" => "head-a"})
+    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-REVIEW-REPLAY/worker", "head_sha" => String.upcase(head_a)})
 
     review_arguments = %{
       "summary" => "Review head A",
       "tests" => ["mix test"],
       "artifacts" => ["review-head-a.txt"],
-      "head_sha" => "head-a",
+      "head_sha" => head_a,
       "acceptance_criteria_met" => true
     }
 
