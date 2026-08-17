@@ -632,7 +632,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
 
     tools_response = MCPHarness.request(%{"jsonrpc" => "2.0", "id" => "literal-branch-tools", "method" => "tools/list", "params" => %{}}, repo: repo, session: session)
     tools_by_name = tools_response |> get_in(["result", "tools"]) |> Map.new(&{&1["name"], &1})
-    assert get_in(tools_by_name, ["attach_branch", "inputSchema", "required"]) == ["branch", "head_sha"]
+    assert get_in(tools_by_name, ["attach_branch", "inputSchema", "required"]) == ["head_sha"]
 
     for tool <- ["update_task_plan", "append_progress", "attach_branch", "complete_review"] do
       refute "work_package_id" in get_in(tools_by_name, [tool, "inputSchema", "required"])

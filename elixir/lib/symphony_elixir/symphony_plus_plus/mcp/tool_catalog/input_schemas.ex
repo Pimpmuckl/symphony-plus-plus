@@ -222,7 +222,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     do: schema(%{"reason" => markdown_string_schema("Why this work package is being abandoned.")}, ["reason"])
 
   def worker_tool_input_schema("attach_branch") do
-    schema(metadata_properties(%{"branch" => string_schema(), "head_sha" => string_schema()}), ["branch", "head_sha"])
+    schema(metadata_properties(%{"branch" => string_schema(), "head_sha" => string_schema()}), ["head_sha"])
   end
 
   def worker_tool_input_schema("attach_pr") do
