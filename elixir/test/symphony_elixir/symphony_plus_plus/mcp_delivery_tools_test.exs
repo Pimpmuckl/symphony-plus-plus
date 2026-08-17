@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
   import ExUnit.CaptureLog
 
   import SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers,
-    only: [create_phase_architect_session: 4]
+    only: [create_phase_architect_session: 4, create_work_request_handoff_architect_session: 3]
 
   defmodule CheckoutTimeoutRepo do
     use Ecto.Repo,
@@ -1255,6 +1255,102 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
              |> Enum.filter(&(&1.work_package_id == work_package.id))
 
     assert delivery.successor_work_package_id == successor_package.id
+  end
+
+  test "architect blocker resolution normalizes status and closes inactive blockers idempotently", %{repo: repo} do
+    {work_request, _slice, package} =
+      linked_slice!(repo,
+        work_request_id: "WR-MCP-ARCHITECT-BLOCKER",
+        work_package_status: "blocked"
+      )
+
+    {_anchor, session, _grant} =
+      create_work_request_handoff_architect_session(repo, work_request, [
+        "read:work_request",
+        "write:work_request"
+      ])
+
+    for blocker_id <- ["architect-first", "architect-second"] do
+      assert {:ok, _event} =
+               PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, package.id, %{
+                 "summary" => "Waiting on #{blocker_id}",
+                 "status" => "blocked",
+                 "idempotency_key" => "report-#{blocker_id}",
+                 "payload" => %{
+                   "type" => "blocker",
+                   "source_tool" => "report_blocker",
+                   "blocker_id" => blocker_id,
+                   "active" => true
+                 }
+               })
+    end
+
+    mismatch =
+      mcp_tool(repo, session, "resolve_blocker", %{
+        "work_package_id" => package.id,
+        "blocker_id" => "architect-first",
+        "resolution" => "Ready",
+        "summary" => "Ready",
+        "status" => "blocked",
+        "idempotency_key" => "architect-mismatch"
+      })
+
+    assert get_in(mismatch, ["error", "data", "reason"]) == "implied_status_mismatch"
+    assert get_in(mismatch, ["error", "data", "expected_status"]) == "resolved"
+
+    first_args = %{
+      "work_package_id" => package.id,
+      "blocker_id" => "architect-first",
+      "resolution" => "Ready",
+      "summary" => "Resolved first",
+      "status" => "resolved",
+      "idempotency_key" => "architect-first"
+    }
+
+    first = mcp_tool(repo, session, "resolve_blocker", first_args)
+    first_id = get_in(first, ["result", "structuredContent", "progress_event", "id"])
+    assert first_id
+    assert repo.get!(WorkPackage, package.id).status == "blocked"
+
+    replay = mcp_tool(repo, session, "resolve_blocker", first_args)
+    assert get_in(replay, ["result", "structuredContent", "progress_event", "id"]) == first_id
+
+    assert {:ok, events_before_noop} = PlanningRepository.list_progress_events(repo, package.id)
+
+    no_op =
+      mcp_tool(repo, session, "resolve_blocker", %{
+        "work_package_id" => package.id,
+        "blocker_id" => "architect-first",
+        "resolution" => "Different prose must not be stored",
+        "summary" => "Different no-op prose",
+        "idempotency_key" => "architect-first-again"
+      })
+
+    assert get_in(no_op, ["result", "structuredContent", "already_resolved"]) == true
+    assert {:ok, ^events_before_noop} = PlanningRepository.list_progress_events(repo, package.id)
+
+    second =
+      mcp_tool(repo, session, "resolve_blocker", %{
+        "work_package_id" => package.id,
+        "blocker_id" => "architect-second",
+        "resolution" => "Ready",
+        "summary" => "Resolved second",
+        "idempotency_key" => "architect-second"
+      })
+
+    assert get_in(second, ["result", "structuredContent", "progress_event", "id"])
+    assert repo.get!(WorkPackage, package.id).status == "blocked"
+
+    unknown =
+      mcp_tool(repo, session, "resolve_blocker", %{
+        "work_package_id" => package.id,
+        "blocker_id" => "unknown",
+        "resolution" => "No",
+        "summary" => "No",
+        "idempotency_key" => "architect-unknown"
+      })
+
+    assert get_in(unknown, ["error", "data", "reason"]) == "blocker_not_found"
   end
 
   defp linked_slice!(repo, overrides) do
