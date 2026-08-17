@@ -101,6 +101,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubGhCliClientTest do
     end
   end
 
+  test "classifies startup failures and closed pull requests as blocked failures" do
+    assert {:ok, ref} = PullRequest.parse(%{"url" => "https://github.com/nextide/repo/pull/28"}, nil)
+
+    response =
+      GitHubPullRequestFixtures.gh_view(28, "head-a", changed_files: 0)
+      |> Map.merge(%{
+        "id" => "PR_provider_28",
+        "files" => [],
+        "state" => "CLOSED",
+        "mergeable" => "UNKNOWN",
+        "mergeStateStatus" => "UNKNOWN",
+        "statusCheckRollup" => [%{"status" => "COMPLETED", "conclusion" => "STARTUP_FAILURE"}]
+      })
+
+    FakeGhCli.put_response("nextide/repo", 28, response)
+
+    assert {:ok, metadata} = GhCliClient.fetch_pull_request(ref, command_runner: &FakeGhCli.run/3)
+    assert {:ok, payload} = PullRequest.provider_snapshot(metadata, ref, "head-a")
+    assert payload["check_summary"] == %{"status" => "failing"}
+    assert payload["merge_state"] == %{"merged" => false, "status" => "blocked"}
+  end
+
   test "provider snapshot mode does not use the incomplete HTTP fallback" do
     assert {:ok, ref} = PullRequest.parse(%{"url" => "https://github.com/nextide/repo/pull/25"}, nil)
     FakeGhCli.put_error("nextide/repo", 25, :gh_unavailable)

@@ -275,6 +275,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
         "error" => "failing",
         "cancelled" => "failing",
         "timed_out" => "failing",
+        "startup_failure" => "failing",
         "action_required" => "failing",
         "queued" => "pending",
         "in_progress" => "pending",
@@ -289,10 +290,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
       })
 
   defp provider_merge_status(%{} = value) do
-    if truthy?(Map.get(value, "merged")) do
-      {:ok, "merged"}
-    else
-      provider_merge_status(Map.get(value, "status") || Map.get(value, "mergeable_state") || Map.get(value, "state") || Map.get(value, "mergeable"))
+    cond do
+      truthy?(Map.get(value, "merged")) ->
+        {:ok, "merged"}
+
+      closed_pr_state?(Map.get(value, "state")) ->
+        {:ok, "blocked"}
+
+      true ->
+        provider_merge_status(Map.get(value, "status") || Map.get(value, "mergeable_state") || Map.get(value, "state") || Map.get(value, "mergeable"))
     end
   end
 
@@ -313,6 +319,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
         "open" => "unknown",
         "closed" => "blocked"
       })
+
+  defp closed_pr_state?(state) when is_binary(state), do: String.downcase(String.trim(state)) == "closed"
+  defp closed_pr_state?(_state), do: false
 
   defp normalize_provider_status(nil, _aliases), do: {:ok, "unknown"}
 
@@ -348,7 +357,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
 
     cond do
       result in ~w(success neutral skipped) -> "passing"
-      result in ~w(failure error cancelled timed_out action_required stale) -> "failing"
+      result in ~w(failure error cancelled timed_out startup_failure action_required stale) -> "failing"
       result in ~w(pending expected) or execution in ~w(queued in_progress pending requested waiting) -> "pending"
       true -> "unknown"
     end
