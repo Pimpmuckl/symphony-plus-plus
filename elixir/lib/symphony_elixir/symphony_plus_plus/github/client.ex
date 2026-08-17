@@ -3,9 +3,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.Client do
 
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
 
-  @callback fetch_pull_request(PullRequest.ref(), keyword()) :: {:ok, map()} | {:error, term()}
+  @callback fetch_pull_request(PullRequest.ref(), keyword()) :: {:ok, term()} | {:error, term()}
 
-  @spec fetch_pull_request(module(), PullRequest.ref(), keyword()) :: {:ok, map()} | {:error, term()}
+  @spec fetch_pull_request(module(), PullRequest.ref(), keyword()) :: {:ok, term()} | {:error, term()}
   def fetch_pull_request(client, ref, opts \\ []) when is_atom(client) and is_map(ref) do
     client.fetch_pull_request(ref, opts)
   end
