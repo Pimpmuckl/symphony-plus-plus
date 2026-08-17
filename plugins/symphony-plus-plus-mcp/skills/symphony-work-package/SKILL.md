@@ -22,24 +22,30 @@ cross-slice target, successor relation, audit closeout, or concurrency guard.
 
 1. Use a dedicated S++ MCP-enabled session connected to the same ledger as
    dispatch.
-   Sessions may show worker WorkPackage tool schemas before claim; schema
-   visibility is not authority, so claim first.
-2. Claim the package with `claim_local_assignment` using the WorkPackage id:
+   The initial tool list contains only health, assignment introspection,
+   release, and the claim tools allowed by the configured profile.
+2. Call `get_current_assignment()`. An unbound or stale session returns
+   `assignment: null` plus the profile-aware claim or reclaim action.
+3. Claim the package with `claim_local_assignment` using the WorkPackage id:
    `{"work_package_id":"<WP id>"}`. Include `claimed_by` only when the
    dispatch payload or operator provided a stable worker identity.
    A successful first claim atomically activates a `ready_for_worker` package.
-3. Replay the same local claim after reconnects. The server heartbeats the
+4. Follow the successful claim's `relist.next_action` and refresh the MCP tool
+   list before calling worker tools. Release results require the same refresh.
+5. Replay the same local claim after reconnects. The server heartbeats the
    current lease, reclaims stale leases with audit evidence, and rejects paused
    leases or another active owner. Reconnect does not rewrite lifecycle state.
    Stop and report those blockers instead of minting your own replacement.
-4. Call `get_current_assignment()` and treat that WorkPackage as authoritative.
-5. Read `sympp://work-packages/{id}/acceptance.md` with the other MCP-backed
+6. Call `get_current_assignment()` and treat that WorkPackage as authoritative.
+7. Read `sympp://work-packages/{id}/acceptance.md` with the other MCP-backed
    package resources.
-6. Read current context before coding: `read_context()`, `read_task_plan()`,
+8. Read current context before coding: `read_context()`, `read_task_plan()`,
    acceptance/review/handoff resources, findings, and progress.
-   `read_context()` includes only the parent WorkRequest title and goal, direct
-   dependency ids/titles/statuses, and the architect-owned completion step.
-7. Do not create local `task_plan.md`, `findings.md`, or `progress.md` files as
+   `read_context()` includes the assigned package contract and binding, a
+   parent WorkRequest summary, direct dependencies, selected relevant
+   decisions, and the architect-owned completion step. It excludes siblings
+   and the WorkRequest-wide plan.
+9. Do not create local `task_plan.md`, `findings.md`, or `progress.md` files as
    the source of truth.
 
 ## Context Format

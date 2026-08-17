@@ -23,7 +23,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   def worker_context(repo, %WorkPackage{} = work_package) do
     with {:ok, work_request} <- WorkRequestService.get(repo, work_package.work_request_id),
          {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
-         {:ok, execution_graph} <- ProductTree.execution_graph(repo, work_request.id, work_packages) do
+         {:ok, tree} <- ProductTree.tree_for_work_request(repo, work_request.id),
+         execution_graph = ProductTree.ExecutionGraph.evaluate(tree, work_packages, []),
+         {:ok, selected_decisions} <-
+           selected_worker_decisions(repo, work_request.id, execution_graph.effective_edges, tree.dependency_edges, work_package.id) do
       packages_by_id = Map.new(work_packages, &{&1.id, &1})
 
       direct_dependencies =
@@ -38,11 +41,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
       {:ok,
        worker_completion()
        |> Map.put("parent_work_request", %{
+         "id" => work_request.id,
          "title" => Redactor.redact_text(work_request.title),
-         "goal" => Redactor.redact_text(work_request.human_description)
+         "goal" => Redactor.redact_text(work_request.human_description),
+         "status" => work_request.status
        })
-       |> Map.put("direct_dependencies", direct_dependencies)}
+       |> Map.put("direct_dependencies", direct_dependencies)
+       |> Map.put("selected_decisions", selected_decisions)}
     end
+  end
+
+  defp selected_worker_decisions(repo, work_request_id, effective_edges, dependency_edges, work_package_id) do
+    dependency_ids =
+      effective_edges
+      |> Enum.filter(&(&1.dependent_work_package_id == work_package_id))
+      |> Enum.flat_map(& &1.dependency_ids)
+      |> MapSet.new()
+
+    ids =
+      dependency_edges
+      |> Enum.filter(&MapSet.member?(dependency_ids, &1.id))
+      |> Enum.map(&get_in(&1.decision_ref || %{}, ["id"]))
+      |> Enum.filter(&is_binary/1)
+      |> MapSet.new()
+
+    if MapSet.size(ids) == 0 do
+      {:ok, []}
+    else
+      with {:ok, decisions} <- WorkRequestService.list_decisions(repo, work_request_id) do
+        {:ok, decisions |> Enum.filter(&MapSet.member?(ids, &1.id)) |> Enum.map(&worker_decision/1)}
+      end
+    end
+  end
+
+  defp worker_decision(%DecisionLogEntry{} = decision) do
+    %{
+      "id" => decision.id,
+      "decision" => Redactor.redact_text(decision.decision),
+      "rationale" => Redactor.redact_text(decision.rationale),
+      "scope_impact" => Redactor.redact_text(decision.scope_impact)
+    }
   end
 
   @spec work_request_cards([WorkRequest.t()]) :: [map()]

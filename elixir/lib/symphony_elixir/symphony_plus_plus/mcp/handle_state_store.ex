@@ -109,7 +109,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
           | initialized: server.initialized or stored.initialized,
             session: session,
             state_key_version: state_key_version,
-            session_refresh_required: session_refresh_required?
+            session_refresh_required: session_refresh_required?,
+            stale_assignment_role: server.stale_assignment_role || stored.stale_assignment_role
         }
 
       _stored ->
@@ -120,7 +121,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HandleStateStore do
   defp restore(%{__struct__: @server} = server) do
     case lookup(server) do
       {%{__struct__: @server} = stored, _timestamp_ms, _explicit?} ->
-        %{server | initialized: server.initialized or stored.initialized, session: server.session || stored.session}
+        %{
+          server
+          | initialized: server.initialized or stored.initialized,
+            session: server.session || stored.session,
+            stale_assignment_role: server.stale_assignment_role || stored.stale_assignment_role
+        }
 
       _stored ->
         server

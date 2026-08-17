@@ -20,23 +20,27 @@ Assignment:
   the dispatch payload or operator supplied a stable worker identity.
 
 Before coding:
-1. Claim the assignment through `claim_local_assignment`.
+1. Call `get_current_assignment()`. If it reports an unbound or stale binding,
+   follow its profile-aware claim or reclaim action.
+2. Claim the assignment through `claim_local_assignment`.
    The first successful claim activates the package atomically; reconnecting
    the same claim does not change lifecycle state.
-2. Call `get_current_assignment()` and treat that assignment as the scope.
-3. If claim fails because the lease is paused, another active owner exists, or
+3. Follow the successful claim's `relist.next_action`, refresh the MCP tool
+   list, then call `get_current_assignment()` and treat that assignment as the
+   scope.
+4. If claim fails because the lease is paused, another active owner exists, or
    the local ledger scope mismatches, stop and ask the architect or operator to
    repair that state. Do not request raw secrets.
-4. Read `read_context()`, `read_task_plan()`, findings, progress,
+5. Read `read_context()`, `read_task_plan()`, findings, progress,
    acceptance, review, and handoff virtual resources.
-5. Update the virtual task plan with
+6. Update the virtual task plan with
    `update_task_plan({"expected_version": <read version>, "nodes": [...]})`.
    Omit a node `id` only to create it with a required `title`; use the
    returned server-owned `id` for updates. Use `pending`, `in_progress`,
    `done`, or `skipped`.
-6. Stop and ask the architecture agent if dependency evidence, permission
+7. Stop and ask the architecture agent if dependency evidence, permission
    grants, or source context are missing.
-7. If you need guidance, ask the parent or architect through ordinary agent
+8. If you need guidance, ask the parent or architect through ordinary agent
    messaging. State the decision, evidence checked, impact, and candidate
    options with pros/cons when you can supply them.
 

@@ -3,7 +3,21 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{HTTPStateStore, HTTPTransport, Session}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{HTTPStateStore, HTTPTransport, Session, SessionBindingTools}
+
+  defmodule BusyAssignmentIntrospectionRepo do
+    def get(schema, id), do: delegate().get(schema, id)
+    def all(query), do: delegate().all(query)
+    def one(_query), do: raise(%Exqlite.Error{message: "database is locked"})
+    defp delegate, do: Process.get({__MODULE__, :delegate})
+  end
+
+  defmodule BusyScopeAssignmentIntrospectionRepo do
+    def get(schema, id), do: delegate().get(schema, id)
+    def one(query), do: delegate().one(query)
+    def all(_query), do: raise(%Exqlite.Error{message: "database is locked"})
+    defp delegate, do: Process.get({__MODULE__, :delegate})
+  end
 
   test "response-only handle supports explicit state keys for recreated servers through local claim replay", %{repo: repo} do
     package = create_local_claim_package!(repo, "SYMPP-STATELESS-HANDLE")
@@ -48,7 +62,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert get_in(init_response, ["result", "serverInfo", "name"]) == "symphony-plus-plus"
     assert get_in(claim_response, ["result", "structuredContent", "assignment", "work_package_id"]) == package.id
     refute inspect(claim_response) =~ minted.work_key.secret
-    assert get_in(assignment_response, ["error", "data", "reason"]) == "claim_required"
+    assert get_in(assignment_response, ["result", "structuredContent", "assignment"]) == nil
+    assert get_in(assignment_response, ["result", "structuredContent", "binding", "state"]) in ["unbound", "stale"]
     assert get_in(reconnect_claim_response, ["result", "structuredContent", "assignment", "work_package_id"]) == package.id
   end
 
@@ -138,7 +153,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert get_in(other_repo_response, ["error", "data", "reason"]) == "server_not_initialized"
   end
 
-  test "explicit state key stale live server keeps claim and trusted local tools until new session", %{repo: repo} do
+  test "explicit state key stale live server advertises recovery-only tools until new session", %{repo: repo} do
     package = create_local_claim_package!(repo, "SYMPP-STATE-STALE-LIVE")
     assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
@@ -219,13 +234,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert get_in(reinit_response, ["result", "serverInfo", "name"]) == "symphony-plus-plus"
 
     assert Map.keys(tools_by_name) |> Enum.sort() == [
-             "add_work_request_comment",
              "claim_local_architect_assignment",
              "claim_local_assignment",
-             "create_work_request",
-             "list_comments",
-             "record_work_request_operator_decision",
-             "summarize_failed_mcp_calls",
+             "get_current_assignment",
+             "release_current_assignment",
              "sympp.health"
            ]
 
@@ -234,8 +246,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert [%{"id" => stale_comment_id}] = get_in(stale_list_comments_response, ["result", "structuredContent", "comments"])
     assert stale_comment_id == comment.id
     assert get_in(fresh_init_response, ["result", "serverInfo", "name"]) == "symphony-plus-plus"
-    refute Map.has_key?(tools_by_name, "get_current_assignment")
-    assert Map.has_key?(fresh_tools_by_name, "read_work_request")
+    assert Map.has_key?(tools_by_name, "get_current_assignment")
+    refute Map.has_key?(fresh_tools_by_name, "read_work_request")
+    assert Map.has_key?(fresh_tools_by_name, "claim_local_architect_assignment")
     assert Map.has_key?(fresh_tools_by_name, "solo_attach")
     assert Map.has_key?(fresh_tools_by_name, "get_current_assignment")
   end
@@ -612,6 +625,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert get_in(blocked_response, ["error", "data", "claim_lease_reason"]) == "claim_lease_paused"
     assert updated_server.session == nil
     assert updated_server.session_refresh_required == true
+    assert updated_server.stale_assignment_role == "worker"
+
+    {stale_tools, _relisted_server} =
+      Server.handle_state(
+        %{"jsonrpc" => "2.0", "id" => "tools-after-pause", "method" => "tools/list", "params" => %{}},
+        updated_server
+      )
+
+    stale_tool_names = stale_tools |> get_in(["result", "tools"]) |> Enum.map(& &1["name"])
+    assert "get_current_assignment" in stale_tool_names
+    assert "claim_local_assignment" in stale_tool_names
+    refute "claim_local_architect_assignment" in stale_tool_names
     assert {:ok, []} = PlanningRepository.list_progress_events(repo, package.id)
   end
 
@@ -648,6 +673,98 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert updated_server.session == nil
     assert updated_server.session_refresh_required == true
     assert {:ok, []} = PlanningRepository.list_progress_events(repo, package.id)
+  end
+
+  test "assignment introspection preserves the binding when claim lease lookup returns database busy", %{repo: repo} do
+    package = create_local_claim_package!(repo, "SYMPP-STATE-ASSIGNMENT-LEDGER-FAIL")
+    assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+
+    {_claim_response, claimed_server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "claim-assignment-ledger-fail",
+          "method" => "tools/call",
+          "params" => %{"name" => "claim_local_assignment", "arguments" => local_assignment_claim_args(package)}
+        },
+        local_mcp_server(local_mcp_config(repo), "claim-assignment-ledger-fail-state")
+      )
+
+    Process.put({BusyAssignmentIntrospectionRepo, :delegate}, repo)
+    on_exit(fn -> Process.delete({BusyAssignmentIntrospectionRepo, :delegate}) end)
+    failed_server = %{claimed_server | config: local_mcp_config(BusyAssignmentIntrospectionRepo)}
+
+    {response, updated_server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "get-assignment-ledger-fail",
+          "method" => "tools/call",
+          "params" => %{"name" => "get_current_assignment", "arguments" => %{}}
+        },
+        failed_server
+      )
+
+    assert get_in(response, ["error", "code"]) == -32_000
+    assert get_in(response, ["error", "data", "reason"]) == "ledger_unavailable"
+    assert updated_server.session == failed_server.session
+    assert updated_server.session_refresh_required == false
+    assert updated_server.stale_assignment_role == nil
+  end
+
+  test "assignment introspection preserves the binding when grant scope lookup returns database busy", %{repo: repo} do
+    package = create_local_claim_package!(repo, "SYMPP-STATE-ASSIGNMENT-SCOPE-FAIL")
+    assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+
+    {_claim_response, claimed_server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "claim-assignment-scope-fail",
+          "method" => "tools/call",
+          "params" => %{"name" => "claim_local_assignment", "arguments" => local_assignment_claim_args(package)}
+        },
+        local_mcp_server(local_mcp_config(repo), "claim-assignment-scope-fail-state")
+      )
+
+    Process.put({BusyScopeAssignmentIntrospectionRepo, :delegate}, repo)
+    on_exit(fn -> Process.delete({BusyScopeAssignmentIntrospectionRepo, :delegate}) end)
+    failed_server = %{claimed_server | config: local_mcp_config(BusyScopeAssignmentIntrospectionRepo)}
+
+    assert {:error, {:scope_lookup_failed, :database_busy}} = SessionBindingTools.get_current_assignment(failed_server)
+    assert failed_server.session == claimed_server.session
+    assert failed_server.session_refresh_required == false
+  end
+
+  test "tools list reports claim lease storage failure without advertising an unbound surface", %{repo: repo} do
+    package = create_local_claim_package!(repo, "SYMPP-STATE-LIST-LEDGER-FAIL")
+    assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+
+    {_claim_response, claimed_server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "claim-list-ledger-fail",
+          "method" => "tools/call",
+          "params" => %{"name" => "claim_local_assignment", "arguments" => local_assignment_claim_args(package)}
+        },
+        local_mcp_server(local_mcp_config(repo), "claim-list-ledger-fail-state")
+      )
+
+    Process.put({BusyAssignmentIntrospectionRepo, :delegate}, repo)
+    on_exit(fn -> Process.delete({BusyAssignmentIntrospectionRepo, :delegate}) end)
+    failed_server = %{claimed_server | config: local_mcp_config(BusyAssignmentIntrospectionRepo)}
+
+    {response, updated_server} =
+      Server.handle_state(
+        %{"jsonrpc" => "2.0", "id" => "list-ledger-fail", "method" => "tools/list", "params" => %{}},
+        failed_server
+      )
+
+    assert get_in(response, ["error", "code"]) == -32_000
+    assert get_in(response, ["error", "data", "reason"]) == "ledger_unavailable"
+    assert updated_server.session == failed_server.session
+    assert updated_server.session_refresh_required == false
   end
 
   test "HTTP local assignment release clears the current claim lease", %{repo: repo} do
@@ -779,7 +896,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
           "method" => "tools/call",
           "params" => %{"name" => "claim_local_assignment", "arguments" => local_assignment_claim_args(package)}
         },
-        local_mcp_server(local_mcp_config(repo), "claim-reclaimed-blocks-old-session-state")
+        local_mcp_server(%{local_mcp_config(repo) | surface_profile: :worker}, "claim-reclaimed-blocks-old-session-state")
       )
 
     assert {:ok, original_lease} = ClaimLeaseService.current_for_work_package(repo, package.id)
@@ -795,6 +912,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
              )
 
     assert replacement_lease.previous_claim_id == original_lease.id
+
+    {introspection_response, stale_server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "introspect-after-reclaim",
+          "method" => "tools/call",
+          "params" => %{"name" => "get_current_assignment", "arguments" => %{}}
+        },
+        claimed_server
+      )
+
+    assert get_in(introspection_response, ["result", "structuredContent", "assignment"]) == nil
+    assert get_in(introspection_response, ["result", "structuredContent", "binding", "state"]) == "stale"
+    assert get_in(introspection_response, ["result", "structuredContent", "next_action"]) == "reclaim_assignment"
+    assert get_in(introspection_response, ["result", "structuredContent", "recovery", "tools"]) == ["claim_local_assignment"]
+    assert stale_server.session == nil
+    assert stale_server.session_refresh_required == true
+
+    {stale_tools_response, _stale_server} =
+      Server.handle_state(
+        %{"jsonrpc" => "2.0", "id" => "tools-after-reclaim", "method" => "tools/list", "params" => %{}},
+        stale_server
+      )
+
+    stale_tool_names = stale_tools_response |> get_in(["result", "tools"]) |> Enum.map(& &1["name"])
+    assert "get_current_assignment" in stale_tool_names
+    assert "claim_local_assignment" in stale_tool_names
+    refute "read_context" in stale_tool_names
 
     {blocked_response, blocked_server} =
       Server.handle_state(

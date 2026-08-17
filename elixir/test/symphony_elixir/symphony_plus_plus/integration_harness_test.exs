@@ -211,8 +211,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     context = get_in(response, ["result", "structuredContent"])
 
     assert context["parent_work_request"] == %{
+             "id" => work_request.id,
              "title" => work_request.title,
-             "goal" => work_request.human_description
+             "goal" => work_request.human_description,
+             "status" => work_request.status
            }
 
     assert context["direct_dependencies"] == [

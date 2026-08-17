@@ -555,7 +555,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
         released_server
       )
 
-    assert get_in(worker_response, ["error", "data", "reason"]) == "claim_required"
+    assert get_in(worker_response, ["result", "structuredContent", "assignment"]) == nil
+    assert get_in(worker_response, ["result", "structuredContent", "binding", "state"]) == "unbound"
   end
 
   test "batched release_current_assignment updates the live server state", %{repo: repo} do
@@ -1120,7 +1121,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     end
   end
 
-  test "tools list exposes only claim refresh for stale architect sessions after grant revocation", %{repo: repo} do
+  test "tools list exposes callable unbound recovery after architect grant revocation", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-ARCHITECT-TOOLS-REVOKED", kind: "mcp"))
     assert {:ok, architect_work_key} = create_architect_work_key(repo, package.id, ["read:phase"])
 
@@ -1135,7 +1136,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     response = Server.handle(%{"jsonrpc" => "2.0", "id" => "revoked-architect-tools", "method" => "tools/list", "params" => %{}}, server)
     tools_by_name = response |> get_in(["result", "tools"]) |> Map.new(&{&1["name"], &1})
 
-    assert Map.keys(tools_by_name) |> Enum.sort() == ["claim_local_architect_assignment", "claim_local_assignment", "sympp.health"]
+    for tool <- [
+          "sympp.health",
+          "get_current_assignment",
+          "release_current_assignment",
+          "claim_local_architect_assignment",
+          "solo_attach"
+        ] do
+      assert Map.has_key?(tools_by_name, tool)
+    end
+
+    refute Map.has_key?(tools_by_name, "claim_local_assignment")
+    refute Map.has_key?(tools_by_name, "read_work_request")
+    refute Map.has_key?(tools_by_name, "read_context")
   end
 
   test "tools list preserves ledger failures while revalidating bound sessions" do

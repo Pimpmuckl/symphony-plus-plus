@@ -219,7 +219,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport05Test do
     assert get_in(Enum.at(responses, 0), ["result", "structuredContent", "assignment", "work_package_id"]) == package.id
     assert get_in(Enum.at(responses, 1), ["error", "data", "reason"]) == "claim_required"
     assert claimed_server.session.assignment.work_package_id == package.id
-    assert get_in(assignment_response, ["error", "data", "reason"]) == "claim_required"
+    assert get_in(assignment_response, ["result", "structuredContent", "assignment"]) == nil
+    assert get_in(assignment_response, ["result", "structuredContent", "binding", "state"]) == "unbound"
   end
 
   defp tool_call(id, name, arguments) do

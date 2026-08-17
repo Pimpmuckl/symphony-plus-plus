@@ -14,6 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     Repository,
     Response,
     Session,
+    SessionBindingTools,
     ToolCatalog
   }
 
@@ -29,19 +30,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   @version_resource "sympp://health/version"
 
   @spec tool_specs_for_server(map()) :: {:ok, [map()]} | {:error, term()}
-  def tool_specs_for_server(%{config: %Config{surface_profile: profile} = config}) when profile != :full do
-    {:ok, ToolCatalog.startup_tool_specs(profile, config)}
-  end
-
   def tool_specs_for_server(%{session_refresh_required: true, config: %Config{} = config} = server) do
-    specs = dedupe_tool_specs(claimable_tool_specs(config) ++ local_trusted_tool_specs(server))
-    {:ok, ToolCatalog.lean_tool_specs(specs)}
+    {:ok, effective_tool_specs(claimable_tool_specs(config), server)}
   end
 
   def tool_specs_for_server(%{config: %Config{} = config, session: session} = server) do
-    with {:ok, specs} <- tool_specs_for_session(config, session) do
-      specs = dedupe_tool_specs(advertised_tool_specs(specs, server) ++ local_trusted_tool_specs(server))
-      {:ok, ToolCatalog.lean_tool_specs(specs)}
+    surface_session = if(is_nil(session), do: {:ok, nil}, else: SessionBindingTools.tool_surface_session(server))
+
+    with {:ok, session} <- surface_session,
+         {:ok, specs} <- tool_specs_for_session(config, session) do
+      {:ok, effective_tool_specs(specs, server)}
+    end
+  end
+
+  @spec surface_revision(map()) :: {:ok, String.t()} | {:error, term()}
+  def surface_revision(server) do
+    with {:ok, specs} <- tool_specs_for_server(server) do
+      revision = specs |> :erlang.term_to_binary() |> then(&:crypto.hash(:sha256, &1)) |> Base.url_encode64(padding: false)
+      {:ok, "sha256:" <> revision}
     end
   end
 
@@ -102,7 +108,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   end
 
   defp tool_specs_for_session(%Config{} = config, nil) do
-    {:ok, unbound_tool_specs(config)}
+    {:ok, ToolCatalog.callable_unbound_tool_specs_for_config(config)}
   end
 
   defp tool_specs_for_session(%Config{repo: repo} = config, session) do
@@ -128,8 +134,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     {:ok, claimable_tool_specs(config)}
   end
 
-  defp claimable_tool_specs(%Config{} = config), do: ToolCatalog.claimable_tool_specs(config)
-  defp unbound_tool_specs(%Config{} = config), do: ToolCatalog.unbound_tool_specs_for_config(config)
+  defp claimable_tool_specs(%Config{} = config), do: ToolCatalog.callable_claim_tool_specs(config)
 
   defp architect_session_tool_specs(%Session{} = session) do
     ToolCatalog.architect_session_tool_specs(current_work_request?: CurrentWorkRequest.single_scope?(session))
@@ -164,28 +169,96 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     end)
   end
 
-  defp advertised_tool_specs(specs, server) do
-    if local_trusted_tools_enabled?(server) do
-      specs
-    else
-      hide_trusted_local_tool_specs(specs)
-    end
+  defp effective_tool_specs(specs, server) do
+    specs
+    |> role_scoped_claim_tool_specs(server)
+    |> advertised_tool_specs(server)
+    |> Kernel.++(local_trusted_tool_specs(server))
+    |> Enum.filter(&(&1["name"] in profile_tool_names(server.config.surface_profile)))
+    |> dedupe_tool_specs()
+    |> ToolCatalog.lean_tool_specs()
   end
 
-  defp hide_trusted_local_tool_specs(specs) do
-    Enum.reject(specs, &(&1["name"] in @bootstrap_tools))
+  defp advertised_tool_specs(specs, %{session: nil, session_refresh_required: false} = server) do
+    if local_trusted_tools_enabled?(server), do: specs, else: hide_trusted_local_tool_specs(specs)
   end
+
+  defp advertised_tool_specs(specs, _server), do: hide_trusted_local_tool_specs(specs)
+
+  defp hide_trusted_local_tool_specs(specs), do: Enum.reject(specs, &(&1["name"] in @bootstrap_tools))
 
   defp dedupe_tool_specs(specs) do
     Enum.uniq_by(specs, & &1["name"])
   end
 
-  defp local_trusted_tool_specs(server) do
+  defp role_scoped_claim_tool_specs(specs, server) do
+    case assignment_role(server) do
+      role when role in ["worker", "architect"] ->
+        claim_tool =
+          if role == "worker",
+            do: ToolCatalog.local_assignment_claim_tool(),
+            else: ToolCatalog.local_architect_assignment_claim_tool()
+
+        claim_spec =
+          server.config
+          |> ToolCatalog.callable_claim_tool_specs()
+          |> Enum.find(&(&1["name"] == claim_tool))
+
+        specs
+        |> Enum.reject(&(&1["name"] in ToolCatalog.session_claim_tools()))
+        |> maybe_prepend_tool_spec(claim_spec)
+
+      _unbound ->
+        specs
+    end
+  end
+
+  defp assignment_role(%{session: %Session{assignment: %{grant_role: role}}}), do: role
+  defp assignment_role(%{stale_assignment_role: role}), do: role
+  defp assignment_role(_server), do: nil
+
+  defp maybe_prepend_tool_spec(specs, nil), do: specs
+  defp maybe_prepend_tool_spec(specs, spec), do: [spec | specs]
+
+  defp local_trusted_tool_specs(
+         %{
+           session: nil,
+           session_refresh_required: false,
+           config: %Config{surface_profile: :full}
+         } = server
+       ) do
     if local_trusted_tools_enabled?(server) do
       LocalTrustedTools.tool_specs(server.config)
     else
       []
     end
+  end
+
+  defp local_trusted_tool_specs(_server), do: []
+
+  defp profile_tool_names(:full), do: ToolCatalog.known_tools()
+
+  defp profile_tool_names(:worker) do
+    [
+      ToolCatalog.health_tool(),
+      ToolCatalog.assignment_release_tool(),
+      ToolCatalog.local_assignment_claim_tool()
+      | ToolCatalog.worker_tools()
+    ]
+  end
+
+  defp profile_tool_names(:architect) do
+    [
+      ToolCatalog.health_tool(),
+      ToolCatalog.assignment_release_tool(),
+      "get_current_assignment",
+      ToolCatalog.local_architect_assignment_claim_tool()
+      | ToolCatalog.bootstrap_tools() ++ ToolCatalog.local_operator_tools() ++ ToolCatalog.architect_tools()
+    ]
+  end
+
+  defp profile_tool_names(profile) when profile in [:coordinator, :solo] do
+    [ToolCatalog.health_tool(), ToolCatalog.assignment_release_tool(), "get_current_assignment" | ToolCatalog.solo_tools()]
   end
 
   defp valid_resource_path?(resource_path) when is_binary(resource_path) do

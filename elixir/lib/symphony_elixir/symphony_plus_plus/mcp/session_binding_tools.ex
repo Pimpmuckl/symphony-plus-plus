@@ -22,7 +22,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @assignment_release_tool ToolCatalog.assignment_release_tool()
   @local_assignment_claim_tool ToolCatalog.local_assignment_claim_tool()
@@ -31,6 +30,70 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
   @architect_tools ToolCatalog.architect_tools()
   @local_assignment_claim_stale_after_ms :timer.minutes(5)
   @claim_lease_heartbeat_interval_ms :timer.seconds(30)
+
+  @spec get_current_assignment(Server.t()) :: {:ok, map(), Server.t()} | {:error, term()}
+  def get_current_assignment(%Server{session: nil} = server) do
+    state = if(server.session_refresh_required, do: "stale", else: "unbound")
+    {:ok, unbound_assignment_payload(server, state, server.stale_assignment_role), server}
+  end
+
+  def get_current_assignment(%Server{session: %Session{claim_lease_id: claim_lease_id}} = server) when is_binary(claim_lease_id) do
+    case require_current_session_claim(server, true) do
+      {:ok, %Server{session: %Session{} = session} = updated_server} ->
+        {:ok, bound_assignment_payload(updated_server, session), updated_server}
+
+      {:service_error, reason} ->
+        {:error, reason}
+
+      {:error, _code, _message, _data, %Server{} = updated_server} ->
+        {:ok, unbound_assignment_payload(updated_server, "stale", server.session.assignment.grant_role), updated_server}
+    end
+  end
+
+  def get_current_assignment(%Server{config: %Config{repo: repo}, session: %Session{} = session} = server) do
+    case Auth.require_session(session, repo) do
+      {:ok, %Session{} = live_session} ->
+        {:ok, bound_assignment_payload(server, live_session), server}
+
+      {:error, {:service_unavailable, _reason} = error} ->
+        {:error, error}
+
+      {:error, _reason} ->
+        updated_server = %{
+          server
+          | session: nil,
+            session_refresh_required: true,
+            stale_assignment_role: session.assignment.grant_role
+        }
+
+        {:ok, unbound_assignment_payload(updated_server, "stale", session.assignment.grant_role), updated_server}
+    end
+  end
+
+  @spec tool_surface_session(Server.t()) :: {:ok, Session.t() | nil} | {:error, term()}
+  def tool_surface_session(%Server{session: nil}), do: {:ok, nil}
+
+  def tool_surface_session(%Server{config: %Config{repo: repo}, session: %Session{claim_lease_id: claim_lease_id} = session})
+      when is_binary(claim_lease_id) do
+    with {:ok, %Session{} = live_session} <- Auth.require_session(session, repo),
+         {:ok, %ClaimLease{status: "active"} = lease} <- current_matching_claim_lease(repo, session) do
+      {:ok, Session.with_claim_lease(live_session, lease)}
+    else
+      {:error, reason} -> tool_surface_session_error(reason)
+      _not_callable -> {:ok, nil}
+    end
+  rescue
+    error -> {:error, {:service_unavailable, {:claim_lease_check_failed, error.__struct__}}}
+  end
+
+  def tool_surface_session(%Server{config: %Config{repo: repo}, session: %Session{} = session}) do
+    case Auth.require_session(session, repo) do
+      {:ok, %Session{} = live_session} -> {:ok, live_session}
+      {:error, reason} -> tool_surface_session_error(reason)
+    end
+  rescue
+    error -> {:error, {:service_unavailable, {:session_revalidation_failed, error.__struct__}}}
+  end
 
   @spec release_current_assignment(map(), Server.t()) :: {:ok, map(), Server.t()} | term()
   def release_current_assignment(arguments, %Server{session: nil} = server) do
@@ -52,7 +115,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
         }
       }
 
-      {:ok, result, %{server | session_refresh_required: false}}
+      {:ok, result, %{server | session_refresh_required: false, stale_assignment_role: nil}}
     end
   end
 
@@ -79,7 +142,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
 
       updated_server =
         if binding_cleared?,
-          do: %{server | session: nil, session_refresh_required: false},
+          do: %{server | session: nil, session_refresh_required: false, stale_assignment_role: nil},
           else: %{server | session_refresh_required: server.session_refresh_required or fresh_mcp_session_required?}
 
       {:ok, result, updated_server}
@@ -341,6 +404,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
       lease.access_grant_id != assignment.grant_id
   end
 
+  defp bound_session_call?(%Server{}, "tools/call", %{"name" => "get_current_assignment"}), do: false
+
   defp bound_session_call?(%Server{session: %Session{claim_lease_id: claim_lease_id}}, "tools/call", %{"name" => name})
        when name in @worker_tools or name in @architect_tools,
        do: is_binary(claim_lease_id)
@@ -357,29 +422,49 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
 
   defp bound_session_call?(%Server{}, _method, _params), do: false
 
-  defp require_current_session_claim(%Server{config: %Config{repo: repo}, session: %Session{} = session} = server) do
+  defp require_current_session_claim(
+         %Server{config: %Config{repo: repo}, session: %Session{} = session} = server,
+         preserve_service_unavailable? \\ false
+       ) do
     case {Auth.require_live_session_grant(session, repo), current_matching_claim_lease(repo, session)} do
-      {:ok, {:ok, %ClaimLease{status: "active"} = lease}} -> refresh_current_session_claim_lease(repo, server, lease)
-      {:ok, {:ok, %ClaimLease{status: "paused"}}} -> lost_current_session_claim(server, :claim_lease_paused)
-      {:ok, {:ok, %ClaimLease{}}} -> lost_current_session_claim(server, :claim_lease_not_active)
-      {:ok, {:error, reason}} -> lost_current_session_claim(server, reason)
-      {{:error, reason}, _claim_lease} -> lost_current_session_claim(server, reason)
+      {:ok, {:ok, %ClaimLease{status: "active"} = lease}} ->
+        refresh_current_session_claim_lease(repo, server, lease, preserve_service_unavailable?)
+
+      {:ok, {:ok, %ClaimLease{status: "paused"}}} ->
+        lost_current_session_claim(server, :claim_lease_paused)
+
+      {:ok, {:ok, %ClaimLease{}}} ->
+        lost_current_session_claim(server, :claim_lease_not_active)
+
+      {:ok, {:error, reason}} ->
+        preserve_service_error_or_lose_claim(server, reason, preserve_service_unavailable?)
+
+      {{:error, reason}, _claim_lease} ->
+        preserve_service_error_or_lose_claim(server, reason, preserve_service_unavailable?)
     end
   rescue
-    _error -> lost_current_session_claim(server, :claim_lease_check_failed)
+    error ->
+      if preserve_service_unavailable?,
+        do: {:service_error, {:service_unavailable, {:claim_lease_check_failed, error.__struct__}}},
+        else: lost_current_session_claim(server, :claim_lease_check_failed)
   end
 
-  defp refresh_current_session_claim_lease(repo, %Server{session: %Session{} = session} = server, %ClaimLease{} = lease) do
+  defp refresh_current_session_claim_lease(
+         repo,
+         %Server{session: %Session{} = session} = server,
+         %ClaimLease{} = lease,
+         preserve_service_unavailable?
+       ) do
     if claim_lease_heartbeat_due?(lease) do
       case ClaimLeaseService.heartbeat(repo, lease.id, stale_after_ms: @local_assignment_claim_stale_after_ms) do
         {:ok, %ClaimLease{} = renewed} ->
           {:ok, %{server | session: Session.with_claim_lease(session, renewed)}}
 
         {:error, :claim_stale} ->
-          reclaim_current_session_claim_lease(repo, server, session, lease)
+          reclaim_current_session_claim_lease(repo, server, session, lease, preserve_service_unavailable?)
 
         {:error, reason} ->
-          lost_current_session_claim(server, reason)
+          preserve_service_error_or_lose_claim(server, reason, preserve_service_unavailable?)
       end
     else
       {:ok, %{server | session: Session.with_claim_lease(session, lease)}}
@@ -399,20 +484,45 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
 
   defp heartbeat_interval_elapsed?(_last_seen_at, _now), do: true
 
-  defp reclaim_current_session_claim_lease(repo, %Server{} = server, %Session{} = session, %ClaimLease{} = lease) do
+  defp reclaim_current_session_claim_lease(
+         repo,
+         %Server{} = server,
+         %Session{} = session,
+         %ClaimLease{} = lease,
+         preserve_service_unavailable?
+       ) do
     actor = %{
       "actor_kind" => session.claim_actor_kind,
       "actor_id" => session.claim_actor_id,
       "actor_display_name" => session.claim_actor_display_name
     }
 
-    opts = LocalClaimLeases.reclaim_opts("mcp_session_tool_heartbeat_stale", @local_assignment_claim_stale_after_ms)
+    claim_opts = LocalClaimLeases.reclaim_opts("mcp_session_tool_heartbeat_stale", @local_assignment_claim_stale_after_ms)
 
-    case ClaimLeaseService.reclaim_stale(repo, lease.work_package_id, actor, opts) do
-      {:ok, %ClaimLease{} = replacement} -> {:ok, %{server | session: Session.with_claim_lease(session, replacement)}}
-      {:error, reason} -> lost_current_session_claim(server, reason)
+    case ClaimLeaseService.reclaim_stale(repo, lease.work_package_id, actor, claim_opts) do
+      {:ok, %ClaimLease{} = replacement} ->
+        {:ok, %{server | session: Session.with_claim_lease(session, replacement)}}
+
+      {:error, reason} ->
+        preserve_service_error_or_lose_claim(server, reason, preserve_service_unavailable?)
     end
   end
+
+  defp tool_surface_session_error({:unauthorized, reason}), do: tool_surface_session_error(reason)
+  defp tool_surface_session_error(reason), do: if(operational_service_error?(reason), do: {:error, reason}, else: {:ok, nil})
+
+  defp operational_service_error?(:database_busy), do: true
+  defp operational_service_error?({:scope_lookup_failed, reason}), do: operational_service_error?(reason)
+  defp operational_service_error?({kind, _reason}) when kind in [:service_unavailable, :storage_failed, :migration_failed], do: true
+  defp operational_service_error?(_reason), do: false
+
+  defp preserve_service_error_or_lose_claim(server, reason, true) do
+    if operational_service_error?(reason),
+      do: {:service_error, reason},
+      else: lost_current_session_claim(server, reason)
+  end
+
+  defp preserve_service_error_or_lose_claim(server, reason, _preserve?), do: lost_current_session_claim(server, reason)
 
   defp lost_current_session_claim(%Server{session: %Session{} = session} = server, reason) do
     action =
@@ -421,7 +531,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
         _role -> @local_assignment_claim_tool
       end
 
-    updated_server = %{server | session: nil, session_refresh_required: true}
+    updated_server = %{
+      server
+      | session: nil,
+        session_refresh_required: true,
+        stale_assignment_role: session.assignment.grant_role
+    }
 
     {:error, -32_001, "Unauthorized",
      %{
@@ -430,6 +545,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionBindingTools do
        "action" => action
      }, updated_server}
   end
+
+  defp bound_assignment_payload(%Server{config: %Config{surface_profile: profile}}, %Session{} = session) do
+    %{
+      "assignment" => Session.public_assignment(session),
+      "binding" => %{"state" => "bound", "surface_profile" => Atom.to_string(profile)},
+      "next_action" => "continue_current_assignment"
+    }
+  end
+
+  defp unbound_assignment_payload(%Server{config: %Config{surface_profile: profile}}, state, previous_role) do
+    claim_tools = claim_tools(profile, previous_role)
+    next_action = unbound_next_action(state, claim_tools)
+
+    %{
+      "assignment" => nil,
+      "binding" => %{"state" => state, "surface_profile" => Atom.to_string(profile)},
+      "next_action" => next_action,
+      "recovery" => %{"next_action" => next_action, "tools" => claim_tools}
+    }
+  end
+
+  defp claim_tools(:worker, _previous_role), do: [@local_assignment_claim_tool]
+  defp claim_tools(:architect, _previous_role), do: [@local_architect_assignment_claim_tool]
+  defp claim_tools(:full, "worker"), do: [@local_assignment_claim_tool]
+  defp claim_tools(:full, "architect"), do: [@local_architect_assignment_claim_tool]
+  defp claim_tools(:full, _previous_role), do: [@local_assignment_claim_tool, @local_architect_assignment_claim_tool]
+  defp claim_tools(profile, _previous_role) when profile in [:coordinator, :solo], do: []
+
+  defp unbound_next_action("stale", [_tool | _rest]), do: "reclaim_assignment"
+  defp unbound_next_action(_state, [_tool | _rest]), do: "claim_assignment"
+  defp unbound_next_action(_state, []), do: "use_unbound_tools"
 
   defp optional_put(attrs, _key, nil), do: attrs
   defp optional_put(attrs, key, value), do: Map.put(attrs, key, value)

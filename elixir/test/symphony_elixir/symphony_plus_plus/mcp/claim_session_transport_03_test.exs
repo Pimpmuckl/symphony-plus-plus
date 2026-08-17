@@ -434,7 +434,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
     assert old_owner_grant.revoked_at == nil
   end
 
-  test "claim_local_architect_assignment releases the current binding before rebinding", %{repo: repo} do
+  test "claim_local_architect_assignment cannot replace a bound worker role", %{repo: repo} do
     package = create_local_claim_package!(repo, "SYMPP-ARCHITECT-CLAIM-BOUND-WORKER", base_branch: "main")
     assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
@@ -474,9 +474,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
         worker_server
       )
 
-    assert get_in(response, ["result", "structuredContent", "assignment", "grant_role"]) == "architect"
-    assert server.session.assignment.grant_role == "architect"
-    assert {:error, :not_found} = ClaimLeaseService.current_for_work_package(repo, package.id)
+    assert get_in(response, ["error", "data", "reason"]) == "tool_not_callable"
+    assert get_in(response, ["error", "data", "recovery"]) == %{"next_action" => "list_tools"}
+    assert server.session.assignment.grant_role == "worker"
+    assert {:ok, %ClaimLease{status: "active"}} = ClaimLeaseService.current_for_work_package(repo, package.id)
   end
 
   test "claim_local_architect_assignment reclaims a stale bound local session for the same WorkRequest with a new owner label", %{repo: repo} do

@@ -12,6 +12,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
       local_architect_assignment_claim_tool_specs(config)
   end
 
+  @spec callable_claim_tool_specs(Config.t()) :: [ToolCatalog.tool_spec()]
+  def callable_claim_tool_specs(%Config{} = config) do
+    introspection_tool_specs() ++ profile_claim_tool_specs(config)
+  end
+
   @spec unbound_tool_specs_for_config(Config.t()) :: [ToolCatalog.tool_spec()]
   def unbound_tool_specs_for_config(%Config{} = config) do
     [health_tool_spec(), assignment_release_tool_spec()] ++
@@ -22,23 +27,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
       Enum.map(ToolCatalog.bootstrap_tools(), &bootstrap_tool_spec/1)
   end
 
+  @spec callable_unbound_tool_specs_for_config(Config.t()) :: [ToolCatalog.tool_spec()]
+  def callable_unbound_tool_specs_for_config(%Config{} = config) do
+    introspection_tool_specs() ++
+      unbound_profile_tool_specs(config) ++ Enum.map(ToolCatalog.bootstrap_tools(), &bootstrap_tool_spec/1)
+  end
+
   @spec startup_tool_specs(:full | :worker | :architect | :coordinator | :solo, Config.t()) :: [ToolCatalog.tool_spec()]
-  def startup_tool_specs(:full, %Config{} = config), do: config |> unbound_tool_specs_for_config() |> lean_tool_specs()
+  def startup_tool_specs(profile, %Config{} = config),
+    do: config |> Map.put(:surface_profile, profile) |> callable_unbound_tool_specs_for_config() |> lean_tool_specs()
 
-  def startup_tool_specs(:worker, %Config{}) do
-    [worker_tool_spec(ToolCatalog.local_assignment_claim_tool()) | worker_session_tool_specs()]
-    |> lean_tool_specs()
+  defp introspection_tool_specs,
+    do: [health_tool_spec(), assignment_release_tool_spec(), worker_tool_spec("get_current_assignment")]
+
+  defp unbound_profile_tool_specs(%Config{surface_profile: profile}) when profile in [:coordinator, :solo],
+    do: Enum.map(ToolCatalog.solo_tools(), &SoloTools.tool_spec/1)
+
+  defp unbound_profile_tool_specs(%Config{surface_profile: :worker} = config), do: local_assignment_claim_tool_specs(config)
+  defp unbound_profile_tool_specs(%Config{surface_profile: :architect} = config), do: local_architect_assignment_claim_tool_specs(config)
+
+  defp unbound_profile_tool_specs(%Config{surface_profile: :full} = config) do
+    Enum.map(ToolCatalog.solo_tools(), &SoloTools.tool_spec/1) ++ profile_claim_tool_specs(config)
   end
 
-  def startup_tool_specs(:architect, %Config{}) do
-    [local_architect_assignment_claim_tool_spec() | architect_session_tool_specs(current_work_request?: true)]
-    |> lean_tool_specs()
-  end
+  defp profile_claim_tool_specs(%Config{surface_profile: :worker} = config), do: local_assignment_claim_tool_specs(config)
+  defp profile_claim_tool_specs(%Config{surface_profile: :architect} = config), do: local_architect_assignment_claim_tool_specs(config)
+  defp profile_claim_tool_specs(%Config{surface_profile: profile}) when profile in [:coordinator, :solo], do: []
 
-  def startup_tool_specs(profile, %Config{}) when profile in [:coordinator, :solo] do
-    [health_tool_spec(), assignment_release_tool_spec() | Enum.map(ToolCatalog.solo_tools(), &SoloTools.tool_spec/1)]
-    |> lean_tool_specs()
-  end
+  defp profile_claim_tool_specs(%Config{} = config),
+    do: local_assignment_claim_tool_specs(config) ++ local_architect_assignment_claim_tool_specs(config)
 
   @spec architect_session_tool_specs(keyword()) :: [ToolCatalog.tool_spec()]
   def architect_session_tool_specs(opts) do

@@ -41,6 +41,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
+  alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
@@ -48,7 +49,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @tools [
-    "get_current_assignment",
     "read_context",
     "read_task_plan",
     "update_task_plan",
@@ -73,17 +73,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   def tools, do: @tools
 
   @spec call(String.t(), Config.t(), Session.t() | nil, map()) :: result()
-  def call("get_current_assignment", %Config{} = config, session, _arguments) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         :ok <- require_assignment_introspection(session.assignment) do
-      {:ok, ToolResult.agent_tool_result(%{"assignment" => Session.public_assignment(session)})}
-    else
-      {:error, reason} -> worker_error(reason, "get_current_assignment")
-    end
-  end
-
   def call("read_context", %Config{} = config, session, _arguments) do
-    read_current_virtual_file(config.repo, session, "context.md")
+    read_current_virtual_file(config, session, "context.md")
   end
 
   def call("read_task_plan", %Config{} = config, session, _arguments) do
@@ -305,7 +296,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     end
   end
 
-  defp read_current_virtual_file(repo, session, file_name) do
+  defp read_current_virtual_file(%Config{repo: repo, surface_profile: profile}, session, file_name) do
     with {:ok, session} <- Auth.require_session(session, repo),
          :ok <- require_worker_assignment(session.assignment),
          work_package_id = Session.work_package_id(session),
@@ -314,6 +305,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
          {:ok, markdown} <- PlanningRenderer.render_state(state, file_name),
          {:ok, context_anchor} <- PhaseChildScope.context_anchor(repo, state.work_package),
          {:ok, worker_context} <- WorkRequestPayloads.worker_context(repo, context_anchor) do
+      worker_context =
+        worker_context
+        |> Map.put("work_package", worker_package_context(state.work_package))
+        |> Map.put("current_binding", %{
+          "state" => "bound",
+          "role" => session.assignment.grant_role,
+          "surface_profile" => Atom.to_string(profile),
+          "next_action" => "continue_current_assignment"
+        })
+
       {:ok,
        ToolResult.agent_tool_result(Map.merge(%{"uri" => uri, "text" => markdown}, worker_context), fn ->
          {:ok, toon} = WorkerContext.encode_virtual_file(state, file_name, uri: uri, worker_context: worker_context)
@@ -322,6 +323,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     else
       {:error, reason} -> worker_error(reason, "read_#{file_name}")
     end
+  end
+
+  defp worker_package_context(%WorkPackage{} = work_package) do
+    work_package
+    |> WorkRequestPayloads.work_package()
+    |> Map.take(~w(id status contract_revision repo base_branch branch_pattern goal allowed_file_globs forbidden_file_globs acceptance_criteria validation_steps stop_conditions review))
+    |> Map.put("branch", Redactor.redact_text(work_package.branch_pattern))
+    |> Map.delete("branch_pattern")
+    |> Map.merge(%{
+      "product_description" => Redactor.redact_text(work_package.product_description),
+      "engineering_scope" => Redactor.redact_text(work_package.engineering_scope)
+    })
   end
 
   defp normalize_update_task_plan_result({:tool_error, reason}),
@@ -881,8 +894,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   defp require_worker_assignment(%{grant_role: "worker"}), do: :ok
   defp require_worker_assignment(_assignment), do: {:error, :worker_grant_required}
-  defp require_assignment_introspection(%{grant_role: grant_role}) when grant_role in ["worker", "architect"], do: :ok
-  defp require_assignment_introspection(_assignment), do: {:error, :worker_grant_required}
 
   defp metadata_tool_response({:ok, _result} = result, _tool), do: result
   defp metadata_tool_response({:error, _code, _message, _data} = error, _tool), do: error

@@ -108,6 +108,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     local_daemon_trusted: false,
     state_key_explicit: false,
     session_refresh_required: false,
+    stale_assignment_role: nil,
     initialized: false
   ]
 
@@ -119,6 +120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
           local_daemon_trusted: boolean(),
           state_key_explicit: boolean(),
           session_refresh_required: boolean(),
+          stale_assignment_role: String.t() | nil,
           initialized: boolean()
         }
 
@@ -137,6 +139,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       local_daemon_trusted: Keyword.get(opts, :local_daemon_trusted, config.local_daemon_trusted),
       state_key_explicit: state_key_explicit?,
       session_refresh_required: false,
+      stale_assignment_role: nil,
       initialized: Keyword.get(opts, :initialized, false)
     }
   end
@@ -244,8 +247,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   def handle_state(payload, %__MODULE__{} = server), do: {do_handle(payload, server), server}
 
-  defp handle_tool_call_request({:ok, %{"name" => name} = params}, id, %__MODULE__{} = server) when name in @session_claim_tools,
-    do: handle_session_claim_tool(name, params, id, server)
+  defp handle_tool_call_request({:ok, %{"name" => name} = params}, id, %__MODULE__{} = server)
+       when name in @session_claim_tools do
+    case Surface.tool_specs_for_server(server) do
+      {:ok, specs} ->
+        if Enum.any?(specs, &(&1["name"] == name)) do
+          handle_session_claim_tool(name, params, id, server)
+        else
+          error =
+            {:error, -32_601, "Method not found",
+             %{
+               "tool" => name,
+               "reason" => "tool_not_callable",
+               "recovery" => %{"next_action" => "list_tools"}
+             }}
+
+          dispatch_request_state(error, "tools/call", id, server)
+        end
+
+      {:error, reason} ->
+        dispatch_request_state(worker_error(reason, name), "tools/call", id, server)
+    end
+  end
 
   defp handle_tool_call_request({:ok, %{"name" => @assignment_release_tool} = params}, id, %__MODULE__{} = server),
     do: handle_assignment_release_tool(params, id, server)
@@ -387,7 +410,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp batch_server_state_changed?(%__MODULE__{} = server, %__MODULE__{} = updated_server) do
     server.initialized != updated_server.initialized or
       server.session != updated_server.session or
-      server.session_refresh_required != updated_server.session_refresh_required
+      server.session_refresh_required != updated_server.session_refresh_required or
+      server.stale_assignment_role != updated_server.stale_assignment_role
   end
 
   defp batch_session_claim_success?(
@@ -493,7 +517,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch("tools/call", %{"name" => @local_assignment_claim_tool} = params, %__MODULE__{} = server) do
     case claim_local_assignment(params, server) do
       {:ok, result, session} ->
-        {:ok, ToolResult.claim_tool_result(result), %{server | session: session, session_refresh_required: false}}
+        updated_server = %{server | session: session, session_refresh_required: false, stale_assignment_role: nil}
+        {:ok, ToolResult.claim_tool_result(put_surface_relist(result, updated_server)), updated_server}
 
       {:error, code, message, data} ->
         {:error, code, message, data}
@@ -503,7 +528,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch("tools/call", %{"name" => @local_architect_assignment_claim_tool} = params, %__MODULE__{} = server) do
     case claim_local_architect_assignment(params, server) do
       {:ok, result, session} ->
-        {:ok, ToolResult.claim_tool_result(result), %{server | session: session, session_refresh_required: false}}
+        updated_server = %{server | session: session, session_refresh_required: false, stale_assignment_role: nil}
+        {:ok, ToolResult.claim_tool_result(put_surface_relist(result, updated_server)), updated_server}
 
       {:error, code, message, data} ->
         {:error, code, message, data}
@@ -513,10 +539,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp dispatch("tools/call", %{"name" => @assignment_release_tool} = params, %__MODULE__{} = server) do
     with {:ok, arguments} <- prepare_assignment_release_tool_call(server, params),
          {:ok, result, updated_server} <- release_current_assignment(arguments, server) do
-      {:ok, ToolResult.release_tool_result(result), updated_server}
+      {:ok, ToolResult.release_tool_result(put_surface_relist(result, updated_server)), updated_server}
     else
       {:error, code, message, data} -> {:error, code, message, data}
       {:tool_error, reason} -> invalid_params_error(@assignment_release_tool, reason)
+    end
+  end
+
+  defp dispatch("tools/call", %{"name" => "get_current_assignment"} = params, %__MODULE__{} = server) do
+    with {:ok, _arguments} <- worker_tool_arguments(params, "get_current_assignment"),
+         {:ok, result, updated_server} <- SessionBindingTools.get_current_assignment(server) do
+      {:ok, ToolResult.agent_tool_result(result), updated_server}
+    else
+      {:error, _code, _message, _data} = error -> error
+      {:error, reason} -> worker_error(reason, "get_current_assignment")
     end
   end
 
@@ -706,7 +742,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       {:ok, arguments} ->
         case release_current_assignment(arguments, server) do
           {:ok, result, updated_server} ->
-            tool_result = build_release_tool_result(server, result)
+            tool_result = build_release_tool_result(server, put_surface_relist(result, updated_server))
             {Response.response(id, tool_result), updated_server}
 
           {:tool_error, reason} ->
@@ -722,11 +758,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp handle_session_claim_tool(@local_assignment_claim_tool, params, id, %__MODULE__{} = server) do
     case claim_local_assignment(params, server) do
       {:ok, result, session} ->
-        tool_result = build_tool_result(server, fn -> ToolResult.claim_tool_result(result) end)
+        updated_server = %{server | session: session, session_refresh_required: false, stale_assignment_role: nil}
+
+        tool_result =
+          build_tool_result(server, fn ->
+            ToolResult.claim_tool_result(put_surface_relist(result, updated_server))
+          end)
 
         {
           Response.response(id, tool_result),
-          %{server | session: session, session_refresh_required: false}
+          updated_server
         }
 
       {:error, code, message, data} ->
@@ -737,11 +778,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp handle_session_claim_tool(@local_architect_assignment_claim_tool, params, id, %__MODULE__{} = server) do
     case claim_local_architect_assignment(params, server) do
       {:ok, result, session} ->
-        tool_result = build_tool_result(server, fn -> ToolResult.claim_tool_result(result) end)
+        updated_server = %{server | session: session, session_refresh_required: false, stale_assignment_role: nil}
+
+        tool_result =
+          build_tool_result(server, fn ->
+            ToolResult.claim_tool_result(put_surface_relist(result, updated_server))
+          end)
 
         {
           Response.response(id, tool_result),
-          %{server | session: session, session_refresh_required: false}
+          updated_server
         }
 
       {:error, code, message, data} ->
@@ -906,12 +952,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp preauthorize_worker_tool_call(%__MODULE__{session: nil} = server, name) do
     {:error, -32_001, "Unauthorized", %{"resource" => name, "reason" => "claim_required", "action" => worker_claim_action(server)}}
-  end
-
-  defp preauthorize_worker_tool_call(%__MODULE__{session: session}, "get_current_assignment") do
-    with {:ok, session} <- Auth.require_session(session) do
-      require_assignment_introspection(session.assignment)
-    end
   end
 
   defp preauthorize_worker_tool_call(%__MODULE__{session: session}, _name) do
@@ -1787,6 +1827,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp worker_error(:forbidden, resource), do: auth_error(:forbidden, resource)
   defp worker_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
   defp worker_error(:database_busy, tool), do: service_error(:database_busy, tool)
+  defp worker_error({:scope_lookup_failed, reason}, tool), do: service_error(reason, tool)
   defp worker_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp worker_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp worker_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
@@ -1800,7 +1841,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
   defp architect_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
   defp architect_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
-  defp architect_error(:architect_grant_required, resource), do: auth_error({:unauthorized, :architect_grant_required}, resource)
+
+  defp architect_error(:architect_grant_required, resource) do
+    {:error, code, message, data} = auth_error({:unauthorized, :architect_grant_required}, resource)
+    {:error, code, message, Map.put(data, "recovery", %{"next_action" => "return_to_architect", "next_owner" => "architect"})}
+  end
+
   defp architect_error(:insufficient_capability, resource), do: auth_error({:unauthorized, :insufficient_capability}, resource)
   defp architect_error({:authorization_policy_denied, %Decision{} = decision}, resource), do: MCPError.from_decision(decision, resource)
   defp architect_error({:authorization_policy_denied, code, message, data}, _resource), do: {:error, code, message, data}
@@ -2077,7 +2123,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   # Claim preflight and these handlers both revalidate live authority; avoid a third
   # grant/package/scope lookup between them.
-  defp authorize_worker_tool_call(%__MODULE__{}, tool) when tool in ["get_current_assignment", "append_progress"], do: :ok
+  defp authorize_worker_tool_call(%__MODULE__{}, "append_progress"), do: :ok
 
   defp authorize_worker_tool_call(%__MODULE__{config: config, session: session}, "sync_pr") do
     case Auth.require_session(session, config.repo) do
@@ -2201,6 +2247,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp build_release_tool_result(%__MODULE__{} = server, result) do
     build_tool_result(server, fn -> ToolResult.release_tool_result(result) end)
+  end
+
+  defp put_surface_relist(result, %__MODULE__{} = server) do
+    case Surface.surface_revision(server) do
+      {:ok, revision} ->
+        result
+        |> Map.put("surface_revision", revision)
+        |> Map.put("relist", %{"next_action" => "list_tools"})
+
+      {:error, _reason} ->
+        Map.put(result, "relist", %{"next_action" => "list_tools"})
+    end
   end
 
   defp response_text_profile(%__MODULE__{config: %Config{mode: :stdio, surface_profile: :full}}), do: :full

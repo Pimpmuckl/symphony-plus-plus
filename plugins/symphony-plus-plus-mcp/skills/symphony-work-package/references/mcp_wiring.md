@@ -86,8 +86,8 @@ dispatch.
 Plugin installation is not worker package dispatch. Normal work-package worker
 dispatch emits a `worker_bootstrap` payload with `type: ledger_claim`, `mode:
 local_assignment`, and `claim.tool: claim_local_assignment`. The worker claims
-with only the WorkPackage id and optional `claimed_by` owner, then calls
-`get_current_assignment`.
+with only the WorkPackage id and optional `claimed_by` owner, follows the
+claim response's explicit re-list action, then calls `get_current_assignment`.
 
 ## Local HTTP Server
 
@@ -133,9 +133,12 @@ MCP session that will do the WorkPackage work.
 
 Workers start by calling `claim_local_assignment` in a dedicated S++ MCP
 session connected to the same ledger as dispatch. Pass `work_package_id` and,
-when provided, `claimed_by`. Then call
-`get_current_assignment()` and read package context. The first successful
-claim atomically activates a `ready_for_worker` package.
+when provided, `claimed_by`. Before claim, `get_current_assignment()` succeeds
+with `assignment: null` and a claim or reclaim action. After claim, follow
+`relist.next_action`, refresh the tool list, then call
+`get_current_assignment()` and read package context. The first successful claim
+atomically activates a `ready_for_worker` package. Release also returns an
+explicit re-list action.
 
 Replaying the same claim heartbeats the current claim lease. If the prior lease
 is stale, the server may reclaim it and records audit evidence without
