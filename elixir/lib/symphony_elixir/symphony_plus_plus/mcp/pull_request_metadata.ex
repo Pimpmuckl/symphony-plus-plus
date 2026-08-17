@@ -20,17 +20,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
   @type tool_error :: {:tool_error, term()}
 
   @spec payload(repo(), Session.t(), map(), String.t()) :: {:ok, map()} | tool_error() | {:error, term()}
-  def payload(repo, %Session{} = session, arguments, "sync_pr" = source_tool) do
-    case default_sync_pr_replay_payload(repo, session, arguments) do
-      {:ok, payload} -> {:ok, payload}
-      :not_found -> build_payload(repo, session, arguments, source_tool)
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  def payload(repo, %Session{} = session, arguments, source_tool), do: build_payload(repo, session, arguments, source_tool)
-
-  defp build_payload(repo, %Session{} = session, arguments, source_tool) do
+  def payload(repo, %Session{} = session, arguments, source_tool) do
     case legacy_attach_pr_payload(arguments, source_tool) do
       {:ok, payload} -> {:ok, payload}
       {:tool_error, reason} -> {:tool_error, reason}
@@ -38,8 +28,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
     end
   end
 
-  defp default_sync_pr_replay_payload(repo, %Session{} = session, arguments) do
-    if default_sync_pr_replay_arguments?(arguments) do
+  @spec replay_provider_sync(repo(), Session.t(), map()) :: {:ok, map()} | :not_found | tool_error() | {:error, term()}
+  def replay_provider_sync(repo, %Session{} = session, arguments) do
+    if provider_sync_replay_arguments?(arguments) do
       idempotency_key =
         ProgressEvents.scoped_idempotency_key(
           "sync_pr",
@@ -48,19 +39,46 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
         )
 
       case ProgressEvents.existing(repo, session, idempotency_key) do
-        {:ok, %ProgressEvent{payload: %{"type" => "pr", "source_tool" => "sync_pr"} = payload}} -> {:ok, payload}
-        {:ok, %ProgressEvent{}} -> :not_found
-        {:error, :not_found} -> :not_found
-        {:error, reason} -> {:error, reason}
+        {:ok, %ProgressEvent{payload: %{"type" => "pr", "source_tool" => "sync_pr"} = payload} = event} ->
+          with :ok <- validate_replay_pr_identity(arguments, payload),
+               {:ok, ^idempotency_key, attrs} <- ProgressEvents.metadata_attrs(session, arguments, "sync_pr", "pr_synced", payload) do
+            ProgressEvents.replay_existing(repo, session, event, attrs, "sync_pr")
+          end
+
+        {:ok, %ProgressEvent{}} ->
+          :not_found
+
+        {:error, :not_found} ->
+          :not_found
+
+        {:error, reason} ->
+          {:error, reason}
       end
     else
       :not_found
     end
   end
 
-  defp default_sync_pr_replay_arguments?(arguments) do
+  defp provider_sync_replay_arguments?(arguments) do
     filled_string?(Map.get(arguments, "idempotency_key")) and
-      Enum.all?(Map.keys(arguments), &(&1 in ~w(idempotency_key work_package_id summary status body payload)))
+      not Map.has_key?(arguments, "recovery") and not manual_sync_state?(arguments)
+  end
+
+  defp validate_replay_pr_identity(arguments, payload) do
+    arguments = drop_blank_pr_identity_arguments(arguments)
+
+    if Enum.any?(~w(url repository number), &Map.has_key?(arguments, &1)) do
+      with {:ok, attached_ref} <- PullRequest.parse(payload, nil),
+           {:ok, candidate_arguments} <- sync_pr_reference_arguments(arguments, {attached_ref.repository, attached_ref.number}),
+           {:ok, candidate_ref} <- PullRequest.parse(candidate_arguments, nil),
+           true <- normalized_pr_ref(candidate_ref.repository, candidate_ref.number) == normalized_pr_ref(attached_ref.repository, attached_ref.number) do
+        :ok
+      else
+        _mismatch -> {:tool_error, "pr_reference_mismatch"}
+      end
+    else
+      :ok
+    end
   end
 
   @spec validate_sync_target_unless_replay(repo(), Session.t(), map(), map(), String.t(), boolean()) ::

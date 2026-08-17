@@ -271,9 +271,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
   end
 
   test "default sync_pr retries replay before fetching the provider", %{repo: repo} do
-    {_package, session} = sync_package(repo, "SYMPP-PROVIDER-REPLAY", 48, "head-a")
+    {package, session} = sync_package(repo, "SYMPP-PROVIDER-REPLAY", 48, "head-a")
     SymphonyElixir.FakeGitHubClient.put_response("nextide/repo", 48, provider_metadata(48, "head-a"))
-    arguments = %{"idempotency_key" => "provider-retry"}
+    arguments = %{"idempotency_key" => "provider-retry", "url" => "https://github.com/nextide/repo/pull/48"}
 
     first = attach_tool(repo, session, "sync_pr", arguments)
     event_id = get_in(first, ["result", "structuredContent", "progress_event", "id"])
@@ -283,6 +283,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     replay = attach_tool(repo, session, "sync_pr", arguments)
 
     assert get_in(replay, ["result", "structuredContent", "progress_event", "id"]) == event_id
+    refute_receive {:provider_fetch, _, _}
+
+    package |> Ecto.Changeset.change(status: "ready_for_merge") |> repo.update!()
+    terminal_replay = attach_tool(repo, session, "sync_pr", arguments)
+
+    assert get_in(terminal_replay, ["result", "structuredContent", "progress_event", "id"]) == event_id
     refute_receive {:provider_fetch, _, _}
   end
 
