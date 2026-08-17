@@ -221,7 +221,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
     with {:ok, candidate_arguments} <- sync_pr_reference_arguments(arguments, attached_ref),
          {:ok, candidate_ref} <- PullRequest.parse(candidate_arguments, nil),
          true <- normalized_pr_ref(candidate_ref.repository, candidate_ref.number) == attached_ref do
-      sync_pr_reference_arguments(arguments, attached_ref)
+      {:ok, candidate_arguments}
     else
       false -> {:tool_error, "pr_mismatch"}
       {:error, reason} -> {:tool_error, reason_text(reason)}
