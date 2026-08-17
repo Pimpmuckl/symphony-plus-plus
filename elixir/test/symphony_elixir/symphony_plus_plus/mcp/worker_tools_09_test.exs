@@ -207,7 +207,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools09Test do
       for _task <- tasks,
           do:
             (
-              assert_receive {:resolver_ready, pid}
+              assert_receive {:resolver_ready, pid}, 5_000
               pid
             )
 
