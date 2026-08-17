@@ -93,6 +93,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope do
   def require_cleanup_target_repo_root_scope(target_repo_root, %WorkPackage{} = work_package, %Config{} = config),
     do: require_target_repo_root_scope(target_repo_root, work_package, config)
 
+  @spec require_live_review_head(WorkPackage.t(), Config.t(), String.t(), String.t()) :: scope_result()
+  def require_live_review_head(
+        %WorkPackage{worktree_path: worktree_path} = work_package,
+        %Config{} = config,
+        branch,
+        head_sha
+      )
+      when is_binary(worktree_path) and is_binary(branch) and is_binary(head_sha) do
+    with {:ok, _target_repo_root} <- resolve_target_repo_root(nil, work_package, config),
+         :ok <- require_local_branch_pattern_scope(work_package, branch, prepared_worktree?: true),
+         {:ok, %{branch: live_branch, head_sha: live_head_sha}} <- live_git_head(worktree_path),
+         :ok <- require_live_branch(branch, live_branch) do
+      require_live_head(head_sha, live_head_sha)
+    end
+  end
+
+  def require_live_review_head(%WorkPackage{}, %Config{}, _branch, _head_sha),
+    do: {:tool_error, "worktree_scope_required"}
+
   @spec prepare_branch(WorkPackage.t(), String.t() | nil) :: {:ok, String.t()} | tool_error()
   def prepare_branch(%WorkPackage{} = work_package, branch) when is_binary(branch) do
     case require_local_branch_pattern_scope(work_package, branch, prepared_worktree?: true) do
@@ -256,6 +275,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope do
     else
       _result -> nil
     end
+  end
+
+  defp live_git_head(worktree_path) do
+    with git when is_binary(git) <- System.find_executable("git") || System.find_executable("git.exe"),
+         {output, 0} <-
+           System.cmd(git, ["-C", worktree_path, "status", "--porcelain=v2", "--branch", "--untracked-files=no"], stderr_to_stdout: true),
+         {:ok, head_sha} <- git_status_value(output, "# branch.oid "),
+         {:ok, branch} <- git_status_value(output, "# branch.head "),
+         true <- Regex.match?(~r/\A[0-9a-f]{40,64}\z/i, head_sha),
+         false <- branch == "(detached)" do
+      {:ok, %{branch: branch, head_sha: String.downcase(head_sha)}}
+    else
+      _result -> {:tool_error, "invalid_worktree_path"}
+    end
+  end
+
+  defp git_status_value(output, prefix) do
+    output
+    |> String.split(~r/\R/)
+    |> Enum.find_value(fn line ->
+      if String.starts_with?(line, prefix), do: {:ok, String.replace_prefix(line, prefix, "")}
+    end)
+    |> case do
+      {:ok, ""} -> :error
+      result -> result || :error
+    end
+  end
+
+  defp require_live_branch(branch, branch), do: :ok
+  defp require_live_branch(_expected, _actual), do: {:tool_error, "worktree_branch_mismatch"}
+
+  defp require_live_head(expected, actual) do
+    if String.downcase(String.trim(expected)) == actual,
+      do: :ok,
+      else: {:tool_error, "worktree_head_mismatch"}
   end
 
   defp target_repo_root_matches_repo_scope?(target_repo_root, expected_repo, %Config{} = config) when is_binary(expected_repo) do

@@ -5,6 +5,47 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
 
   alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
 
+  defmodule ConcurrentReviewHeadRepo do
+    @moduledoc false
+
+    alias Ecto.Changeset
+    alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
+    alias SymphonyElixir.SymphonyPlusPlus.Repo
+    alias SymphonyElixir.TestSupport
+
+    @race_key :sympp_concurrent_review_head
+
+    def arm(worktree_path), do: Process.put(@race_key, worktree_path)
+    def disarm, do: Process.delete(@race_key)
+
+    def transaction(fun), do: Repo.transaction(fun)
+    def rollback(value), do: Repo.rollback(value)
+    def get(schema, id), do: Repo.get(schema, id)
+    def get!(schema, id), do: Repo.get!(schema, id)
+    def one(query), do: Repo.one(query)
+    def all(query), do: Repo.all(query)
+    def update_all(query, updates), do: Repo.update_all(query, updates)
+
+    def insert(%Changeset{} = changeset) do
+      result = Repo.insert(changeset)
+      maybe_advance_head(changeset)
+      result
+    end
+
+    defp maybe_advance_head(%Changeset{
+           data: %ProgressEvent{},
+           changes: %{payload: %{"type" => "branch", "source_tool" => "attach_branch"}}
+         }) do
+      if worktree_path = Process.delete(@race_key) do
+        File.write!(Path.join(worktree_path, "concurrent-head.txt"), "changed during review submission\n")
+        TestSupport.git_output!(worktree_path, ["add", "concurrent-head.txt"])
+        TestSupport.git_output!(worktree_path, ["commit", "-m", "Concurrent head change"])
+      end
+    end
+
+    defp maybe_advance_head(%Changeset{}), do: :ok
+  end
+
   test "mark_ready requires plan nodes when package-depth planning is meaningful", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(
@@ -262,6 +303,121 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert get_in(ready, ["result", "structuredContent", "ready"]) == true
   end
 
+  test "submit_review_package atomically refreshes a live scoped worktree head and invalidates old review evidence", %{repo: repo} do
+    live = live_review_fixture!(repo, "SYMPP-LIVE-REVIEW-HEAD")
+    config = Config.default(repo: repo, repo_root: live.fixture.repo_root)
+
+    live_tool(repo, live.session, config, "attach_branch", %{"branch" => live.branch, "head_sha" => live.head_a})
+
+    live_tool(repo, live.session, config, "submit_review_package", %{
+      "summary" => "Review at head A",
+      "tests" => ["mix test"],
+      "artifacts" => ["head-a.txt"],
+      "head_sha" => live.head_a,
+      "acceptance_criteria_met" => true
+    })
+
+    live_tool(repo, live.session, config, "complete_review", %{"reference" => "review-a"})
+    head_b = commit_worktree!(live.worktree, "head-b.txt", "head B\n", "Head B")
+
+    response =
+      live_tool(repo, live.session, config, "submit_review_package", %{
+        "summary" => "Review at head B",
+        "tests" => ["mix test"],
+        "artifacts" => ["head-b.txt"],
+        "head_sha" => head_b,
+        "acceptance_criteria_met" => true
+      })
+
+    assert response_progress_payload(repo, response)["head_sha"] == head_b
+    assert {:ok, events} = PlanningRepository.list_progress_events(repo, live.package.id)
+
+    refreshed_branch =
+      events
+      |> Enum.filter(&(get_in(&1.payload, ["type"]) == "branch"))
+      |> List.last()
+
+    current_review =
+      events
+      |> Enum.filter(&(get_in(&1.payload, ["type"]) == "review_package"))
+      |> List.last()
+
+    assert refreshed_branch.payload["branch"] == live.branch
+    assert refreshed_branch.payload["head_sha"] == head_b
+    assert current_review.payload["head_sha"] == head_b
+    assert current_review.sequence == refreshed_branch.sequence + 1
+
+    assert Enum.any?(events, fn event ->
+             get_in(event.payload, ["type"]) == "review_completion" and event.payload["head_sha"] == live.head_a
+           end)
+
+    not_ready = live_request(repo, live.session, config, "mark_ready", %{})
+    assert "review_complete" in get_in(not_ready, ["error", "data", "missing"])
+  end
+
+  test "submit_review_package rejects heads without matching live worktree proof", %{repo: repo} do
+    live = live_review_fixture!(repo, "SYMPP-LIVE-REVIEW-NEGATIVE")
+    config = Config.default(repo: repo, repo_root: live.fixture.repo_root)
+    live_tool(repo, live.session, config, "attach_branch", %{"branch" => live.branch, "head_sha" => live.head_a})
+    head_b = commit_worktree!(live.worktree, "head-b.txt", "head B\n", "Head B")
+
+    mismatched = review_head_request(repo, live, config, String.duplicate("f", 40))
+    assert_review_head_proof_error(mismatched, "worktree_head_mismatch")
+
+    TestSupport.git_output!(live.worktree, ["checkout", "-b", "other-branch"])
+    wrong_branch = review_head_request(repo, live, config, head_b)
+    assert_review_head_proof_error(wrong_branch, "worktree_branch_mismatch")
+    TestSupport.git_output!(live.worktree, ["checkout", live.branch])
+
+    assert {:ok, _package} =
+             WorkPackageRepository.update(repo, live.package.id, %{
+               worktree_path: nil,
+               worktree_target_repo_root: nil
+             })
+
+    unrecorded = review_head_request(repo, live, config, head_b)
+    assert_review_head_proof_error(unrecorded, "worktree_scope_required")
+
+    foreign = TestSupport.git_repo_fixture!("main", prefix: "sympp-live-review-foreign")
+
+    assert {:ok, _package} =
+             WorkPackageRepository.update(repo, live.package.id, %{
+               worktree_path: foreign.repo_root,
+               worktree_target_repo_root: foreign.repo_root
+             })
+
+    foreign_repo = review_head_request(repo, live, config, head_b)
+    assert_review_head_proof_error(foreign_repo, "target_repo_root_required")
+
+    assert {:ok, events} = PlanningRepository.list_progress_events(repo, live.package.id)
+    assert Enum.count(events, &(get_in(&1.payload, ["type"]) == "branch")) == 1
+    refute Enum.any?(events, &(get_in(&1.payload, ["type"]) == "review_package"))
+  end
+
+  test "submit_review_package rolls back a concurrent live head change", %{repo: repo} do
+    live = live_review_fixture!(repo, "SYMPP-LIVE-REVIEW-RACE")
+    initial_config = Config.default(repo: repo, repo_root: live.fixture.repo_root)
+    live_tool(repo, live.session, initial_config, "attach_branch", %{"branch" => live.branch, "head_sha" => live.head_a})
+    head_b = commit_worktree!(live.worktree, "head-b.txt", "head B\n", "Head B")
+    race_config = Config.default(repo: ConcurrentReviewHeadRepo, repo_root: live.fixture.repo_root)
+
+    try do
+      ConcurrentReviewHeadRepo.arm(live.worktree)
+      response = review_head_request(ConcurrentReviewHeadRepo, live, race_config, head_b)
+
+      assert get_in(response, ["error", "data", "reason"]) == "concurrent_head_change"
+      assert get_in(response, ["error", "data", "proof_failure"]) == "worktree_head_mismatch"
+      assert get_in(response, ["error", "data", "recovery", "next_action"]) == "retry_submit_review_package"
+    after
+      ConcurrentReviewHeadRepo.disarm()
+    end
+
+    assert {:ok, events} = PlanningRepository.list_progress_events(repo, live.package.id)
+    assert Enum.count(events, &(get_in(&1.payload, ["type"]) == "branch")) == 1
+    refute Enum.any?(events, &(get_in(&1.payload, ["type"]) == "review_package"))
+    assert {:ok, []} = PlanningRepository.list_artifacts(repo, live.package.id)
+  end
+
   test "mark_ready does not require review-package metadata for non-merge-gated policies", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(
@@ -448,6 +604,71 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
       %{"jsonrpc" => "2.0", "id" => id, "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
       repo: repo,
       session: session
+    )
+  end
+
+  defp live_review_fixture!(repo, id) do
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-live-review-head")
+    branch = "agent/#{id}/worker"
+    worktree = Path.join(fixture.root, "worktree")
+    TestSupport.git_output!(fixture.repo_root, ["worktree", "add", "-b", branch, worktree, "HEAD"])
+    head_a = fixture.repo_root |> TestSupport.git_output!(["rev-parse", "HEAD"]) |> String.trim()
+
+    assert {:ok, package} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: id,
+                 repo: fixture.origin,
+                 branch_pattern: branch,
+                 worktree_path: worktree,
+                 worktree_target_repo_root: fixture.repo_root,
+                 review_requirement: %{"type" => "human"},
+                 status: "ci_waiting"
+               )
+             )
+
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: id)
+    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+    %{fixture: fixture, worktree: worktree, branch: branch, head_a: head_a, package: package, session: session}
+  end
+
+  defp commit_worktree!(worktree, file, contents, message) do
+    File.write!(Path.join(worktree, file), contents)
+    TestSupport.git_output!(worktree, ["add", file])
+    TestSupport.git_output!(worktree, ["commit", "-m", message])
+    worktree |> TestSupport.git_output!(["rev-parse", "HEAD"]) |> String.trim()
+  end
+
+  defp review_head_request(repo, live, config, head_sha) do
+    live_request(repo, live.session, config, "submit_review_package", %{
+      "summary" => "Review new head",
+      "tests" => ["mix test"],
+      "artifacts" => ["new-head.txt"],
+      "head_sha" => head_sha,
+      "acceptance_criteria_met" => true
+    })
+  end
+
+  defp assert_review_head_proof_error(response, proof_failure) do
+    assert get_in(response, ["error", "data", "reason"]) == "stale_head_sha"
+    assert get_in(response, ["error", "data", "proof_failure"]) == proof_failure
+    assert get_in(response, ["error", "data", "recovery", "next_action"]) == "attach_branch"
+  end
+
+  defp live_tool(repo, session, config, name, arguments) do
+    response = live_request(repo, session, config, name, arguments)
+    assert get_in(response, ["result", "structuredContent", "progress_event", "id"])
+    response
+  end
+
+  defp live_request(repo, session, config, name, arguments) do
+    MCPHarness.request(
+      %{"jsonrpc" => "2.0", "id" => name, "method" => "tools/call", "params" => %{"name" => name, "arguments" => arguments}},
+      repo: repo,
+      session: session,
+      config: config
     )
   end
 
