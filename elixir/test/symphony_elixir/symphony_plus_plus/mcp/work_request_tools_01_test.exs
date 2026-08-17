@@ -133,15 +133,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert get_in(old_name_response, ["error", "code"]) == -32_601
     assert get_in(old_name_response, ["error", "data", "tool"]) == "read_work_request_product_tree"
 
-    assert get_in(claimed_tools_by_name, ["slice_work_request", "inputSchema", "required"]) == ["work_packages"]
+    assert get_in(claimed_tools_by_name, ["slice_work_request", "inputSchema", "required"]) == ["work_request_id", "work_packages"]
 
     assert get_in(claimed_tools_by_name, ["update_work_package", "inputSchema", "required"]) == [
+             "work_request_id",
              "work_package_id",
              "expected_contract_revision",
              "patch"
            ]
 
     assert get_in(claimed_tools_by_name, ["skip_work_package", "inputSchema", "required"]) == [
+             "work_request_id",
              "work_package_id",
              "current_status"
            ]
@@ -279,7 +281,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert get_in(stdio_response, ["error", "code"]) == -32_001
     assert get_in(stdio_response, ["error", "data", "tool"]) == "create_work_request"
     assert get_in(stdio_response, ["error", "data", "reason"]) == "local_mcp_required"
-    refute Enum.any?(tools_for_server(Server.new(Config.default(repo: repo), initialized: true)), &(&1["name"] == "create_work_request"))
+    assert Enum.any?(tools_for_server(Server.new(Config.default(repo: repo), initialized: true)), &(&1["name"] == "create_work_request"))
 
     implicit_state_response =
       Server.handle(
@@ -295,7 +297,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert get_in(implicit_state_response, ["error", "code"]) == -32_001
     assert get_in(implicit_state_response, ["error", "data", "reason"]) == "local_mcp_session_required"
 
-    refute Enum.any?(
+    assert Enum.any?(
              tools_for_server(Server.new(local_mcp_config(repo), initialized: true, local_daemon_trusted: true)),
              &(&1["name"] == "create_work_request")
            )
@@ -316,7 +318,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert get_in(remote_response, ["error", "code"]) == -32_001
     assert get_in(remote_response, ["error", "data", "reason"]) == "local_database_required"
     refute inspect(remote_response) =~ "ghp_createworksecret"
-    refute Enum.any?(tools_for_server(local_mcp_server(remote_config, "remote-create-work-request-tools-state")), &(&1["name"] == "create_work_request"))
+    assert Enum.any?(tools_for_server(local_mcp_server(remote_config, "remote-create-work-request-tools-state")), &(&1["name"] == "create_work_request"))
 
     memory_response =
       Server.handle(

@@ -488,7 +488,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
       )
 
     assert get_in(response, ["error", "data", "reason"]) == "tool_not_callable"
-    assert get_in(response, ["error", "data", "recovery"]) == %{"next_action" => "list_tools"}
+    refute Map.has_key?(response["error"]["data"], "recovery")
     assert server.session.assignment.grant_role == "worker"
     assert {:ok, %ClaimLease{status: "active"}} = ClaimLeaseService.current_for_work_package(repo, package.id)
   end

@@ -262,7 +262,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     end
 
     for tool <- ["read_context", "read_work_request", "create_child_work_package", "list_work_requests"] do
-      refute tool in names
+      assert tool in names
     end
   end
 
@@ -351,9 +351,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert "get_current_assignment" in tool_names
     assert "append_progress" in tool_names
     assert "claim_local_assignment" in tool_names
-    refute "claim_local_architect_assignment" in tool_names
+    assert "claim_local_architect_assignment" in tool_names
     refute "claim_private_handoff" in tool_names
-    refute "solo_attach" in tool_names
+    assert "solo_attach" in tool_names
 
     assignment_tool =
       post_json(tool_call_request("assignment-tool", "get_current_assignment", %{}), [{"mcp-session-id", session_id}])
@@ -410,7 +410,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert "get_current_assignment" in tool_names
     assert "read_work_request" in tool_names
     assert "dispatch_work_package" in tool_names
-    refute "solo_attach" in tool_names
+    assert "solo_attach" in tool_names
 
     read =
       post_json(
@@ -772,7 +772,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     tool_names = tool_names(json_response(tools, 200))
 
     assert "claim_local_assignment" in tool_names
-    refute "claim_local_architect_assignment" in tool_names
+    assert "claim_local_architect_assignment" in tool_names
     assert "get_current_assignment" in tool_names
 
     assignment_tool =

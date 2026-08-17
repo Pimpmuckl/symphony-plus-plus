@@ -34,8 +34,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   end
 
   @spec startup_tool_specs(:full | :worker | :architect | :coordinator | :solo, Config.t()) :: [ToolCatalog.tool_spec()]
-  def startup_tool_specs(profile, %Config{} = config),
-    do: config |> Map.put(:surface_profile, profile) |> callable_unbound_tool_specs_for_config() |> lean_tool_specs()
+  def startup_tool_specs(profile, %Config{} = config) do
+    config = Map.put(config, :surface_profile, profile)
+
+    case profile do
+      :worker ->
+        worker_session_tool_specs() ++ local_assignment_claim_tool_specs(config)
+
+      :architect ->
+        architect_session_tool_specs(current_work_request?: true) ++ local_architect_assignment_claim_tool_specs(config)
+
+      profile when profile in [:coordinator, :solo] ->
+        introspection_tool_specs() ++ Enum.map(ToolCatalog.solo_tools(), &SoloTools.tool_spec/1)
+
+      :full ->
+        unbound_tool_specs_for_config(config) ++ local_operator_tool_specs()
+    end
+    |> Enum.uniq_by(& &1["name"])
+    |> lean_tool_specs()
+  end
 
   defp introspection_tool_specs,
     do: [health_tool_spec(), assignment_release_tool_spec(), worker_tool_spec("get_current_assignment")]

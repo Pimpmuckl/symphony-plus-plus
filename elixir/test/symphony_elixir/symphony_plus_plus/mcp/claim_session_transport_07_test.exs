@@ -6,7 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{HTTPStateStore, HTTPTransport}
 
-  test "HTTP worker client introspects, claims, re-lists, releases, and reclaims only callable tools", %{repo: repo} do
+  test "HTTP worker catalog stays stable across claim, release, and reclaim", %{repo: repo} do
     {package, work_request} = create_http_local_claim_package!(repo, "SYMPP-HTTP-RELEASE-THEN-CLAIM")
     config = %{local_mcp_config(repo) | surface_profile: :worker}
     client_key = "client-http-release-then-claim-batch"
@@ -16,10 +16,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
 
     state_key = init_result.state_key
 
-    unbound_tools = http!(config, client_key, state_key, "unbound-tools", "tools/list", %{})
+    startup_tools = http!(config, client_key, state_key, "startup-tools", "tools/list", %{})
 
-    assert tool_names(unbound_tools) ==
-             MapSet.new(["sympp.health", "release_current_assignment", "get_current_assignment", "claim_local_assignment"])
+    assert tool_names(startup_tools) ==
+             MapSet.new(["sympp.health", "release_current_assignment", "claim_local_assignment" | @worker_tool_names])
+
+    unclaimed_read =
+      http!(config, client_key, state_key, "unclaimed-read", "tools/call", %{
+        "name" => "read_context",
+        "arguments" => %{}
+      })
+
+    assert get_in(unclaimed_read.response, ["error", "data", "reason"]) == "claim_required"
 
     introspection =
       http!(config, client_key, state_key, "unbound-assignment", "tools/call", %{
@@ -49,11 +57,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
 
     claim_payload = get_in(claim_result.response, ["result", "structuredContent"])
     assert get_in(claim_payload, ["assignment", "work_package_id"]) == package.id
-    assert claim_payload["surface_revision"] =~ ~r/^sha256:[A-Za-z0-9_-]{43}$/
-    assert claim_payload["relist"] == %{"next_action" => "list_tools"}
+    refute Map.has_key?(claim_payload, "surface_revision")
+    refute Map.has_key?(claim_payload, "relist")
 
     bound_tools = http!(config, client_key, state_key, "bound-tools", "tools/list", %{})
-    bound_names = tool_names(bound_tools)
+    assert tool_specs(bound_tools) == tool_specs(startup_tools)
+    bound_names = tool_names(startup_tools)
     assert MapSet.member?(bound_names, "read_context")
     assert MapSet.member?(bound_names, "get_current_assignment")
     assert MapSet.member?(bound_names, "claim_local_assignment")
@@ -101,10 +110,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
 
     release_payload = get_in(release_result.response, ["result", "structuredContent"])
     assert release_payload["binding_cleared"] == true
-    assert release_payload["surface_revision"] =~ ~r/^sha256:[A-Za-z0-9_-]{43}$/
-    assert release_payload["surface_revision"] != claim_payload["surface_revision"]
-    assert release_payload["relist"] == %{"next_action" => "list_tools"}
-    assert tool_names(http!(config, client_key, state_key, "released-tools", "tools/list", %{})) == tool_names(unbound_tools)
+    refute Map.has_key?(release_payload, "surface_revision")
+    refute Map.has_key?(release_payload, "relist")
+    assert tool_specs(http!(config, client_key, state_key, "released-tools", "tools/list", %{})) == tool_specs(startup_tools)
 
     reclaim_result =
       http!(config, client_key, state_key, "reclaim", "tools/call", %{
@@ -113,7 +121,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
       })
 
     assert get_in(reclaim_result.response, ["result", "structuredContent", "assignment", "work_package_id"]) == package.id
-    assert MapSet.member?(tool_names(http!(config, client_key, state_key, "reclaimed-tools", "tools/list", %{})), "read_context")
+    assert tool_specs(http!(config, client_key, state_key, "reclaimed-tools", "tools/list", %{})) == tool_specs(startup_tools)
     assert {:ok, %ClaimLease{status: "active"}} = ClaimLeaseService.current_for_work_package(repo, package.id)
 
     HTTPStateStore.reset!()
@@ -129,6 +137,80 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
     assert get_in(assignment_result.response, ["result", "structuredContent", "assignment", "work_package_id"]) == package.id
   end
 
+  test "HTTP architect claims and slices after one startup tools list", %{repo: repo} do
+    work_request =
+      create_work_request!(repo,
+        id: "WR-HTTP-STABLE-ARCHITECT-CATALOG",
+        status: "ready_for_slicing"
+      )
+
+    assert {:ok, _handoff} =
+             ArchitectHandoff.create_or_replay(repo, work_request.id,
+               local_operator?: true,
+               handoff_opts: [
+                 claimed_by: ArchitectHandoff.claimed_by(),
+                 database: repo.database_path(),
+                 local_architect_claim?: true
+               ]
+             )
+
+    config = %{local_mcp_config(repo) | surface_profile: :architect}
+    client_key = "client-http-stable-architect-catalog"
+
+    {:ok, init_result} =
+      HTTPTransport.handle(
+        config,
+        %{"jsonrpc" => "2.0", "id" => "init-stable-architect", "method" => "initialize", "params" => initialize_params()},
+        client_key: client_key
+      )
+
+    state_key = init_result.state_key
+    startup_tools = http!(config, client_key, state_key, "architect-tools", "tools/list", %{})
+    startup_names = tool_names(startup_tools)
+
+    assert MapSet.member?(startup_names, "slice_work_request")
+    refute MapSet.member?(startup_names, "read_context")
+
+    slice_arguments = %{
+      "work_packages" => [
+        %{
+          "title" => "Stable catalog regression",
+          "goal" => "Prove claim authorizes the startup catalog.",
+          "kind" => "mcp",
+          "allowed_file_globs" => ["elixir/lib/**"],
+          "acceptance_criteria" => ["Slice succeeds without another tools/list."],
+          "validation_steps" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp/claim_session_transport_07_test.exs"],
+          "stop_conditions" => ["Stop after the regression proves the flow."]
+        }
+      ]
+    }
+
+    unclaimed_slice =
+      http!(config, client_key, state_key, "unclaimed-slice", "tools/call", %{
+        "name" => "slice_work_request",
+        "arguments" => slice_arguments
+      })
+
+    assert get_in(unclaimed_slice.response, ["error", "data", "reason"]) == "claim_required"
+
+    claim =
+      http!(config, client_key, state_key, "architect-claim", "tools/call", %{
+        "name" => "claim_local_architect_assignment",
+        "arguments" => %{"work_request_id" => work_request.id}
+      })
+
+    assert get_in(claim.response, ["result", "structuredContent", "assignment", "grant_role"]) == "architect"
+
+    slice =
+      http!(config, client_key, state_key, "slice-without-relist", "tools/call", %{
+        "name" => "slice_work_request",
+        "arguments" => slice_arguments
+      })
+
+    assert get_in(slice.response, ["result", "structuredContent", "status", "work_request_status"]) == "sliced"
+    assert [_work_package_id] = get_in(slice.response, ["result", "structuredContent", "work_package_ids"])
+  end
+
   defp http!(config, client_key, state_key, id, method, params) do
     assert {:ok, result} =
              HTTPTransport.handle(
@@ -142,11 +224,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport07Test do
   end
 
   defp tool_names(result) do
-    result.response
-    |> get_in(["result", "tools"])
+    result
+    |> tool_specs()
     |> Enum.map(& &1["name"])
     |> MapSet.new()
   end
+
+  defp tool_specs(result), do: get_in(result.response, ["result", "tools"])
 
   defp create_http_local_claim_package!(repo, id) do
     package = create_local_claim_package!(repo, id, base_branch: "main")

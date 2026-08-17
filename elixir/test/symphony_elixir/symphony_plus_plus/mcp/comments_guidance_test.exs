@@ -615,10 +615,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
       |> tools_for_server()
       |> Map.new(&{&1["name"], &1})
 
-    refute Map.has_key?(implicit_state_tools, "add_work_request_comment")
-    refute Map.has_key?(implicit_state_tools, "record_work_request_operator_decision")
-    refute Map.has_key?(remote_tools, "add_work_request_comment")
-    refute Map.has_key?(remote_tools, "record_work_request_operator_decision")
+    assert Map.has_key?(implicit_state_tools, "add_work_request_comment")
+    assert Map.has_key?(implicit_state_tools, "record_work_request_operator_decision")
+    assert Map.has_key?(remote_tools, "add_work_request_comment")
+    assert Map.has_key?(remote_tools, "record_work_request_operator_decision")
 
     remote_response =
       Server.handle(
@@ -647,8 +647,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
         |> tools_for_server()
         |> Map.new(&{&1["name"], &1})
 
-      refute Map.has_key?(memory_tools, "add_work_request_comment")
-      refute Map.has_key?(memory_tools, "record_work_request_operator_decision")
+      assert Map.has_key?(memory_tools, "add_work_request_comment")
+      assert Map.has_key?(memory_tools, "record_work_request_operator_decision")
 
       memory_response =
         Server.handle(

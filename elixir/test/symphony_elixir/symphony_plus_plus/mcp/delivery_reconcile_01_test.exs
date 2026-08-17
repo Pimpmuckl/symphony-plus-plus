@@ -37,9 +37,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     local_server = local_mcp_server(local_mcp_config(repo), "local-work-request-read-state")
     tools_by_name = tools_for_server(local_server) |> Map.new(&{&1["name"], &1})
 
-    refute Map.has_key?(tools_by_name, "list_work_requests")
-    refute Map.has_key?(tools_by_name, "read_work_request")
-    refute Map.has_key?(tools_by_name, "read_delivery_board")
+    assert Map.has_key?(tools_by_name, "list_work_requests")
+    assert Map.has_key?(tools_by_name, "read_work_request")
+    assert Map.has_key?(tools_by_name, "read_delivery_board")
     assert Map.has_key?(tools_by_name, "get_current_assignment")
     assert Map.has_key?(tools_by_name, "claim_local_architect_assignment")
 

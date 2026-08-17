@@ -25,9 +25,9 @@ Before coding:
 2. Claim the assignment through `claim_local_assignment`.
    The first successful claim activates the package atomically; reconnecting
    the same claim does not change lifecycle state.
-3. Follow the successful claim's `relist.next_action`, refresh the MCP tool
-   list, then call `get_current_assignment()` and treat that assignment as the
-   scope.
+3. Call `get_current_assignment()` from the stable worker catalog and treat
+   that assignment as the scope. Claim and release do not require another
+   tool-list refresh.
 4. If claim fails because the lease is paused, another active owner exists, or
    the local ledger scope mismatches, stop and ask the architect or operator to
    repair that state. Do not request raw secrets.
