@@ -292,6 +292,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     refute_receive {:provider_fetch, _, _}
   end
 
+  test "recovery retries replay with the persisted observation time and reject changed state", %{repo: repo} do
+    {_package, session} = sync_package(repo, "SYMPP-RECOVERY-REPLAY", 49, "head-a")
+
+    recovery = %{
+      "url" => "https://github.com/nextide/repo/pull/49",
+      "head_sha" => "head-a",
+      "check_summary" => %{"status" => "passing"},
+      "review_state" => %{"status" => "approved"},
+      "merge_state" => %{"status" => "clean", "merged" => false}
+    }
+
+    arguments = %{"idempotency_key" => "recovery-retry", "recovery" => recovery}
+    first = attach_tool(repo, session, "sync_pr", arguments)
+    event_id = get_in(first, ["result", "structuredContent", "progress_event", "id"])
+
+    replay = attach_tool(repo, session, "sync_pr", arguments)
+    assert get_in(replay, ["result", "structuredContent", "progress_event", "id"]) == event_id
+
+    changed = put_in(arguments, ["recovery", "check_summary", "status"], "failing")
+
+    conflict =
+      MCPHarness.request(%{"jsonrpc" => "2.0", "id" => "recovery-conflict", "method" => "tools/call", "params" => %{"name" => "sync_pr", "arguments" => changed}}, repo: repo, session: session)
+
+    assert get_in(conflict, ["error", "data", "reason"]) == "idempotency_conflict"
+    refute_receive {:provider_fetch, _, _}
+  end
+
   test "sync_pr provider failures preserve the previous snapshot", %{repo: repo} do
     {package, session} = sync_package(repo, "SYMPP-PROVIDER-FAILURE", 43, "head-a")
     SymphonyElixir.FakeGitHubClient.put_response("nextide/repo", 43, provider_metadata(43, "head-a"))

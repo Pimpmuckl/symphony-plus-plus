@@ -57,18 +57,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
   end
 
   defp replay_provider_sync_event(repo, session, arguments, idempotency_key, event, payload) do
-    with :ok <- validate_replay_pr_identity(arguments, payload),
-         {:ok, ^idempotency_key, attrs} <- ProgressEvents.metadata_attrs(session, arguments, "sync_pr", "pr_synced", payload) do
+    with {:ok, replay_payload} <- replay_provider_sync_payload(repo, session, arguments, payload),
+         {:ok, ^idempotency_key, attrs} <- ProgressEvents.metadata_attrs(session, arguments, "sync_pr", "pr_synced", replay_payload) do
       ProgressEvents.replay_existing(repo, session, event, attrs, "sync_pr")
     end
   end
 
   defp provider_sync_replay_arguments?(arguments) do
-    filled_string?(Map.get(arguments, "idempotency_key")) and
-      not Map.has_key?(arguments, "recovery") and not manual_sync_state?(arguments)
+    filled_string?(Map.get(arguments, "idempotency_key")) and not manual_sync_state?(arguments)
   end
 
-  defp validate_replay_pr_identity(arguments, payload) do
+  defp replay_provider_sync_payload(repo, session, %{"recovery" => recovery} = arguments, stored) when is_map(recovery) do
+    recovery = Map.put_new(recovery, "observed_at", Map.get(stored, "observed_at"))
+
+    case github_pr_metadata_payload(repo, session, Map.put(arguments, "recovery", recovery), "sync_pr") do
+      {:ok, payload} -> {:ok, Map.merge(payload, Map.take(stored, ["attachment_repair"]))}
+      error -> error
+    end
+  end
+
+  defp replay_provider_sync_payload(_repo, _session, %{"recovery" => _recovery}, _stored), do: {:tool_error, "invalid_recovery"}
+
+  defp replay_provider_sync_payload(_repo, _session, arguments, payload) do
     arguments = drop_blank_pr_identity_arguments(arguments)
 
     if Enum.any?(~w(url repository number), &Map.has_key?(arguments, &1)) do
@@ -76,12 +86,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
            {:ok, candidate_arguments} <- sync_pr_reference_arguments(arguments, {attached_ref.repository, attached_ref.number}),
            {:ok, candidate_ref} <- PullRequest.parse(candidate_arguments, nil),
            true <- normalized_pr_ref(candidate_ref.repository, candidate_ref.number) == normalized_pr_ref(attached_ref.repository, attached_ref.number) do
-        :ok
+        {:ok, payload}
       else
         _mismatch -> {:tool_error, "pr_reference_mismatch"}
       end
     else
-      :ok
+      {:ok, payload}
     end
   end
 
