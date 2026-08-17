@@ -217,7 +217,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   def call("submit_review_package", %Config{} = config, session, arguments) do
     with {:ok, session} <- scoped_session(config.repo, session, arguments),
          :ok <- authorize_current_package_policy(config.repo, session, :review_evidence_append, :review_evidence),
-         {:ok, result} <- ReviewReadiness.submit_review_package(config.repo, session, arguments) do
+         {:ok, result} <- ReviewReadiness.submit_review_package(config.repo, session, arguments, config) do
       {:ok, result}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "submit_review_package", "reason" => reason}}

@@ -8,9 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolResult
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, ProgressEvents, Session, ToolResult, WorktreeScope}
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
@@ -28,14 +26,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   @type mcp_error :: {:error, integer(), String.t(), map()}
   @type worker_result :: {:ok, term()} | {:tool_error, term()} | {:error, term()} | mcp_error()
 
-  @spec submit_review_package(repo(), Session.t(), map()) :: worker_result()
-  def submit_review_package(repo, %Session{} = session, arguments) do
+  @spec submit_review_package(repo(), Session.t(), map(), Config.t()) :: worker_result()
+  def submit_review_package(repo, %Session{} = session, arguments, %Config{} = config) do
     with {:ok, summary} <- required_argument(arguments, "summary"),
          {:ok, tests} <- required_string_list(arguments, "tests"),
          {:ok, artifacts} <- required_string_list(arguments, "artifacts"),
          artifacts = Enum.uniq(artifacts),
          {:ok, acceptance_criteria_met} <- optional_boolean(arguments, "acceptance_criteria_met", nil) do
-      submit_review_package_transaction(repo, session, arguments, artifacts, %{
+      submit_review_package_transaction(repo, session, arguments, artifacts, config, %{
         "type" => "review_package",
         "summary" => summary,
         "tests" => tests,
@@ -89,9 +87,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   def maybe_put_readiness_warnings(payload, []), do: payload
   def maybe_put_readiness_warnings(payload, warnings), do: Map.put(payload, "warnings", warnings)
 
-  defp submit_review_package_transaction(repo, %Session{} = session, arguments, artifacts, payload) do
+  defp submit_review_package_transaction(repo, %Session{} = session, arguments, artifacts, config, payload) do
     case repo.transaction(fn ->
-           submit_review_package_transaction_body(repo, session, arguments, artifacts, payload)
+           submit_review_package_transaction_body(repo, session, arguments, artifacts, config, payload)
          end) do
       {:ok, result} -> {:ok, result}
       {:error, {:mcp_error, code, message, data}} -> {:error, code, message, data}
@@ -99,7 +97,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     end
   end
 
-  defp submit_review_package_transaction_body(repo, %Session{} = session, arguments, artifacts, payload) do
+  defp submit_review_package_transaction_body(repo, %Session{} = session, arguments, artifacts, config, payload) do
     work_package_id = Session.work_package_id(session)
 
     with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
@@ -108,97 +106,112 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
          {:ok, requested_head_sha} <- optional_head_sha(arguments) do
       replay_head_sha = requested_head_sha || latest_current_head_sha(state.progress_events)
       arguments = maybe_put_headless_review_idempotency_key(arguments, requested_head_sha, payload)
-      arguments = maybe_put_review_head_sha(arguments, replay_head_sha)
-      payload = maybe_put_review_head_sha(payload, replay_head_sha)
+      replay_arguments = maybe_put_review_head_sha(arguments, replay_head_sha)
+      replay_payload = maybe_put_review_head_sha(payload, replay_head_sha)
 
-      result =
-        submit_or_replay_review_package(
-          repo,
-          session,
-          arguments,
-          artifacts,
-          payload,
-          replay_head_sha,
-          state.work_package,
-          state.progress_events
-        )
+      case replay_existing_metadata_event(
+             repo,
+             session,
+             replay_arguments,
+             "submit_review_package",
+             "review_package_submitted",
+             replay_payload,
+             state.progress_events
+           ) do
+        {:ok, result} ->
+          put_remaining_readiness_gates_or_rollback(repo, session, result)
 
-      case put_remaining_readiness_gates(repo, session, result) do
-        {:ok, result} -> result
-        {:error, reason} -> repo.rollback(reason)
+        :not_found ->
+          submit_new_review_package_transaction_body(
+            repo,
+            session,
+            arguments,
+            artifacts,
+            payload,
+            requested_head_sha,
+            state,
+            config
+          )
+
+        {:error, code, message, data} ->
+          repo.rollback({:mcp_error, code, message, data})
       end
     else
       {:tool_error, reason} ->
-        repo.rollback({:mcp_error, -32_602, "Invalid params", %{"tool" => "submit_review_package", "reason" => reason}})
+        rollback_review_head_error(repo, reason)
 
       {:error, reason} ->
         repo.rollback(reason)
     end
   end
 
-  defp submit_or_replay_review_package(
+  defp submit_new_review_package_transaction_body(
          repo,
          %Session{} = session,
          arguments,
          artifacts,
          payload,
          requested_head_sha,
-         work_package,
-         progress_events
+         state,
+         config
        ) do
-    case replay_existing_metadata_event(repo, session, arguments, "submit_review_package", "review_package_submitted", payload, progress_events) do
-      {:ok, result} ->
-        result
+    case review_package_head_sha(requested_head_sha, state, config) do
+      {:ok, review_head_sha, refresh} ->
+        arguments = maybe_put_review_head_sha(arguments, review_head_sha)
+        payload = maybe_put_review_head_sha(payload, review_head_sha)
 
-      :not_found ->
-        submit_new_review_package(
-          repo,
-          session,
-          arguments,
-          artifacts,
-          payload,
-          requested_head_sha,
-          work_package,
-          progress_events
-        )
+        with :ok <- maybe_append_live_branch_refresh(repo, session, refresh),
+             result <- submit_new_review_package(repo, session, arguments, artifacts, payload, review_head_sha),
+             :ok <- confirm_live_branch_refresh(state.work_package, config, refresh) do
+          put_remaining_readiness_gates_or_rollback(repo, session, result)
+        else
+          {:tool_error, reason} -> rollback_review_head_error(repo, reason)
+          {:error, code, message, data} -> repo.rollback({:mcp_error, code, message, data})
+        end
+
+      {:tool_error, reason} ->
+        rollback_review_head_error(repo, reason)
+    end
+  end
+
+  defp put_remaining_readiness_gates_or_rollback(repo, %Session{} = session, result) do
+    case put_remaining_readiness_gates(repo, session, result) do
+      {:ok, result} -> result
+      {:error, reason} -> repo.rollback(reason)
+    end
+  end
+
+  defp submit_new_review_package(repo, %Session{} = session, arguments, artifacts, payload, head_sha) do
+    case ProgressEvents.append_metadata(repo, session, arguments, "submit_review_package", "review_package_submitted", payload) do
+      {:ok, result} ->
+        persist_review_artifacts_or_rollback(repo, session, artifacts, head_sha, result)
 
       {:error, code, message, data} ->
         repo.rollback({:mcp_error, code, message, data})
     end
   end
 
-  defp submit_new_review_package(repo, %Session{} = session, arguments, artifacts, payload, requested_head_sha, work_package, progress_events) do
-    case review_package_head_sha(requested_head_sha, progress_events, work_package) do
-      {:ok, head_sha} ->
-        case ProgressEvents.append_metadata(repo, session, arguments, "submit_review_package", "review_package_submitted", payload) do
-          {:ok, result} ->
-            persist_review_artifacts_or_rollback(repo, session, artifacts, head_sha, result)
-
-          {:error, code, message, data} ->
-            repo.rollback({:mcp_error, code, message, data})
-        end
-
-      {:tool_error, reason} ->
-        repo.rollback({:mcp_error, -32_602, "Invalid params", %{"tool" => "submit_review_package", "reason" => reason}})
-    end
-  end
-
-  defp review_package_head_sha(nil, progress_events, %WorkPackage{} = work_package) do
+  defp review_package_head_sha(nil, %{progress_events: progress_events, work_package: work_package}, %Config{}) do
     case latest_current_head_sha(progress_events) do
-      current_head_sha when is_binary(current_head_sha) -> {:ok, current_head_sha}
-      _missing_head -> if exact_head_required?(work_package), do: {:tool_error, "missing_current_head_sha"}, else: {:ok, nil}
+      current_head_sha when is_binary(current_head_sha) -> {:ok, current_head_sha, nil}
+      _missing_head -> if exact_head_required?(work_package), do: {:tool_error, "missing_current_head_sha"}, else: {:ok, nil, nil}
     end
   end
 
-  defp review_package_head_sha(head_sha, progress_events, %WorkPackage{} = work_package) when is_binary(head_sha) do
+  defp review_package_head_sha(
+         head_sha,
+         %{progress_events: progress_events, work_package: %WorkPackage{} = work_package},
+         %Config{} = config
+       )
+       when is_binary(head_sha) do
     current_head_sha = latest_current_head_sha(progress_events)
 
     cond do
-      is_binary(current_head_sha) and PullRequest.head_sha_matches?(head_sha, current_head_sha) ->
-        {:ok, head_sha}
+      is_binary(current_head_sha) and head_sha_matches?(head_sha, current_head_sha) ->
+        {:ok, head_sha, nil}
 
       is_binary(current_head_sha) and is_binary(head_sha) ->
-        {:tool_error, "stale_head_sha"}
+        live_review_head_refresh(work_package, config, progress_events, head_sha)
 
       exact_head_required?(work_package) ->
         {:tool_error, "missing_current_head_sha"}
@@ -206,6 +219,62 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       true ->
         {:tool_error, "unbound_head_sha"}
     end
+  end
+
+  defp live_review_head_refresh(%WorkPackage{} = work_package, %Config{} = config, progress_events, head_sha) do
+    with %ProgressEvent{payload: payload} = event <- latest_current_branch_event(progress_events),
+         branch when is_binary(branch) <- Map.get(payload, "branch"),
+         :ok <- WorktreeScope.require_live_review_head(work_package, config, branch, head_sha) do
+      {:ok, head_sha, %{branch: branch, head_sha: head_sha, boundary: event.id}}
+    else
+      nil -> {:tool_error, {"stale_head_sha", "branch_proof_required"}}
+      {:tool_error, reason} -> {:tool_error, {"stale_head_sha", reason}}
+      _invalid_branch -> {:tool_error, {"stale_head_sha", "branch_proof_required"}}
+    end
+  end
+
+  defp maybe_append_live_branch_refresh(_repo, %Session{}, nil), do: :ok
+
+  defp maybe_append_live_branch_refresh(repo, %Session{} = session, refresh) do
+    payload = %{
+      "type" => "branch",
+      "branch" => refresh.branch,
+      "head_sha" => refresh.head_sha
+    }
+
+    arguments = %{"idempotency_key" => "live-review-head:#{refresh.boundary}:#{refresh.head_sha}"}
+
+    case ProgressEvents.append_metadata(repo, session, arguments, "attach_branch", "branch_attached", payload) do
+      {:ok, _result} -> :ok
+      error -> error
+    end
+  end
+
+  defp confirm_live_branch_refresh(%WorkPackage{}, %Config{}, nil), do: :ok
+
+  defp confirm_live_branch_refresh(%WorkPackage{} = work_package, %Config{} = config, refresh) do
+    case WorktreeScope.require_live_review_head(work_package, config, refresh.branch, refresh.head_sha) do
+      :ok -> :ok
+      {:tool_error, reason} -> {:tool_error, {"concurrent_head_change", reason}}
+      {:error, reason} -> {:tool_error, {"concurrent_head_change", to_string(reason)}}
+    end
+  end
+
+  defp rollback_review_head_error(repo, {reason, proof_failure}) do
+    repo.rollback({:mcp_error, -32_602, "Invalid params", review_head_error_data(reason, proof_failure)})
+  end
+
+  defp rollback_review_head_error(repo, reason) do
+    repo.rollback({:mcp_error, -32_602, "Invalid params", %{"tool" => "submit_review_package", "reason" => reason}})
+  end
+
+  defp review_head_error_data(reason, proof_failure) do
+    %{
+      "tool" => "submit_review_package",
+      "reason" => reason,
+      "proof_failure" => proof_failure,
+      "recovery" => %{"next_action" => if(reason == "concurrent_head_change", do: "retry_submit_review_package", else: "attach_branch")}
+    }
   end
 
   defp optional_head_sha(arguments) do
@@ -219,7 +288,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {:ok, head_sha} when is_binary(head_sha) ->
         case String.trim(head_sha) do
           "" -> {:ok, nil}
-          trimmed -> {:ok, trimmed}
+          trimmed -> {:ok, String.downcase(trimmed)}
         end
 
       {:ok, _head_sha} ->
@@ -593,7 +662,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp review_head_matches?(payload, :any_head) when is_map(payload), do: true
 
   defp review_head_matches?(payload, current_head_sha) when is_map(payload) and is_binary(current_head_sha) do
-    PullRequest.head_sha_matches?(Map.get(payload, "head_sha"), current_head_sha)
+    head_sha_matches?(Map.get(payload, "head_sha"), current_head_sha)
   end
 
   defp review_head_matches?(_payload, _current_head_sha), do: false
@@ -615,7 +684,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     Enum.any?(artifacts, &(&1.id == expected_id and &1.kind == "review" and &1.path == path))
   end
 
-  defp latest_current_head_sha(progress_events), do: latest_metadata_head_sha(progress_events, "branch", "attach_branch")
+  defp latest_current_head_sha(progress_events) do
+    case latest_metadata_head_sha(progress_events, "branch", "attach_branch") do
+      head_sha when is_binary(head_sha) -> String.downcase(head_sha)
+      missing -> missing
+    end
+  end
+
+  defp latest_current_branch_event(progress_events) do
+    progress_events
+    |> Enum.reverse()
+    |> Enum.find(&payload_type?(&1, "branch", "attach_branch"))
+  end
 
   defp latest_metadata_head_sha(progress_events, type, source_tool) do
     progress_events
@@ -763,10 +843,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp failed_status(status), do: status <> "_failed"
 
   defp latest_branch_event_sequence(progress_events) do
-    progress_events
-    |> Enum.reverse()
-    |> Enum.find(&payload_type?(&1, "branch", "attach_branch"))
-    |> case do
+    case latest_current_branch_event(progress_events) do
       %ProgressEvent{sequence: sequence} when is_integer(sequence) -> sequence
       _event -> nil
     end
@@ -999,7 +1076,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp metadata_tool("branch"), do: "attach_branch"
   defp metadata_tool("pr"), do: "attach_pr"
   defp metadata_tool("review_package"), do: "submit_review_package"
-  defp head_sha_matches?(left, right), do: PullRequest.head_sha_matches?(left, right)
+
+  defp head_sha_matches?(left, right) when is_binary(left) and is_binary(right) do
+    PullRequest.head_sha_matches?(String.downcase(left), String.downcase(right))
+  end
+
+  defp head_sha_matches?(_left, _right), do: false
 
   defp payload_type?(%ProgressEvent{payload: payload}, type, source_tools) when is_map(payload) and is_list(source_tools) do
     Map.get(payload, "type") == type and Map.get(payload, "source_tool") in source_tools
