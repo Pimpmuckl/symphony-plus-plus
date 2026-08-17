@@ -298,6 +298,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     recovery = %{
       "url" => "https://github.com/nextide/repo/pull/49",
       "head_sha" => "head-a",
+      "observed_at" => "",
       "check_summary" => %{"status" => "passing"},
       "review_state" => %{"status" => "approved"},
       "merge_state" => %{"status" => "clean", "merged" => false}
@@ -306,6 +307,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     arguments = %{"idempotency_key" => "recovery-retry", "recovery" => recovery}
     first = attach_tool(repo, session, "sync_pr", arguments)
     event_id = get_in(first, ["result", "structuredContent", "progress_event", "id"])
+
+    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-RECOVERY-REPLAY", "head_sha" => "head-b"})
+    attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/nextide/repo/pull/49", "head_sha" => "head-b"})
 
     replay = attach_tool(repo, session, "sync_pr", arguments)
     assert get_in(replay, ["result", "structuredContent", "progress_event", "id"]) == event_id

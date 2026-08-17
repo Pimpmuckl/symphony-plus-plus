@@ -68,11 +68,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PullRequestMetadata do
   end
 
   defp replay_provider_sync_payload(repo, session, %{"recovery" => recovery} = arguments, stored) when is_map(recovery) do
-    recovery = Map.put_new(recovery, "observed_at", Map.get(stored, "observed_at"))
+    recovery =
+      if filled_string?(Map.get(recovery, "observed_at")),
+        do: recovery,
+        else: Map.put(recovery, "observed_at", Map.get(stored, "observed_at"))
 
-    case github_pr_metadata_payload(repo, session, Map.put(arguments, "recovery", recovery), "sync_pr") do
-      {:ok, payload} -> {:ok, Map.merge(payload, Map.take(stored, ["attachment_repair"]))}
-      error -> error
+    with {:ok, _stored} <- replay_provider_sync_payload(repo, session, Map.delete(arguments, "recovery") |> Map.merge(recovery), stored),
+         {:ok, ref} <- PullRequest.parse(stored, nil),
+         {:ok, payload} <- import_pr_snapshot(%{"recovery" => recovery}, ref, Map.get(stored, "head_sha")) do
+      {:ok, Map.merge(Map.put(payload, "source_tool", "sync_pr"), Map.take(stored, ["attachment_repair"]))}
     end
   end
 
