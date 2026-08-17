@@ -1308,7 +1308,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     repo.delete_all(
       from(scope in RepoScope,
         where: scope.work_request_id == ^updated.id,
-        where: scope.scope_key in ^scope_keys
+        where:
+          scope.scope_key in ^scope_keys or
+            (scope.repo == ^previous.repo and scope.base_branch == ^previous.base_branch)
       )
     )
 
