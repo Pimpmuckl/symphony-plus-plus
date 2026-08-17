@@ -283,7 +283,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert {:ok, package} = WorkPackageRepository.get(repo, package.id)
     package |> Ecto.Changeset.change(review_requirement: review) |> repo.update!()
 
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/generic-review", "head_sha" => "review-head-b"})
+    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/generic-review", "head_sha" => "REVIEW-HEAD-B"})
     attach_tool(repo, session, "attach_pr", %{"url" => pr_url, "head_sha" => "review-head-b"})
     sync_pr_state(repo, session, pr_url, "review-head-b")
 

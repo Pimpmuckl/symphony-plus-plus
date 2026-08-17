@@ -207,7 +207,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     current_head_sha = latest_current_head_sha(progress_events)
 
     cond do
-      is_binary(current_head_sha) and PullRequest.head_sha_matches?(head_sha, String.downcase(current_head_sha)) ->
+      is_binary(current_head_sha) and head_sha_matches?(head_sha, current_head_sha) ->
         {:ok, head_sha, nil}
 
       is_binary(current_head_sha) and is_binary(head_sha) ->
@@ -662,7 +662,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp review_head_matches?(payload, :any_head) when is_map(payload), do: true
 
   defp review_head_matches?(payload, current_head_sha) when is_map(payload) and is_binary(current_head_sha) do
-    PullRequest.head_sha_matches?(Map.get(payload, "head_sha"), current_head_sha)
+    head_sha_matches?(Map.get(payload, "head_sha"), current_head_sha)
   end
 
   defp review_head_matches?(_payload, _current_head_sha), do: false
@@ -684,7 +684,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     Enum.any?(artifacts, &(&1.id == expected_id and &1.kind == "review" and &1.path == path))
   end
 
-  defp latest_current_head_sha(progress_events), do: latest_metadata_head_sha(progress_events, "branch", "attach_branch")
+  defp latest_current_head_sha(progress_events) do
+    case latest_metadata_head_sha(progress_events, "branch", "attach_branch") do
+      head_sha when is_binary(head_sha) -> String.downcase(head_sha)
+      missing -> missing
+    end
+  end
 
   defp latest_current_branch_event(progress_events) do
     progress_events
@@ -1071,7 +1076,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp metadata_tool("branch"), do: "attach_branch"
   defp metadata_tool("pr"), do: "attach_pr"
   defp metadata_tool("review_package"), do: "submit_review_package"
-  defp head_sha_matches?(left, right), do: PullRequest.head_sha_matches?(left, right)
+
+  defp head_sha_matches?(left, right) when is_binary(left) and is_binary(right) do
+    PullRequest.head_sha_matches?(String.downcase(left), String.downcase(right))
+  end
+
+  defp head_sha_matches?(_left, _right), do: false
 
   defp payload_type?(%ProgressEvent{payload: payload}, type, source_tools) when is_map(payload) and is_list(source_tools) do
     Map.get(payload, "type") == type and Map.get(payload, "source_tool") in source_tools
