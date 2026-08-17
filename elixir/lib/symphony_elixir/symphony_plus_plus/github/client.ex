@@ -53,7 +53,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.HttpClient do
   def fetch_pull_request(_ref, _opts), do: {:error, :invalid_pr_reference}
 
   defp handle_pull_request_response({:ok, %Req.Response{status: status, body: body}}) when status in 200..299 do
-    if is_map(body), do: {:ok, body}, else: {:error, :invalid_github_response}
+    if is_map(body), do: {:ok, Map.put(body, "provider_snapshot_complete", false)}, else: {:error, :invalid_github_response}
   end
 
   defp handle_pull_request_response({:ok, %Req.Response{status: 404}}), do: {:error, :not_found}
@@ -109,6 +109,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.GhCliClient do
 
   @default_timeout 5_000
   @json_fields [
+    "id",
     "number",
     "url",
     "headRefName",
@@ -116,6 +117,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.GhCliClient do
     "baseRefName",
     "baseRefOid",
     "changedFiles",
+    "files",
+    "statusCheckRollup",
+    "reviewDecision",
     "state",
     "isDraft",
     "mergeable",
@@ -239,6 +243,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.GhCliClient do
     merged? = merged?(metadata)
 
     %{
+      "provider_snapshot_complete" => true,
+      "provider_reference" => Map.get(metadata, "id"),
       "number" => Map.get(metadata, "number") || ref.number,
       "html_url" => Map.get(metadata, "url") || ref.url,
       "head" => %{
@@ -250,6 +256,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.GhCliClient do
         "sha" => Map.get(metadata, "baseRefOid")
       },
       "changed_files_count" => changed_files_count(metadata),
+      "changed_files" => Map.get(metadata, "files"),
+      "check_rollup" => Map.get(metadata, "statusCheckRollup"),
+      "review_decision" => blank_to_nil(Map.get(metadata, "reviewDecision")),
       "draft" => Map.get(metadata, "isDraft"),
       "state" => normalized_gh_string(Map.get(metadata, "state")),
       "mergeable" => Map.get(metadata, "mergeable"),

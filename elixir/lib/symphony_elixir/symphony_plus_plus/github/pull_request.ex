@@ -107,7 +107,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
 
   @spec provider_snapshot(map(), ref(), String.t()) :: {:ok, map()} | {:error, term()}
   def provider_snapshot(metadata, ref, expected_head_sha) when is_map(metadata) and is_map(ref) and is_binary(expected_head_sha) do
-    with {:ok, payload} <- metadata(metadata, ref, nil),
+    with :ok <- provider_snapshot_complete(metadata),
+         {:ok, payload} <- metadata(metadata, ref, nil),
+         :ok <- provider_changed_files_complete(metadata, payload),
          :ok <- provider_head_matches(payload["head_sha"], expected_head_sha),
          {:ok, provider_reference} <- provider_reference(metadata),
          {:ok, check_summary} <- provider_check_summary(metadata),
@@ -168,6 +170,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
   defp provider_head_matches(actual, expected) do
     if head_sha_matches?(actual, expected), do: :ok, else: {:error, {:provider_head_mismatch, expected, actual}}
   end
+
+  defp provider_snapshot_complete(%{"provider_snapshot_complete" => false}), do: {:error, :provider_incomplete}
+  defp provider_snapshot_complete(_metadata), do: :ok
+
+  defp provider_changed_files_complete(%{"provider_snapshot_complete" => true}, payload) do
+    files = Map.get(payload, "changed_files", [])
+    count = Map.get(payload, "changed_files_count")
+
+    if Map.get(payload, "changed_files_available") == true and is_integer(count) and count == length(files),
+      do: :ok,
+      else: {:error, :provider_incomplete}
+  end
+
+  defp provider_changed_files_complete(_metadata, _payload), do: :ok
 
   defp imported_observed_at(metadata) do
     case clean_string(Map.get(metadata, "observed_at")) do
