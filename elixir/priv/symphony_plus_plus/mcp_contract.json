@@ -1,6 +1,6 @@
 {
   "version": 7,
-  "mcp_contract_fingerprint": "3a7556b6d6bac4c1684f76b694e9d2bd5a69b57133ecef7f680d341fb0c9f083",
+  "mcp_contract_fingerprint": "6300d025dfa54155c02fc4c297d310824b85741b33113a4696f0659c9f15e4f4",
   "tool_sets": {
     "unbound_tools": [
       "sympp.health",
@@ -64,6 +64,7 @@
       "resolve_blocker",
       "read_delivery_board",
       "reconcile_work_request",
+      "accept_review_rework",
       "cleanup_work_request_work_package_runtime",
       "record_work_package_delivery",
       "revoke_work_package_worker_key",

@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress do
   @spec chronological_events([ProgressEvent.t()]) :: [ProgressEvent.t()]
   def chronological_events(events) when is_list(events) do
     Enum.sort_by(events, fn %ProgressEvent{sequence: sequence, created_at: created_at, id: id} ->
-      {created_at || DateTime.from_unix!(0), sequence || 0, id || ""}
+      {timestamp_sort_value(created_at), sequence || 0, id || ""}
     end)
   end
 
@@ -122,4 +122,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress do
   end
 
   defp clean_string(_value), do: nil
+
+  defp timestamp_sort_value(%DateTime{} = value), do: DateTime.to_unix(value, :microsecond)
+  defp timestamp_sort_value(_value), do: 0
 end

@@ -264,6 +264,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert String.ends_with?(get_in(completion_payload, ["review", "args", "context"]), "[truncated]")
     assert get_in(completion, ["result", "structuredContent", "remaining_readiness_gates"]) == []
 
+    legacy_digest = :crypto.hash(:sha256, Jason.encode!(["review-head-a", review])) |> Base.url_encode64(padding: false)
+
+    assert get_in(completion, ["result", "structuredContent", "progress_event", "idempotency_key"]) ==
+             "complete_review:#{package.id}:current:#{legacy_digest}"
+
     replay =
       attach_tool(repo, session, "complete_review", %{
         "reference" => "human-review-42",

@@ -78,6 +78,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "resolve_blocker",
     "read_delivery_board",
     "reconcile_work_request",
+    "accept_review_rework",
     "cleanup_work_request_work_package_runtime",
     "record_work_package_delivery",
     "revoke_work_package_worker_key",
@@ -148,6 +149,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
                                 [
                                   "read_delivery_board",
                                   "reconcile_work_request",
+                                  "accept_review_rework",
                                   "cleanup_work_request_work_package_runtime",
                                   "record_work_package_delivery",
                                   "revoke_work_package_worker_key",
@@ -155,6 +157,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
                                 ]
   @delivery_policy_tools [
     "reconcile_work_request",
+    "accept_review_rework",
     "cleanup_work_request_work_package_runtime",
     "record_work_package_delivery",
     "revoke_work_package_worker_key"

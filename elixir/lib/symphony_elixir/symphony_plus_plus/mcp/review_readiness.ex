@@ -106,18 +106,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
          {:ok, requested_head_sha} <- optional_head_sha(arguments) do
       replay_head_sha = requested_head_sha || latest_current_head_sha(state.progress_events)
       arguments = maybe_put_headless_review_idempotency_key(arguments, requested_head_sha, payload)
+      arguments = scope_review_rework_idempotency(arguments, state.progress_events)
       replay_arguments = maybe_put_review_head_sha(arguments, replay_head_sha)
       replay_payload = maybe_put_review_head_sha(payload, replay_head_sha)
 
-      case replay_existing_metadata_event(
-             repo,
-             session,
-             replay_arguments,
-             "submit_review_package",
-             "review_package_submitted",
-             replay_payload,
-             state.progress_events
-           ) do
+      replay_existing_metadata_event(
+        repo,
+        session,
+        replay_arguments,
+        "submit_review_package",
+        "review_package_submitted",
+        replay_payload,
+        events_after_latest_rework(state.progress_events)
+      )
+      |> case do
         {:ok, result} ->
           put_remaining_readiness_gates_or_rollback(repo, session, result)
 
@@ -161,12 +163,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
         payload = maybe_put_review_head_sha(payload, review_head_sha)
 
         with :ok <- maybe_append_live_branch_refresh(repo, session, refresh),
+             {:ok, current_state} <- PlanningRepository.get_state(repo, state.work_package.id),
+             :ok <- require_rework_head_advanced(current_state.progress_events, review_head_sha),
              result <- submit_new_review_package(repo, session, arguments, artifacts, payload, review_head_sha),
              :ok <- confirm_live_branch_refresh(state.work_package, config, refresh) do
           put_remaining_readiness_gates_or_rollback(repo, session, result)
         else
           {:tool_error, reason} -> rollback_review_head_error(repo, reason)
           {:error, code, message, data} -> repo.rollback({:mcp_error, code, message, data})
+          {:error, reason} -> repo.rollback(reason)
         end
 
       {:tool_error, reason} ->
@@ -305,6 +310,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp maybe_put_headless_review_idempotency_key(arguments, _requested_head_sha, _payload), do: arguments
 
+  defp scope_review_rework_idempotency(arguments, progress_events) do
+    case latest_accepted_review_rework(progress_events) do
+      %ProgressEvent{id: id} ->
+        fallback =
+          :crypto.hash(:sha256, Jason.encode!([id, arguments]))
+          |> Base.url_encode64(padding: false)
+
+        case Map.get(arguments, "idempotency_key") do
+          value when is_binary(value) -> Map.put(arguments, "idempotency_key", value <> ":rework:" <> id)
+          nil -> Map.put(arguments, "idempotency_key", "rework:#{id}:#{fallback}")
+          _invalid -> arguments
+        end
+
+      nil ->
+        arguments
+    end
+  end
+
   defp persist_review_artifacts_or_rollback(repo, %Session{} = session, artifacts, head_sha, result) do
     case append_review_artifacts(repo, session, artifacts, head_sha) do
       :ok -> result
@@ -394,8 +417,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
          {:ok, state} <- PlanningRepository.get_state(repo, work_package_id),
          {:ok, requirement} <- required_review_requirement(state.work_package),
          {:ok, head_sha} <- required_current_review_head(state.progress_events),
-         payload <- review_completion_payload(work_package_id, requirement, head_sha, reference, note),
-         arguments <- review_completion_arguments(requirement, head_sha, note),
+         :ok <- require_rework_head_advanced(state.progress_events, head_sha),
+         :ok <- require_new_review_package_after_rework(state.progress_events, head_sha),
+         rework_id = accepted_review_rework_id(state.progress_events),
+         payload <- review_completion_payload(work_package_id, requirement, head_sha, reference, note, rework_id),
+         arguments <- review_completion_arguments(requirement, head_sha, note, rework_id),
          {:ok, result} <- ProgressEvents.append_metadata(repo, session, arguments, "complete_review", "review_complete", payload),
          {:ok, result} <- put_remaining_readiness_gates(repo, session, result) do
       result
@@ -416,7 +442,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     end
   end
 
-  defp review_completion_payload(work_package_id, requirement, head_sha, reference, note) do
+  defp review_completion_payload(work_package_id, requirement, head_sha, reference, note, rework_id) do
     %{
       "type" => "review_completion",
       "source_tool" => "complete_review",
@@ -427,19 +453,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     }
     |> put_if_present("reference", reference)
     |> put_if_present("note", note)
+    |> put_if_present("accepted_review_rework_id", rework_id)
   end
 
-  defp review_completion_arguments(requirement, head_sha, note) do
+  defp review_completion_arguments(requirement, head_sha, note, rework_id) do
     %{
       "summary" => "Required review completed",
       "body" => note,
       "status" => "review_complete",
-      "idempotency_key" => review_completion_idempotency_key(requirement, head_sha)
+      "idempotency_key" => review_completion_idempotency_key(requirement, head_sha, rework_id)
     }
   end
 
-  defp review_completion_idempotency_key(requirement, head_sha) do
-    digest = :crypto.hash(:sha256, Jason.encode!([head_sha, requirement])) |> Base.url_encode64(padding: false)
+  defp review_completion_idempotency_key(requirement, head_sha, rework_id) do
+    inputs = if is_binary(rework_id), do: [head_sha, requirement, rework_id], else: [head_sha, requirement]
+    digest = :crypto.hash(:sha256, Jason.encode!(inputs)) |> Base.url_encode64(padding: false)
     "current:" <> digest
   end
 
@@ -472,6 +500,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {merge_metadata_missing?(state, "branch"), "branch_attached"},
       {merge_metadata_missing?(state, "pr"), "pr_attached"},
       {current_pr_state_missing?(state), "current_pr_state"},
+      {rework_head_not_advanced?(state), "rework_head_advanced"},
+      {rework_current_pr_state_missing?(state), "rework_current_pr_state"},
       {ScopeGuard.missing?(state.work_package, state.progress_events), @scope_guard_gate},
       {review_artifacts_missing?(state), "review_artifacts_attached"},
       {review_current_head_missing?(state), "review_current_head"},
@@ -563,6 +593,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp readiness_failure_message("branch_attached"), do: "Current branch metadata is missing."
   defp readiness_failure_message("pr_attached"), do: "Current PR metadata is missing."
   defp readiness_failure_message("current_pr_state"), do: "Current synced PR state is missing."
+  defp readiness_failure_message("rework_head_advanced"), do: "Accepted review rework requires a different exact head."
+  defp readiness_failure_message("rework_current_pr_state"), do: "Accepted review rework requires fresh synced PR state for the new head."
   defp readiness_failure_message("review_artifacts_attached"), do: "Current-head validation artifacts are missing."
   defp readiness_failure_message("review_current_head"), do: "Required review cannot be completed until the current exact head is attached."
   defp readiness_failure_message("review_complete"), do: "Required review is not completed for the current exact head and requirement."
@@ -593,6 +625,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       not current_pr_state_present?(state.progress_events, current_head_sha)
   end
 
+  defp rework_head_not_advanced?(state) do
+    case latest_accepted_review_rework(state.progress_events) do
+      %ProgressEvent{payload: payload} ->
+        current_head_sha = latest_current_head_sha(state.progress_events)
+        not is_binary(current_head_sha) or exact_head_sha?(Map.get(payload, "head_sha"), current_head_sha)
+
+      nil ->
+        false
+    end
+  end
+
+  defp rework_current_pr_state_missing?(state) do
+    not is_nil(latest_accepted_review_rework(state.progress_events)) and
+      not fresh_rework_pr_state_present?(state.progress_events)
+  end
+
+  defp fresh_rework_pr_state_present?(progress_events) do
+    current_head_sha = latest_current_head_sha(progress_events)
+
+    case latest_attached_pr_ref(progress_events) do
+      {:ok, attached_ref} ->
+        Enum.any?(events_after_latest_rework(progress_events), &fresh_rework_pr_state_event?(&1, attached_ref, current_head_sha))
+
+      {:tool_error, _reason} ->
+        false
+    end
+  end
+
+  defp fresh_rework_pr_state_event?(%ProgressEvent{payload: payload} = event, attached_ref, current_head_sha)
+       when is_map(payload) do
+    payload_type?(event, "pr", "sync_pr") and exact_head_sha?(payload["head_sha"], current_head_sha) and
+      pr_payload_ref(payload) == attached_ref and current_pr_state_payload?(payload)
+  end
+
+  defp fresh_rework_pr_state_event?(%ProgressEvent{}, _attached_ref, _current_head_sha), do: false
+
   defp review_current_head_missing?(%{work_package: %WorkPackage{review_requirement: nil}}), do: false
   defp review_current_head_missing?(state), do: is_nil(latest_current_head_sha(state.progress_events))
 
@@ -604,7 +672,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
     is_nil(head_sha) or
       not MetadataProjection.review_completion_present?(
-        state.progress_events,
+        events_after_latest_rework(state.progress_events),
         state.work_package.id,
         head_sha,
         requirement
@@ -643,8 +711,66 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp latest_review_package_event(progress_events, current_head_sha) do
     progress_events
+    |> events_after_latest_rework()
     |> current_head_review_package_events(current_head_sha)
     |> List.last()
+  end
+
+  defp require_rework_head_advanced(progress_events, head_sha) do
+    case latest_accepted_review_rework(progress_events) do
+      %ProgressEvent{payload: payload} ->
+        current_head_sha = latest_current_head_sha(progress_events)
+
+        cond do
+          not exact_head_sha?(head_sha, current_head_sha) -> {:tool_error, "rework_review_head_not_current"}
+          exact_head_sha?(Map.get(payload, "head_sha"), head_sha) -> {:tool_error, "rework_head_not_advanced"}
+          true -> :ok
+        end
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp require_new_review_package_after_rework(progress_events, head_sha) do
+    case latest_accepted_review_rework(progress_events) do
+      %ProgressEvent{} ->
+        if Enum.any?(events_after_latest_rework(progress_events), &exact_review_package_event?(&1, head_sha)),
+          do: :ok,
+          else: {:tool_error, "new_review_package_required"}
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp exact_review_package_event?(%ProgressEvent{payload: payload} = event, head_sha) do
+    payload_type?(event, "review_package", "submit_review_package") and exact_head_sha?(payload["head_sha"], head_sha)
+  end
+
+  defp accepted_review_rework_id(progress_events) do
+    case latest_accepted_review_rework(progress_events) do
+      %ProgressEvent{id: id} -> id
+      nil -> nil
+    end
+  end
+
+  defp latest_accepted_review_rework(progress_events) do
+    progress_events
+    |> Enum.filter(&payload_type?(&1, "accepted_review_rework", "accept_review_rework"))
+    |> List.last()
+  end
+
+  defp events_after_latest_rework(progress_events) do
+    case latest_accepted_review_rework(progress_events) do
+      %ProgressEvent{id: id} ->
+        progress_events
+        |> Enum.drop_while(&(&1.id != id))
+        |> Enum.drop(1)
+
+      nil ->
+        progress_events
+    end
   end
 
   defp current_head_review_package_events(progress_events, current_head_sha) do
@@ -1082,6 +1208,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   end
 
   defp head_sha_matches?(_left, _right), do: false
+
+  defp exact_head_sha?(left, right) when is_binary(left) and is_binary(right) do
+    String.downcase(String.trim(left)) == String.downcase(String.trim(right))
+  end
+
+  defp exact_head_sha?(_left, _right), do: false
 
   defp payload_type?(%ProgressEvent{payload: payload}, type, source_tools) when is_map(payload) and is_list(source_tools) do
     Map.get(payload, "type") == type and Map.get(payload, "source_tool") in source_tools

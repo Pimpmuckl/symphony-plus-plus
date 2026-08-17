@@ -100,6 +100,10 @@ Before ready:
    lifecycle calls only to restate existing evidence. Resolve worker-owned
    blockers with `resolve_blocker`; architect-owned human blockers still
    require the architect or trusted local operator.
+8. If the architect accepts a review finding after readiness, advance to a
+   different exact head, refresh the attached PR with `sync_pr`, submit a new
+   review package, and complete the required review. Old-head evidence remains
+   in the ledger but is not readiness evidence for the rework cycle.
 
 Final output:
 - PR URL and final head SHA.
