@@ -325,7 +325,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
         "summary" => "Review at head B",
         "tests" => ["mix test"],
         "artifacts" => ["head-b.txt"],
-        "head_sha" => head_b,
+        "head_sha" => String.upcase(head_b),
         "acceptance_criteria_met" => true
       })
 
