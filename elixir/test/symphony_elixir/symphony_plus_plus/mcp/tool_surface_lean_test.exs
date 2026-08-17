@@ -6,7 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
   @profiles ~w(worker architect coordinator solo)a
   @removed_tools ~w(request_child_replan split_work_package publish_phase_update)
 
-  test "unbound surface profile lists only immediately callable tools" do
+  test "surface profiles advertise stable role catalogs before claim" do
     for profile <- @profiles do
       tools = listed_tools(profile)
       names = MapSet.new(tools, & &1["name"])
@@ -17,10 +17,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
 
       case profile do
         :worker ->
-          assert MapSet.equal?(names, MapSet.new(["sympp.health", "get_current_assignment", "release_current_assignment", "claim_local_assignment"]))
+          expected = ["sympp.health", "release_current_assignment", "claim_local_assignment" | ToolCatalog.worker_tools()]
+          assert MapSet.equal?(names, MapSet.new(expected))
 
         :architect ->
-          expected = ["sympp.health", "get_current_assignment", "release_current_assignment", "claim_local_architect_assignment"]
+          expected = ["sympp.health", "get_current_assignment", "release_current_assignment", "claim_local_architect_assignment" | ToolCatalog.architect_tools()]
           assert MapSet.equal?(names, MapSet.new(expected))
 
         profile when profile in [:coordinator, :solo] ->
@@ -54,24 +55,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
     assert Process.alive?(agent_pid)
   end
 
-  test "role profiles hide bound tools until claim and keep compact claim schemas" do
+  test "role profiles expose complete role-correct catalogs and compact claim schemas" do
     worker = tools_by_name(:worker)
     architect = tools_by_name(:architect)
 
     assert Map.has_key?(worker, "claim_local_assignment")
     assert Map.has_key?(worker, "get_current_assignment")
-    refute Map.has_key?(worker, "read_context")
-    refute Map.has_key?(worker, "mark_ready")
+    assert Map.has_key?(worker, "read_context")
+    assert Map.has_key?(worker, "mark_ready")
+    refute Map.has_key?(worker, "read_work_request")
+    refute Map.has_key?(worker, "slice_work_request")
     assert worker["claim_local_assignment"]["inputSchema"]["required"] == ["work_package_id"]
 
     assert Map.has_key?(architect, "claim_local_architect_assignment")
     assert Map.has_key?(architect, "get_current_assignment")
-    refute Map.has_key?(architect, "read_work_request")
-    refute Map.has_key?(architect, "dispatch_work_package")
+    assert Map.has_key?(architect, "read_work_request")
+    assert Map.has_key?(architect, "dispatch_work_package")
+    refute Map.has_key?(architect, "read_context")
+    refute Map.has_key?(architect, "mark_ready")
     refute Enum.any?(@removed_tools, &Map.has_key?(architect, &1))
   end
 
-  test "full and default expose callable unbound tools without scoped worker or architect calls" do
+  test "full and default expose the stable composite catalog" do
     full = listed_tools(:full)
 
     requested_full =
@@ -82,8 +87,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolSurfaceLeanTest do
     assert Enum.any?(requested_full, &(&1["name"] == "claim_local_architect_assignment"))
     assert Enum.any?(full, &(&1["name"] == "solo_attach"))
     assert Enum.any?(full, &(&1["name"] == "get_current_assignment"))
-    refute Enum.any?(full, &(&1["name"] == "read_context"))
-    refute Enum.any?(full, &(&1["name"] == "read_work_request"))
+    assert Enum.any?(full, &(&1["name"] == "read_context"))
+    assert Enum.any?(full, &(&1["name"] == "read_work_request"))
     assert Enum.all?(full, &(not Map.has_key?(&1, "title")))
     refute Enum.any?(full, &(&1["description"] == "Symphony++ worker tool #{&1["name"]}."))
     refute Enum.any?(@removed_tools, fn name -> Enum.any?(full, &(&1["name"] == name)) end)

@@ -153,7 +153,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert get_in(other_repo_response, ["error", "data", "reason"]) == "server_not_initialized"
   end
 
-  test "explicit state key stale live server advertises recovery-only tools until new session", %{repo: repo} do
+  test "explicit state key stale live server keeps the configured catalog", %{repo: repo} do
     package = create_local_claim_package!(repo, "SYMPP-STATE-STALE-LIVE")
     assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
@@ -233,13 +233,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
 
     assert get_in(reinit_response, ["result", "serverInfo", "name"]) == "symphony-plus-plus"
 
-    assert Map.keys(tools_by_name) |> Enum.sort() == [
-             "claim_local_architect_assignment",
-             "claim_local_assignment",
-             "get_current_assignment",
-             "release_current_assignment",
-             "sympp.health"
-           ]
+    assert tools_by_name == fresh_tools_by_name
 
     assert get_in(stale_solo_response, ["error", "data", "reason"]) == "claim_required"
     assert get_in(stale_solo_response, ["error", "data", "action"]) == "claim_local_assignment"
@@ -247,7 +241,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert stale_comment_id == comment.id
     assert get_in(fresh_init_response, ["result", "serverInfo", "name"]) == "symphony-plus-plus"
     assert Map.has_key?(tools_by_name, "get_current_assignment")
-    refute Map.has_key?(fresh_tools_by_name, "read_work_request")
+    assert Map.has_key?(fresh_tools_by_name, "read_work_request")
     assert Map.has_key?(fresh_tools_by_name, "claim_local_architect_assignment")
     assert Map.has_key?(fresh_tools_by_name, "solo_attach")
     assert Map.has_key?(fresh_tools_by_name, "get_current_assignment")
@@ -636,7 +630,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     stale_tool_names = stale_tools |> get_in(["result", "tools"]) |> Enum.map(& &1["name"])
     assert "get_current_assignment" in stale_tool_names
     assert "claim_local_assignment" in stale_tool_names
-    refute "claim_local_architect_assignment" in stale_tool_names
+    assert "claim_local_architect_assignment" in stale_tool_names
+    assert "append_progress" in stale_tool_names
     assert {:ok, []} = PlanningRepository.list_progress_events(repo, package.id)
   end
 
@@ -736,7 +731,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     assert failed_server.session_refresh_required == false
   end
 
-  test "tools list reports claim lease storage failure without advertising an unbound surface", %{repo: repo} do
+  test "tools list stays available when claim lease storage fails", %{repo: repo} do
     package = create_local_claim_package!(repo, "SYMPP-STATE-LIST-LEDGER-FAIL")
     assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
@@ -761,8 +756,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
         failed_server
       )
 
-    assert get_in(response, ["error", "code"]) == -32_000
-    assert get_in(response, ["error", "data", "reason"]) == "ledger_unavailable"
+    assert is_list(get_in(response, ["result", "tools"]))
     assert updated_server.session == failed_server.session
     assert updated_server.session_refresh_required == false
   end
@@ -940,7 +934,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport04Test do
     stale_tool_names = stale_tools_response |> get_in(["result", "tools"]) |> Enum.map(& &1["name"])
     assert "get_current_assignment" in stale_tool_names
     assert "claim_local_assignment" in stale_tool_names
-    refute "read_context" in stale_tool_names
+    assert "read_context" in stale_tool_names
 
     {blocked_response, blocked_server} =
       Server.handle_state(

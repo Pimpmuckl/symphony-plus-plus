@@ -70,7 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     defp inject_claim_race(_updates), do: :ok
   end
 
-  test "tools list advertises Solo tools for unbound sessions only", %{repo: repo} do
+  test "configured role catalogs exclude Solo tools", %{repo: repo} do
     unbound_server = Server.new(Config.default(repo: repo), initialized: true)
 
     unbound_response =
@@ -119,7 +119,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     worker_response =
       Server.handle(
         %{"jsonrpc" => "2.0", "id" => "solo-worker-tools", "method" => "tools/list", "params" => %{}},
-        Server.new(Config.default(repo: repo), initialized: true, session: worker_session)
+        Server.new(Config.default(repo: repo, surface_profile: :worker), initialized: true, session: worker_session)
       )
 
     worker_tools_by_name =
@@ -138,7 +138,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     architect_response =
       Server.handle(
         %{"jsonrpc" => "2.0", "id" => "solo-architect-tools", "method" => "tools/list", "params" => %{}},
-        Server.new(test_mcp_config(repo), initialized: true, session: architect_session)
+        Server.new(%{test_mcp_config(repo) | surface_profile: :architect}, initialized: true, session: architect_session)
       )
 
     architect_tools_by_name =
@@ -1121,7 +1121,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     end
   end
 
-  test "tools list exposes callable unbound recovery after architect grant revocation", %{repo: repo} do
+  test "tools list keeps the architect catalog after grant revocation", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-ARCHITECT-TOOLS-REVOKED", kind: "mcp"))
     assert {:ok, architect_work_key} = create_architect_work_key(repo, package.id, ["read:phase"])
 
@@ -1129,7 +1129,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              AccessGrantRepository.claim(repo, architect_work_key.secret, %{claimed_by: "architect-1"}, DateTime.utc_now(:microsecond))
 
     session = MCPHarness.session(architect_assignment, proof_hash: WorkKey.secret_hash(architect_work_key.secret))
-    server = Server.new(Config.default(repo: repo), initialized: true, session: session)
+    server = Server.new(Config.default(repo: repo, surface_profile: :architect), initialized: true, session: session)
 
     assert {:ok, _revoked} = AccessGrantService.revoke(repo, architect_assignment.grant_id)
 
@@ -1141,17 +1141,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
           "get_current_assignment",
           "release_current_assignment",
           "claim_local_architect_assignment",
-          "solo_attach"
+          "read_work_request"
         ] do
       assert Map.has_key?(tools_by_name, tool)
     end
 
     refute Map.has_key?(tools_by_name, "claim_local_assignment")
-    refute Map.has_key?(tools_by_name, "read_work_request")
     refute Map.has_key?(tools_by_name, "read_context")
   end
 
-  test "tools list preserves ledger failures while revalidating bound sessions" do
+  test "tools list does not depend on bound-session ledger revalidation" do
     session =
       Session.new(%Assignment{
         grant_id: "grant-1",
@@ -1166,12 +1165,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     response =
       MCPHarness.request(
         %{"jsonrpc" => "2.0", "id" => "tools-list-ledger-failure", "method" => "tools/list", "params" => %{}},
-        config: Config.default(repo: FailingAuthRepo),
+        config: Config.default(repo: FailingAuthRepo, surface_profile: :architect),
         session: session
       )
 
-    assert get_in(response, ["error", "code"]) == -32_000
-    assert get_in(response, ["error", "data", "reason"]) == "ledger_unavailable"
+    assert Enum.any?(get_in(response, ["result", "tools"]), &(&1["name"] == "read_work_request"))
   end
 
   test "tools list keeps static architect schemas while calls use live capabilities", %{repo: repo} do

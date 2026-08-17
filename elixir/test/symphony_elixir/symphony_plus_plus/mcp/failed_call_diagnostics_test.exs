@@ -141,7 +141,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     refute diagnostic_event_line(not_found_log) =~ missing_session_id
   end
 
-  test "HTTP worker diagnostics recognize restricted catalog tools without request details", %{repo: repo} do
+  test "HTTP worker diagnostics redact denied cross-role tool details", %{repo: repo} do
     assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"capture_failed_mcp_calls" => true})
     package = create_local_claim_package!(repo, "SYMPP-DIAGNOSTIC-WORKER")
     assert {:ok, _grant} = AccessGrantService.mint_worker_grant(repo, package.id)
@@ -218,7 +218,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     assert response["error"]["data"]["reason"] == "architect_grant_required"
     assert log =~ ~s("tool_name":"create_child_work_package")
     assert log =~ ~s("failure_reason":"architect_grant_required")
-    assert log =~ ~s("argument_keys":[])
+    assert log =~ ~s("argument_keys":["package"])
     refute diagnostic_event_line(log) =~ secret
   end
 

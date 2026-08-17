@@ -30,8 +30,9 @@ cross-slice target, successor relation, audit closeout, or concurrency guard.
    `{"work_package_id":"<WP id>"}`. Include `claimed_by` only when the
    dispatch payload or operator provided a stable worker identity.
    A successful first claim atomically activates a `ready_for_worker` package.
-4. Follow the successful claim's `relist.next_action` and refresh the MCP tool
-   list before calling worker tools. Release results require the same refresh.
+4. Call worker tools from the stable worker catalog that was advertised at
+   initialization. Claims and releases change authorization and scope, not the
+   tool catalog.
 5. Replay the same local claim after reconnects. The server heartbeats the
    current lease, reclaims stale leases with audit evidence, and rejects paused
    leases or another active owner. Reconnect does not rewrite lifecycle state.

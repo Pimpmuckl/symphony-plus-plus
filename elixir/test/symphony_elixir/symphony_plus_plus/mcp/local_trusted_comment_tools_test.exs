@@ -172,9 +172,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedCommentToolsTest do
       |> tools_for_server()
       |> Map.new(&{&1["name"], &1})
 
-    refute Map.has_key?(worker_tools, "add_work_request_comment")
-    refute Map.has_key?(worker_tools, "record_work_request_operator_decision")
-    refute Map.has_key?(worker_tools, "create_work_request")
+    assert Map.has_key?(worker_tools, "add_work_request_comment")
+    assert Map.has_key?(worker_tools, "record_work_request_operator_decision")
+    assert Map.has_key?(worker_tools, "create_work_request")
     assert Map.has_key?(worker_tools, "list_comments")
 
     assert {:ok, other_package} =
@@ -293,10 +293,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedCommentToolsTest do
     assert Map.has_key?(refresh_required_tools, "get_current_assignment")
     assert Map.has_key?(refresh_required_tools, "claim_local_assignment")
     assert Map.has_key?(refresh_required_tools, "claim_local_architect_assignment")
-    refute Map.has_key?(refresh_required_tools, "add_work_request_comment")
-    refute Map.has_key?(refresh_required_tools, "record_work_request_operator_decision")
-    refute Map.has_key?(refresh_required_tools, "create_work_request")
-    refute Map.has_key?(refresh_required_tools, "list_comments")
+    assert Map.has_key?(refresh_required_tools, "add_work_request_comment")
+    assert Map.has_key?(refresh_required_tools, "record_work_request_operator_decision")
+    assert Map.has_key?(refresh_required_tools, "create_work_request")
+    assert Map.has_key?(refresh_required_tools, "list_comments")
 
     refresh_required_response =
       Server.handle(

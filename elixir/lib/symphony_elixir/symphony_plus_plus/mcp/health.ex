@@ -101,6 +101,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Health do
       "protocol_version" => @protocol_version,
       "resources" => resource_contract_material(),
       "schema_version" => @mcp_contract_schema_version,
+      "startup_tool_sets" =>
+        Map.new([:full, :worker, :architect, :coordinator, :solo], fn profile ->
+          {Atom.to_string(profile), ToolCatalog.startup_tool_specs(profile, config)}
+        end),
       "tool_sets" => %{
         "architect" => ToolCatalog.architect_session_tool_specs(current_work_request?: false),
         "architect_current_work_request" => ToolCatalog.architect_session_tool_specs(current_work_request?: true),

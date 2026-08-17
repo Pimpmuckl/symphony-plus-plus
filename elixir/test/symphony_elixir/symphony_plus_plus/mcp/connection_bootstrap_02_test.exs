@@ -110,7 +110,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     assert is_list(get_in(post_init_response, ["result", "tools"]))
   end
 
-  test "tools list exposes only callable schemas before binding while handcrafted writes stay claim-gated", %{repo: repo} do
+  test "tools list exposes the stable full catalog while unbound writes stay claim-gated", %{repo: repo} do
     unbound_server = Server.new(Config.default(repo: repo), initialized: true)
 
     unbound_response =
@@ -146,7 +146,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
       assert Map.has_key?(unbound_tools_by_name, tool)
     end
 
-    refute Map.has_key?(unbound_tools_by_name, "create_work_request")
+    assert Map.has_key?(unbound_tools_by_name, "create_work_request")
 
     trusted_local_response =
       Server.handle(
@@ -161,13 +161,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
 
     assert Map.has_key?(trusted_local_tools_by_name, "create_work_request")
 
-    for tool <- ToolCatalog.architect_tools() do
-      refute Map.has_key?(unbound_tools_by_name, tool)
-    end
+    for tool <- ToolCatalog.architect_tools(), do: assert(Map.has_key?(unbound_tools_by_name, tool))
 
-    for tool <- ToolCatalog.worker_tools(), tool != "get_current_assignment" do
-      refute Map.has_key?(unbound_tools_by_name, tool)
-    end
+    for tool <- ToolCatalog.worker_tools(), do: assert(Map.has_key?(unbound_tools_by_name, tool))
 
     assert get_in(unbound_tools_by_name, ["claim_local_assignment", "inputSchema", "required"]) == ["work_package_id"]
     assert get_in(unbound_tools_by_name, ["claim_local_assignment", "inputSchema", "properties", "work_package_id", "type"]) == "string"
@@ -328,23 +324,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
 
     assert get_in(tools_by_name, ["abandon", "inputSchema", "required"]) == ["reason"]
     assert get_in(tools_by_name, ["mark_ready", "inputSchema", "properties"]) == %{}
-    assert get_in(tools_by_name, ["add_comment", "inputSchema", "required"]) == ["body"]
+    assert get_in(tools_by_name, ["add_comment", "inputSchema", "required"]) == ["target_kind", "target_id", "body"]
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "properties", "target_kind", "enum"]) == ["work_request", "work_package"]
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "properties", "body", "maxLength"]) == Comment.max_body_length()
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "properties", "body", "description"]) =~ "Markdown"
-    assert get_in(tools_by_name, ["list_comments", "inputSchema", "required"]) == []
-
-    explicit_work_request_target = %{"required" => ["target_kind"], "properties" => %{"target_kind" => %{"enum" => ["work_request"]}}}
-
-    assert get_in(tools_by_name, ["add_comment", "inputSchema", "if"]) == explicit_work_request_target
-    assert get_in(tools_by_name, ["add_comment", "inputSchema", "then"]) == %{"required" => ["target_id"]}
-    assert get_in(tools_by_name, ["list_comments", "inputSchema", "if"]) == explicit_work_request_target
-    assert get_in(tools_by_name, ["list_comments", "inputSchema", "then"]) == %{"required" => ["target_id"]}
+    assert get_in(tools_by_name, ["list_comments", "inputSchema", "required"]) == ["target_kind", "target_id"]
 
     assert get_in(tools_by_name, ["resolve_comment", "inputSchema", "required"]) == ["comment_id"]
     assert get_in(tools_by_name, ["resolve_comment", "inputSchema", "properties", "resolution_note", "maxLength"]) == Comment.max_resolution_note_length()
     assert get_in(tools_by_name, ["resolve_comment", "inputSchema", "properties", "resolution_note", "description"]) =~ "Markdown"
-    assert get_in(tools_by_name, ["attach_branch", "inputSchema", "required"]) == ["branch", "head_sha"]
+    assert get_in(tools_by_name, ["attach_branch", "inputSchema", "required"]) == ["head_sha"]
     assert get_in(tools_by_name, ["attach_branch", "inputSchema", "properties", "head_sha", "type"]) == "string"
 
     assert get_in(tools_by_name, ["attach_pr", "inputSchema", "properties", "head_sha", "type"]) == "string"
@@ -408,8 +397,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "head_sha", "type"]) == "string"
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "acceptance_criteria_met", "type"]) == "boolean"
 
-    refute Map.has_key?(tools_by_name, "read_child_status")
-    refute Map.has_key?(tools_by_name, "mint_child_worker_key")
+    assert Map.has_key?(tools_by_name, "read_child_status")
+    assert Map.has_key?(tools_by_name, "mint_child_worker_key")
 
     refute Map.has_key?(tools_by_name, "claim_work_key")
     refute Map.has_key?(tools_by_name, "claim_private_handoff")

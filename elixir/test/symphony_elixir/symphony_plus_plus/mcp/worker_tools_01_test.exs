@@ -635,7 +635,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     assert get_in(tools_by_name, ["attach_branch", "inputSchema", "required"]) == ["head_sha"]
 
     for tool <- ["update_task_plan", "append_progress", "attach_branch", "complete_review"] do
-      refute Map.has_key?(get_in(tools_by_name, [tool, "inputSchema", "properties"]), "work_package_id")
+      refute "work_package_id" in get_in(tools_by_name, [tool, "inputSchema", "required"])
     end
 
     compact_branch_response = attach_tool(repo, session, "attach_branch", %{"head_sha" => "compact-head"})
