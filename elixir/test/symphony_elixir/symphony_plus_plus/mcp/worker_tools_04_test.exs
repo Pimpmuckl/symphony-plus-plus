@@ -5,6 +5,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{MetadataProjection, OperationalProjection}
 
+  defmodule RecordingProvider do
+    @behaviour SymphonyElixir.SymphonyPlusPlus.GitHub.Client
+
+    @impl true
+    def fetch_pull_request(ref, opts) do
+      send(self(), {:provider_fetch, ref.repository, ref.number})
+      SymphonyElixir.FakeGitHubClient.fetch_pull_request(ref, opts)
+    end
+  end
+
+  setup do
+    original_client = Application.get_env(:symphony_elixir, :sympp_github_client)
+    Application.put_env(:symphony_elixir, :sympp_github_client, RecordingProvider)
+    SymphonyElixir.FakeGitHubClient.clear()
+
+    on_exit(fn ->
+      SymphonyElixir.FakeGitHubClient.clear()
+
+      case original_client do
+        nil -> Application.delete_env(:symphony_elixir, :sympp_github_client)
+        client -> Application.put_env(:symphony_elixir, :sympp_github_client, client)
+      end
+    end)
+
+    :ok
+  end
+
   test "review package submitted before PR attach does not satisfy later PR readiness", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-PRE-PR-REVIEW", kind: "mcp", status: "ci_waiting"))
     append_done_plan(repo, package.id)
@@ -217,531 +244,181 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
            |> length() == 2
   end
 
-  test "sync_pr stores dry GitHub metadata and deterministic artifact", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-PR-SYNC",
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 status: "ci_waiting"
-               )
-             )
+  test "sync_pr fetches only the attached PR and stores canonical provider states", %{repo: repo} do
+    {package, session} = sync_package(repo, "SYMPP-PROVIDER-STATES", 42, "head-a")
 
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+    for status <- ~w(passing failing pending unknown) do
+      metadata =
+        provider_metadata(42, "head-a")
+        |> Map.put("check_summary", %{"status" => status})
 
-    attach_tool(repo, session, "attach_pr", %{"number" => 42, "head_sha" => "sync-head"})
+      SymphonyElixir.FakeGitHubClient.put_response("nextide/repo", 42, metadata)
 
-    sync_request = %{
-      "jsonrpc" => "2.0",
-      "id" => "sync-pr-replay-mismatch",
-      "method" => "tools/call",
-      "params" => %{
-        "name" => "sync_pr",
-        "arguments" => %{
-          "number" => 42,
-          "metadata" => %{
-            "head_sha" => "sync-head",
-            "branch" => "agent/SYMPP-P6-001/github-pr-attachment-sync",
-            "changed_files" => [%{"filename" => "elixir/lib/symphony_elixir/symphony_plus_plus/github/client.ex", "status" => "added"}],
-            "check_summary" => %{"conclusion" => "success", "token" => "ghp_should_not_surface_nested"},
-            "review_state" => %{"state" => "approved"},
-            "merge_state" => %{"state" => "clean"},
-            "token" => "ghp_should_not_surface"
-          }
-        }
-      }
-    }
+      response = attach_tool(repo, session, "sync_pr", %{"idempotency_key" => "provider-state-#{status}"})
+      payload = response_progress_payload(repo, response)
 
-    response = MCPHarness.request(sync_request, repo: repo, session: session)
+      assert payload["check_summary"] == %{"status" => status}
+      assert payload["review_state"] == %{"status" => "approved"}
+      assert payload["merge_state"] == %{"merged" => false, "status" => "clean"}
+      assert payload["provider_reference"] == "https://github.com/nextide/repo/pull/42"
+      assert {:ok, _observed_at, 0} = DateTime.from_iso8601(payload["observed_at"])
+      assert_receive {:provider_fetch, "nextide/repo", 42}
+      refute_receive {:provider_fetch, _, _}
+    end
 
-    payload = response_progress_payload(repo, response)
-
-    assert payload["repository"] == "nextide/symphony-plus-plus"
-    assert payload["number"] == 42
-    assert payload["url"] == "https://github.com/nextide/symphony-plus-plus/pull/42"
-    assert payload["head_sha"] == "sync-head"
-
-    assert payload["changed_files"] == [
-             %{"path" => "elixir/lib/symphony_elixir/symphony_plus_plus/github/client.ex", "status" => "added"}
-           ]
-
-    assert payload["changed_files_count"] == 1
-    refute inspect(payload) =~ "ghp_should_not_surface"
-    idempotency_key = get_in(response, ["result", "structuredContent", "progress_event", "idempotency_key"])
-    refute idempotency_key =~ "ghp_should_not_surface"
-
-    [_prefix, encoded_key_payload] = String.split(idempotency_key, "mcp:pr:", parts: 2)
-    decoded_key_payload = encoded_key_payload |> Base.url_decode64!(padding: false) |> :erlang.binary_to_term()
-
-    refute inspect(decoded_key_payload) =~ "ghp_should_not_surface"
-    assert payload["check_summary"]["token"] == "[REDACTED]"
-    event_id = get_in(response, ["result", "structuredContent", "progress_event", "id"])
-
-    assert {:ok, artifacts} = PlanningRepository.list_artifacts(repo, package.id)
-    assert Enum.any?(artifacts, &(&1.kind == "github_pr" and &1.path == "github-pr.json" and &1.uri == payload["url"]))
-
-    attach_tool(repo, session, "attach_pr", %{"number" => 43, "head_sha" => "sync-head"})
-
-    replay_response = MCPHarness.request(sync_request, repo: repo, session: session)
-
-    assert get_in(replay_response, ["result", "structuredContent", "progress_event", "id"]) == event_id
-
-    assert {:ok, artifacts} = PlanningRepository.list_artifacts(repo, package.id)
-    pr_artifacts = Enum.filter(artifacts, &(&1.kind == "github_pr" and &1.path == "github-pr.json"))
-
-    assert length(pr_artifacts) == 1
-    assert [%{uri: "https://github.com/nextide/symphony-plus-plus/pull/43"}] = pr_artifacts
+    assert {:ok, events} = PlanningRepository.list_progress_events(repo, package.id)
+    assert Enum.count(events, &(&1.status == "pr_synced")) == 4
   end
 
-  test "sync_pr compact refresh uses the attached PR", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-PR-SYNC-COMPACT",
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 status: "ci_waiting"
-               )
-             )
+  test "sync_pr provider failures preserve the previous snapshot", %{repo: repo} do
+    {package, session} = sync_package(repo, "SYMPP-PROVIDER-FAILURE", 43, "head-a")
+    SymphonyElixir.FakeGitHubClient.put_response("nextide/repo", 43, provider_metadata(43, "head-a"))
 
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+    successful = attach_tool(repo, session, "sync_pr", %{})
+    snapshot = response_progress_payload(repo, successful)
+    assert_receive {:provider_fetch, "nextide/repo", 43}
+    assert {:ok, before_events} = PlanningRepository.list_progress_events(repo, package.id)
 
-    attach_tool(repo, session, "attach_pr", %{"number" => 42, "head_sha" => "compact-head"})
+    for {response, reason} <- [{{:error, :request_failed}, "provider_unavailable"}, {:malformed, "provider_malformed"}] do
+      SymphonyElixir.FakeGitHubClient.put_response("nextide/repo", 43, response)
 
-    response = attach_tool(repo, session, "sync_pr", %{})
-    payload = response_progress_payload(repo, response)
+      failed =
+        MCPHarness.request(
+          %{"jsonrpc" => "2.0", "id" => reason, "method" => "tools/call", "params" => %{"name" => "sync_pr", "arguments" => %{}}},
+          repo: repo,
+          session: session
+        )
 
-    assert payload["repository"] == "nextide/symphony-plus-plus"
-    assert payload["number"] == 42
-    assert payload["head_sha"] == "compact-head"
-    assert payload["source_tool"] == "sync_pr"
-    assert payload["changed_files_available"] == false
-    assert payload["changed_files_count_available"] == false
-
-    refreshed =
-      attach_tool(repo, session, "sync_pr", %{
-        "head_sha" => "compact-head",
-        "check_summary" => %{"conclusion" => "success"},
-        "idempotency_key" => "compact-refresh-with-checks"
-      })
-
-    refreshed_payload = response_progress_payload(repo, refreshed)
-    assert refreshed_payload["check_summary"] == %{"conclusion" => "success"}
-    assert refreshed_payload["changed_files_available"] == false
-    assert refreshed_payload["changed_files_count_available"] == false
+      assert get_in(failed, ["error", "code"]) == -32_000
+      assert get_in(failed, ["error", "data", "layer"]) == "provider"
+      assert get_in(failed, ["error", "data", "reason"]) == reason
+      assert_receive {:provider_fetch, "nextide/repo", 43}
+      assert {:ok, after_events} = PlanningRepository.list_progress_events(repo, package.id)
+      assert after_events == before_events
+      assert Enum.find(after_events, &(&1.status == "pr_synced")).payload == snapshot
+    end
   end
 
-  test "sync_pr compact refresh drops stale state when the head changes", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-PR-SYNC-COMPACT-HEAD",
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 status: "ci_waiting"
-               )
-             )
+  test "sync_pr rejects identity and provider head mismatches without replacing the snapshot", %{repo: repo} do
+    {package, session} = sync_package(repo, "SYMPP-PROVIDER-HEAD", 44, "head-a")
+    SymphonyElixir.FakeGitHubClient.put_response("nextide/repo", 44, provider_metadata(44, "head-a"))
+    attach_tool(repo, session, "sync_pr", %{})
+    assert_receive {:provider_fetch, "nextide/repo", 44}
+    assert {:ok, before_events} = PlanningRepository.list_progress_events(repo, package.id)
 
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+    wrong_pr =
+      MCPHarness.request(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "wrong-pr",
+          "method" => "tools/call",
+          "params" => %{"name" => "sync_pr", "arguments" => %{"url" => "https://github.com/nextide/repo/pull/45"}}
+        },
+        repo: repo,
+        session: session
+      )
 
-    attach_tool(repo, session, "attach_pr", %{"number" => 42, "head_sha" => "head-a"})
+    assert get_in(wrong_pr, ["error", "data", "reason"]) == "pr_reference_mismatch"
+    refute_receive {:provider_fetch, _, _}
 
-    attach_tool(repo, session, "sync_pr", %{
+    SymphonyElixir.FakeGitHubClient.put_response("nextide/repo", 44, provider_metadata(44, "head-b"))
+
+    stale =
+      MCPHarness.request(
+        %{"jsonrpc" => "2.0", "id" => "stale-head", "method" => "tools/call", "params" => %{"name" => "sync_pr", "arguments" => %{}}},
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(stale, ["error", "data", "reason"]) == "provider_head_mismatch"
+    assert get_in(stale, ["error", "data", "expected_head_sha"]) == "head-a"
+    assert get_in(stale, ["error", "data", "actual_head_sha"]) == "head-b"
+    assert get_in(stale, ["error", "data", "recovery", "next_action"]) == "prove_current_head_then_retry_sync_pr"
+    assert_receive {:provider_fetch, "nextide/repo", 44}
+    assert {:ok, after_events} = PlanningRepository.list_progress_events(repo, package.id)
+    assert after_events == before_events
+  end
+
+  test "sync_pr accepts canonical state only through explicit recovery import", %{repo: repo} do
+    {_package, session} = sync_package(repo, "SYMPP-PROVIDER-IMPORT", 46, "head-a")
+
+    top_level =
+      MCPHarness.request(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "manual-top-level",
+          "method" => "tools/call",
+          "params" => %{"name" => "sync_pr", "arguments" => %{"check_summary" => %{"status" => "passing"}}}
+        },
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(top_level, ["error", "data", "reason"]) == "unexpected_argument"
+    refute_receive {:provider_fetch, _, _}
+
+    recovery = %{
+      "url" => "https://github.com/nextide/repo/pull/46",
       "head_sha" => "head-a",
+      "branch" => "agent/SYMPP-PROVIDER-IMPORT/worker",
       "base_branch" => "main",
       "base_sha" => "base-a",
-      "changed_files" => ["elixir/lib/stale.ex"],
-      "check_summary" => %{"conclusion" => "success"},
-      "review_state" => %{"state" => "approved"},
-      "merge_state" => %{"state" => "clean"},
-      "idempotency_key" => "compact-refresh-head-a-state"
-    })
-
-    refreshed =
-      attach_tool(repo, session, "sync_pr", %{
-        "head_sha" => "head-b",
-        "idempotency_key" => "compact-refresh-head-b-identity-only"
-      })
-
-    payload = response_progress_payload(repo, refreshed)
-
-    assert payload["head_sha"] == "head-b"
-    assert payload["base_branch"] == nil
-    assert payload["base_sha"] == nil
-    assert payload["changed_files"] == []
-    assert payload["changed_files_count"] == 0
-    assert payload["changed_files_available"] == false
-    assert payload["changed_files_count_available"] == false
-    assert payload["check_summary"] == %{}
-    assert payload["review_state"] == %{}
-    assert payload["merge_state"] == %{}
-  end
-
-  test "sync_pr compact refresh preserves state when requested head is a prefix", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-PR-SYNC-COMPACT-PREFIX",
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 status: "ci_waiting"
-               )
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-    full_head_sha = "abcdef1234567890abcdef1234567890abcdef12"
-
-    attach_tool(repo, session, "attach_pr", %{"number" => 42, "head_sha" => full_head_sha})
-
-    attach_tool(repo, session, "sync_pr", %{
-      "head_sha" => full_head_sha,
-      "changed_files" => ["elixir/lib/current.ex"],
-      "check_summary" => %{"conclusion" => "success"},
-      "idempotency_key" => "compact-refresh-full-head-state"
-    })
-
-    refreshed =
-      attach_tool(repo, session, "sync_pr", %{
-        "head_sha" => "abcdef12",
-        "idempotency_key" => "compact-refresh-prefix-head"
-      })
-
-    payload = response_progress_payload(repo, refreshed)
-
-    assert payload["head_sha"] == "abcdef12"
-    assert payload["changed_files"] == [%{"path" => "elixir/lib/current.ex"}]
-    assert payload["changed_files_available"] == true
-    assert payload["check_summary"] == %{"conclusion" => "success"}
-  end
-
-  test "sync_pr compact refresh treats blank identity fields as absent", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-PR-SYNC-COMPACT-BLANKS",
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 status: "ci_waiting"
-               )
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    attach_tool(repo, session, "attach_pr", %{"number" => 42, "head_sha" => "compact-head"})
-
-    blank_repository =
-      attach_tool(repo, session, "sync_pr", %{
-        "number" => 42,
-        "repository" => " ",
-        "idempotency_key" => "compact-refresh-blank-repository"
-      })
-
-    assert response_progress_payload(repo, blank_repository)["repository"] == "nextide/symphony-plus-plus"
-
-    blank_number =
-      attach_tool(repo, session, "sync_pr", %{
-        "number" => "",
-        "repository" => "nextide/symphony-plus-plus",
-        "idempotency_key" => "compact-refresh-blank-number"
-      })
-
-    assert response_progress_payload(repo, blank_number)["number"] == 42
-
-    blank_url =
-      attach_tool(repo, session, "sync_pr", %{
-        "url" => " ",
-        "idempotency_key" => "compact-refresh-blank-url"
-      })
-
-    assert response_progress_payload(repo, blank_url)["url"] ==
-             "https://github.com/nextide/symphony-plus-plus/pull/42"
-
-    blank_metadata_fields =
-      attach_tool(repo, session, "sync_pr", %{
-        "head_sha" => " ",
-        "branch" => "",
-        "idempotency_key" => "compact-refresh-blank-metadata-fields"
-      })
-
-    blank_metadata_payload = response_progress_payload(repo, blank_metadata_fields)
-    assert blank_metadata_payload["head_sha"] == "compact-head"
-    assert blank_metadata_payload["branch"] == nil
-  end
-
-  test "sync_pr compact refresh preserves earlier synced current state", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-PR-SYNC-COMPACT-MERGE",
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 status: "ci_waiting"
-               )
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    attach_tool(repo, session, "attach_pr", %{"number" => 42, "head_sha" => "compact-head"})
-
-    attach_tool(repo, session, "sync_pr", %{
-      "check_summary" => %{"conclusion" => "success"},
-      "idempotency_key" => "compact-refresh-checks"
-    })
-
-    response =
-      attach_tool(repo, session, "sync_pr", %{
-        "review_state" => %{"decision" => "approved"},
-        "idempotency_key" => "compact-refresh-review"
-      })
-
-    payload = response_progress_payload(repo, response)
-    assert payload["check_summary"] == %{"conclusion" => "success"}
-    assert payload["review_state"] == %{"decision" => "approved"}
-  end
-
-  test "sync_pr recovery can repair missing attached PR evidence", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-PR-SYNC-RECOVERY",
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 status: "ci_waiting"
-               )
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    recovery_arguments = %{
-      "recovery" => %{
-        "url" => "https://api.github.com/repos/nextide/symphony-plus-plus/pulls/42",
-        "html_url" => "https://github.com/nextide/symphony-plus-plus/pull/42",
-        "head_sha" => "recovery-head",
-        "branch" => "agent/recovery"
-      },
-      "check_summary" => %{"conclusion" => "success"},
-      "idempotency_key" => "recovery-initial"
+      "changed_files" => [],
+      "check_summary" => %{"status" => "passing"},
+      "review_state" => %{"status" => "approved"},
+      "merge_state" => %{"status" => "clean", "merged" => false},
+      "provider_reference" => "import-46"
     }
 
-    response = attach_tool(repo, session, "sync_pr", recovery_arguments)
+    imported = attach_tool(repo, session, "sync_pr", %{"recovery" => recovery})
+    payload = response_progress_payload(repo, imported)
+    assert payload["check_summary"] == %{"status" => "passing"}
+    assert payload["provider_reference"] == "import-46"
+    refute_receive {:provider_fetch, _, _}
 
-    payload = response_progress_payload(repo, response)
-    assert payload["repository"] == "nextide/symphony-plus-plus"
-    assert payload["number"] == 42
-    assert payload["head_sha"] == "recovery-head"
-    assert payload["check_summary"] == %{"conclusion" => "success"}
-
-    replay = attach_tool(repo, session, "sync_pr", recovery_arguments)
-    assert get_in(replay, ["result", "structuredContent", "progress_event", "id"]) == get_in(response, ["result", "structuredContent", "progress_event", "id"])
-
-    compact_refresh =
-      attach_tool(repo, session, "sync_pr", %{
-        "review_state" => %{"decision" => "approved"},
-        "idempotency_key" => "recovery-followup-compact"
-      })
-
-    compact_payload = response_progress_payload(repo, compact_refresh)
-    assert compact_payload["number"] == 42
-    assert compact_payload["check_summary"] == %{"conclusion" => "success"}
-    assert compact_payload["review_state"] == %{"decision" => "approved"}
-
-    replacement =
+    invalid =
       MCPHarness.request(
         %{
           "jsonrpc" => "2.0",
-          "id" => "sync_pr_repaired_replacement",
+          "id" => "invalid-import",
           "method" => "tools/call",
-          "params" => %{
-            "name" => "sync_pr",
-            "arguments" => %{"number" => 43, "repository" => "nextide/symphony-plus-plus", "head_sha" => "replacement-head"}
-          }
+          "params" => %{"name" => "sync_pr", "arguments" => %{"recovery" => put_in(recovery, ["check_summary", "status"], "green")}}
         },
         repo: repo,
         session: session
       )
 
-    assert get_in(replacement, ["error", "data", "reason"]) == "pr_reference_mismatch"
+    assert get_in(invalid, ["error", "data", "reason"]) == "invalid_recovery"
   end
 
-  test "sync_pr recovery does not supersede attached PR evidence", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-PR-SYNC-RECOVERY-STALE",
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 status: "ci_waiting"
-               )
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    attach_tool(repo, session, "attach_pr", %{"number" => 41, "head_sha" => "stale-head"})
-
-    conflicting_recovery =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync_pr_conflicting_recovery_number",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "sync_pr",
-            "arguments" => %{
-              "number" => 43,
-              "metadata" => %{"head_sha" => "repaired-head"},
-              "recovery" => %{"repository" => "nextide/symphony-plus-plus", "number" => 42}
-            }
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(conflicting_recovery, ["error", "data", "reason"]) == "pr_recovery_reference_mismatch"
-
-    replacement_recovery =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync_pr_replacement_recovery",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "sync_pr",
-            "arguments" => %{
-              "recovery" => %{
-                "html_url" => "https://github.com/nextide/symphony-plus-plus/pull/42",
-                "head_sha" => "repaired-head"
-              },
-              "check_summary" => %{"conclusion" => "success"}
-            }
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(replacement_recovery, ["error", "data", "reason"]) == "pr_mismatch"
-  end
-
-  test "sync_pr replay after different attach is cached but not current readiness evidence", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-PR-SYNC-REPLAY-CURRENT",
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 status: "ci_waiting",
-                 policy_template: "mcp_current_pr_state"
-               )
-             )
+  test "agent transcript attaches, zero-syncs, submits review, and exposes remaining gate", %{repo: repo} do
+    {package, session} =
+      sync_package(repo, "SYMPP-PROVIDER-TRANSCRIPT", 47, "head-a", review_requirement: %{"type" => "review_suite", "args" => %{"mode" => "fast"}})
 
     append_done_plan(repo, package.id)
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-    head_sha = "abcdef1234567890abcdef1234567890abcdef12"
-
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-PR-SYNC-REPLAY-CURRENT/worker", "head_sha" => head_sha})
-    attach_tool(repo, session, "attach_pr", %{"number" => 42, "head_sha" => head_sha})
-
-    sync_request = %{
-      "jsonrpc" => "2.0",
-      "id" => "sync-pr-replay-current",
-      "method" => "tools/call",
-      "params" => %{
-        "name" => "sync_pr",
-        "arguments" => %{
-          "number" => 42,
-          "metadata" => %{"head_sha" => head_sha, "check_summary" => %{"conclusion" => "success"}}
-        }
-      }
-    }
-
-    sync_response = MCPHarness.request(sync_request, repo: repo, session: session)
-    event_id = get_in(sync_response, ["result", "structuredContent", "progress_event", "id"])
-
-    attach_tool(repo, session, "attach_pr", %{"number" => 43, "head_sha" => head_sha})
-
-    replay_response = MCPHarness.request(sync_request, repo: repo, session: session)
-    assert get_in(replay_response, ["result", "structuredContent", "progress_event", "id"]) == event_id
-
-    new_old_sync_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync-pr-old-new-request",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "sync_pr",
-            "arguments" => %{
-              "number" => 42,
-              "metadata" => %{"head_sha" => head_sha, "check_summary" => %{"conclusion" => "success"}},
-              "idempotency_key" => "new-old-sync"
-            }
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(new_old_sync_response, ["error", "data", "reason"]) == "pr_mismatch"
+    SymphonyElixir.FakeGitHubClient.put_response("nextide/repo", 47, provider_metadata(47, "head-a"))
+    attach_tool(repo, session, "sync_pr", %{})
+    assert_receive {:provider_fetch, "nextide/repo", 47}
 
     attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review",
+      "summary" => "Provider snapshot implementation",
       "tests" => ["mix test"],
-      "artifacts" => ["review.txt"],
-      "head_sha" => head_sha,
+      "artifacts" => ["review-suite-fast.txt"],
+      "head_sha" => "head-a",
       "acceptance_criteria_met" => true
     })
 
-    ready_response =
+    ready =
       MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-after-replayed-old-sync", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
+        %{"jsonrpc" => "2.0", "id" => "ready", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
         repo: repo,
         session: session
       )
 
-    assert "current_pr_state" in get_in(ready_response, ["error", "data", "missing"])
-
-    attach_tool(repo, session, "sync_pr", %{
-      "number" => 43,
-      "metadata" => %{"head_sha" => head_sha, "check_summary" => %{"conclusion" => "success"}}
-    })
-
-    ready_after_current_sync =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-after-current-sync", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(ready_after_current_sync, ["result", "structuredContent", "ready"]) == true
+    missing = get_in(ready, ["error", "data", "missing"])
+    assert "review_complete" in missing
+    refute "pr_attached" in missing
+    refute "tests_passed" in missing
   end
 
   test "attach_pr number requires unambiguous repository context for short package repos", %{repo: repo} do
@@ -838,34 +515,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     assert Enum.count(events, &(&1.idempotency_key == idempotency_key)) == 1
   end
 
-  test "sync_pr malformed metadata returns structured MCP error", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-PR-METADATA-ERROR", kind: "mcp", repo: "nextide/symphony-plus-plus", status: "ci_waiting")
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync_pr",
-          "method" => "tools/call",
-          "params" => %{"name" => "sync_pr", "arguments" => %{"number" => 42, "metadata" => "bad"}}
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(response, ["error", "code"]) == -32_602
-    assert get_in(response, ["error", "data", "tool"]) == "sync_pr"
-    assert get_in(response, ["error", "data", "reason"]) == "invalid_metadata"
-  end
-
   test "sync_pr preserves service error shape for PR metadata lookup failures" do
     session =
       Session.new(
@@ -889,7 +538,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
           "method" => "tools/call",
           "params" => %{
             "name" => "sync_pr",
-            "arguments" => %{"number" => 42, "metadata" => %{"head_sha" => "head-a"}}
+            "arguments" => %{}
           }
         },
         repo: BusyPrSyncRepo,
@@ -899,235 +548,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     assert get_in(response, ["error", "code"]) == -32_000
     assert get_in(response, ["error", "data", "resource"]) == "sync_pr"
     assert get_in(response, ["error", "data", "reason"]) == "ledger_unavailable"
-  end
-
-  test "sync_pr requires an attached matching PR and metadata head", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-PR-SYNC-BOUNDARY", kind: "mcp", repo: "nextide/symphony-plus-plus", status: "ci_waiting")
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    compact_missing_attach =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync_pr_compact_missing_attach",
-          "method" => "tools/call",
-          "params" => %{"name" => "sync_pr", "arguments" => %{}}
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(compact_missing_attach, ["error", "data", "reason"]) == "missing_attached_pr"
-
-    malformed_recovery =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync_pr_malformed_recovery",
-          "method" => "tools/call",
-          "params" => %{"name" => "sync_pr", "arguments" => %{"recovery" => %{"number" => 42, "base" => "x"}}}
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(malformed_recovery, ["error", "data", "reason"]) == "missing_attached_pr"
-
-    explicit_repair =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync_pr_explicit_repair",
-          "method" => "tools/call",
-          "params" => %{"name" => "sync_pr", "arguments" => %{"number" => 42, "metadata" => %{"head_sha" => "abc123"}}}
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert response_progress_payload(repo, explicit_repair)["number"] == 42
-
-    explicit_compact =
-      attach_tool(repo, session, "sync_pr", %{
-        "check_summary" => %{"conclusion" => "success"},
-        "idempotency_key" => "explicit-repair-followup-compact"
-      })
-
-    assert response_progress_payload(repo, explicit_compact)["number"] == 42
-
-    attach_tool(repo, session, "attach_pr", %{"number" => 42, "head_sha" => "abc123"})
-
-    cased_ref =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync_pr_cased_ref",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "sync_pr",
-            "arguments" => %{
-              "url" => "https://github.com/NextIDE/Symphony-Plus-Plus/pull/42",
-              "metadata" => %{"head_sha" => "abc123"}
-            }
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert response_progress_payload(repo, cased_ref)["repository"] == "NextIDE/Symphony-Plus-Plus"
-
-    mixed_number_recovery =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync_pr_mixed_number_recovery",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "sync_pr",
-            "arguments" => %{
-              "number" => "42",
-              "metadata" => %{"head_sha" => "abc123"},
-              "recovery" => %{"repository" => "nextide/symphony-plus-plus", "number" => 42}
-            }
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert response_progress_payload(repo, mixed_number_recovery)["number"] == 42
-
-    mismatch =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync_pr",
-          "method" => "tools/call",
-          "params" => %{"name" => "sync_pr", "arguments" => %{"number" => 43, "metadata" => %{"head_sha" => "abc123"}}}
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(mismatch, ["error", "data", "reason"]) == "pr_mismatch"
-
-    empty_recovery_mismatch =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync_pr_empty_recovery_mismatch",
-          "method" => "tools/call",
-          "params" => %{"name" => "sync_pr", "arguments" => %{"number" => 43, "metadata" => %{"head_sha" => "abc123"}, "recovery" => %{}}}
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(empty_recovery_mismatch, ["error", "data", "reason"]) == "pr_mismatch"
-
-    top_level_head =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "sync_pr",
-          "method" => "tools/call",
-          "params" => %{"name" => "sync_pr", "arguments" => %{"number" => 42, "head_sha" => "abc123", "metadata" => %{}}}
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert response_progress_payload(repo, top_level_head)["head_sha"] == "abc123"
-  end
-
-  test "sync_pr resolves URL-only attached PRs by chronology", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-PR-SYNC-CHRONOLOGY", kind: "mcp", repo: "nextide/symphony-plus-plus", status: "ci_waiting")
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    assert {:ok, _current_attach} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: package.id,
-               summary: "Current PR attached",
-               status: "pr_attached",
-               payload: %{type: "pr", source_tool: "attach_pr", url: "https://github.com/nextide/symphony-plus-plus/pull/43", head_sha: "head-a"},
-               created_at: ~U[2026-05-05 00:00:02Z]
-             })
-
-    assert {:ok, _backfilled_old_attach} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: package.id,
-               summary: "Backfilled old PR attached",
-               status: "pr_attached",
-               payload: %{type: "pr", source_tool: "attach_pr", url: "https://github.com/nextide/symphony-plus-plus/pull/42", head_sha: "head-a"},
-               created_at: ~U[2026-05-05 00:00:01Z]
-             })
-
-    response =
-      attach_tool(repo, session, "sync_pr", %{
-        "number" => 43,
-        "metadata" => %{"head_sha" => "head-a", "branch" => "agent/SYMPP-P6-001/github-pr-attachment-sync"}
-      })
-
-    assert response_progress_payload(repo, response)["number"] == 43
-  end
-
-  test "sync_pr resolves PR numbers from standard metadata when package repo is short", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-PR-SYNC-SHORT-REPO", kind: "mcp", repo: "symphony-plus-plus", status: "ci_waiting")
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/nextide/symphony-plus-plus/pull/43", "head_sha" => "head-a"})
-
-    response =
-      attach_tool(repo, session, "sync_pr", %{
-        "number" => 43,
-        "metadata" => %{
-          "head" => %{"sha" => "head-a", "ref" => "agent/SYMPP-P6-001/github-pr-attachment-sync"},
-          "base" => %{"repo" => %{"full_name" => "nextide/symphony-plus-plus"}},
-          "state" => "open",
-          "mergeable_state" => "clean"
-        }
-      })
-
-    payload = response_progress_payload(repo, response)
-
-    assert payload["repository"] == "nextide/symphony-plus-plus"
-    assert payload["number"] == 43
-    assert payload["merge_state"] == %{"mergeable_state" => "clean", "state" => "open"}
-
-    attached_ref_response =
-      attach_tool(repo, session, "sync_pr", %{
-        "number" => 43,
-        "metadata" => %{
-          "head_sha" => "head-a",
-          "check_summary" => %{"conclusion" => "success"}
-        },
-        "idempotency_key" => "number-only-from-attach"
-      })
-
-    assert response_progress_payload(repo, attached_ref_response)["repository"] ==
-             "nextide/symphony-plus-plus"
   end
 
   test "latest branch head supersedes earlier PR head for review evidence", %{repo: repo} do
@@ -1217,5 +637,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
 
     missing = get_in(ready_response, ["error", "data", "missing"])
     assert "pr_attached" in missing
+  end
+
+  defp sync_package(repo, id, number, head_sha, overrides \\ []) do
+    attrs =
+      [id: id, kind: "mcp", repo: "nextide/repo", status: "ci_waiting"]
+      |> Keyword.merge(overrides)
+
+    assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(attrs))
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "provider-owner")
+    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
+
+    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/#{id}/worker", "head_sha" => head_sha})
+    attach_tool(repo, session, "attach_pr", %{"number" => number, "head_sha" => head_sha})
+    {package, session}
+  end
+
+  defp provider_metadata(number, head_sha) do
+    SymphonyElixir.GitHubPullRequestFixtures.metadata(number, head_sha)
+    |> Map.put("check_summary", %{"status" => "passing"})
+    |> Map.put("review_state", %{"status" => "approved"})
   end
 end

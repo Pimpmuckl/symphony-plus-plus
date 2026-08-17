@@ -56,7 +56,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
           "method" => "tools/call",
           "params" => %{
             "name" => "sync_pr",
-            "arguments" => %{"url" => "https://github.com/nextide/repo/pull/27", "head_sha" => "head-a"}
+            "arguments" => %{"url" => "https://github.com/nextide/repo/pull/27"}
           }
         },
         repo: repo,
@@ -82,7 +82,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
           "method" => "tools/call",
           "params" => %{
             "name" => "sync_pr",
-            "arguments" => %{"url" => "https://github.com/nextide/repo/pull/27", "head_sha" => "head-a"}
+            "arguments" => %{"url" => "https://github.com/nextide/repo/pull/27"}
           }
         },
         repo: repo,
@@ -102,7 +102,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
           "method" => "tools/call",
           "params" => %{
             "name" => "sync_pr",
-            "arguments" => %{"url" => "https://github.com/nextide/repo/pull/27", "head_sha" => "head-a"}
+            "arguments" => %{"url" => "https://github.com/nextide/repo/pull/27"}
           }
         },
         repo: repo,

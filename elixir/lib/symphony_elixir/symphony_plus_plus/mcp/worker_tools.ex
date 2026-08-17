@@ -21,7 +21,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.{DryClient, MergeReconciler}
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
@@ -209,6 +209,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
       sync_pr(config.repo, session, arguments, payload)
       |> metadata_tool_response("sync_pr")
     else
+      {:tool_error, :provider_unavailable} -> sync_pr_provider_error("provider_unavailable")
+      {:tool_error, :provider_malformed} -> sync_pr_provider_error("provider_malformed")
+      {:tool_error, {:provider_head_mismatch, expected, actual}} -> sync_pr_head_mismatch_error(expected, actual)
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "sync_pr", "reason" => reason}}
       {:error, reason} -> worker_error(reason, "sync_pr")
     end
@@ -378,7 +381,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
              "sync_pr",
              false
            ),
-         {:ok, result} <- MergeReconciler.reconcile_work_package(repo, work_package.id, pr_payload: payload) do
+         {:ok, result} <-
+           MergeReconciler.reconcile_work_package(
+             repo,
+             work_package.id,
+             pr_payload: payload,
+             client: DryClient,
+             metadata: payload
+           ) do
       terminal_sync_result(repo, work_package.id, result)
     end
   end
@@ -410,6 +420,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp stringify_keys(%{} = map), do: Map.new(map, fn {key, value} -> {to_string(key), stringify_keys(value)} end)
   defp stringify_keys(values) when is_list(values), do: Enum.map(values, &stringify_keys/1)
   defp stringify_keys(value), do: value
+
+  defp sync_pr_provider_error(reason) do
+    {:error, -32_000, "Provider error",
+     %{
+       "resource" => "sync_pr",
+       "reason" => reason,
+       "layer" => "provider",
+       "recovery" => %{"next_action" => "retry_sync_pr"}
+     }}
+  end
+
+  defp sync_pr_head_mismatch_error(expected, actual) do
+    {:error, -32_602, "Invalid params",
+     %{
+       "tool" => "sync_pr",
+       "reason" => "provider_head_mismatch",
+       "expected_head_sha" => expected,
+       "actual_head_sha" => actual,
+       "recovery" => %{"next_action" => "prove_current_head_then_retry_sync_pr"}
+     }}
+  end
 
   defp append_pr_metadata_event(repo, session, attrs, idempotency_key, tool, payload, replay?) do
     with {:ok, event_result} <- ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, tool),
