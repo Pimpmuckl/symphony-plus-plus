@@ -24,6 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.ActorResolver
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.GuidanceRequest
   alias SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Service, as: GuidanceRequestService
   alias SymphonyElixir.SymphonyPlusPlus.HumanDecisionPrompt
@@ -56,11 +57,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
          {:ok, caller_payload} <- optional_payload(arguments),
          {:ok, actor} <- actor_for_package_resource(config.repo, session, :blocker, work_package_id),
          :ok <- PlanningService.authorize_package_action(config.repo, actor, :blocker_resolve, work_package_id, :blocker),
+         idempotency_key = ["resolve_blocker", work_package_id, String.trim(idempotency_key)] |> Enum.join(":"),
          attrs = %{
            "summary" => summary,
            "body" => optional_argument(arguments, "body", nil),
-           "status" => optional_argument(arguments, "status", "resolved"),
-           "idempotency_key" => ["resolve_blocker", work_package_id, String.trim(idempotency_key)] |> Enum.join(":"),
+           "status" => "resolved",
+           "idempotency_key" => idempotency_key,
            "payload" =>
              Map.merge(caller_payload, %{
                "type" => "blocker",
@@ -70,8 +72,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
                "active" => false
              })
          },
-         {:ok, event} <- PlanningRepository.append_audit_progress_event_for_work_package(config.repo, session.assignment, work_package_id, attrs) do
-      {:ok, ToolResult.tool_result(%{"progress_event" => ProgressEvents.payload(event)})}
+         {:ok, result} <- resolve_architect_blocker(config.repo, session, work_package_id, blocker_id, attrs, idempotency_key) do
+      {:ok, result}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "resolve_blocker", "reason" => reason}}
       {:error, reason} -> architect_error(reason, "resolve_blocker")
@@ -404,15 +406,61 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
     end
   end
 
+  defp resolve_architect_blocker(repo, %Session{} = session, work_package_id, blocker_id, attrs, idempotency_key) do
+    run_architect_transaction(repo, fn ->
+      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
+           :ok <- lock_work_package(repo, work_package_id) do
+        replay_or_resolve_architect_blocker(repo, session, work_package_id, blocker_id, attrs, idempotency_key)
+      end
+    end)
+  end
+
+  defp replay_or_resolve_architect_blocker(repo, %Session{} = session, work_package_id, blocker_id, attrs, idempotency_key) do
+    case ProgressEvents.existing_for_work_package(repo, work_package_id, idempotency_key) do
+      {:ok, event} ->
+        {:ok, ToolResult.tool_result(%{"progress_event" => ProgressEvents.payload(event)})}
+
+      {:error, :not_found} ->
+        resolve_new_architect_blocker(repo, session, work_package_id, blocker_id, attrs)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp resolve_new_architect_blocker(repo, %Session{} = session, work_package_id, blocker_id, attrs) do
+    with {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package_id) do
+      case Enum.find(BlockerProjection.blockers(progress_events), &(&1.id == blocker_id)) do
+        %{active: true} -> append_architect_blocker_resolution(repo, session, work_package_id, attrs)
+        %{} -> {:ok, ToolResult.tool_result(%{"already_resolved" => true, "blocker_id" => blocker_id})}
+        nil -> {:tool_error, "blocker_not_found"}
+      end
+    end
+  end
+
+  defp append_architect_blocker_resolution(repo, %Session{} = session, work_package_id, attrs) do
+    with {:ok, event} <-
+           PlanningRepository.append_audit_progress_event_for_work_package(
+             repo,
+             session.assignment,
+             work_package_id,
+             attrs
+           ) do
+      {:ok, ToolResult.tool_result(%{"progress_event" => ProgressEvents.payload(event)})}
+    end
+  end
+
   defp run_architect_transaction(repo, fun) do
     case repo.transaction(fn -> rollback_architect_transaction_result(repo, fun.()) end) do
       {:ok, result} -> {:ok, result}
+      {:error, {:tool_error, reason}} -> {:tool_error, reason}
       {:error, {:error, reason}} -> {:error, reason}
       {:error, reason} -> {:error, reason}
     end
   end
 
   defp rollback_architect_transaction_result(_repo, {:ok, result}), do: result
+  defp rollback_architect_transaction_result(repo, {:tool_error, reason}), do: repo.rollback({:tool_error, reason})
   defp rollback_architect_transaction_result(repo, {:error, reason}), do: repo.rollback({:error, reason})
 
   defp optional_decision_prompt_argument(arguments, key) do

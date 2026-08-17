@@ -506,8 +506,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
     run_worker_transaction(repo, fn ->
       with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
-           :ok <- lock_work_package(repo, Session.work_package_id(session)),
-           :ok <- ProgressEvents.reject_ready_evidence_mutation(repo, session, "resolve_blocker") do
+           :ok <- lock_work_package(repo, Session.work_package_id(session)) do
         append_or_replay_blocker_resolution(repo, session, blocker_id, attrs, idempotency_key)
       end
     end)
@@ -527,15 +526,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   end
 
   defp resolve_new_worker_blocker(repo, %Session{} = session, blocker_id, attrs, idempotency_key) do
-    with {:ok, %WorkPackage{status: "blocked"} = work_package} <-
-           WorkPackageRepository.get(repo, Session.work_package_id(session)),
+    with {:ok, %WorkPackage{} = work_package} <- WorkPackageRepository.get(repo, Session.work_package_id(session)),
          {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package.id),
-         :ok <-
-           require_worker_owned_active_blocker(
+         {:ok, blocker_state} <-
+           worker_blocker_state(
              progress_events,
              blocker_id,
              session.assignment.grant_id
-           ),
+           ) do
+      resolve_worker_blocker(
+        blocker_state,
+        repo,
+        session,
+        work_package,
+        progress_events,
+        blocker_id,
+        attrs,
+        idempotency_key
+      )
+    end
+  end
+
+  defp resolve_worker_blocker(:active, repo, session, %WorkPackage{status: "blocked"} = work_package, progress_events, blocker_id, attrs, idempotency_key) do
+    with :ok <- ProgressEvents.reject_ready_evidence_mutation(repo, session, "resolve_blocker"),
          {:ok, result} <- ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, "resolve_blocker"),
          {:ok, _work_package} <-
            maybe_unblock_worker_package(
@@ -546,17 +559,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
              blocker_id
            ) do
       {:ok, result}
-    else
-      {:ok, %WorkPackage{}} -> {:tool_error, "work_package_not_blocked"}
+    end
+  end
+
+  defp resolve_worker_blocker(:active, repo, session, %WorkPackage{}, _progress_events, _blocker_id, _attrs, _idempotency_key) do
+    case ProgressEvents.reject_ready_evidence_mutation(repo, session, "resolve_blocker") do
+      :ok -> {:tool_error, "work_package_not_blocked"}
       error -> error
     end
   end
 
-  defp require_worker_owned_active_blocker(progress_events, blocker_id, grant_id) do
+  defp resolve_worker_blocker(:already_resolved, _repo, _session, %WorkPackage{}, _progress_events, blocker_id, _attrs, _idempotency_key) do
+    {:ok, ToolResult.agent_tool_result(%{"already_resolved" => true, "blocker_id" => blocker_id})}
+  end
+
+  defp worker_blocker_state(progress_events, blocker_id, grant_id) do
     case Enum.find(BlockerProjection.blockers(progress_events), &(&1.id == blocker_id)) do
-      %{active: true, actor: %{access_grant_id: ^grant_id}} -> :ok
+      %{active: true, actor: %{access_grant_id: ^grant_id}} -> {:ok, :active}
       %{active: true} -> {:tool_error, "blocker_owned_by_another_actor"}
-      %{} -> {:tool_error, "blocker_not_active"}
+      %{} -> {:ok, :already_resolved}
       nil -> {:tool_error, "blocker_not_found"}
     end
   end

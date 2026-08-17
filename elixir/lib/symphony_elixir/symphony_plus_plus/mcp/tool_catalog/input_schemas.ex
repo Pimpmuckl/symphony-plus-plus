@@ -195,6 +195,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "blocker_id" => described_string_schema("Optional stable blocker id. A deterministic id is generated when omitted."),
         "summary" => string_schema(),
         "body" => markdown_nullable_string_schema("Optional human-facing Markdown body."),
+        "status" => string_enum_schema(["blocked"]),
         "idempotency_key" => string_schema(),
         "payload" => object_schema()
       }),
@@ -209,6 +210,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "resolution" => string_schema(),
         "summary" => string_schema(),
         "body" => markdown_nullable_string_schema("Optional human-facing Markdown body."),
+        "status" => string_enum_schema(["resolved"]),
         "idempotency_key" => string_schema(),
         "payload" => object_schema()
       }),
@@ -386,7 +388,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   def architect_tool_input_schema("resolve_blocker") do
     schema(
       progress_properties(:explicit)
-      |> Map.merge(%{"blocker_id" => string_schema(), "resolution" => string_schema()}),
+      |> Map.merge(%{
+        "blocker_id" => string_schema(),
+        "resolution" => string_schema(),
+        "status" => string_enum_schema(["resolved"])
+      }),
       ["blocker_id", "resolution", "summary", "idempotency_key"]
     )
   end

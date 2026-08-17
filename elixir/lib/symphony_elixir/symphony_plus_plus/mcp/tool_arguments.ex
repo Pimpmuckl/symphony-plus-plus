@@ -240,7 +240,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
     unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
 
     if unexpected == [] do
-      {:ok, arguments}
+      normalize_implied_status(name, arguments)
     else
       {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "unexpected_argument", "arguments" => unexpected}}
     end
@@ -329,9 +329,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
       {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "unexpected_argument", "arguments" => unexpected}}
     else
       case validate_tool_required_arguments(ToolCatalog.architect_tool_input_schema(name), arguments) do
-        :ok -> {:ok, arguments}
+        :ok -> normalize_implied_status(name, arguments)
         {:error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => reason}}
       end
+    end
+  end
+
+  defp normalize_implied_status(name, arguments) do
+    expected_status = %{"report_blocker" => "blocked", "resolve_blocker" => "resolved"}[name]
+
+    case {expected_status, Map.fetch(arguments, "status")} do
+      {nil, _status} ->
+        {:ok, arguments}
+
+      {_expected, :error} ->
+        {:ok, arguments}
+
+      {expected, {:ok, status}} when status == expected ->
+        {:ok, Map.delete(arguments, "status")}
+
+      {expected, {:ok, _status}} ->
+        {:error, -32_602, "Invalid params",
+         %{
+           "tool" => name,
+           "reason" => "implied_status_mismatch",
+           "expected_status" => expected,
+           "recovery" => %{"next_action" => "omit_status_or_use_expected", "expected_status" => expected}
+         }}
     end
   end
 
