@@ -225,8 +225,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     with %ProgressEvent{payload: payload} = event <- latest_current_branch_event(progress_events),
          branch when is_binary(branch) <- Map.get(payload, "branch"),
          :ok <- WorktreeScope.require_live_review_head(work_package, config, branch, head_sha) do
-      canonical_head_sha = String.downcase(head_sha)
-      {:ok, canonical_head_sha, %{branch: branch, head_sha: canonical_head_sha, boundary: event.id}}
+      {:ok, head_sha, %{branch: branch, head_sha: head_sha, boundary: event.id}}
     else
       nil -> {:tool_error, {"stale_head_sha", "branch_proof_required"}}
       {:tool_error, reason} -> {:tool_error, {"stale_head_sha", reason}}
@@ -289,7 +288,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {:ok, head_sha} when is_binary(head_sha) ->
         case String.trim(head_sha) do
           "" -> {:ok, nil}
-          trimmed -> {:ok, trimmed}
+          trimmed -> {:ok, String.downcase(trimmed)}
         end
 
       {:ok, _head_sha} ->

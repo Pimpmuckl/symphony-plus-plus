@@ -320,16 +320,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     live_tool(repo, live.session, config, "complete_review", %{"reference" => "review-a"})
     head_b = commit_worktree!(live.worktree, "head-b.txt", "head B\n", "Head B")
 
-    response =
-      live_tool(repo, live.session, config, "submit_review_package", %{
-        "summary" => "Review at head B",
-        "tests" => ["mix test"],
-        "artifacts" => ["head-b.txt"],
-        "head_sha" => String.upcase(head_b),
-        "acceptance_criteria_met" => true
-      })
+    review_arguments = %{
+      "summary" => "Review at head B",
+      "tests" => ["mix test"],
+      "artifacts" => ["head-b.txt"],
+      "head_sha" => String.upcase(head_b),
+      "acceptance_criteria_met" => true
+    }
+
+    response = live_tool(repo, live.session, config, "submit_review_package", review_arguments)
+    replay = live_tool(repo, live.session, config, "submit_review_package", review_arguments)
 
     assert response_progress_payload(repo, response)["head_sha"] == head_b
+
+    assert get_in(replay, ["result", "structuredContent", "progress_event", "id"]) ==
+             get_in(response, ["result", "structuredContent", "progress_event", "id"])
+
     assert {:ok, events} = PlanningRepository.list_progress_events(repo, live.package.id)
 
     refreshed_branch =
