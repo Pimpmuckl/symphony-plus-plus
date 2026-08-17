@@ -496,7 +496,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
 
     if query
        |> repo.all()
-       |> Enum.any?(&(grant_repo_scope_matches?(&1, scope_repo) and branch_scope_match?(&1.scope_base_branch, scope_base_branch))) do
+       |> Enum.any?(&(grant_repo_scope_matches?(&1, scope_repo) and BaseBranch.equivalent?(&1.scope_base_branch, scope_base_branch))) do
       {:error, :already_claimed}
     else
       :ok
@@ -579,7 +579,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
 
     case query
          |> repo.all()
-         |> Enum.find(&(grant_repo_scope_matches?(&1, scope_repo) and branch_scope_match?(&1.scope_base_branch, scope_base_branch))) do
+         |> Enum.find(&(grant_repo_scope_matches?(&1, scope_repo) and BaseBranch.equivalent?(&1.scope_base_branch, scope_base_branch))) do
       %AccessGrant{} = grant -> {:ok, grant}
       nil -> {:error, :not_found}
     end
@@ -651,7 +651,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
 
     case query
          |> repo.all()
-         |> Enum.find(&(grant_repo_scope_matches?(&1, scope_repo) and branch_scope_match?(&1.scope_base_branch, scope_base_branch))) do
+         |> Enum.find(&(grant_repo_scope_matches?(&1, scope_repo) and BaseBranch.equivalent?(&1.scope_base_branch, scope_base_branch))) do
       %AccessGrant{} = grant ->
         {:ok, grant}
 
@@ -695,7 +695,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
     grants =
       query
       |> repo.all()
-      |> Enum.filter(&(grant_repo_scope_matches?(&1, scope_repo) and branch_scope_match?(&1.scope_base_branch, scope_base_branch)))
+      |> Enum.filter(&(grant_repo_scope_matches?(&1, scope_repo) and BaseBranch.equivalent?(&1.scope_base_branch, scope_base_branch)))
 
     revoked_count = Enum.count(grants, &match?(%DateTime{}, &1.revoked_at))
 
@@ -827,7 +827,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
 
   defp validate_explicit_architect_scope(%AccessGrant{} = access_grant, %AuthScope{type: :repo} = scope) do
     if repo_scope_match?(scope.repo, access_grant.scope_repo) and
-         branch_scope_match?(scope.base_branch, access_grant.scope_base_branch) do
+         BaseBranch.equivalent?(scope.base_branch, access_grant.scope_base_branch) do
       :ok
     else
       {:error, :invalid_scope}
@@ -960,12 +960,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
       anchor.phase_id == access_grant.phase_id and
       anchor.kind == @architect_handoff_anchor_kind and
       repo_scope_match?(anchor.repo, access_grant.scope_repo) and
-      branch_scope_match?(anchor.base_branch, access_grant.scope_base_branch)
+      BaseBranch.equivalent?(anchor.base_branch, access_grant.scope_base_branch)
   end
 
   defp work_request_matches_grant_scope?(work_request, %AccessGrant{} = access_grant) do
     repo_scope_match?(work_request.repo, access_grant.scope_repo) and
-      branch_scope_match?(work_request.base_branch, access_grant.scope_base_branch)
+      BaseBranch.equivalent?(work_request.base_branch, access_grant.scope_base_branch)
   end
 
   defp grant_repo_scope_matches?(%AccessGrant{scope_repo: scope_repo}, expected_repo), do: repo_scope_match?(scope_repo, expected_repo)
@@ -978,13 +978,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   end
 
   defp repo_scope_match?(_expected_repo, _actual_repo), do: false
-
-  defp branch_scope_match?(expected_branch, actual_branch)
-       when is_binary(expected_branch) and is_binary(actual_branch) do
-    BaseBranch.canonicalize(expected_branch) == BaseBranch.canonicalize(actual_branch)
-  end
-
-  defp branch_scope_match?(_expected_branch, _actual_branch), do: false
 
   defp repo_scope_trusted_remotes do
     :symphony_elixir
@@ -1054,7 +1047,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
     is_binary(work_package.phase_id) and
       work_package.phase_id == access_grant.phase_id and
       repo_scope_match?(work_package.repo, access_grant.scope_repo) and
-      branch_scope_match?(work_package.base_branch, access_grant.scope_base_branch)
+      BaseBranch.equivalent?(work_package.base_branch, access_grant.scope_base_branch)
   end
 
   defp work_request_matches_grant_scope?(repo, %AccessGrant{} = access_grant, work_request_id)
