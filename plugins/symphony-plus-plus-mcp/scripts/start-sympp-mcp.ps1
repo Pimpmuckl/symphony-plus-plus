@@ -1001,11 +1001,14 @@ function Test-SymppPublicationControlsMatch($Recorded, $Expected) {
 
 function Set-SymppRuntimePublication($State, [string]$Status, $InstalledIdentity, $Controls, $BackendPlan, [string]$RuntimeRoot, [string]$BackendStartIdentity = $null) {
   $backendPid = if ($null -ne $BackendPlan) { $BackendPlan.pid } else { $null }
+  $ownerAdapterPid = 0
+  if (-not [int]::TryParse([string]$env:SYMPP_BACKEND_OWNER_PID, [ref]$ownerAdapterPid) -or $ownerAdapterPid -le 0) { $ownerAdapterPid = $PID }
   $publication = [pscustomobject]@{
     status = $Status
     generation_key = [string]$InstalledIdentity.generation_key
     installed_revision = [string]$InstalledIdentity.revision
     leader_pid = $PID
+    owner_adapter_pid = $ownerAdapterPid
     leader_process_start_time_utc_ticks = Get-ProcessStartIdentity (Get-Process -Id $PID -ErrorAction SilentlyContinue)
     published_at = [DateTimeOffset]::UtcNow.ToString("o")
     controls = $Controls
