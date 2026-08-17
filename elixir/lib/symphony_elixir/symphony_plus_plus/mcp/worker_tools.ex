@@ -207,7 +207,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
          :ok <- authorize_current_package_policy(config.repo, session, :review_evidence_append, :review_evidence) do
       sync_pr_call(config.repo, session, arguments)
     else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "sync_pr", "reason" => reason}}
       {:error, reason} -> worker_error(reason, "sync_pr")
     end
   end
