@@ -1,3 +1,4 @@
+[System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
 $ErrorActionPreference = "Stop"
 function Assert-True($Condition, [string]$Message) {
   if (-not $Condition) { throw $Message }
@@ -548,6 +549,7 @@ Assert-True (($coldSmoke.recovery | Where-Object mode -eq "shutdown_during_recov
 Assert-True (($coldSmoke.recovery | Where-Object mode -eq "generation_changed_recovery").fatal_generation) "A replacement rejected by generation validation must detach its lease and fail the adapter closed"
 Assert-True (($coldSmoke.recovery | Where-Object mode -eq "cleanup_source_changed_recovery").fatal_cleanup) "A replacement rejected by cleanup-source validation must detach its lease, fail closed, and stop cleanly"
 Assert-True (($coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_recovery").fallback_recovery -and ($coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_recovery").cancelled_recovery) "Surviving PowerShell fallback adapters must retain STDIO, rebind the replacement, cancel recovery on final close, and drain it after final detach"
+Assert-True (($coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_initialize_retry").initialize_retry) "A provably unsent initialize must be retransmitted after PowerShell fallback recovery"
 Assert-True ($coldSmoke.powershell_fallback.clients -eq 30 -and $coldSmoke.powershell_fallback.preparations -eq 1 -and $coldSmoke.powershell_fallback.backends -eq 1) "Direct PowerShell fallback must elect one cold leader before installed identity and runtime work"
 $persistentRuntime = @(& (Join-Path $PSScriptRoot "persistent-artifact-runtime-smoke.ps1"))[-1] | ConvertFrom-Json
 Assert-True ($persistentRuntime.installed_waves -eq 2 -and $persistentRuntime.initialize_and_tools_list -eq 3 -and $persistentRuntime.installed_pids_distinct) "Installed command must stop the artifact-static runtime and start a new backend PID for the next wave"

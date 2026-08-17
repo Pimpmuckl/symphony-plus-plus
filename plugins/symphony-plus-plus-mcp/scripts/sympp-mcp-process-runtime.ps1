@@ -713,7 +713,9 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
           $McpUrl = $recovered.mcp_url; $heartbeatIntervalMs = $recovered.heartbeat_interval_ms
           $sessionId = $null; $protocolVersion = $null; $needsInitialize = $true
           if (-not $requestMayHaveReachedBackend) {
-            if ([string]::IsNullOrWhiteSpace($requestProtocolVersion)) {
+            if (-not [string]::IsNullOrWhiteSpace($requestProtocolVersion)) {
+              $needsInitialize = $false
+            } else {
               $bridgeInitialize = Invoke-McpBridgeInitialize $McpUrl $TimeoutSec $ClientId $heartbeatIntervalMs
               if ($bridgeInitialize.ok) {
                 $sessionId = $bridgeInitialize.session_id; $protocolVersion = $bridgeInitialize.protocol_version; $needsInitialize = $false

@@ -87,8 +87,8 @@ function backendFixture() {
   return [
     '"use strict";',
     'const crypto=require("crypto"),fs=require("fs"),http=require("http"),path=require("path");',
-    'const a=process.argv.slice(2),arg=(n)=>a[a.indexOf(n)+1],port=Number(arg("--port")),stateFile=arg("--state"),release=arg("--release"),bindRelease=arg("--bind-release"),contract=arg("--contract"),revision=arg("--revision"),ledger=arg("--ledger");',
-    'const tools=JSON.parse(Buffer.from(arg("--tools"),"base64").toString("utf8")),leases=new Set(),sessions=new Set();',
+    'const a=process.argv.slice(2),arg=(n)=>a[a.indexOf(n)+1],port=Number(arg("--port")),stateFile=arg("--state"),release=arg("--release"),bindRelease=arg("--bind-release"),failAfterProbe=arg("--fail-after-probe"),contract=arg("--contract"),revision=arg("--revision"),ledger=arg("--ledger");',
+    'const tools=JSON.parse(Buffer.from(arg("--tools"),"base64").toString("utf8")),leases=new Set(),sessions=new Set();let failAfterProbeArmed=false;',
     'let previous={};try{previous=JSON.parse(fs.readFileSync(stateFile,"utf8"));}catch(_){}',
     'const state={pid:process.pid,starts:(previous.starts||0)+1,started_at:Date.now(),initialize:previous.initialize||0,tools_list:previous.tools_list||0,mutations:previous.mutations||0,attach:previous.attach||0,detach:previous.detach||0,lease_peak:previous.lease_peak||0,active_leases:0};',
     'function save(){state.active_leases=leases.size;const t=stateFile+".tmp";fs.mkdirSync(path.dirname(stateFile),{recursive:true});fs.writeFileSync(t,JSON.stringify(state));fs.renameSync(t,stateFile);}',
@@ -98,15 +98,16 @@ function backendFixture() {
     ' if(req.url==="/shutdown"){send(res,200,{status:"stopping"});server.close(()=>process.exit(0));return;}',
     ' if(req.url==="/mcp/readiness"){if(release&&!fs.existsSync(release))return send(res,503,{status:"starting"});return send(res,200,{status:"ok",ledger:{reachable:true},dashboard:{ready:true},source:{revision,mcp_contract:{fingerprint:contract}}});}',
     ' if(req.url==="/sympp/board")return send(res,200,"<title>Symphony++ Dashboard</title>",{"Content-Type":"text/html"});',
-    ' if(req.url==="/mcp/client-lease"){const p=JSON.parse(await body(req));if(p.action==="attach")state.attach++;if(p.action==="attach"||p.action==="heartbeat")leases.add(p.client_id);if(p.action==="detach"){state.detach++;leases.delete(p.client_id);}state.lease_peak=Math.max(state.lease_peak,leases.size);save();return send(res,200,{stale_after_ms:600000});}',
+    ' if(req.url==="/mcp/client-lease"){const p=JSON.parse(await body(req));if(p.action==="attach")state.attach++;if(p.action==="attach"||p.action==="heartbeat")leases.add(p.client_id);if(p.action==="heartbeat"&&failAfterProbe&&fs.existsSync(failAfterProbe)){fs.unlinkSync(failAfterProbe);failAfterProbeArmed=true;}if(p.action==="detach"){state.detach++;leases.delete(p.client_id);}state.lease_peak=Math.max(state.lease_peak,leases.size);save();return send(res,200,{stale_after_ms:600000});}',
     ' if(req.url==="/mcp"){const p=JSON.parse(await body(req));let result,session=req.headers["mcp-session-id"];if(p.method==="initialize"){state.initialize++;session=crypto.randomUUID();sessions.add(session);result={protocolVersion:"2025-03-26",capabilities:{},serverInfo:{name:"cold-fixture",version:"1"}};}else if(!sessions.has(session))return send(res,404,{error:"missing session"});else if(p.method==="tools/list"){state.tools_list++;result={tools:tools.map(name=>({name,description:"fixture",inputSchema:{type:"object"}}))};}else if(p.method==="tools/call"&&p.params.name==="fixture.mutate"){state.mutations++;save();res.writeHead(200,{"Content-Type":"application/json"});res.write("{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":");return setTimeout(()=>{res.destroy();setTimeout(()=>process.exit(0),10);},25);}else return send(res,404,{error:"missing"});save();return send(res,200,{jsonrpc:"2.0",id:p.id,result},{"Mcp-Session-Id":session});}',
     ' send(res,404,{error:"not found"});',
     '});',
+    'server.on("connection",socket=>{if(!failAfterProbeArmed)return;failAfterProbeArmed=false;socket.on("close",()=>{server.close();server.closeAllConnections?.();setTimeout(()=>process.exit(0),10);});});',
     'fs.mkdirSync(path.dirname(ledger),{recursive:true});fs.writeFileSync(ledger,"fixture");function listen(){if(bindRelease&&!fs.existsSync(bindRelease))return setTimeout(listen,25);server.listen(port,"127.0.0.1",save);}listen();'
   ].join("\n");
 }
 
-function createArchive(root, shell, backendPort, backendState, releaseFile, bindReleaseFile, ledgerFile) {
+function createArchive(root, shell, backendPort, backendState, releaseFile, bindReleaseFile, failAfterProbeFile, ledgerFile) {
   const source = path.join(root, "artifact-source");
   const archive = path.join(root, "artifact.zip");
   fs.mkdirSync(path.join(source, "dashboard"), { recursive: true });
@@ -121,7 +122,7 @@ function createArchive(root, shell, backendPort, backendState, releaseFile, bind
     archive,
     sha: sha256(fs.readFileSync(archive)),
     dashboardHash,
-    runtimeArgs: ["--port", "{port}", "--state", backendState, "--release", releaseFile, "--bind-release", bindReleaseFile, "--contract", contract, "--revision", revision, "--ledger", ledgerFile, "--tools", Buffer.from(JSON.stringify(expectedTools)).toString("base64"), "start-runtime.ps1"],
+    runtimeArgs: ["--port", "{port}", "--state", backendState, "--release", releaseFile, "--bind-release", bindReleaseFile, "--fail-after-probe", failAfterProbeFile, "--contract", contract, "--revision", revision, "--ledger", ledgerFile, "--tools", Buffer.from(JSON.stringify(expectedTools)).toString("base64"), "start-runtime.ps1"],
     backendPort,
   };
 }
@@ -239,6 +240,7 @@ async function runCase(clientCount, shell, mode = "normal") {
   const backendState = path.join(root, "backend-state.json");
   const releaseFile = path.join(root, "backend-ready");
   const bindReleaseFile = path.join(root, "backend-bind-ready");
+  const failAfterProbeFile = path.join(root, "fail-after-probe");
   const ledgerFile = path.join(root, "ledger", "fixture.sqlite3");
   const barrier = path.join(root, "barrier");
   const backendPort = await freePort();
@@ -259,7 +261,7 @@ async function runCase(clientCount, shell, mode = "normal") {
     writeJson(path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus", "mcp_contract.json"), { mcp_contract_fingerprint: contract });
     if (mode !== "backend_death") fs.writeFileSync(releaseFile, "ready");
     if (mode !== "backend_prebind_death") fs.writeFileSync(bindReleaseFile, "ready");
-    const artifact = createArchive(root, shell, backendPort, backendState, releaseFile, bindReleaseFile, ledgerFile);
+    const artifact = createArchive(root, shell, backendPort, backendState, releaseFile, bindReleaseFile, failAfterProbeFile, ledgerFile);
     let resolvedManifest;
     channel = await createChannelServer(mode, () => JSON.stringify(resolvedManifest), artifact.archive);
     resolvedManifest = {
@@ -277,7 +279,7 @@ async function runCase(clientCount, shell, mode = "normal") {
       SYMPP_COLD_START_TIMEOUT_SEC: "90", SYMPP_BACKEND_STARTUP_TIMEOUT_SEC: "60", SYMPP_BACKEND_PORT_RELEASE_TIMEOUT_SEC: "1",
       SYMPP_ELIXIR_SETUP_TIMEOUT_SEC: "30", SYMPP_AUTOSTART_FRONTEND: "0", SYMPP_MCP_HTTP_TIMEOUT_SEC: "30", TEMP: path.join(root, "tmp"), TMP: path.join(root, "tmp") };
     if (mode === "shutdown_during_recovery") environment.SYMPP_MCP_CLIENT_HEARTBEAT_SEC = "5";
-    if (["powershell_fallback", "powershell_fallback_recovery"].includes(mode)) environment.SYMPP_NODE_BRIDGE = "0";
+    if (["powershell_fallback", "powershell_fallback_recovery", "powershell_fallback_initialize_retry"].includes(mode)) environment.SYMPP_NODE_BRIDGE = "0";
     for (const name of ["SYMPP_REPO_ROOT", "SYMPP_BACKEND_URL", "SYMPP_DASHBOARD_ORIGIN", "SYMPP_DATABASE", "SYMPP_SOURCE_FALLBACK", "SYMPP_ARTIFACT_RUNTIME"]) delete environment[name];
     fs.mkdirSync(environment.TEMP, { recursive: true });
 
@@ -322,7 +324,21 @@ async function runCase(clientCount, shell, mode = "normal") {
     const firstBackend = readJson(backendState);
     const firstOwnerPid = Number(readJson(runtimeFile)?.publication?.owner_adapter_pid || 0);
     let recoveryClients = clients;
-    if (mode === "powershell_fallback_recovery") {
+    if (mode === "powershell_fallback_initialize_retry") {
+      fs.writeFileSync(failAfterProbeFile, "ready");
+      const retriedInitialize = await requestClient(clients[0], 3400, "initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "recovered-initialize", version: "1" } });
+      assert.equal(retriedInitialize.result?.protocolVersion, "2025-03-26", `Provably unsent initialize was not retransmitted. ${JSON.stringify(retriedInitialize)}`);
+      await waitFor(() => readJson(backendState)?.starts === 2, "Initialize retry did not elect one replacement backend.");
+      for (const client of clients) client.child.stdin.end();
+      const results = await Promise.all(clients.map((client) => client.result));
+      assert.ok(results.every((result) => result.code === 0), results.map((result) => result.stderr).join("\n"));
+      await waitFor(() => portAvailable(backendPort), "Initialize-retry replacement listener did not stop.");
+      const backend = readJson(backendState);
+      assert.equal(backend.initialize, clientCount + 1);
+      assert.equal(fs.readdirSync(path.join(symppHome, "runtime", "codex-plugin-leases"), { withFileTypes: true }).filter((entry) => entry.isFile()).length, 0);
+      backendPid = 0;
+      return { mode, shell: path.basename(shell), clients: clientCount, backends: backend.starts, initializes: backend.initialize, listeners: 0, leases_after: 0, initialize_retry: true };
+    } else if (mode === "powershell_fallback_recovery") {
       await terminate(firstOwnerPid);
       await terminate(firstBackend.pid);
       await waitFor(() => clients.filter((client) => client.child.exitCode === null).length === clientCount - 1, "Fallback backend owner adapter did not exit.");
@@ -513,7 +529,7 @@ async function main() {
   const powershellFallback = await runCase(30, windowsPowerShell, "powershell_fallback");
   for (const mode of ["manifest_death", "artifact_death", "backend_death", "backend_prebind_death"]) results.push(await runCase(30, pwsh, mode));
   const recovery = [];
-  for (const mode of ["owner_loss", "backend_loss", "ambiguous_tool", "shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery", "powershell_fallback_recovery"]) recovery.push(await runCase(["shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery"].includes(mode) ? 3 : mode === "powershell_fallback_recovery" ? 4 : 10, mode === "powershell_fallback_recovery" ? windowsPowerShell : pwsh, mode));
+  for (const mode of ["owner_loss", "backend_loss", "ambiguous_tool", "shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery", "powershell_fallback_recovery", "powershell_fallback_initialize_retry"]) recovery.push(await runCase(["shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery"].includes(mode) ? 3 : mode === "powershell_fallback_recovery" ? 4 : mode === "powershell_fallback_initialize_retry" ? 1 : 10, mode.startsWith("powershell_fallback") ? windowsPowerShell : pwsh, mode));
   process.stdout.write(`${JSON.stringify({ matrix: results.slice(0, 3), powershell_fallback: powershellFallback, leader_death: results.slice(3), recovery, powershell_5_1: true, pwsh: true, cleanup: true })}\n`);
 }
 
