@@ -75,22 +75,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubGhCliClientTest do
     assert {:error, :provider_malformed} = PullRequest.provider_snapshot(metadata, ref, "head-a")
   end
 
-  test "rejects renamed gh files when the old path is unavailable" do
-    assert {:ok, ref} = PullRequest.parse(%{"url" => "https://github.com/nextide/repo/pull/24"}, nil)
+  test "rejects gh file entries that cannot prove rename identity" do
+    for {number, file} <- [{24, %{"path" => "lib/unknown.ex"}}, {26, %{"path" => "lib/new.ex", "changeType" => "RENAMED"}}] do
+      assert {:ok, ref} = PullRequest.parse(%{"url" => "https://github.com/nextide/repo/pull/#{number}"}, nil)
 
-    response =
-      GitHubPullRequestFixtures.gh_view(24, "head-a", changed_files: 1)
-      |> Map.merge(%{
-        "id" => "PR_provider_24",
-        "files" => [%{"path" => "lib/new.ex", "changeType" => "RENAMED"}],
-        "statusCheckRollup" => [],
-        "reviewDecision" => ""
-      })
+      response =
+        GitHubPullRequestFixtures.gh_view(number, "head-a", changed_files: 1)
+        |> Map.merge(%{
+          "id" => "PR_provider_#{number}",
+          "files" => [file],
+          "statusCheckRollup" => [],
+          "reviewDecision" => ""
+        })
 
-    FakeGhCli.put_response("nextide/repo", 24, response)
+      FakeGhCli.put_response("nextide/repo", number, response)
 
-    assert {:ok, metadata} = GhCliClient.fetch_pull_request(ref, command_runner: &FakeGhCli.run/3)
-    assert {:error, :provider_malformed} = PullRequest.provider_snapshot(metadata, ref, "head-a")
+      assert {:ok, metadata} = GhCliClient.fetch_pull_request(ref, command_runner: &FakeGhCli.run/3)
+      assert {:error, :provider_malformed} = PullRequest.provider_snapshot(metadata, ref, "head-a")
+    end
   end
 
   test "provider snapshot mode does not use the incomplete HTTP fallback" do

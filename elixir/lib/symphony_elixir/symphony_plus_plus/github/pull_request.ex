@@ -193,7 +193,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
          filled_string?(Map.get(file, "previous_path") || Map.get(file, "previous_filename")))
   end
 
-  defp provider_file_complete?(%{"path" => path}), do: filled_string?(path)
   defp provider_file_complete?(_file), do: false
 
   defp imported_observed_at(metadata) do
