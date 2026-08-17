@@ -1,6 +1,22 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
   @moduledoc false
 
+  @lifecycle_detail_fields ["actual_status", "allowed_authoring_states", "current_contract_revision"]
+
+  @spec lifecycle_error(String.t(), atom(), map()) :: {:error, integer(), String.t(), map()}
+  def lifecycle_error(tool, reason, details \\ %{}) do
+    data =
+      details
+      |> Map.take(@lifecycle_detail_fields)
+      |> Map.merge(%{
+        "tool" => tool,
+        "reason" => Atom.to_string(reason),
+        "recovery" => %{"next_action" => lifecycle_next_action(reason)}
+      })
+
+    {:error, -32_009, "Precondition Failed", data}
+  end
+
   @spec invalid_params_error(String.t(), term()) :: {:error, integer(), String.t(), map()}
   def invalid_params_error(tool, {:invalid_enum, field, allowed_values}) do
     field = to_string(field)
@@ -80,4 +96,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
   defp reason_text(reason) when is_binary(reason), do: reason
   defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp reason_text(reason), do: inspect(reason)
+
+  defp lifecycle_next_action(:contract_revision_conflict), do: "read_work_request"
+  defp lifecycle_next_action(:work_request_not_authorable), do: "read_work_request"
+  defp lifecycle_next_action(:work_package_contract_frozen), do: "request_scope_expansion"
+  defp lifecycle_next_action(:work_package_terminal), do: "create_successor"
+  defp lifecycle_next_action(:work_request_terminal), do: "no_change"
 end

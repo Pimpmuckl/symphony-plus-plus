@@ -5,7 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
 
   import Ecto.Changeset
 
-  alias SymphonyElixir.SymphonyPlusPlus.Id
+  alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, Id}
 
   @primary_key {:id, :string, autogenerate: false}
   @foreign_key_type :string
@@ -117,8 +117,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest do
 
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(%__MODULE__{} = work_request, attrs) do
+    attrs =
+      attrs
+      |> normalize_keys()
+      |> BaseBranch.canonicalize_attrs()
+      |> normalize_constraints()
+      |> normalize_provenance()
+
     work_request
-    |> cast(attrs |> normalize_keys() |> normalize_constraints() |> normalize_provenance(), [
+    |> cast(attrs, [
       :id,
       :title,
       :repo,

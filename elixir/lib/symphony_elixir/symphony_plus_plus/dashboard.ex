@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.AgentRun
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
+  alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Repository, as: CommentRepository
 
@@ -170,7 +171,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   def work_requests_for_grant(repo, %AccessGrant{} = grant, opts) when is_atom(repo) and is_list(opts) do
     safe_read(fn ->
       with {:ok, filters} <- work_request_filters_for_grant(repo, grant),
-           {:ok, work_requests} <- WorkRequestRepository.list(repo, filters |> Map.new() |> Map.put(:include_archived, true)),
+           query_filters = filters |> Keyword.delete(:base_branch) |> Map.new() |> Map.put(:include_archived, true),
+           {:ok, work_requests} <- WorkRequestRepository.list(repo, query_filters),
+           work_requests = Enum.filter(work_requests, &work_request_matches_filters?(&1, filters)),
            repo_identity_catalog = repo_identity_catalog_from_opts(opts, Enum.map(work_requests, & &1.repo)),
            {:ok, cards} <- work_request_cards(repo, ordered_work_requests(work_requests), Keyword.merge(opts, grant: grant, repo_identity_catalog: repo_identity_catalog)) do
         cards = visible_work_request_cards(cards)
@@ -973,9 +976,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   @spec phase_work_package_matches_filters?(WorkPackage.t(), keyword()) :: boolean()
   def phase_work_package_matches_filters?(%WorkPackage{} = work_package, filters) do
     Enum.all?(filters, fn
-      {:repo, repo} when is_binary(repo) -> repo_scope_match?(work_package.repo, repo)
-      {:base_branch, base_branch} when is_binary(base_branch) -> work_package.base_branch == base_branch
-      _filter -> true
+      {:repo, repo} when is_binary(repo) ->
+        repo_scope_match?(work_package.repo, repo)
+
+      {:base_branch, base_branch} when is_binary(base_branch) ->
+        BaseBranch.equivalent?(work_package.base_branch, base_branch)
+
+      _filter ->
+        true
     end)
   end
 
@@ -999,9 +1007,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   defp work_request_matches_filters?(%WorkRequest{} = work_request, filters) do
     Enum.all?(filters, fn
-      {:repo, repo} when is_binary(repo) -> repo_scope_match?(work_request.repo, repo)
-      {:base_branch, base_branch} when is_binary(base_branch) -> work_request.base_branch == base_branch
-      _filter -> true
+      {:repo, repo} when is_binary(repo) ->
+        repo_scope_match?(work_request.repo, repo)
+
+      {:base_branch, base_branch} when is_binary(base_branch) ->
+        BaseBranch.equivalent?(work_request.base_branch, base_branch)
+
+      _filter ->
+        true
     end)
   end
 

@@ -252,8 +252,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
     assert get_in(worker_read_response, ["result", "structuredContent", "guidance_request", "answer"]) == nil
   end
 
-  test "WorkRequest architect sees guidance for unphased dispatched slice packages", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-GUIDANCE-WR-DISPATCHED")
+  test "WorkRequest architect guidance remains operable under a legacy main grant", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-GUIDANCE-WR-DISPATCHED", base_branch: "main")
     work_package = create_work_package!(repo, work_request, id: "WRS-GUIDANCE-WR-DISPATCHED")
     assert {:ok, approved_slice} = CanonicalWorkPackageFixtures.approve_work_package(repo, work_request.id, work_package.id, "planned")
 
@@ -277,12 +277,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
         "idempotency_key" => "wr-linked-guidance"
       })
 
-    {_anchor, architect_session} = create_work_request_architect_session(repo, work_request)
+    escalation_request_id =
+      create_guidance_request(repo, worker_session, %{
+        "summary" => "Need a human choice",
+        "question" => "Should this package stop for product direction?",
+        "context" => "The package has a product decision outside worker authority.",
+        "idempotency_key" => "wr-linked-guidance-escalation"
+      })
+
+    {anchor, architect_session} = create_work_request_architect_session(repo, work_request)
+
+    assert {1, nil} =
+             repo.update_all(
+               from(work_package in WorkPackage, where: work_package.id == ^anchor.id),
+               set: [base_branch: "origin/main"]
+             )
+
+    assert {1, nil} =
+             repo.update_all(
+               from(grant in AccessGrant, where: grant.id == ^architect_session.assignment.grant_id),
+               set: [scope_base_branch: "origin/main"]
+             )
+
     list_response = mcp_tool(repo, architect_session, "list_guidance_requests", %{"status" => "open"})
     assert list_response["error"] == nil
     listed_ids = list_response |> get_in(["result", "structuredContent", "guidance_requests"]) |> Enum.map(& &1["id"])
 
-    assert listed_ids == [guidance_request_id]
+    assert MapSet.new(listed_ids) == MapSet.new([guidance_request_id, escalation_request_id])
+
+    read_response =
+      mcp_tool(repo, architect_session, "read_guidance_request", %{
+        "guidance_request_id" => guidance_request_id,
+        "work_package_id" => package.id
+      })
+
+    assert get_in(read_response, ["result", "structuredContent", "guidance_request", "id"]) == guidance_request_id
 
     answer_response =
       mcp_tool(repo, architect_session, "answer_guidance_request", %{
@@ -292,6 +321,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
 
     assert get_in(answer_response, ["result", "structuredContent", "guidance_request", "status"]) == "answered"
     refute Map.has_key?(get_in(answer_response, ["result", "structuredContent", "guidance_request"]), "answer")
+
+    escalation_response =
+      mcp_tool(repo, architect_session, "escalate_guidance_request", %{
+        "guidance_request_id" => escalation_request_id,
+        "reason" => "The package needs a product decision before implementation continues.",
+        "recommended_language" => "Choose the package behavior before work continues."
+      })
+
+    assert get_in(escalation_response, ["result", "structuredContent", "guidance_request", "status"]) == "human_info_needed"
+    assert get_in(escalation_response, ["result", "structuredContent", "blocker", "active"]) == true
 
     worker_read_response = mcp_tool(repo, worker_session, "read_guidance_request", %{"guidance_request_id" => guidance_request_id})
 

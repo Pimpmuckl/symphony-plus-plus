@@ -10,6 +10,7 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive do
   import Phoenix.HTML.Form, only: [input_value: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
+  alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
@@ -1802,7 +1803,7 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive do
         work_request.repo == repo
 
       {:base_branch, base_branch} when is_binary(base_branch) ->
-        work_request.base_branch == base_branch
+        BaseBranch.equivalent?(work_request.base_branch, base_branch)
 
       _filter ->
         false
@@ -1837,7 +1838,7 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive do
   end
 
   defp work_request_in_scope?(work_request, %{repo: repo, base_branch: base_branch}) do
-    if work_request.repo == repo and work_request.base_branch == base_branch do
+    if work_request.repo == repo and BaseBranch.equivalent?(work_request.base_branch, base_branch) do
       :ok
     else
       {:error, :not_found}
@@ -1890,6 +1891,18 @@ defmodule SymphonyElixirWeb.SymppWorkRequestLive do
   defp locked_scope_value(_value), do: {:error, :forbidden}
 
   if Mix.env() == :test do
+    @doc false
+    @spec __test_create_work_request(AccessGrant.t(), map()) :: term()
+    def __test_create_work_request(grant, params), do: create_work_request(grant, params)
+
+    @doc false
+    @spec __test_mark_ready_in_repo(module(), AccessGrant.t(), String.t()) :: term()
+    def __test_mark_ready_in_repo(repo, grant, work_request_id), do: mark_ready_in_repo(repo, grant, work_request_id)
+
+    @doc false
+    @spec __test_scoped_work_request(module(), AccessGrant.t(), String.t()) :: term()
+    def __test_scoped_work_request(repo, grant, work_request_id), do: scoped_work_request(repo, grant, work_request_id)
+
     @doc false
     @spec __test_work_request_route(URI.t(), atom(), map(), String.t()) :: String.t()
     def __test_work_request_route(uri, action, params, work_request_id) do

@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
@@ -15,7 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope 
   end
 
   def validate(ecto_repo, %WorkRequest{} = work_request, attrs) when is_atom(ecto_repo) and is_map(attrs) do
-    case {nonblank_or_nil(Map.get(attrs, "repo")), nonblank_or_nil(Map.get(attrs, "base_branch"))} do
+    case {nonblank_or_nil(Map.get(attrs, "repo")), canonical_base_branch(Map.get(attrs, "base_branch"))} do
       {nil, _base_branch} ->
         :ok
 
@@ -44,7 +45,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope 
     do: scoped_repo == delivery_repo
 
   defp repo_scope_matches_delivery?(%RepoScope{repo: scoped_repo, base_branch: scoped_branch}, delivery_repo, base_branch),
-    do: scoped_repo == delivery_repo and scoped_branch == base_branch
+    do: scoped_repo == delivery_repo and BaseBranch.canonicalize(scoped_branch) == base_branch
+
+  defp canonical_base_branch(value), do: value |> nonblank_or_nil() |> BaseBranch.canonicalize()
 
   defp nonblank_or_nil(value) when is_binary(value) do
     value = String.trim(value)

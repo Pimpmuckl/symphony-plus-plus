@@ -11,6 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Policy
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Scope
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Target
+  alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
@@ -120,19 +121,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   end
 
   defp maybe_put_work_request_guidance_package_ids(%{"repo" => repo_name, "base_branch" => base_branch, "phase_id" => phase_id} = filters, repo) do
+    equivalent_base_branches = BaseBranch.equivalent_refs(base_branch)
+
     work_package_ids =
       repo.all(
         from(work_package in WorkPackage,
           join: work_request in WorkRequest,
           on: work_request.id == work_package.work_request_id,
-          where: work_request.base_branch == ^base_branch,
+          where: work_request.base_branch in ^equivalent_base_branches,
           where: not is_nil(work_package.id),
           select: {work_request, work_package.id}
         )
       )
       |> Enum.filter(fn {work_request, _work_package_id} ->
         ArchitectHandoff.phase_id_for_work_request(work_request) == phase_id and
-          repo_scope_name_matches?(repo_name, work_request.repo, [])
+          repo_scope_name_matches?(repo_name, work_request.repo, []) and
+          BaseBranch.equivalent?(base_branch, work_request.base_branch)
       end)
       |> Enum.map(fn {_work_request, work_package_id} -> work_package_id end)
       |> Enum.uniq()
@@ -669,7 +673,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
     {:ok,
      Enum.all?(filters, fn
        {"repo", repo} when is_binary(repo) -> repo_scope_name_matches?(repo, work_request.repo, opts)
-       {"base_branch", base_branch} when is_binary(base_branch) -> work_request.base_branch == base_branch
+       {"base_branch", base_branch} when is_binary(base_branch) -> BaseBranch.equivalent?(work_request.base_branch, base_branch)
        {"status", status} when is_binary(status) -> work_request.status == status
        {"phase_id", phase_id} when is_binary(phase_id) -> ArchitectHandoff.phase_id_for_work_request(work_request) == phase_id
        _filter -> true
@@ -682,13 +686,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
     cond do
       is_binary(repo) and is_binary(base_branch) ->
-        Enum.any?(repo_scopes, &(repo_scope_name_matches?(repo, &1.repo, opts) and &1.base_branch == base_branch))
+        Enum.any?(repo_scopes, &(repo_scope_name_matches?(repo, &1.repo, opts) and BaseBranch.equivalent?(&1.base_branch, base_branch)))
 
       is_binary(repo) ->
         Enum.any?(repo_scopes, &repo_scope_name_matches?(repo, &1.repo, opts))
 
       is_binary(base_branch) ->
-        Enum.any?(repo_scopes, &match?(%{base_branch: ^base_branch}, &1))
+        Enum.any?(repo_scopes, &BaseBranch.equivalent?(&1.base_branch, base_branch))
 
       true ->
         true

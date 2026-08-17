@@ -32,7 +32,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
+
+  @work_request_authoring_states ["ready_for_slicing", "sliced"]
+  @work_package_authoring_states ["planned"]
+  @work_package_terminal_states ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
 
   @tools [
     "ask_question",
@@ -155,8 +161,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
          {:ok, work_packages} <- optional_list_argument(arguments, "work_packages"),
          :ok <- require_work_package_batch(work_packages),
-         {:ok, _work_request, _filters, scope} <-
+         {:ok, work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_package_create, tool),
+         :ok <- require_work_package_authoring_status(work_request),
          :ok <- require_complete_work_package_contracts(work_packages),
          {:ok, {result, detail}} <-
            mutate_product_tree_with_projection(
@@ -205,11 +212,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              :work_package_update,
              tool
            ),
-         :ok <- require_work_package_authoring_status(work_request.status),
+         :ok <- require_contract_revision(work_package, expected_revision),
+         :ok <- require_work_package_authoring_status(work_request, work_package.contract_revision),
+         :ok <- require_mutable_work_package_contract(work_package),
          :ok <- require_complete_work_package_contracts([effective_work_package_contract(work_package, patch)]),
          {:ok, work_package} <-
            mutate_product_tree(config.repo, work_request_id, tool, session_claimed_by(session), fn ->
-             WorkRequestService.update_work_package(
+             update_work_package(
                config.repo,
                work_request_id,
                work_package_id,
@@ -257,7 +266,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
            ),
          {:ok, work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
-         :ok <- require_work_package_authoring_status(work_request.status),
+         :ok <- require_work_package_authoring_status(work_request),
          attrs =
            %{"work_request_id" => work_request_id}
            |> optional_put("id", group_id)
@@ -308,7 +317,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, created_by} <- optional_string_argument(arguments, "created_by", session_claimed_by(session)),
          {:ok, work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
-         :ok <- require_work_package_authoring_status(work_request.status),
+         :ok <- require_work_package_authoring_status(work_request),
          attrs =
            %{
              "work_request_id" => work_request_id,
@@ -356,7 +365,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, session),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, current_status} <- required_argument(arguments, "current_status"),
-         {:ok, work_request, _work_package, _filters, scope} <-
+         {:ok, work_request, work_package, _filters, scope} <-
            WorkRequestScope.authorized_work_package_scope(
              config.repo,
              session,
@@ -365,7 +374,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              :work_package_skip,
              tool
            ),
-         :ok <- require_work_package_authoring_status(work_request.status),
+         :ok <- require_work_package_authoring_status(work_request, work_package.contract_revision),
+         :ok <- require_mutable_work_package_contract(work_package),
          {:ok, work_package} <-
            mutate_product_tree(config.repo, work_request_id, tool, session_claimed_by(session), fn ->
              WorkRequestService.skip_work_package(config.repo, work_request_id, work_package_id, current_status)
@@ -389,7 +399,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, id} <- required_argument(arguments, id_key),
          {:ok, work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_request_update, tool),
-         :ok <- require_work_package_authoring_status(work_request.status),
+         :ok <- require_work_package_authoring_status(work_request),
          created_by = session_claimed_by(session),
          {:ok, {deleted, detail}} <-
            mutate_product_tree_with_projection(config.repo, work_request_id, tool, created_by, fn ->
@@ -431,8 +441,58 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
     WorkRequestPayloads.dependency_intent(dependency)
   end
 
-  defp require_work_package_authoring_status(status) when status in ["ready_for_slicing", "sliced"], do: :ok
-  defp require_work_package_authoring_status(_status), do: {:tool_error, "invalid_status"}
+  defp require_contract_revision(%WorkPackage{contract_revision: revision}, revision), do: :ok
+
+  defp require_contract_revision(%WorkPackage{} = work_package, _expected_revision) do
+    {:error, {:contract_revision_conflict, work_package.status, work_package.contract_revision}}
+  end
+
+  defp require_work_package_authoring_status(%WorkRequest{} = work_request),
+    do: require_work_package_authoring_status(work_request, nil)
+
+  defp require_work_package_authoring_status(%WorkRequest{archived_at: %DateTime{}}, revision),
+    do: {:error, {:work_request_terminal, "archived", revision}}
+
+  defp require_work_package_authoring_status(
+         %WorkRequest{completed_at: %DateTime{}, completion_source: "operator"},
+         revision
+       ),
+       do: {:error, {:work_request_terminal, "completed", revision}}
+
+  defp require_work_package_authoring_status(%WorkRequest{status: status}, revision) when status in ["completed", "archived"],
+    do: {:error, {:work_request_terminal, status, revision}}
+
+  defp require_work_package_authoring_status(%WorkRequest{status: status}, _revision)
+       when status in @work_request_authoring_states,
+       do: :ok
+
+  defp require_work_package_authoring_status(%WorkRequest{status: status}, revision),
+    do: {:error, {:work_request_not_authorable, status, revision}}
+
+  defp require_mutable_work_package_contract(%WorkPackage{status: "planned"}), do: :ok
+
+  defp require_mutable_work_package_contract(%WorkPackage{status: status} = work_package)
+       when status in @work_package_terminal_states do
+    {:error, {:work_package_terminal, status, work_package.contract_revision}}
+  end
+
+  defp require_mutable_work_package_contract(%WorkPackage{} = work_package) do
+    {:error, {:work_package_contract_frozen, work_package.status, work_package.contract_revision}}
+  end
+
+  defp update_work_package(repo, work_request_id, work_package_id, expected_revision, patch) do
+    case WorkRequestService.update_work_package(repo, work_request_id, work_package_id, expected_revision, patch) do
+      {:error, reason} when reason in [:stale_status, :invalid_status] ->
+        with {:ok, work_package} <- WorkRequestService.get_work_package(repo, work_request_id, work_package_id),
+             :ok <- require_contract_revision(work_package, expected_revision),
+             :ok <- require_mutable_work_package_contract(work_package) do
+          {:error, reason}
+        end
+
+      result ->
+        result
+    end
+  end
 
   defp require_group_mutation(nil, title, _description_supplied?, _kind, _parent_supplied?, _position) do
     if filled_string?(title), do: :ok, else: {:tool_error, "missing_title"}
@@ -623,7 +683,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp architect_error(:phase_scope_not_available, resource), do: auth_error(:forbidden, resource)
   defp architect_error({:phase_scope_not_available, _missing_evidence}, resource), do: auth_error(:forbidden, resource)
   defp architect_error(:ambiguous_phase_scope, resource), do: auth_error(:forbidden, resource)
-  defp architect_error({:work_request_terminal, _terminal_state}, resource), do: auth_error(:forbidden, resource)
+
+  defp architect_error({:work_request_terminal, status}, tool),
+    do: architect_error({:work_request_terminal, status, nil}, tool)
+
+  defp architect_error({reason, status, revision}, tool)
+       when reason in [:work_request_terminal, :work_request_not_authorable] do
+    details =
+      %{
+        "actual_status" => reason_text(status),
+        "allowed_authoring_states" => @work_request_authoring_states
+      }
+      |> optional_put("current_contract_revision", revision)
+
+    ErrorDetails.lifecycle_error(tool, reason, details)
+  end
+
+  defp architect_error({reason, status, revision}, tool)
+       when reason in [:contract_revision_conflict, :work_package_contract_frozen, :work_package_terminal] do
+    ErrorDetails.lifecycle_error(tool, reason, %{
+      "actual_status" => reason_text(status),
+      "allowed_authoring_states" => @work_package_authoring_states,
+      "current_contract_revision" => revision
+    })
+  end
+
   defp architect_error(:forbidden, resource), do: auth_error(:forbidden, resource)
   defp architect_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
   defp architect_error(:database_busy, tool), do: service_error(:database_busy, tool)

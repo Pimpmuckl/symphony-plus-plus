@@ -171,31 +171,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     assert {:ok, [^first, ^second]} = Service.list(repo, filters)
   end
 
-  test "stores explicit WorkRequest repo scopes while primary list filters stay compatible", %{repo: repo} do
+  test "canonicalizes supported main refs across WorkRequest repo scopes", %{repo: repo} do
     assert {:ok, request} =
              Repository.create(
                repo,
                attrs(
                  id: "WR-MULTI-REPO",
                  repo: "service-a",
-                 base_branch: "main",
+                 base_branch: " refs/heads/main ",
                  repo_scopes: [
-                   %{repo: "service-a", base_branch: "main"},
-                   %{repo: "service-b", base_branch: "release"}
+                   %{repo: "service-a", base_branch: "origin/main"},
+                   %{repo: "service-b", base_branch: "refs/remotes/origin/main"},
+                   %{repo: "service-c", base_branch: "feature/foo"},
+                   %{repo: "service-d", base_branch: "upstream/release"}
                  ]
                )
              )
 
+    assert request.base_branch == "main"
     assert {:ok, scopes} = Repository.list_repo_scopes(repo, request.id)
-    assert Enum.map(scopes, &{&1.repo, &1.base_branch}) == [{"service-a", "main"}, {"service-b", "release"}]
+
+    assert Enum.map(scopes, &{&1.repo, &1.base_branch}) == [
+             {"service-a", "main"},
+             {"service-b", "main"},
+             {"service-c", "feature/foo"},
+             {"service-d", "upstream/release"}
+           ]
 
     scope_keys = MapSet.new(Enum.map(scopes, &{&1.repo, &1.base_branch}))
     assert MapSet.member?(scope_keys, {"service-a", "main"})
-    assert MapSet.member?(scope_keys, {"service-b", "release"})
-    refute MapSet.member?(scope_keys, {"service-c", "main"})
+    assert MapSet.member?(scope_keys, {"service-b", "main"})
+    assert MapSet.member?(scope_keys, {"service-c", "feature/foo"})
+    assert MapSet.member?(scope_keys, {"service-d", "upstream/release"})
 
     assert {:ok, [^request]} = Repository.list(repo, %{repo: "service-a", base_branch: "main"})
-    assert {:ok, []} = Repository.list(repo, %{repo: "service-b", base_branch: "release"})
   end
 
   test "primary repo updates preserve existing secondary repo scopes", %{repo: repo} do
@@ -213,18 +222,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
                )
              )
 
-    assert {:ok, _updated} = Repository.update(repo, request.id, %{repo: "service-a-renamed"})
+    assert {:ok, scopes} = Repository.list_repo_scopes(repo, request.id)
+    primary_scope = Enum.find(scopes, &(&1.repo == "service-a"))
+    repo.update!(Ecto.Changeset.change(primary_scope, base_branch: "origin/main", scope_key: "repo:service-a:origin/main"))
+
+    repo.insert!(%RepoScope{
+      id: "WR-MULTI-REPO-UPDATE-LEGACY-ALIAS",
+      work_request_id: request.id,
+      repo: "service-a",
+      base_branch: "refs/heads/main",
+      scope_key: "repo:service-a:refs/heads/main"
+    })
+
+    request = repo.update!(Ecto.Changeset.change(request, base_branch: "origin/main"))
+
+    assert {:ok, updated} =
+             Repository.update(repo, request.id, %{repo: "service-a-renamed", base_branch: "origin/main"})
+
+    assert updated.base_branch == "main"
 
     assert {:ok, scopes} = Repository.list_repo_scopes(repo, request.id)
     assert Enum.map(scopes, &{&1.repo, &1.base_branch}) == [{"service-a-renamed", "main"}, {"service-b", "release"}]
+    refute Enum.any?(scopes, &(&1.repo == "service-a"))
   end
 
   test "repo scope primary attrs support repo-only scopes" do
     changeset = RepoScope.primary_attrs("WR-REPO-ONLY", "service-a", nil) |> RepoScope.create_changeset()
 
+    blank_changeset =
+      RepoScope.create_changeset(%{work_request_id: "WR-REPO-ONLY-BLANK", repo: "service-b", base_branch: "  "})
+
     assert changeset.valid?
     assert Ecto.Changeset.get_field(changeset, :base_branch) == nil
     assert Ecto.Changeset.get_field(changeset, :scope_key) == "repo:service-a:"
+    assert blank_changeset.valid?
+    assert Ecto.Changeset.get_field(blank_changeset, :base_branch) == nil
+    assert Ecto.Changeset.get_field(blank_changeset, :scope_key) == "repo:service-b:"
   end
 
   test "updates fields while preserving stable id and inserted timestamp", %{repo: repo} do

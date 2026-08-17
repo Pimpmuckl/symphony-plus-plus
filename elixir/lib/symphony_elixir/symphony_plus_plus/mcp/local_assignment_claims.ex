@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
 
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
+  alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
@@ -141,6 +142,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
 
   defp require_local_value_match(value, value, _reason) when is_binary(value), do: :ok
   defp require_local_value_match(_expected, _actual, reason), do: {:error, reason}
+
+  defp require_local_base_branch_match(expected_branch, actual_branch, reason) do
+    if BaseBranch.equivalent?(expected_branch, actual_branch), do: :ok, else: {:error, reason}
+  end
 
   defp require_local_repo_scope_match(expected_repo, actual_repo, reason) do
     if repo_scope_name_matches?(expected_repo, actual_repo, []), do: :ok, else: {:error, reason}
@@ -706,10 +711,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
     expected_phase_id = ArchitectHandoff.phase_id_for_work_request(work_request)
 
     with :ok <- require_local_repo_scope_match(work_request.repo, claim.repo, :repo_scope_mismatch),
-         :ok <- require_local_value_match(work_request.base_branch, claim.base_branch, :base_branch_scope_mismatch),
+         :ok <-
+           require_local_base_branch_match(
+             work_request.base_branch,
+             claim.base_branch,
+             :base_branch_scope_mismatch
+           ),
          :ok <- require_local_repo_scope_match(anchor.repo, work_request.repo, :architect_anchor_scope_mismatch),
          :ok <-
-           require_local_value_match(
+           require_local_base_branch_match(
              anchor.base_branch,
              work_request.base_branch,
              :architect_anchor_scope_mismatch
@@ -733,7 +743,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
     expected_phase_id = ArchitectHandoff.phase_id_for_work_request(work_request)
 
     with :ok <- require_local_repo_scope_match(work_request.repo, claim.repo, :repo_scope_mismatch),
-         :ok <- require_local_value_match(work_request.base_branch, claim.base_branch, :base_branch_scope_mismatch),
+         :ok <-
+           require_local_base_branch_match(
+             work_request.base_branch,
+             claim.base_branch,
+             :base_branch_scope_mismatch
+           ),
          :ok <-
            require_local_value_match(
              expected_anchor_id,
@@ -799,7 +814,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
     with :ok <- require_local_value_match(grant.work_package_id, anchor.id, :architect_grant_scope_mismatch),
          :ok <- require_local_value_match(grant.phase_id, anchor.phase_id, :architect_grant_scope_mismatch),
          :ok <- require_local_repo_scope_match(grant.scope_repo, claim.repo, :architect_grant_scope_mismatch),
-         :ok <- require_local_value_match(grant.scope_base_branch, claim.base_branch, :architect_grant_scope_mismatch),
+         :ok <-
+           require_local_base_branch_match(
+             grant.scope_base_branch,
+             claim.base_branch,
+             :architect_grant_scope_mismatch
+           ),
          :ok <- AccessGrantService.require_live_package_authority(repo, grant) do
       require_local_architect_handoff_grant(repo, grant)
     end

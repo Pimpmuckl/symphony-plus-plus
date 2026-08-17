@@ -5,8 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
 
   import Ecto.Changeset
 
-  alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
-  alias SymphonyElixir.SymphonyPlusPlus.Id
+  alias SymphonyElixir.SymphonyPlusPlus.{BaseBranch, BranchPattern, Id}
   alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
   alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.StringList
@@ -176,7 +175,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   end
 
   defp changeset(%__MODULE__{} = work_package, attrs, valid_kinds) do
-    attrs = attrs |> normalize_keys() |> normalize_status()
+    attrs = attrs |> normalize_keys() |> BaseBranch.canonicalize_attrs() |> normalize_status()
 
     work_package
     |> cast(attrs, [

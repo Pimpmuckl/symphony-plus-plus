@@ -9,6 +9,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.GrantScope
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.WorkKey
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Scope, as: AuthScope
+  alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
@@ -477,12 +478,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
          now,
          terminal_statuses
        ) do
+    scope_base_branches = BaseBranch.equivalent_refs(scope_base_branch)
+
     query =
       from(grant in AccessGrant,
         where: grant.work_package_id == ^work_package_id,
         where: grant.phase_id == ^phase_id,
         where: grant.grant_role == "architect",
-        where: grant.scope_base_branch == ^scope_base_branch,
+        where: grant.scope_base_branch in ^scope_base_branches,
         where: not is_nil(grant.claimed_at),
         where: grant.claimed_by != ^claimed_by,
         where: is_nil(grant.revoked_at),
@@ -491,7 +494,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
       )
       |> scope_live_package_authority(terminal_statuses)
 
-    if query |> repo.all() |> Enum.any?(&grant_repo_scope_matches?(&1, scope_repo)) do
+    if query
+       |> repo.all()
+       |> Enum.any?(&(grant_repo_scope_matches?(&1, scope_repo) and BaseBranch.equivalent?(&1.scope_base_branch, scope_base_branch))) do
       {:error, :already_claimed}
     else
       :ok
@@ -556,12 +561,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   end
 
   defp local_reconnect_architect_grant(repo, work_package_id, phase_id, scope_repo, scope_base_branch, claimed_by, now, terminal_statuses) do
+    scope_base_branches = BaseBranch.equivalent_refs(scope_base_branch)
+
     query =
       from(grant in AccessGrant,
         where: grant.work_package_id == ^work_package_id,
         where: grant.phase_id == ^phase_id,
         where: grant.grant_role == "architect",
-        where: grant.scope_base_branch == ^scope_base_branch,
+        where: grant.scope_base_branch in ^scope_base_branches,
         where: grant.claimed_by == ^claimed_by,
         where: not is_nil(grant.claimed_at),
         where: is_nil(grant.revoked_at),
@@ -570,7 +577,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
       )
       |> scope_live_package_authority(terminal_statuses)
 
-    case query |> repo.all() |> Enum.find(&grant_repo_scope_matches?(&1, scope_repo)) do
+    case query
+         |> repo.all()
+         |> Enum.find(&(grant_repo_scope_matches?(&1, scope_repo) and BaseBranch.equivalent?(&1.scope_base_branch, scope_base_branch))) do
       %AccessGrant{} = grant -> {:ok, grant}
       nil -> {:error, :not_found}
     end
@@ -625,12 +634,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
          now,
          terminal_statuses
        ) do
+    scope_base_branches = BaseBranch.equivalent_refs(scope_base_branch)
+
     query =
       from(grant in AccessGrant,
         where: grant.work_package_id == ^work_package_id,
         where: grant.phase_id == ^phase_id,
         where: grant.grant_role == "architect",
-        where: grant.scope_base_branch == ^scope_base_branch,
+        where: grant.scope_base_branch in ^scope_base_branches,
         where: is_nil(grant.claimed_at),
         where: is_nil(grant.revoked_at),
         where: is_nil(grant.expires_at) or grant.expires_at > ^now,
@@ -638,7 +649,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
       )
       |> scope_live_package_authority(terminal_statuses)
 
-    case query |> repo.all() |> Enum.find(&grant_repo_scope_matches?(&1, scope_repo)) do
+    case query
+         |> repo.all()
+         |> Enum.find(&(grant_repo_scope_matches?(&1, scope_repo) and BaseBranch.equivalent?(&1.scope_base_branch, scope_base_branch))) do
       %AccessGrant{} = grant ->
         {:ok, grant}
 
@@ -668,16 +681,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
   end
 
   defp inactive_architect_grant_reason(repo, work_package_id, phase_id, scope_repo, scope_base_branch) do
+    scope_base_branches = BaseBranch.equivalent_refs(scope_base_branch)
+
     query =
       from(grant in AccessGrant,
         where: grant.work_package_id == ^work_package_id,
         where: grant.phase_id == ^phase_id,
         where: grant.grant_role == "architect",
-        where: grant.scope_base_branch == ^scope_base_branch,
+        where: grant.scope_base_branch in ^scope_base_branches,
         select: grant
       )
 
-    grants = query |> repo.all() |> Enum.filter(&grant_repo_scope_matches?(&1, scope_repo))
+    grants =
+      query
+      |> repo.all()
+      |> Enum.filter(&(grant_repo_scope_matches?(&1, scope_repo) and BaseBranch.equivalent?(&1.scope_base_branch, scope_base_branch)))
+
     revoked_count = Enum.count(grants, &match?(%DateTime{}, &1.revoked_at))
 
     case {length(grants), revoked_count} do
@@ -807,7 +826,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
        do: :ok
 
   defp validate_explicit_architect_scope(%AccessGrant{} = access_grant, %AuthScope{type: :repo} = scope) do
-    if repo_scope_match?(scope.repo, access_grant.scope_repo) and scope.base_branch == access_grant.scope_base_branch do
+    if repo_scope_match?(scope.repo, access_grant.scope_repo) and
+         BaseBranch.equivalent?(scope.base_branch, access_grant.scope_base_branch) do
       :ok
     else
       {:error, :invalid_scope}
@@ -940,12 +960,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
       anchor.phase_id == access_grant.phase_id and
       anchor.kind == @architect_handoff_anchor_kind and
       repo_scope_match?(anchor.repo, access_grant.scope_repo) and
-      anchor.base_branch == access_grant.scope_base_branch
+      BaseBranch.equivalent?(anchor.base_branch, access_grant.scope_base_branch)
   end
 
   defp work_request_matches_grant_scope?(work_request, %AccessGrant{} = access_grant) do
     repo_scope_match?(work_request.repo, access_grant.scope_repo) and
-      work_request.base_branch == access_grant.scope_base_branch
+      BaseBranch.equivalent?(work_request.base_branch, access_grant.scope_base_branch)
   end
 
   defp grant_repo_scope_matches?(%AccessGrant{scope_repo: scope_repo}, expected_repo), do: repo_scope_match?(scope_repo, expected_repo)
@@ -1027,7 +1047,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository do
     is_binary(work_package.phase_id) and
       work_package.phase_id == access_grant.phase_id and
       repo_scope_match?(work_package.repo, access_grant.scope_repo) and
-      work_package.base_branch == access_grant.scope_base_branch
+      BaseBranch.equivalent?(work_package.base_branch, access_grant.scope_base_branch)
   end
 
   defp work_request_matches_grant_scope?(repo, %AccessGrant{} = access_grant, work_request_id)

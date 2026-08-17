@@ -1991,15 +1991,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  kind: "phase_child",
                  status: "planning",
                  repo: "nextide/symphony-plus-plus",
-                 base_branch: "symphony-plus-plus/beta"
+                 base_branch: "main"
                )
              )
 
     in_scope = create_work_request!(repo, id: "WR-DASH-AUTH-IN", repo: anchor.repo, base_branch: anchor.base_branch)
     other_repo = create_work_request!(repo, id: "WR-DASH-AUTH-OTHER", repo: "nextide/other", base_branch: anchor.base_branch)
-    other_branch = create_work_request!(repo, id: "WR-DASH-AUTH-BRANCH", repo: anchor.repo, base_branch: "main")
+    other_branch = create_work_request!(repo, id: "WR-DASH-AUTH-BRANCH", repo: anchor.repo, base_branch: "feature/dashboard-auth")
+
+    assert {:ok, legacy_package} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-DASH-WR-AUTH-LEGACY-PACKAGE",
+                 kind: "phase_child",
+                 status: "blocked",
+                 repo: anchor.repo,
+                 base_branch: anchor.base_branch
+               )
+             )
+
     secret = create_architect_grant_secret(repo, anchor.id)
     legacy_secret = create_legacy_phase_grant_secret(repo, anchor.id, "grant-dashboard-wr-legacy")
+
+    in_scope = repo.update!(Ecto.Changeset.change(in_scope, base_branch: "origin/main"))
+    legacy_package = repo.update!(Ecto.Changeset.change(legacy_package, base_branch: "origin/main"))
+
+    assert %{"work_requests" => [%{"id" => "WR-DASH-AUTH-IN"}]} =
+             json_response(get(auth_conn(secret), "/api/v1/sympp/work-requests"), 200)
 
     assert %{"work_requests" => [%{"id" => "WR-DASH-AUTH-IN"}]} =
              json_response(get(auth_conn(legacy_secret), "/api/v1/sympp/work-requests"), 200)
@@ -2021,6 +2040,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     assert %{"error" => %{"code" => "not_found"}} =
              json_response(get(auth_conn(legacy_secret), "/api/v1/sympp/work-requests/#{other_branch.id}"), 404)
+
+    legacy_package_id = legacy_package.id
+
+    assert %{"groups" => %{"blocked" => [%{"id" => ^legacy_package_id}]}} =
+             json_response(get(auth_conn(secret), "/api/v1/sympp/board"), 200)
+
+    assert %{"work_package" => %{"id" => ^legacy_package_id}} =
+             json_response(get(auth_conn(secret), "/api/v1/sympp/work-packages/#{legacy_package.id}"), 200)
 
     assert {:error, :forbidden} =
              Dashboard.work_requests_for_grant(repo, %AccessGrant{grant_role: "operator", capabilities: ["read:phase"]})

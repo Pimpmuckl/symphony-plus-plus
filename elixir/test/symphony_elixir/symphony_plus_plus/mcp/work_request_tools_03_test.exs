@@ -330,8 +330,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
         "work_packages" => [Map.delete(add_args, "work_request_id")]
       })
 
-    assert get_in(add_response, ["error", "code"]) == -32_602
-    assert get_in(add_response, ["error", "data", "reason"]) == "invalid_status"
+    assert get_in(add_response, ["error", "code"]) == -32_009
+    assert get_in(add_response, ["error", "data", "reason"]) == "work_request_not_authorable"
+    assert get_in(add_response, ["error", "data", "actual_status"]) == "draft"
+    assert get_in(add_response, ["error", "data", "recovery", "next_action"]) == "read_work_request"
     assert {:ok, []} = WorkRequestRepository.list_work_packages(repo, work_request.id)
   end
 
@@ -884,7 +886,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
         "patch" => %{"title" => "Must not persist"}
       })
 
-    assert get_in(update_response, ["error", "data", "reason"]) == "invalid_status"
+    assert get_in(update_response, ["error", "code"]) == -32_009
+    assert get_in(update_response, ["error", "data", "reason"]) == "work_request_terminal"
+    assert get_in(update_response, ["error", "data", "recovery", "next_action"]) == "no_change"
 
     skip_response =
       mcp_tool(repo, session, "skip_work_package", %{
@@ -893,7 +897,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
         "current_status" => "planned"
       })
 
-    assert get_in(skip_response, ["error", "data", "reason"]) == "invalid_status"
+    assert get_in(skip_response, ["error", "code"]) == -32_009
+    assert get_in(skip_response, ["error", "data", "reason"]) == "work_request_terminal"
+    assert get_in(skip_response, ["error", "data", "recovery", "next_action"]) == "no_change"
 
     persisted = repo.get!(WorkPackage, work_package.id)
     assert persisted.title == work_package.title

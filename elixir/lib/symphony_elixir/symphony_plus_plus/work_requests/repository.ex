@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   @moduledoc false
 
   alias Ecto.Changeset
+  alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Node
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -1299,6 +1300,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   end
 
   defp replace_primary_repo_scope(repo, %WorkRequest{} = previous, %WorkRequest{} = updated) do
+    previous_base_branches = BaseBranch.equivalent_refs(previous.base_branch)
+
     scope_keys =
       [primary_repo_scope_attrs(previous), primary_repo_scope_attrs(updated)]
       |> Enum.reject(&is_nil/1)
@@ -1308,7 +1311,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     repo.delete_all(
       from(scope in RepoScope,
         where: scope.work_request_id == ^updated.id,
-        where: scope.scope_key in ^scope_keys
+        where:
+          scope.scope_key in ^scope_keys or
+            (scope.repo == ^previous.repo and scope.base_branch in ^previous_base_branches)
       )
     )
 

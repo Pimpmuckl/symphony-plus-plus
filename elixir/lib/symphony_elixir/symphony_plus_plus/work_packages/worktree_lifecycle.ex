@@ -2,6 +2,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
   @moduledoc false
 
   alias SymphonyElixir.PathSafety
+  alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -67,7 +68,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
       when is_atom(repo) and is_binary(work_package_id) and is_map(attrs) and is_list(opts) do
     with {:ok, %WorkPackage{} = work_package} <- Repository.get(repo, work_package_id),
          {:ok, target_repo_root} <- target_repo_root(attrs),
-         {:ok, base_branch} <- ref_name(attrs, "base_branch", :invalid_base_branch, target_repo_root, opts),
+         {:ok, requested_base_branch} <- ref_name(attrs, "base_branch", :invalid_base_branch, target_repo_root, opts),
+         base_branch = BaseBranch.canonicalize(requested_base_branch),
          :ok <- require_base_branch(work_package, base_branch),
          {:ok, branch} <- ref_name(attrs, "branch", :invalid_branch, target_repo_root, opts),
          {:ok, worktree_parent} <- worktree_parent(attrs, opts),
@@ -155,8 +157,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
     end
   end
 
-  defp require_base_branch(%WorkPackage{base_branch: base_branch}, base_branch), do: :ok
-  defp require_base_branch(%WorkPackage{}, _base_branch), do: {:error, :invalid_base_branch}
+  defp require_base_branch(%WorkPackage{base_branch: recorded}, requested) do
+    if BaseBranch.canonicalize(recorded) == requested, do: :ok, else: {:error, :invalid_base_branch}
+  end
 
   defp worktree_parent(attrs, opts) do
     with {:ok, root} <- worktree_root(opts),

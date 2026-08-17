@@ -7,6 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalArchitectGrantClaim do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.GrantScope
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
+  alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
@@ -89,12 +90,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalArchitectGrantClaim do
   defp repair_recoverable_work_request_scope(_repo, %WorkPackage{}, _claim, %DateTime{}, _validate_grant), do: :ok
 
   defp recoverable_work_request_scope_candidates(repo, %WorkPackage{} = anchor, claim, %DateTime{} = now) do
+    scope_base_branches = BaseBranch.equivalent_refs(claim.base_branch)
+
     query =
       from(grant in AccessGrant,
         where: grant.work_package_id == ^anchor.id,
         where: grant.phase_id == ^anchor.phase_id,
         where: grant.grant_role == "architect",
-        where: grant.scope_base_branch == ^claim.base_branch,
+        where: grant.scope_base_branch in ^scope_base_branches,
         where: is_nil(grant.revoked_at),
         where: is_nil(grant.expires_at) or grant.expires_at > ^now,
         order_by: [desc: grant.claimed_at, desc: grant.updated_at, asc: grant.id]
@@ -126,7 +129,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalArchitectGrantClaim do
   defp recoverable_work_request_scope_candidate?(repo, %AccessGrant{} = grant, %WorkPackage{} = anchor, claim) do
     with true <- grant.work_package_id == anchor.id,
          true <- grant.phase_id == anchor.phase_id,
-         true <- grant.scope_base_branch == claim.base_branch,
+         true <- BaseBranch.equivalent?(grant.scope_base_branch, claim.base_branch),
          true <- grant_repo_scope_matches?(grant, claim.repo),
          {:ok, %WorkRequest{} = work_request} <- WorkRequestRepository.get(repo, claim.work_request_id),
          true <- recoverable_work_request?(work_request, anchor, claim) do
@@ -153,7 +156,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalArchitectGrantClaim do
     anchor.kind == "delegation" and
       ArchitectHandoff.anchor_id_for_work_request(work_request) == anchor.id and
       ArchitectHandoff.phase_id_for_work_request(work_request) == anchor.phase_id and
-      work_request.base_branch == claim.base_branch
+      BaseBranch.equivalent?(work_request.base_branch, claim.base_branch)
   end
 
   defp work_request_repo_scope_matches?(%WorkRequest{} = work_request, claim) do
@@ -262,12 +265,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalArchitectGrantClaim do
   end
 
   defp active_grant_ids(repo, %WorkPackage{} = anchor, claim, %DateTime{} = now) do
+    scope_base_branches = BaseBranch.equivalent_refs(claim.base_branch)
+
     query =
       from(grant in AccessGrant,
         where: grant.work_package_id == ^anchor.id,
         where: grant.phase_id == ^anchor.phase_id,
         where: grant.grant_role == "architect",
-        where: grant.scope_base_branch == ^claim.base_branch,
+        where: grant.scope_base_branch in ^scope_base_branches,
         where: grant.claimed_by == ^claim.claimed_by,
         where: not is_nil(grant.claimed_at),
         where: is_nil(grant.revoked_at),
@@ -303,12 +308,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalArchitectGrantClaim do
   end
 
   defp released_handoff_owner_candidate(repo, %WorkPackage{} = anchor, claim, %DateTime{} = now) do
+    scope_base_branches = BaseBranch.equivalent_refs(claim.base_branch)
+
     query =
       from(grant in AccessGrant,
         where: grant.work_package_id == ^anchor.id,
         where: grant.phase_id == ^anchor.phase_id,
         where: grant.grant_role == "architect",
-        where: grant.scope_base_branch == ^claim.base_branch,
+        where: grant.scope_base_branch in ^scope_base_branches,
         where: not is_nil(grant.claimed_at),
         where: grant.claimed_by != ^claim.claimed_by,
         where: is_nil(grant.revoked_at),
