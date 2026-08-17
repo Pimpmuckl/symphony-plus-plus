@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.ArchitectContext
+  alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo, as: SymppRepo
@@ -226,7 +227,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
       repo_scope? and base_branch_scope? ->
         [
           if(not repo_scope_match?(anchor.repo, grant.scope_repo), do: :grant_scope_repo),
-          if(anchor.base_branch != grant.scope_base_branch, do: :grant_scope_base_branch)
+          if(not branch_scope_match?(anchor.base_branch, grant.scope_base_branch), do: :grant_scope_base_branch)
         ]
 
       repo_scope? ->
@@ -310,7 +311,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
       if(phase_id(work_request) != anchor.phase_id, do: :phase_id),
       if(anchor_id(work_request) != anchor.id, do: :architect_anchor_work_package_id),
       if(not repo_scope_match?(work_request.repo, anchor.repo), do: :work_request_repo),
-      if(work_request.base_branch != anchor.base_branch, do: :work_request_base_branch),
+      if(not branch_scope_match?(work_request.base_branch, anchor.base_branch), do: :work_request_base_branch),
       if(not handoff_work_request_file_scope_matches?(work_request, anchor), do: :work_request_allowed_file_globs)
     ]
     |> Enum.reject(&is_nil/1)
@@ -328,12 +329,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
   end
 
   defp single_handoff_anchor_work_request(repo, %WorkPackage{} = anchor) do
-    with {:ok, work_requests} <- WorkRequestRepository.list(repo, %{"base_branch" => anchor.base_branch, "include_archived" => true}) do
+    with {:ok, work_requests} <- handoff_anchor_work_requests(repo, anchor) do
       case Enum.filter(work_requests, &work_request_scope_matches_handoff_anchor?(&1, anchor)) do
         [work_request] -> {:ok, work_request}
         [] -> {:error, phase_scope_not_available([:work_request_scope])}
         _work_requests -> {:error, :ambiguous_phase_scope}
       end
+    end
+  end
+
+  defp handoff_anchor_work_requests(repo, %WorkPackage{} = anchor) do
+    Enum.reduce_while(BaseBranch.equivalent_refs(anchor.base_branch), {:ok, []}, fn base_branch, {:ok, work_requests} ->
+      case WorkRequestRepository.list(repo, %{"base_branch" => base_branch, "include_archived" => true}) do
+        {:ok, matches} -> {:cont, {:ok, matches ++ work_requests}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, work_requests} -> {:ok, Enum.uniq_by(work_requests, & &1.id)}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -729,7 +743,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
         anchor.phase_id == phase.id and
           anchor.kind == @anchor_kind and
           repo_scope_match?(anchor.repo, work_request.repo) and
-          anchor.base_branch == work_request.base_branch and
+          branch_scope_match?(anchor.base_branch, work_request.base_branch) and
           normalized_strings(anchor.allowed_file_globs || []) == allowed_file_globs
 
       if valid_anchor?, do: {:ok, anchor}, else: {:error, :handoff_anchor_scope_conflict}
@@ -1001,7 +1015,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
   defp matching_handoff_grant(repo, %AccessGrant{} = grant, %WorkRequest{} = work_request, %Phase{} = phase, %WorkPackage{} = anchor, now) do
     if active_unclaimed_handoff_grant?(grant, phase, anchor, now) and
          repo_scope_match?(grant.scope_repo, work_request.repo) and
-         grant.scope_base_branch == work_request.base_branch and
+         branch_scope_match?(grant.scope_base_branch, work_request.base_branch) and
          required_capabilities?(grant.capabilities) do
       scoped_to_work_request(repo, grant, work_request)
     else
@@ -1027,6 +1041,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
   end
 
   defp repo_scope_match?(_expected_repo, _actual_repo), do: false
+
+  defp branch_scope_match?(expected_branch, actual_branch)
+       when is_binary(expected_branch) and is_binary(actual_branch) do
+    BaseBranch.canonicalize(expected_branch) == BaseBranch.canonicalize(actual_branch)
+  end
+
+  defp branch_scope_match?(_expected_branch, _actual_branch), do: false
 
   defp repo_scope_trusted_remotes do
     :symphony_elixir

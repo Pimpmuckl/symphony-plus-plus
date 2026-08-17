@@ -375,6 +375,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
              tool
            ),
          :ok <- require_work_package_authoring_status(work_request, work_package.contract_revision),
+         :ok <- require_mutable_work_package_contract(work_package),
          {:ok, work_package} <-
            mutate_product_tree(config.repo, work_request_id, tool, session_claimed_by(session), fn ->
              WorkRequestService.skip_work_package(config.repo, work_request_id, work_package_id, current_status)

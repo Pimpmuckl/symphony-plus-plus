@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.GrantScope
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
+  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
@@ -163,6 +164,82 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
     refute handoff.prompt =~ "call private tool"
     refute handoff.prompt =~ "nextide/symphony-plus-plus"
     refute handoff.prompt =~ "WR-ARCH-HANDOFF"
+  end
+
+  test "creates and reclaims a canonical handoff for a frozen legacy main branch", %{repo: repo, database_path: database_path} do
+    work_request =
+      repo
+      |> create_work_request!(id: "WR-ARCH-HANDOFF-LEGACY-CREATE")
+      |> Ecto.Changeset.change(base_branch: "origin/main")
+      |> repo.update!()
+
+    assert {:ok, handoff} =
+             ArchitectHandoff.create_or_replay(repo, work_request.id,
+               local_operator?: true,
+               handoff_opts: handoff_opts(database_path)
+             )
+
+    assert handoff.status == :created
+    assert handoff.work_request.base_branch == "origin/main"
+    assert handoff.anchor_package.base_branch == "main"
+    assert handoff.grant.scope_base_branch == "main"
+
+    claim_opts = [
+      claimed_by: ArchitectHandoff.claimed_by(),
+      scope_repo: work_request.repo,
+      scope_base_branch: work_request.base_branch,
+      work_request_id: work_request.id
+    ]
+
+    assert {:ok, claimed_grant} =
+             AccessGrantService.claim_local_architect_grant(
+               repo,
+               handoff.anchor_package.id,
+               handoff.phase.id,
+               claim_opts
+             )
+
+    assert {:ok, reclaimed_grant} =
+             AccessGrantService.claim_local_architect_grant(
+               repo,
+               handoff.anchor_package.id,
+               handoff.phase.id,
+               claim_opts
+             )
+
+    assert claimed_grant.id == handoff.grant.id
+    assert reclaimed_grant.id == handoff.grant.id
+  end
+
+  test "validates an existing canonical handoff against a frozen legacy main branch", %{
+    repo: repo,
+    database_path: database_path
+  } do
+    work_request = create_work_request!(repo, id: "WR-ARCH-HANDOFF-LEGACY-EXISTING")
+
+    assert {:ok, created} =
+             ArchitectHandoff.create_or_replay(repo, work_request.id,
+               local_operator?: true,
+               handoff_opts: handoff_opts(database_path)
+             )
+
+    work_request
+    |> Ecto.Changeset.change(base_branch: "origin/main")
+    |> repo.update!()
+
+    assert {:ok, displayed} =
+             ArchitectHandoff.existing_display(repo, work_request.id,
+               local_operator?: true,
+               handoff_opts: handoff_opts(database_path)
+             )
+
+    assert displayed.status == :replayed
+    assert displayed.grant.id == created.grant.id
+    assert {:ok, true} = ArchitectHandoff.handoff_phase_grant?(repo, struct(AccessGrant, created.grant))
+    assert {:ok, stored_work_request} = WorkRequestRepository.get(repo, work_request.id)
+    assert stored_work_request.base_branch == "origin/main"
+    assert displayed.anchor_package.base_branch == "main"
+    assert displayed.grant.scope_base_branch == "main"
   end
 
   test "replays the latest active unclaimed architect grant", %{repo: repo, database_path: database_path} do

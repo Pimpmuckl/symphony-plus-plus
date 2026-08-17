@@ -85,6 +85,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope do
   defp normalize_scope_values(attrs) do
     attrs
     |> normalize_string_value("repo")
+    |> normalize_string_value("base_branch")
     |> BaseBranch.canonicalize_attrs()
   end
 

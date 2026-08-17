@@ -249,9 +249,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
   test "repo scope primary attrs support repo-only scopes" do
     changeset = RepoScope.primary_attrs("WR-REPO-ONLY", "service-a", nil) |> RepoScope.create_changeset()
 
+    blank_changeset =
+      RepoScope.create_changeset(%{work_request_id: "WR-REPO-ONLY-BLANK", repo: "service-b", base_branch: "  "})
+
     assert changeset.valid?
     assert Ecto.Changeset.get_field(changeset, :base_branch) == nil
     assert Ecto.Changeset.get_field(changeset, :scope_key) == "repo:service-a:"
+    assert blank_changeset.valid?
+    assert Ecto.Changeset.get_field(blank_changeset, :base_branch) == nil
+    assert Ecto.Changeset.get_field(blank_changeset, :scope_key) == "repo:service-b:"
   end
 
   test "updates fields while preserving stable id and inserted timestamp", %{repo: repo} do

@@ -85,6 +85,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProductTreeRevisionIdempotencyTest
       "create_successor"
     )
 
+    skipped =
+      mcp_tool(repo, session, "skip_work_package", %{
+        "work_request_id" => work_request.id,
+        "work_package_id" => package.id,
+        "current_status" => "closed"
+      })
+
+    assert_lifecycle_error(
+      skipped,
+      "work_package_terminal",
+      "closed",
+      ["planned"],
+      package.contract_revision,
+      "create_successor"
+    )
+
     assert revision_count(repo, work_request.id) == 0
   end
 
