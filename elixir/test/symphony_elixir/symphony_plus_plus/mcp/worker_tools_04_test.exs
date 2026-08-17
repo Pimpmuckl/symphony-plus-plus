@@ -317,7 +317,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     changed = put_in(arguments, ["recovery", "check_summary", "status"], "failing")
 
     conflict =
-      MCPHarness.request(%{"jsonrpc" => "2.0", "id" => "recovery-conflict", "method" => "tools/call", "params" => %{"name" => "sync_pr", "arguments" => changed}}, repo: repo, session: session)
+      MCPHarness.request(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "recovery-conflict",
+          "method" => "tools/call",
+          "params" => %{"name" => "sync_pr", "arguments" => changed}
+        },
+        repo: repo,
+        session: session
+      )
 
     assert get_in(conflict, ["error", "data", "reason"]) == "idempotency_conflict"
     refute_receive {:provider_fetch, _, _}
