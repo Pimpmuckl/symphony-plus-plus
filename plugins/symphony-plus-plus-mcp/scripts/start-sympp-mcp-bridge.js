@@ -614,7 +614,7 @@ function sameRuntimeNodeLeaseExists(runtimeFile, key) {
 function cleanupLastDetach(runtimeFile, key, cleanupScript) {
   if (sameRuntimeNodeLeaseExists(runtimeFile, key)) return;
   const script = cleanupScript || path.join(__dirname, "start-sympp-mcp.ps1");
-  const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-CleanupRuntimeKey", key, "-PreserveCurrentArtifactRuntime"];
+  const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-CleanupRuntimeKey", key];
   let result = spawnSync("pwsh.exe", args, { stdio: ["ignore", "ignore", "inherit"] });
   if (result.error && result.error.code === "ENOENT") result = spawnSync("powershell.exe", args, { stdio: ["ignore", "ignore", "inherit"] });
   if (result.error || result.status !== 0) diagnostic(`Symphony++ last-detach cleanup failed: ${result.error ? result.error.message : `exit ${result.status}`}`);

@@ -66,6 +66,14 @@ async function freePort() {
   return port;
 }
 
+function portAvailable(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once("error", () => resolve(false));
+    server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
+  });
+}
+
 async function barrierClient() {
   const [, , , barrier, launcher] = process.argv;
   process.stderr.write("BARRIER_READY\n");
@@ -297,21 +305,21 @@ async function runCase(clientCount, shell, mode = "normal") {
     } finally {
       clearTimeout(readyTimeout);
     }
+    const activeBackend = readJson(backendState);
+    const ownersResult = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", "@(Get-NetTCPConnection -LocalPort $env:FIXTURE_PORT -State Listen -ErrorAction Stop | Select-Object -ExpandProperty OwningProcess -Unique) | ConvertTo-Json -Compress"], { env: { ...process.env, FIXTURE_PORT: String(backendPort) }, encoding: "utf8", windowsHide: true });
+    assert.equal(ownersResult.status, 0, ownersResult.stderr);
+    assert.deepEqual([].concat(JSON.parse(ownersResult.stdout.trim())), [activeBackend.pid]);
     for (const client of clients) { try { client.child.stdin.end(); } catch (_) { } }
     const results = await Promise.all(clients.map((client) => client.result));
     const expectedFailures = mode.endsWith("_death") ? 1 : 0;
     assert.equal(results.filter((result) => result.code !== 0).length, expectedFailures, results.map((result) => result.stderr).join("\n"));
     assert.equal(results.filter((result) => result.code === 0).length, clientCount);
     await waitFor(() => readJson(backendState)?.active_leases === 0, "Backend leases did not drain.");
-    const state = readJson(runtimeFile);
     const backend = readJson(backendState);
     backendPid = backend.pid;
-    const ownersResult = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", "@(Get-NetTCPConnection -LocalPort $env:FIXTURE_PORT -State Listen -ErrorAction Stop | Select-Object -ExpandProperty OwningProcess -Unique) | ConvertTo-Json -Compress"], { env: { ...process.env, FIXTURE_PORT: String(backendPort) }, encoding: "utf8", windowsHide: true });
-    assert.equal(ownersResult.status, 0, ownersResult.stderr);
-    const owners = JSON.parse(ownersResult.stdout.trim());
-    assert.deepEqual([].concat(owners), [backendPid]);
+    await waitFor(() => portAvailable(backendPort), "Backend listener did not stop after the final client exited.");
+    const state = await waitFor(() => { const value = readJson(runtimeFile); return value?.backend?.status === "stopped" && value.backend.pid === null && value; }, "Runtime state did not record zero-client backend shutdown.");
     assert.equal(state.publication.status, "ready");
-    assert.equal(state.backend.pid, backendPid);
     assert.equal(backend.starts, 1);
     assert.equal(backend.initialize, clientCount);
     assert.equal(backend.tools_list, clientCount);
@@ -336,7 +344,7 @@ async function runCase(clientCount, shell, mode = "normal") {
     for (const directory of [symppHome, environment.TEMP]) if (fs.existsSync(directory)) for (const entry of fs.readdirSync(directory, { recursive: true })) if (/artifact\.zip\.tmp-|\.extracting-|codex-plugin\.json\.tmp-/.test(String(entry))) leftovers.push(entry);
     assert.deepEqual(leftovers, []);
     assert.ok(percentile(latencies, 0.95) < 60000 && Math.max(...latencies) < 90000);
-    return { mode, shell: path.basename(shell), clients: clientCount, p95_ms: percentile(latencies, 0.95), max_ms: Math.max(...latencies), manifest: channel.counts.manifest_successes, manifest_attempts: channel.counts.manifest_attempts, artifact: channel.counts.archive_successes, artifact_attempts: channel.counts.archive_attempts, preparations: traceCount(traceDir, "artifact_prepare_end"), backends: backend.starts, pids: 1, listeners: 1, initializes: backend.initialize, tools_list: backend.tools_list, lease_peak: backend.lease_peak, leases_after: backend.active_leases, adopted: traceCount(traceDir, "backend_adopted") };
+    return { mode, shell: path.basename(shell), clients: clientCount, p95_ms: percentile(latencies, 0.95), max_ms: Math.max(...latencies), manifest: channel.counts.manifest_successes, manifest_attempts: channel.counts.manifest_attempts, artifact: channel.counts.archive_successes, artifact_attempts: channel.counts.archive_attempts, preparations: traceCount(traceDir, "artifact_prepare_end"), backends: backend.starts, pids: 1, listeners: 0, initializes: backend.initialize, tools_list: backend.tools_list, lease_peak: backend.lease_peak, leases_after: backend.active_leases, adopted: traceCount(traceDir, "backend_adopted") };
   } finally {
     terminateTrees(clients.filter((client) => client.child.exitCode === null).map((client) => client.child.pid));
     if (!backendPid) backendPid = readJson(backendState)?.pid || 0;

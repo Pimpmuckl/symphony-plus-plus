@@ -1,4 +1,3 @@
-param([int]$IdleMilliseconds = 1500)
 $ErrorActionPreference = "Stop"
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../../.."))
 $pluginRoot = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp"
@@ -29,7 +28,7 @@ function Start-IsolatedProcess([string]$FilePath, [string[]]$Arguments, [hashtab
   $psi.RedirectStandardError = $RedirectStreams
   foreach ($key in @($psi.Environment.Keys)) {
     if ([string]$key -match "(?i)(TOKEN|SECRET|API_KEY|AUTHORIZATION|GITHUB|LINEAR|OPENAI)" -or
-        [string]$key -in @("SYMPP_REPO_ROOT", "SYMPP_BACKEND_PORT", "SYMPP_DASHBOARD_PORT", "SYMPP_BACKEND_URL", "SYMPP_DASHBOARD_ORIGIN")) {
+        [string]$key -in @("SYMPP_REPO_ROOT", "SYMPP_DATABASE", "SYMPP_SOURCE_FALLBACK", "SYMPP_ARTIFACT_RUNTIME", "SYMPP_BACKEND_PORT", "SYMPP_DASHBOARD_PORT", "SYMPP_BACKEND_URL", "SYMPP_DASHBOARD_ORIGIN")) {
       [void]$psi.Environment.Remove([string]$key)
     }
   }
@@ -63,8 +62,15 @@ function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$E
       $process.StandardInput.Flush()
       $line = $process.StandardOutput.ReadLineAsync()
       if (-not $line.Wait(60000)) { throw "Timed out waiting for MCP response from $FilePath" }
+      if ($null -eq $line.Result) {
+        [void]$process.WaitForExit(5000)
+        throw "$FilePath closed before its MCP response: $($stderr.GetAwaiter().GetResult())"
+      }
       $line.Result | ConvertFrom-Json
     }
+    $activeState = Get-Content -LiteralPath $Environment.SYMPP_RUNTIME_FILE -Raw | ConvertFrom-Json
+    $activeBackend = Get-Process -Id ([int]$activeState.backend.pid) -ErrorAction Stop
+    $activeBackendStartTicks = $activeBackend.StartTime.ToUniversalTime().Ticks
     $process.StandardInput.Close()
     if (-not $process.WaitForExit(60000)) { $process.Kill($true); throw "Bridge did not exit after stdin closed: $FilePath" }
     $errorText = $stderr.GetAwaiter().GetResult()
@@ -72,7 +78,12 @@ function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$E
     if ($responses[0].result.protocolVersion -ne "2025-03-26" -or @($responses[1].result.tools).Count -eq 0) {
       throw "Bridge did not complete real initialize plus tools/list."
     }
-    return $errorText
+    return [pscustomobject]@{
+      backend_pid = [int]$activeState.backend.pid
+      backend_start_ticks = $activeBackendStartTicks
+      runtime_mode = [string]$activeState.runtime_mode
+      artifact_root = [string]$activeState.artifact.root
+    }
   } finally {
     if (-not $process.HasExited) { $process.Kill($true) }
     $process.Dispose()
@@ -83,10 +94,18 @@ function Get-Sha256([string]$Value) {
   return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Value))).ToLowerInvariant()
 }
 
-function Wait-ProcessStopped([int]$ProcessIdValue) {
+function Test-PortAvailable([int]$Port) {
+  $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+  try { $listener.Start(); return $true } catch { return $false } finally { $listener.Stop() }
+}
+
+function Wait-ManagedRuntimeStopped([int]$ProcessIdValue, [int]$Port) {
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
-  while ((Get-Process -Id $ProcessIdValue -ErrorAction SilentlyContinue) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
-  if (Get-Process -Id $ProcessIdValue -ErrorAction SilentlyContinue) { throw "Managed backend pid=$ProcessIdValue did not stop." }
+  while ([DateTime]::UtcNow -lt $deadline) {
+    if (-not (Get-Process -Id $ProcessIdValue -ErrorAction SilentlyContinue) -and (Test-PortAvailable $Port)) { return }
+    Start-Sleep -Milliseconds 100
+  }
+  throw "Managed runtime pid=$ProcessIdValue or listener port=$Port did not stop."
 }
 
 try {
@@ -116,7 +135,7 @@ try {
   $backendStartTicks = (Get-Process -Id $backendProcessId -ErrorAction Stop).StartTime.ToUniversalTime().Ticks
   $frontendProcessId = [int]$state.frontend.pid
   Stop-Process -Id $frontendProcessId -Force -ErrorAction Stop
-  Wait-ProcessStopped $frontendProcessId
+  Wait-ManagedRuntimeStopped $frontendProcessId $dashboardPort
   $frontendProcessId = $null
   $contract = [string]$state.backend.contract_fingerprint
   $backend = ([string]$state.backend.url).TrimEnd("/")
@@ -131,8 +150,41 @@ try {
   }
   $revision = "b" * 40
   New-Item -ItemType Directory -Path (Join-Path $sourceRoot "elixir/priv/symphony_plus_plus") -Force | Out-Null
+  "[]" | Set-Content -LiteralPath (Join-Path $sourceRoot "elixir/mix.exs") -NoNewline
   @{ revision = $revision } | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json")
   @{ mcp_contract_fingerprint = $contract } | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $sourceRoot "elixir/priv/symphony_plus_plus/mcp_contract.json")
+  $artifactPayload = Join-Path $tempRoot "artifact-payload"
+  $artifactArchive = Join-Path $tempRoot "artifact.zip"
+  $dashboardHtml = "<title>Symphony++ Dashboard</title>"
+  New-Item -ItemType Directory -Path (Join-Path $artifactPayload "dashboard") -Force | Out-Null
+  @'
+"use strict";
+const http=require("http"),a=process.argv.slice(2),arg=n=>a[a.indexOf(n)+1],port=Number(arg("--port")),contract=arg("--contract"),revision=arg("--revision"),session="artifact-fixture";
+const body=r=>new Promise(q=>{const c=[];r.on("data",x=>c.push(x));r.on("end",()=>q(Buffer.concat(c).toString("utf8")));});
+const send=(r,s,v,h={})=>{const b=typeof v==="string"?v:JSON.stringify(v);r.writeHead(s,{"Content-Type":"application/json","Content-Length":Buffer.byteLength(b),...h});r.end(b);};
+const server=http.createServer(async(req,res)=>{
+  if(req.url==="/shutdown"){send(res,200,{status:"stopping"});return server.close(()=>process.exit(0));}
+  if(req.url==="/mcp/readiness")return send(res,200,{status:"ok",ledger:{reachable:true},dashboard:{ready:true},source:{revision,mcp_contract:{fingerprint:contract}}});
+  if(req.url==="/sympp/board")return send(res,200,"<title>Symphony++ Dashboard</title>",{"Content-Type":"text/html"});
+  if(req.url==="/mcp/client-lease"){await body(req);return send(res,200,{stale_after_ms:600000});}
+  if(req.url==="/mcp"){const p=JSON.parse(await body(req)),result=p.method==="initialize"?{protocolVersion:"2025-03-26",capabilities:{},serverInfo:{name:"artifact-fixture",version:"1"}}:p.method==="tools/list"?{tools:[{name:"fixture",description:"fixture",inputSchema:{type:"object"}}]}:null;return result?send(res,200,{jsonrpc:"2.0",id:p.id,result},{"Mcp-Session-Id":session}):send(res,404,{error:"missing"});}
+  send(res,404,{error:"not found"});
+});
+server.listen(port,"127.0.0.1");
+'@ | Set-Content -LiteralPath (Join-Path $artifactPayload "backend.js") -NoNewline
+  "@echo off`r`nnode `"%~dp0backend.js`" %*`r`n" | Set-Content -LiteralPath (Join-Path $artifactPayload "start-runtime.cmd") -NoNewline
+  $dashboardHtml | Set-Content -LiteralPath (Join-Path $artifactPayload "dashboard/index.html") -NoNewline
+  Compress-Archive -Path (Join-Path $artifactPayload "*") -DestinationPath $artifactArchive
+  $artifactSha = (Get-FileHash -LiteralPath $artifactArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+  $dashboardFingerprint = Get-Sha256 "index.html $(Get-Sha256 $dashboardHtml)"
+  New-Item -ItemType Directory -Path (Join-Path $installedRoot "assets") -Force | Out-Null
+  @{
+    schema_version = 1; source_revision = $revision; launcher_contract = @{ mcp_contract_fingerprint = $contract }
+    artifacts = @(@{ platform = "windows-x86_64"; source_revision = $revision; mcp_contract_fingerprint = $contract
+        path = $artifactArchive; sha256 = $artifactSha; entrypoint = "start-runtime.cmd"
+        runtime_args = @("--port", "{port}", "--contract", $contract, "--revision", $revision, "start-runtime.cmd")
+        dashboard = @{ asset_root = "dashboard"; fingerprint = $dashboardFingerprint } })
+  } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $installedRoot "assets/sympp-runtime-artifacts.json")
   $installedPath = [System.IO.Path]::GetFullPath($installedRoot).ToLowerInvariant()
   $generationKey = Get-Sha256 "$installedPath`n$revision`n$contract"
   $validationFile = Join-Path $sourceEnvironment.SYMPP_HOME ("runtime/launcher-validation/" + (Get-Sha256 $installedPath).Substring(0, 12) + ".json")
@@ -158,22 +210,34 @@ try {
     SYMPP_LOG_DIR = $sourceEnvironment.SYMPP_LOG_DIR; SYMPP_LAUNCHER_TRACE_DIR = Join-Path $tempRoot "trace"
     SYMPP_STARTUP_LOCK_TIMEOUT_SEC = "30"; SYMPP_MCP_HTTP_TIMEOUT_SEC = "60"
   }
-  $node = (Get-Command node.exe -ErrorAction Stop).Source
-  $bridge = Join-Path $installedRoot "scripts/start-sympp-mcp-bridge.js"
-  $firstBridgeLog = Invoke-McpBridge $node @($bridge) $installedEnvironment
-  Start-Sleep -Milliseconds $IdleMilliseconds
-  $afterIdle = Get-Process -Id $backendProcessId -ErrorAction SilentlyContinue
-  if (-not $afterIdle) { throw "Artifact backend stopped after idle detach. Bridge diagnostics: $firstBridgeLog" }
-  if ($afterIdle.StartTime.ToUniversalTime().Ticks -ne $backendStartTicks) { throw "Artifact backend PID identity changed after last detach." }
-  Invoke-McpBridge $node @($bridge) $installedEnvironment
-  $afterSecondWave = Get-Process -Id $backendProcessId -ErrorAction Stop
-  if ($afterSecondWave.StartTime.ToUniversalTime().Ticks -ne $backendStartTicks) { throw "Second bridge wave did not reuse the artifact backend PID." }
+  $cmd = (Get-Command cmd.exe -ErrorAction Stop).Source
+  $installedCommand = Join-Path $installedRoot "scripts/start-sympp-mcp.cmd"
+  $firstWave = Invoke-McpBridge $cmd @("/d", "/c", "call $installedCommand") $installedEnvironment
+  if ($firstWave.backend_pid -ne $backendProcessId) { throw "Installed command attached to unexpected backend pid=$($firstWave.backend_pid)." }
+  Wait-ManagedRuntimeStopped $backendProcessId $backendPort
+  $firstBackendProcessId = $backendProcessId
+  $backendProcessId = $null
 
-  $installedLauncher = Join-Path $installedRoot "scripts/start-sympp-mcp.ps1"
-  [void](Invoke-IsolatedCommand $pwsh @("-NoProfile", "-File", $installedLauncher, "-CleanupRuntimeKey", "superseded-$runtimeKey") $installedEnvironment)
-  [void](Get-Process -Id $backendProcessId -ErrorAction Stop)
-  [void](Invoke-IsolatedCommand $pwsh @("-NoProfile", "-File", $installedLauncher, "-CleanupRuntimeKey", $runtimeKey) $installedEnvironment)
-  Wait-ProcessStopped $backendProcessId
+  $laterInstalledEnvironment = $installedEnvironment.Clone()
+  $laterInstalledEnvironment.SYMPP_BACKEND_PORT = [string]$backendPort
+  $laterInstalledEnvironment.SYMPP_AUTOSTART_FRONTEND = "0"
+  $laterInstalledEnvironment.SYMPP_ELIXIR_SETUP_TIMEOUT_SEC = "30"
+  $laterInstalledEnvironment.SYMPP_BACKEND_STARTUP_TIMEOUT_SEC = "60"
+  $laterInstalledEnvironment.SYMPP_BACKEND_PORT_RELEASE_TIMEOUT_SEC = "1"
+  $laterInstalledEnvironment.SYMPP_STARTUP_LOCK_TIMEOUT_SEC = "180"
+  $laterInstalledEnvironment.SYMPP_COLD_START_TIMEOUT_SEC = "90"
+  $laterInstalledEnvironment.SYMPP_POWERSHELL = $pwsh
+  $laterInstalledEnvironment.TEMP = $sourceEnvironment.TEMP
+  $laterInstalledEnvironment.TMP = $sourceEnvironment.TMP
+  $secondWave = Invoke-McpBridge $cmd @("/d", "/c", "call $installedCommand") $laterInstalledEnvironment
+  $backendProcessId = $secondWave.backend_pid
+  $backendStartTicks = $secondWave.backend_start_ticks
+  if ($backendProcessId -eq $firstBackendProcessId) { throw "Later installed command wave reused backend pid=$backendProcessId." }
+  $artifactCacheRoot = [System.IO.Path]::GetFullPath((Join-Path $sourceEnvironment.SYMPP_HOME "artifacts/mcp"))
+  if ($secondWave.runtime_mode -ne "artifact" -or -not ([System.IO.Path]::GetFullPath($secondWave.artifact_root).StartsWith($artifactCacheRoot, [StringComparison]::OrdinalIgnoreCase))) {
+    throw "Later installed command wave was not artifact-backed."
+  }
+  Wait-ManagedRuntimeStopped $backendProcessId $backendPort
   $backendProcessId = $null
 
   [void](Invoke-IsolatedCommand $pwsh @("-NoProfile", "-File", $launcher, "-PrepareRuntimeOnly") $sourceEnvironment)
@@ -182,14 +246,15 @@ try {
   $frontendProcessId = [int]$sourceState.frontend.pid
   $backendProcessId = $sourceProcessId
   $backendStartTicks = (Get-Process -Id $sourceProcessId -ErrorAction Stop).StartTime.ToUniversalTime().Ticks
-  Invoke-McpBridge $pwsh @("-NoProfile", "-File", $launcher) $sourceEnvironment
-  Wait-ProcessStopped $sourceProcessId
+  [void](Invoke-McpBridge $pwsh @("-NoProfile", "-File", $launcher) $sourceEnvironment)
+  Wait-ManagedRuntimeStopped $sourceProcessId $backendPort
+  Wait-ManagedRuntimeStopped $frontendProcessId $dashboardPort
   $backendProcessId = $null
   $frontendProcessId = $null
 
   [pscustomobject]@{
-    artifact_waves = 2; initialize_and_tools_list = 2; artifact_pid_reused = $true
-    stale_cleanup_preserved_current = $true; explicit_cleanup_stopped_exact = $true
+    installed_waves = 2; initialize_and_tools_list = 3; installed_pids_distinct = $true
+    artifact_last_detach_stopped = $true; listeners_closed = $true
     source_last_detach_stopped = $true; isolated_runtime_ledger_ports = $true
   } | ConvertTo-Json -Compress
 } finally {
