@@ -440,6 +440,8 @@ function request(urlString, method, body, headers, timeoutMs) {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("end", () => resolve({ status: res.statusCode || 0, headers: res.headers, body: Buffer.concat(chunks).toString("utf8") }));
+      res.once("aborted", () => { const error = new Error("response aborted before completion"); error.symppRequestMayHaveReachedBackend = true; reject(error); });
+      res.once("error", (error) => { error.symppRequestMayHaveReachedBackend = true; reject(error); });
     });
     req.once("socket", (socket) => {
       if (socket.connecting) socket.once("connect", () => { connected = true; });
@@ -723,21 +725,23 @@ async function bridge(identity, state, runtimeFile) {
   };
   const adopt = async (runtime) => {
     const next = { ...runtime, mcpUrl: `${runtime.identity.backend}/mcp` };
-    const nextCleanupScript = prepareCleanupScript(next.identity);
-    if (nextCleanupScript === CLEANUP_SOURCE_CHANGED) {
-      cleanupAllowed = false;
-      throw new Error("Installed Symphony++ cleanup scripts changed during backend recovery.");
-    }
-    if (!nextCleanupScript) throw new Error("Symphony++ cleanup scripts were unavailable during backend recovery.");
     const replacementLease = next.identity.runtimeKey.toLowerCase() === current.identity.runtimeKey.toLowerCase()
       ? localLease
       : createLocalLease(runtimeFile, next.state, next.identity);
     let attachedResponse;
+    let nextCleanupScript;
     let replacementAttached = false;
     try {
       attachedResponse = await clientLease(next.mcpUrl, clientId, "attach", true);
       replacementAttached = true;
       trace("replacement_lease_attached");
+      nextCleanupScript = prepareCleanupScript(next.identity);
+      if (nextCleanupScript === CLEANUP_SOURCE_CHANGED) {
+        const error = new Error("Installed Symphony++ cleanup scripts changed during backend recovery.");
+        error.symppFatal = true;
+        throw error;
+      }
+      if (!nextCleanupScript) throw new Error("Symphony++ cleanup scripts were unavailable during backend recovery.");
       if (!await generationValidAtAttachment(next.identity)) {
         const error = new Error("Installed Symphony++ generation changed during backend recovery.");
         error.symppFatal = true;

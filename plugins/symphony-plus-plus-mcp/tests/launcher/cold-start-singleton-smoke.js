@@ -99,7 +99,7 @@ function backendFixture() {
     ' if(req.url==="/mcp/readiness"){if(release&&!fs.existsSync(release))return send(res,503,{status:"starting"});return send(res,200,{status:"ok",ledger:{reachable:true},dashboard:{ready:true},source:{revision,mcp_contract:{fingerprint:contract}}});}',
     ' if(req.url==="/sympp/board")return send(res,200,"<title>Symphony++ Dashboard</title>",{"Content-Type":"text/html"});',
     ' if(req.url==="/mcp/client-lease"){const p=JSON.parse(await body(req));if(p.action==="attach"){state.attach++;leases.add(p.client_id);}if(p.action==="detach"){state.detach++;leases.delete(p.client_id);}state.lease_peak=Math.max(state.lease_peak,leases.size);save();return send(res,200,{stale_after_ms:600000});}',
-    ' if(req.url==="/mcp"){const p=JSON.parse(await body(req));let result;if(p.method==="initialize"){state.initialize++;result={protocolVersion:"2025-03-26",capabilities:{},serverInfo:{name:"cold-fixture",version:"1"}};}else if(p.method==="tools/list"){state.tools_list++;result={tools:tools.map(name=>({name,description:"fixture",inputSchema:{type:"object"}}))};}else if(p.method==="tools/call"&&p.params.name==="fixture.mutate"){state.mutations++;save();req.socket.destroy();return setTimeout(()=>process.exit(0),10);}else return send(res,404,{error:"missing"});save();return send(res,200,{jsonrpc:"2.0",id:p.id,result},{"Mcp-Session-Id":crypto.randomUUID()});}',
+    ' if(req.url==="/mcp"){const p=JSON.parse(await body(req));let result;if(p.method==="initialize"){state.initialize++;result={protocolVersion:"2025-03-26",capabilities:{},serverInfo:{name:"cold-fixture",version:"1"}};}else if(p.method==="tools/list"){state.tools_list++;result={tools:tools.map(name=>({name,description:"fixture",inputSchema:{type:"object"}}))};}else if(p.method==="tools/call"&&p.params.name==="fixture.mutate"){state.mutations++;save();res.writeHead(200,{"Content-Type":"application/json"});res.write("{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":");return setTimeout(()=>{res.destroy();setTimeout(()=>process.exit(0),10);},25);}else return send(res,404,{error:"missing"});save();return send(res,200,{jsonrpc:"2.0",id:p.id,result},{"Mcp-Session-Id":crypto.randomUUID()});}',
     ' send(res,404,{error:"not found"});',
     '});',
     'fs.mkdirSync(path.dirname(ledger),{recursive:true});fs.writeFileSync(ledger,"fixture");function listen(){if(bindRelease&&!fs.existsSync(bindRelease))return setTimeout(listen,25);server.listen(port,"127.0.0.1",save);}listen();'
@@ -361,6 +361,27 @@ async function runCase(clientCount, shell, mode = "normal") {
       assert.equal(fs.readdirSync(path.join(symppHome, "runtime", "codex-plugin-leases"), { withFileTypes: true }).filter((entry) => entry.isFile()).length, 0);
       backendPid = 0;
       return { mode, shell: path.basename(shell), clients: clientCount, p95_ms: percentile(latencies, 0.95), max_ms: Math.max(...latencies), manifest: channel.counts.manifest_successes, artifact: channel.counts.archive_successes, preparations: traceCount(traceDir, "artifact_prepare_end"), backends: backend.starts, pids: 2, listeners: 0, initializes: backend.initialize, tools_list: backend.tools_list, mutations: backend.mutations, lease_peak: backend.lease_peak, leases_after: backend.active_leases, recovery_leaders: 1, fatal_generation: stopped.backend.status === "stopped" };
+    } else if (mode === "cleanup_source_changed_recovery") {
+      fs.appendFileSync(path.join(sourcePluginRoot, "scripts", "start-sympp-mcp.ps1"), "\r\n");
+      await terminate(firstBackend.pid);
+      clients[0].child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3100, method: "tools/list", params: {} })}\n`);
+      const failed = await clients[0].result;
+      assert.notEqual(failed.code, 0);
+      assert.match(failed.stderr, /cleanup scripts changed during backend recovery/i);
+      await waitFor(() => readJson(backendState)?.active_leases === 0, "Cleanup-invalidated replacement backend lease did not detach.");
+      for (const client of clients.slice(1)) client.child.stdin.end();
+      const results = await Promise.all(clients.slice(1).map((client) => client.result));
+      assert.ok(results.every((result) => result.code === 0), results.map((result) => result.stderr).join("\n"));
+      await waitFor(() => portAvailable(backendPort), "Cleanup-invalidated replacement listener did not stop.");
+      const stopped = await waitFor(() => { const value = readJson(runtimeFile); return value?.backend?.status === "stopped" && value.backend.pid === null && value; }, "Cleanup-invalidated runtime state did not reach stopped.");
+      const backend = readJson(backendState);
+      assert.equal(backend.starts, 2);
+      assert.equal(backend.tools_list, clientCount);
+      assert.equal(backend.active_leases, 0);
+      assert.equal(traceCount(traceDir, "replacement_lease_attached"), 1);
+      assert.equal(fs.readdirSync(path.join(symppHome, "runtime", "codex-plugin-leases"), { withFileTypes: true }).filter((entry) => entry.isFile()).length, 0);
+      backendPid = 0;
+      return { mode, shell: path.basename(shell), clients: clientCount, p95_ms: percentile(latencies, 0.95), max_ms: Math.max(...latencies), manifest: channel.counts.manifest_successes, artifact: channel.counts.archive_successes, preparations: traceCount(traceDir, "artifact_prepare_end"), backends: backend.starts, pids: 2, listeners: 0, initializes: backend.initialize, tools_list: backend.tools_list, mutations: backend.mutations, lease_peak: backend.lease_peak, leases_after: backend.active_leases, recovery_leaders: traceCount(traceDir, "backend_recovery_leader"), fatal_cleanup: stopped.backend.status === "stopped" };
     } else if (mode === "backend_loss") {
       await terminate(firstBackend.pid);
     } else if (mode === "owner_loss") {
@@ -456,7 +477,7 @@ async function main() {
   const powershellFallback = await runCase(30, windowsPowerShell, "powershell_fallback");
   for (const mode of ["manifest_death", "artifact_death", "backend_death", "backend_prebind_death"]) results.push(await runCase(30, pwsh, mode));
   const recovery = [];
-  for (const mode of ["owner_loss", "backend_loss", "ambiguous_tool", "shutdown_during_recovery", "generation_changed_recovery"]) recovery.push(await runCase(["shutdown_during_recovery", "generation_changed_recovery"].includes(mode) ? 3 : 10, pwsh, mode));
+  for (const mode of ["owner_loss", "backend_loss", "ambiguous_tool", "shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery"]) recovery.push(await runCase(["shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery"].includes(mode) ? 3 : 10, pwsh, mode));
   process.stdout.write(`${JSON.stringify({ matrix: results.slice(0, 3), powershell_fallback: powershellFallback, leader_death: results.slice(3), recovery, powershell_5_1: true, pwsh: true, cleanup: true })}\n`);
 }
 
