@@ -40,15 +40,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerScopeExpansionTest do
 
     path_sync_response =
       attach_tool(repo, session, "sync_pr", %{
-        "url" => pr_url,
-        "metadata" => %{
+        "recovery" => %{
+          "url" => pr_url,
           "head_sha" => head_sha,
-          "base" => %{"ref" => "main", "sha" => "base-pr61"},
+          "base_branch" => "main",
+          "base_sha" => "base-pr61",
           "changed_files" => Enum.map(changed_paths, &%{"filename" => &1, "status" => "modified"}),
           "changed_files_count" => length(changed_paths),
-          "check_summary" => %{"conclusion" => "success"},
-          "review_state" => %{"state" => "approved"},
-          "merge_state" => %{"state" => "clean"}
+          "check_summary" => %{"status" => "passing"},
+          "review_state" => %{"status" => "approved"},
+          "merge_state" => %{"status" => "clean", "merged" => false}
         }
       })
 
@@ -59,14 +60,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerScopeExpansionTest do
 
     count_only_sync_response =
       attach_tool(repo, session, "sync_pr", %{
-        "url" => pr_url,
-        "metadata" => %{
+        "recovery" => %{
+          "url" => pr_url,
           "head_sha" => head_sha,
-          "base" => %{"ref" => "main", "sha" => "base-pr61"},
+          "base_branch" => "main",
+          "base_sha" => "base-pr61",
           "changed_files" => 7,
-          "check_summary" => %{"conclusion" => "success"},
-          "review_state" => %{"state" => "approved"},
-          "merge_state" => %{"state" => "clean"}
+          "check_summary" => %{"status" => "passing"},
+          "review_state" => %{"status" => "approved"},
+          "merge_state" => %{"status" => "clean", "merged" => false}
         }
       })
 

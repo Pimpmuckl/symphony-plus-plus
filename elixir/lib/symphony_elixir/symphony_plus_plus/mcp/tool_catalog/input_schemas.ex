@@ -784,17 +784,53 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   end
 
   defp sync_pr_metadata_properties do
-    Map.merge(pr_metadata_properties(), %{
-      "branch" => string_schema(),
-      "base_branch" => string_schema(),
-      "base_sha" => string_schema(),
-      "changed_files" => changed_files_schema(),
-      "changed_files_count" => nonnegative_integer_schema(),
-      "check_summary" => object_schema(),
-      "review_state" => object_schema(),
-      "merge_state" => object_schema(),
-      "recovery" => object_schema()
-    })
+    pr_metadata_properties()
+    |> Map.take(~w(url number repository))
+    |> Map.put("recovery", sync_pr_recovery_schema())
+  end
+
+  defp sync_pr_recovery_schema do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{
+        "url" => string_schema(),
+        "html_url" => string_schema(),
+        "number" => pr_number_schema(),
+        "repository" => string_schema(),
+        "head_sha" => nonblank_string_schema(),
+        "branch" => string_schema(),
+        "base_branch" => string_schema(),
+        "base_sha" => string_schema(),
+        "changed_files" => changed_files_schema(),
+        "changed_files_count" => nonnegative_integer_schema(),
+        "check_summary" => canonical_status_schema(~w(passing failing pending unknown)),
+        "review_state" => canonical_status_schema(~w(approved changes_requested review_required unknown)),
+        "merge_state" => canonical_merge_state_schema(),
+        "merged_at" => string_schema(),
+        "merge_commit_sha" => string_schema(),
+        "observed_at" => string_schema(),
+        "provider_reference" => string_schema()
+      },
+      "allOf" => [
+        %{"anyOf" => [%{"required" => ["url"]}, %{"required" => ["html_url"]}, %{"required" => ["number", "repository"]}]},
+        %{"required" => ["head_sha"]}
+      ]
+    }
+  end
+
+  defp canonical_status_schema(statuses) do
+    %{
+      "type" => "object",
+      "additionalProperties" => false,
+      "properties" => %{"status" => string_enum_schema(statuses)},
+      "required" => ["status"]
+    }
+  end
+
+  defp canonical_merge_state_schema do
+    canonical_status_schema(~w(merged clean blocked pending unknown))
+    |> put_in(["properties", "merged"], boolean_schema())
   end
 
   defp string_schema, do: %{"type" => "string"}

@@ -181,12 +181,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
 
   def sync_pr_state(repo, session, url, head_sha) do
     attach_tool(repo, session, "sync_pr", %{
-      "url" => url,
-      "metadata" => %{
+      "recovery" => %{
+        "url" => url,
         "head_sha" => head_sha,
-        "check_summary" => %{"conclusion" => "success"},
-        "review_state" => %{"state" => "approved"},
-        "merge_state" => %{"state" => "clean"}
+        "check_summary" => %{"status" => "passing"},
+        "review_state" => %{"status" => "approved"},
+        "merge_state" => %{"status" => "clean", "merged" => false}
       }
     })
   end

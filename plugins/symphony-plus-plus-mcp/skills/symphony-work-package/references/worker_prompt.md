@@ -82,9 +82,9 @@ Before ready:
 3. Open the PR and attach it with `attach_pr(url, head_sha)` when the policy
    requires PR metadata. Include current check, review, or merge metadata there
    when it is already available.
-4. Refresh current state only for the attached PR with `sync_pr()`. Pass
-   top-level current-state fields when they changed; use explicit PR identity
-   or `recovery` only for repair.
+4. Refresh current state only for the attached PR with zero-state-argument
+   `sync_pr()`. Use explicit PR identity only to repair a missing attachment;
+   put manual canonical state only in the validated `recovery` import.
 5. Submit validation evidence with
    `submit_review_package(summary, tests, artifacts)`. Policy-approved no-PR
    work may omit branch/head metadata; PR-backed or review-required work must

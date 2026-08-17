@@ -146,10 +146,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
     refute "pr_attached" in missing
     assert "current_pr_state" in missing
 
-    attach_tool(repo, session, "sync_pr", %{
-      "url" => "https://github.com/example/repo/pull/790",
-      "metadata" => %{"head_sha" => "head-a", "check_summary" => %{"token" => "x"}}
-    })
+    invalid_recovery =
+      MCPHarness.request(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "invalid-recovery-state",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "sync_pr",
+            "arguments" => %{
+              "recovery" => %{
+                "url" => "https://github.com/example/repo/pull/790",
+                "head_sha" => "head-a",
+                "check_summary" => %{"status" => "green"}
+              }
+            }
+          }
+        },
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(invalid_recovery, ["error", "data", "reason"]) == "invalid_recovery"
 
     invalid_sync_response =
       MCPHarness.request(
@@ -160,10 +178,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
 
     assert "current_pr_state" in get_in(invalid_sync_response, ["error", "data", "missing"])
 
-    attach_tool(repo, session, "sync_pr", %{
-      "url" => "https://github.com/example/repo/pull/790",
-      "metadata" => %{"head_sha" => "head-a", "state" => "open", "draft" => false}
-    })
+    inconsistent_recovery =
+      MCPHarness.request(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "inconsistent-recovery-state",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "sync_pr",
+            "arguments" => %{
+              "recovery" => %{
+                "url" => "https://github.com/example/repo/pull/790",
+                "head_sha" => "head-a",
+                "merge_state" => %{"status" => "clean", "merged" => true}
+              }
+            }
+          }
+        },
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(inconsistent_recovery, ["error", "data", "reason"]) == "invalid_recovery"
 
     raw_state_response =
       MCPHarness.request(
@@ -199,12 +235,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
     assert "current_pr_state" in get_in(reattach_after_sync_response, ["error", "data", "missing"])
 
     attach_tool(repo, session, "sync_pr", %{
-      "url" => "https://github.com/example/repo/pull/790",
-      "metadata" => %{
+      "recovery" => %{
+        "url" => "https://github.com/example/repo/pull/790",
         "head_sha" => "head-b",
-        "check_summary" => %{"conclusion" => "success", "total_count" => 1},
-        "review_state" => %{"state" => "approved"},
-        "merge_state" => %{"state" => "clean"}
+        "check_summary" => %{"status" => "passing"},
+        "review_state" => %{"status" => "approved"},
+        "merge_state" => %{"status" => "clean", "merged" => false}
       }
     })
 
@@ -226,7 +262,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
     assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
   end
 
-  test "current PR state accepts semantic boolean sync metadata", %{repo: repo} do
+  test "current PR state accepts canonical recovery state", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
@@ -247,8 +283,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/790", "head_sha" => "head-a"})
 
     attach_tool(repo, session, "sync_pr", %{
-      "url" => "https://github.com/example/repo/pull/790",
-      "metadata" => %{"head_sha" => "head-a", "mergeable" => true, "merged" => false}
+      "recovery" => %{
+        "url" => "https://github.com/example/repo/pull/790",
+        "head_sha" => "head-a",
+        "check_summary" => %{"status" => "passing"},
+        "review_state" => %{"status" => "approved"},
+        "merge_state" => %{"status" => "clean", "merged" => false}
+      }
     })
 
     attach_tool(repo, session, "submit_review_package", %{
@@ -291,12 +332,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-PR-SYNC-HEAD-READY/worker", "head_sha" => "head-b"})
 
     attach_tool(repo, session, "sync_pr", %{
-      "number" => 790,
-      "metadata" => %{
+      "recovery" => %{
+        "url" => "https://github.com/example/repo/pull/790",
         "head_sha" => "head-b",
-        "check_summary" => %{"conclusion" => "success"},
-        "review_state" => %{"state" => "approved"},
-        "merge_state" => %{"state" => "clean"}
+        "check_summary" => %{"status" => "passing"},
+        "review_state" => %{"status" => "approved"},
+        "merge_state" => %{"status" => "clean", "merged" => false}
       }
     })
 
@@ -518,17 +559,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/nextide/symphony-plus-plus/pull/903", "head_sha" => head_sha})
 
     attach_tool(repo, session, "sync_pr", %{
-      "url" => "https://github.com/nextide/symphony-plus-plus/pull/903",
-      "metadata" => %{
+      "recovery" => %{
+        "url" => "https://github.com/nextide/symphony-plus-plus/pull/903",
         "head_sha" => head_sha,
         "base_branch" => "symphony-plus-plus/beta",
         "changed_files" => [
           %{"filename" => "elixir/lib/symphony_elixir/symphony_plus_plus/readiness/scope_guard.ex", "status" => "added"},
           %{"filename" => "docs/scope-contract.md", "status" => "added", "token" => "ghp_scope_secret"}
         ],
-        "check_summary" => %{"conclusion" => "success", "token" => "ghp_scope_secret"},
-        "review_state" => %{"state" => "approved"},
-        "merge_state" => %{"state" => "clean"}
+        "check_summary" => %{"status" => "passing"},
+        "review_state" => %{"status" => "approved"},
+        "merge_state" => %{"status" => "clean", "merged" => false}
       }
     })
 

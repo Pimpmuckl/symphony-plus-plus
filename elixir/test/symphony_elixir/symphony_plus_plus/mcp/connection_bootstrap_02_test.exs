@@ -364,12 +364,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
 
     assert get_in(tools_by_name, ["sync_pr", "inputSchema", "required"]) == []
 
-    assert get_in(tools_by_name, ["sync_pr", "inputSchema", "properties", "metadata", "type"]) == "object"
+    sync_pr_properties = get_in(tools_by_name, ["sync_pr", "inputSchema", "properties"])
+
+    for manual <- ["head_sha", "metadata", "branch", "base_branch", "base_sha", "changed_files", "changed_files_count", "check_summary", "review_state", "merge_state"] do
+      refute Map.has_key?(sync_pr_properties, manual)
+    end
+
     assert get_in(tools_by_name, ["sync_pr", "inputSchema", "then"]) == nil
     assert get_in(tools_by_name, ["sync_pr", "inputSchema", "properties", "recovery", "type"]) == "object"
-    assert get_in(tools_by_name, ["sync_pr", "inputSchema", "properties", "check_summary", "type"]) == "object"
+    assert get_in(tools_by_name, ["sync_pr", "inputSchema", "properties", "recovery", "additionalProperties"]) == false
 
-    assert get_in(tools_by_name, ["sync_pr", "inputSchema", "properties", "changed_files", "anyOf"]) == [
+    assert get_in(tools_by_name, ["sync_pr", "inputSchema", "properties", "recovery", "properties", "check_summary", "properties", "status", "enum"]) ==
+             ~w(passing failing pending unknown)
+
+    assert get_in(tools_by_name, ["sync_pr", "inputSchema", "properties", "recovery", "properties", "changed_files", "anyOf"]) == [
              %{
                "type" => "array",
                "items" => %{

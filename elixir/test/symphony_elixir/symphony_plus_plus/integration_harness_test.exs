@@ -522,14 +522,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
 
   defp sync_fake_github(repo, session, number, head_sha, changed_files) do
     attach_tool(repo, session, "sync_pr", %{
-      "number" => number,
-      "metadata" => %{
+      "recovery" => %{
+        "url" => "https://github.com/nextide/symphony-plus-plus/pull/#{number}",
         "head_sha" => head_sha,
         "base_branch" => "symphony-plus-plus/beta",
         "changed_files" => Enum.map(changed_files, &%{"filename" => &1, "status" => "modified"}),
-        "check_summary" => %{"conclusion" => "success"},
-        "review_state" => %{"state" => "approved"},
-        "merge_state" => %{"state" => "clean"}
+        "check_summary" => %{"status" => "passing"},
+        "review_state" => %{"status" => "approved"},
+        "merge_state" => %{"status" => "clean", "merged" => false}
       }
     })
   end

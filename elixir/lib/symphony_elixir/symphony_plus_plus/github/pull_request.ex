@@ -4,6 +4,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
 
   @minimum_sha_prefix_length 7
+  @check_statuses ~w(passing failing pending unknown)
+  @review_statuses ~w(approved changes_requested review_required unknown)
+  @merge_statuses ~w(merged clean blocked pending unknown)
 
   @type ref :: %{
           owner: String.t(),
@@ -93,12 +96,59 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
          "review_state" => Redactor.redact(review_state),
          "merge_state" => Redactor.redact(merge_state),
          "merged_at" => metadata_merged_at(metadata),
-         "merge_commit_sha" => metadata_merge_commit_sha(metadata)
+         "merge_commit_sha" => metadata_merge_commit_sha(metadata),
+         "observed_at" => clean_string(Map.get(metadata, "observed_at")),
+         "provider_reference" => clean_provider_reference(Map.get(metadata, "provider_reference"))
        }}
     end
   end
 
   def metadata(_metadata, _ref, _fallback_head_sha), do: {:error, :missing_pr_metadata}
+
+  @spec provider_snapshot(map(), ref(), String.t()) :: {:ok, map()} | {:error, term()}
+  def provider_snapshot(metadata, ref, expected_head_sha) when is_map(metadata) and is_map(ref) and is_binary(expected_head_sha) do
+    with :ok <- provider_snapshot_complete(metadata),
+         {:ok, payload} <- metadata(metadata, ref, nil),
+         :ok <- provider_changed_files_complete(metadata, payload),
+         :ok <- provider_head_matches(payload["head_sha"], expected_head_sha),
+         {:ok, provider_reference} <- provider_reference(metadata),
+         {:ok, check_summary} <- provider_check_summary(metadata),
+         {:ok, review_state} <- provider_review_state(metadata),
+         {:ok, merge_state} <- provider_merge_state(metadata) do
+      {:ok,
+       payload
+       |> Map.put("check_summary", check_summary)
+       |> Map.put("review_state", review_state)
+       |> Map.put("merge_state", merge_state)
+       |> Map.put("observed_at", DateTime.utc_now(:microsecond) |> DateTime.to_iso8601())
+       |> Map.put("provider_reference", provider_reference)}
+    else
+      {:error, {:provider_head_mismatch, _expected, _actual}} = error -> error
+      {:error, _reason} -> {:error, :provider_malformed}
+    end
+  end
+
+  def provider_snapshot(_metadata, _ref, _expected_head_sha), do: {:error, :provider_malformed}
+
+  @spec imported_snapshot(map(), ref(), String.t()) :: {:ok, map()} | {:error, term()}
+  def imported_snapshot(metadata, ref, expected_head_sha) when is_map(metadata) and is_map(ref) and is_binary(expected_head_sha) do
+    with {:ok, payload} <- metadata(metadata, ref, nil),
+         :ok <- provider_head_matches(payload["head_sha"], expected_head_sha),
+         {:ok, check_summary} <- imported_state(metadata, "check_summary", @check_statuses),
+         {:ok, review_state} <- imported_state(metadata, "review_state", @review_statuses),
+         {:ok, merge_state} <- imported_merge_state(metadata),
+         {:ok, observed_at} <- imported_observed_at(metadata) do
+      {:ok,
+       payload
+       |> Map.put("check_summary", check_summary)
+       |> Map.put("review_state", review_state)
+       |> Map.put("merge_state", merge_state)
+       |> Map.put("observed_at", observed_at)
+       |> maybe_put_provider_reference(metadata)}
+    end
+  end
+
+  def imported_snapshot(_metadata, _ref, _expected_head_sha), do: {:error, :invalid_recovery}
 
   @spec stale?(map() | nil, String.t() | nil) :: boolean()
   def stale?(%{} = pr_metadata, current_head_sha) when is_binary(current_head_sha) do
@@ -116,6 +166,250 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest do
   end
 
   def head_sha_matches?(_left, _right), do: false
+
+  defp provider_head_matches(actual, expected) do
+    if head_sha_matches?(actual, expected), do: :ok, else: {:error, {:provider_head_mismatch, expected, actual}}
+  end
+
+  defp provider_snapshot_complete(%{"provider_snapshot_complete" => false}), do: {:error, :provider_incomplete}
+  defp provider_snapshot_complete(_metadata), do: :ok
+
+  defp provider_changed_files_complete(%{"provider_snapshot_complete" => true} = metadata, payload) do
+    files = Map.get(payload, "changed_files", [])
+    count = Map.get(payload, "changed_files_count")
+    provider_files = Map.get(metadata, "changed_files")
+
+    if Map.get(payload, "changed_files_available") == true and is_integer(count) and count == length(files) and
+         is_list(provider_files) and Enum.all?(provider_files, &provider_file_complete?/1),
+       do: :ok,
+       else: {:error, :provider_incomplete}
+  end
+
+  defp provider_changed_files_complete(_metadata, _payload), do: :ok
+
+  defp provider_file_complete?(%{"path" => path, "changeType" => change_type} = file) do
+    filled_string?(path) and is_binary(change_type) and
+      (String.downcase(change_type) != "renamed" or
+         filled_string?(Map.get(file, "previous_path") || Map.get(file, "previous_filename")))
+  end
+
+  defp provider_file_complete?(_file), do: false
+
+  defp imported_observed_at(metadata) do
+    case clean_string(Map.get(metadata, "observed_at")) do
+      nil ->
+        {:ok, DateTime.utc_now(:microsecond) |> DateTime.to_iso8601()}
+
+      observed_at ->
+        case DateTime.from_iso8601(observed_at) do
+          {:ok, datetime, 0} -> {:ok, DateTime.to_iso8601(datetime)}
+          _invalid -> {:error, :invalid_observed_at}
+        end
+    end
+  end
+
+  defp provider_reference(metadata) do
+    case clean_provider_reference(
+           Map.get(metadata, "provider_reference") || Map.get(metadata, "node_id") || Map.get(metadata, "id") || Map.get(metadata, "html_url") ||
+             Map.get(metadata, "url")
+         ) do
+      nil -> {:error, :missing_provider_reference}
+      reference -> {:ok, reference}
+    end
+  end
+
+  defp clean_provider_reference(value) when is_binary(value), do: clean_string(value)
+  defp clean_provider_reference(value) when is_integer(value), do: Integer.to_string(value)
+  defp clean_provider_reference(_value), do: nil
+
+  defp provider_check_summary(metadata) do
+    case Map.fetch(metadata, "check_summary") do
+      {:ok, value} -> provider_state(value, @check_statuses, &provider_check_status/1)
+      :error -> check_rollup_state(Map.get(metadata, "check_rollup") || Map.get(metadata, "statusCheckRollup"))
+    end
+  end
+
+  defp provider_review_state(metadata) do
+    value = Map.get(metadata, "review_state") || Map.get(metadata, "review_decision") || Map.get(metadata, "reviewDecision")
+    provider_state(value, @review_statuses, &provider_review_status/1)
+  end
+
+  defp provider_merge_state(metadata) do
+    value = Map.get(metadata, "merge_state", metadata)
+
+    with {:ok, status} <- provider_merge_status(value) do
+      {:ok, %{"status" => status, "merged" => status == "merged"}}
+    end
+  end
+
+  defp provider_state(nil, _allowed, _normalize), do: {:ok, %{"status" => "unknown"}}
+
+  defp provider_state(%{} = value, allowed, normalize) do
+    status = Map.get(value, "status") || Map.get(value, "conclusion") || Map.get(value, "state") || Map.get(value, "decision")
+
+    with {:ok, status} <- normalize.(status),
+         true <- status in allowed do
+      {:ok, %{"status" => status}}
+    else
+      _invalid -> {:error, :provider_malformed}
+    end
+  end
+
+  defp provider_state(value, allowed, normalize) do
+    with {:ok, status} <- normalize.(value),
+         true <- status in allowed do
+      {:ok, %{"status" => status}}
+    else
+      _invalid -> {:error, :provider_malformed}
+    end
+  end
+
+  defp provider_check_status(value),
+    do:
+      normalize_provider_status(value, %{
+        "success" => "passing",
+        "successful" => "passing",
+        "passed" => "passing",
+        "failure" => "failing",
+        "failed" => "failing",
+        "error" => "failing",
+        "cancelled" => "failing",
+        "timed_out" => "failing",
+        "startup_failure" => "failing",
+        "action_required" => "failing",
+        "queued" => "pending",
+        "in_progress" => "pending",
+        "expected" => "pending"
+      })
+
+  defp provider_review_status(value),
+    do:
+      normalize_provider_status(value, %{
+        "changesrequested" => "changes_requested",
+        "reviewrequired" => "review_required"
+      })
+
+  defp provider_merge_status(%{} = value) do
+    cond do
+      truthy?(Map.get(value, "merged")) ->
+        {:ok, "merged"}
+
+      closed_pr_state?(Map.get(value, "state")) ->
+        {:ok, "blocked"}
+
+      true ->
+        provider_merge_status(Map.get(value, "status") || Map.get(value, "mergeable_state") || Map.get(value, "state") || Map.get(value, "mergeable"))
+    end
+  end
+
+  defp provider_merge_status(true), do: {:ok, "clean"}
+  defp provider_merge_status(false), do: {:ok, "blocked"}
+
+  defp provider_merge_status(value),
+    do:
+      normalize_provider_status(value, %{
+        "mergeable" => "clean",
+        "clean" => "clean",
+        "has_hooks" => "clean",
+        "unstable" => "blocked",
+        "dirty" => "blocked",
+        "blocked" => "blocked",
+        "behind" => "blocked",
+        "draft" => "blocked",
+        "open" => "unknown",
+        "closed" => "blocked"
+      })
+
+  defp closed_pr_state?(state) when is_binary(state), do: String.downcase(String.trim(state)) == "closed"
+  defp closed_pr_state?(_state), do: false
+
+  defp normalize_provider_status(nil, _aliases), do: {:ok, "unknown"}
+
+  defp normalize_provider_status(value, aliases) when is_binary(value) do
+    normalized = value |> String.trim() |> String.downcase()
+    {:ok, Map.get(aliases, normalized, normalized)}
+  end
+
+  defp normalize_provider_status(_value, _aliases), do: {:error, :provider_malformed}
+
+  defp check_rollup_state(nil), do: {:ok, %{"status" => "unknown"}}
+  defp check_rollup_state([]), do: {:ok, %{"status" => "unknown"}}
+
+  defp check_rollup_state(checks) when is_list(checks) do
+    statuses = Enum.map(checks, &check_rollup_status/1)
+
+    status =
+      cond do
+        "failing" in statuses -> "failing"
+        "pending" in statuses -> "pending"
+        Enum.all?(statuses, &(&1 == "passing")) -> "passing"
+        true -> "unknown"
+      end
+
+    {:ok, %{"status" => status}}
+  end
+
+  defp check_rollup_state(_checks), do: {:error, :provider_malformed}
+
+  defp check_rollup_status(%{} = check) do
+    result = normalize_check_value(Map.get(check, "conclusion") || Map.get(check, "state"))
+    execution = normalize_check_value(Map.get(check, "status"))
+
+    cond do
+      result in ~w(success neutral skipped) -> "passing"
+      result in ~w(failure error cancelled timed_out startup_failure action_required stale) -> "failing"
+      result in ~w(pending expected) or execution in ~w(queued in_progress pending requested waiting) -> "pending"
+      true -> "unknown"
+    end
+  end
+
+  defp check_rollup_status(_check), do: "unknown"
+
+  defp normalize_check_value(value) when is_binary(value), do: String.downcase(value)
+  defp normalize_check_value(_value), do: nil
+
+  defp imported_state(metadata, key, allowed) do
+    case Map.get(metadata, key) do
+      nil ->
+        {:ok, %{"status" => "unknown"}}
+
+      %{"status" => status} = state when map_size(state) == 1 ->
+        if status in allowed, do: {:ok, state}, else: {:error, :invalid_recovery}
+
+      _invalid ->
+        {:error, :invalid_recovery}
+    end
+  end
+
+  defp imported_merge_state(metadata) do
+    case Map.get(metadata, "merge_state") do
+      nil ->
+        {:ok, %{"status" => "unknown", "merged" => false}}
+
+      %{"status" => status} = state when status in @merge_statuses ->
+        merged = Map.get(state, "merged", status == "merged")
+
+        if Map.keys(state) -- ["status", "merged"] == [] and is_boolean(merged) and merged == (status == "merged") do
+          {:ok, %{"status" => status, "merged" => merged}}
+        else
+          {:error, :invalid_recovery}
+        end
+
+      _invalid ->
+        {:error, :invalid_recovery}
+    end
+  end
+
+  defp maybe_put_provider_reference(payload, metadata) do
+    case clean_provider_reference(Map.get(metadata, "provider_reference")) do
+      nil -> payload
+      reference -> Map.put(payload, "provider_reference", reference)
+    end
+  end
+
+  defp truthy?(true), do: true
+  defp truthy?(value) when is_binary(value), do: String.downcase(String.trim(value)) in ["true", "merged"]
+  defp truthy?(_value), do: false
 
   defp ref(owner, repo, number, url) do
     %{owner: owner, repo: repo, repository: "#{owner}/#{repo}", number: number, url: url}

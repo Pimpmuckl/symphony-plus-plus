@@ -770,8 +770,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
     attach_tool(repo, claimed_server.session, "attach_pr", %{"number" => 258, "head_sha" => head_sha})
 
     sync_args = %{
-      "number" => 258,
-      "metadata" => %{"head_sha" => head_sha, "check_summary" => %{"conclusion" => "success"}}
+      "idempotency_key" => "sync-pr-after-reconnect",
+      "recovery" => %{
+        "number" => 258,
+        "repository" => package.repo,
+        "head_sha" => head_sha,
+        "branch" => package.branch_pattern,
+        "base_branch" => package.base_branch,
+        "base_sha" => "base-head",
+        "changed_files" => [],
+        "check_summary" => %{"status" => "passing"},
+        "review_state" => %{"status" => "unknown"},
+        "merge_state" => %{"status" => "unknown", "merged" => false},
+        "observed_at" => "2026-08-17T10:00:00Z"
+      }
     }
 
     sync_response = attach_tool(repo, claimed_server.session, "sync_pr", sync_args)
