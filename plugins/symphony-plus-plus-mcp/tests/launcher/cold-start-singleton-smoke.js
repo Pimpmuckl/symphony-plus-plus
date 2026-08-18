@@ -459,7 +459,7 @@ async function runCase(clientCount, shell, mode = "normal") {
       assert.ok(recovered.every((response) => response.result?.tools?.length === expectedTools.length), "Surviving adapters did not rebind tools/list.");
     } else if (mode.endsWith("ambiguous_tool")) {
       const indeterminate = mode.startsWith("powershell_fallback")
-        ? await requestClientLine(clients[0], 2000, '{"jsonrpc":"2.0","id":2000,"method":"tools/call","Method":"other","params":{"name":"fixture.mutate","arguments":{}}}')
+        ? await requestClientLine(clients[0], 2000, JSON.stringify({ jsonrpc: "2.0", id: 2000, method: "tools/call", Method: "other", params: { name: "fixture.mutate", arguments: { padding: "x".repeat(2_100_000) } } }))
         : await requestClient(clients[0], 2000, "tools/call", { name: "fixture.mutate", arguments: {} });
       assert.equal(indeterminate.id, 2000);
       assert.equal(indeterminate.error?.code, -32001);

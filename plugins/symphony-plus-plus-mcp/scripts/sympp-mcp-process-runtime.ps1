@@ -401,7 +401,9 @@ function Start-Frontend($Plan, [string]$BackendUrl, [string]$AssetsDir, [string]
 function ConvertFrom-McpRequestJson([string]$Line) {
   if ($PSVersionTable.PSEdition -eq "Desktop") {
     Add-Type -AssemblyName System.Web.Extensions
-    return (New-Object System.Web.Script.Serialization.JavaScriptSerializer).DeserializeObject($Line)
+    $serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $serializer.MaxJsonLength = [int]::MaxValue
+    return $serializer.DeserializeObject($Line)
   }
   return $Line | ConvertFrom-Json -AsHashtable
 }
@@ -602,7 +604,7 @@ function Test-McpToolCall([string]$Line) {
   try {
     $payload = ConvertFrom-McpRequestJson $Line
     return ($payload.Keys -ccontains "method") -and [string]$payload["method"] -ceq "tools/call"
-  } catch { return $false }
+  } catch { return $true }
 }
 
 function Invoke-McpBackendRecovery([scriptblock]$Recover, [string]$McpUrl, [string]$ClientId, [int]$HeartbeatIntervalSec, $StdinReadState) {
