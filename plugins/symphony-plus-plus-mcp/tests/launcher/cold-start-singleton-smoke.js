@@ -214,12 +214,16 @@ function startClient(barrier, launcher, environment, clients, latencies, readyTa
   return client;
 }
 
-function requestClient(client, id, method, params = {}) {
+function requestClientLine(client, id, line) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { client.pending.delete(id); reject(new Error(`Client request ${id} timed out. ${client.stderr}`)); }, 90000);
     client.pending.set(id, (response) => { clearTimeout(timeout); resolve(response); });
-    client.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
+    client.child.stdin.write(`${line}\n`);
   });
+}
+
+function requestClient(client, id, method, params = {}) {
+  return requestClientLine(client, id, JSON.stringify({ jsonrpc: "2.0", id, method, params }));
 }
 
 function assertLockFree(shell, startupLock, artifactLock) {
@@ -451,15 +455,17 @@ async function runCase(clientCount, shell, mode = "normal") {
     if (["backend_loss", "owner_loss"].includes(mode)) {
       const recovered = await Promise.all(recoveryClients.map((client, index) => requestClient(client, 1000 + index, "tools/list")));
       assert.ok(recovered.every((response) => response.result?.tools?.length === expectedTools.length), "Surviving adapters did not rebind tools/list.");
-    } else if (mode === "ambiguous_tool") {
-      const indeterminate = await requestClient(clients[0], 2000, "tools/call", { name: "fixture.mutate", arguments: {} });
+    } else if (mode.endsWith("ambiguous_tool")) {
+      const indeterminate = mode.startsWith("powershell_fallback")
+        ? await requestClientLine(clients[0], null, '{"jsonrpc":"2.0","id":2000,"method":"tools/call","Method":"other","params":{"name":"fixture.mutate","arguments":{}}}')
+        : await requestClient(clients[0], 2000, "tools/call", { name: "fixture.mutate", arguments: {} });
       assert.equal(indeterminate.error?.code, -32001);
       assert.equal(indeterminate.error?.data?.replayed, false);
       const recovered = await requestClient(clients[0], 2001, "tools/list");
       assert.equal(recovered.result?.tools?.length, expectedTools.length);
     }
-    if (["backend_loss", "owner_loss", "ambiguous_tool"].includes(mode) || backendOnlyReadRecovery) {
-      const expectedRecoveredLeases = mode === "ambiguous_tool" || backendOnlyReadRecovery ? 1 : recoveryClients.length;
+    if (["backend_loss", "owner_loss"].includes(mode) || mode.endsWith("ambiguous_tool") || backendOnlyReadRecovery) {
+      const expectedRecoveredLeases = mode.endsWith("ambiguous_tool") || backendOnlyReadRecovery ? 1 : recoveryClients.length;
       await waitFor(() => readJson(backendState)?.active_leases === expectedRecoveredLeases, "Recovered adapters did not retain their replacement backend leases.");
     }
     const activeBackend = readJson(backendState);
@@ -477,12 +483,12 @@ async function runCase(clientCount, shell, mode = "normal") {
     await waitFor(() => portAvailable(backendPort), "Backend listener did not stop after the final client exited.");
     const state = await waitFor(() => { const value = readJson(runtimeFile); return value?.backend?.status === "stopped" && value.backend.pid === null && value; }, "Runtime state did not record zero-client backend shutdown.");
     assert.equal(state.publication.status, "ready");
-    const recoveryMode = ["backend_loss", "owner_loss", "ambiguous_tool"].includes(mode) || backendOnlyReadRecovery;
-    const recoveryRebinds = ["backend_loss", "owner_loss"].includes(mode) ? recoveryClients.length : mode === "ambiguous_tool" || backendOnlyReadRecovery ? 1 : 0;
+    const recoveryMode = ["backend_loss", "owner_loss"].includes(mode) || mode.endsWith("ambiguous_tool") || backendOnlyReadRecovery;
+    const recoveryRebinds = ["backend_loss", "owner_loss"].includes(mode) ? recoveryClients.length : mode.endsWith("ambiguous_tool") || backendOnlyReadRecovery ? 1 : 0;
     assert.equal(backend.starts, recoveryMode ? 2 : 1);
     assert.equal(backend.initialize, clientCount + recoveryRebinds);
     assert.equal(backend.tools_list, clientCount + recoveryRebinds + (backendOnlyReadRecovery ? 1 : 0));
-    assert.equal(backend.mutations, mode === "ambiguous_tool" ? 1 : 0);
+    assert.equal(backend.mutations, mode.endsWith("ambiguous_tool") ? 1 : 0);
     assert.equal(backend.lease_peak, clientCount);
     assert.equal(backend.active_leases, 0);
     assert.equal(fs.readdirSync(path.join(symppHome, "runtime", "codex-plugin-leases"), { withFileTypes: true }).filter((entry) => entry.isFile()).length, 0);
@@ -490,7 +496,7 @@ async function runCase(clientCount, shell, mode = "normal") {
     assert.equal(channel.counts.archive_successes, 1);
     assert.equal(traceCount(traceDir, "artifact_prepare_end"), 1);
     assert.equal(traceCount(traceDir, "runtime_ready_published"), recoveryMode ? 2 : 1);
-    const recoveryLeaders = backendOnlyReadRecovery && mode.startsWith("powershell_fallback") ? traceCount(traceDir, "runtime_ready_published") - 1 : traceCount(traceDir, "backend_recovery_leader");
+    const recoveryLeaders = recoveryMode && mode.startsWith("powershell_fallback") ? traceCount(traceDir, "runtime_ready_published") - 1 : traceCount(traceDir, "backend_recovery_leader");
     assert.equal(recoveryLeaders, recoveryMode ? 1 : 0);
     if (recoveryMode) {
       assert.notEqual(activeBackend.pid, firstBackend.pid);
@@ -536,7 +542,7 @@ async function main() {
   const powershellFallback = await runCase(30, windowsPowerShell, "powershell_fallback");
   for (const mode of ["manifest_death", "artifact_death", "backend_death", "backend_prebind_death"]) results.push(await runCase(30, pwsh, mode));
   const recovery = [];
-  for (const mode of ["owner_loss", "backend_loss", "backend_only_read_recovery", "ambiguous_tool", "shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery", "powershell_fallback_recovery", "powershell_fallback_backend_only_read_recovery", "powershell_fallback_initialize_retry"]) recovery.push(await runCase(["shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery"].includes(mode) ? 3 : mode === "powershell_fallback_recovery" ? 4 : mode.endsWith("backend_only_read_recovery") || mode === "powershell_fallback_initialize_retry" ? 1 : 10, mode.startsWith("powershell_fallback") ? windowsPowerShell : pwsh, mode));
+  for (const mode of ["owner_loss", "backend_loss", "backend_only_read_recovery", "ambiguous_tool", "powershell_fallback_ambiguous_tool", "shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery", "powershell_fallback_recovery", "powershell_fallback_backend_only_read_recovery", "powershell_fallback_initialize_retry"]) recovery.push(await runCase(["shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery"].includes(mode) ? 3 : mode === "powershell_fallback_recovery" ? 4 : mode.endsWith("backend_only_read_recovery") || mode.endsWith("ambiguous_tool") || mode === "powershell_fallback_initialize_retry" ? 1 : 10, mode.startsWith("powershell_fallback") ? windowsPowerShell : pwsh, mode));
   process.stdout.write(`${JSON.stringify({ matrix: results.slice(0, 3), powershell_fallback: powershellFallback, leader_death: results.slice(3), recovery, powershell_5_1: true, pwsh: true, cleanup: true })}\n`);
 }
 
