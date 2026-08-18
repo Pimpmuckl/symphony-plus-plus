@@ -41,6 +41,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
 
@@ -445,7 +446,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
              session.assignment,
              work_package_id,
              attrs
-           ) do
+           ),
+         {:ok, _work_package} <- WorkPackageRepository.reactivate_if_unblocked(repo, work_package_id) do
       {:ok, ToolResult.tool_result(%{"progress_event" => ProgressEvents.payload(event)})}
     end
   end
