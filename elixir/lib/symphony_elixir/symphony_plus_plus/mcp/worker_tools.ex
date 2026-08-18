@@ -595,17 +595,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     end
   end
 
-  defp resolve_worker_blocker(:active, repo, session, %WorkPackage{status: "blocked"} = work_package, progress_events, blocker_id, attrs, idempotency_key) do
+  defp resolve_worker_blocker(:active, repo, session, %WorkPackage{status: "blocked"} = work_package, _progress_events, _blocker_id, attrs, idempotency_key) do
     with :ok <- ProgressEvents.reject_ready_evidence_mutation(repo, session, "resolve_blocker"),
          {:ok, result} <- ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, "resolve_blocker"),
-         {:ok, _work_package} <-
-           maybe_unblock_worker_package(
-             repo,
-             session,
-             work_package,
-             progress_events,
-             blocker_id
-           ) do
+         {:ok, _work_package} <- WorkPackageRepository.reactivate_if_unblocked(repo, work_package.id) do
       {:ok, result}
     end
   end
@@ -627,19 +620,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
       %{active: true} -> {:tool_error, "blocker_owned_by_another_actor"}
       %{} -> {:ok, :already_resolved}
       nil -> {:tool_error, "blocker_not_found"}
-    end
-  end
-
-  defp maybe_unblock_worker_package(repo, %Session{} = session, %WorkPackage{} = work_package, progress_events, blocker_id) do
-    active_blockers =
-      progress_events
-      |> BlockerProjection.blockers()
-      |> Enum.filter(&(&1.active and &1.id != blocker_id))
-
-    if active_blockers == [] do
-      LifecycleService.transition(repo, work_package, "active", actor(session))
-    else
-      {:ok, work_package}
     end
   end
 

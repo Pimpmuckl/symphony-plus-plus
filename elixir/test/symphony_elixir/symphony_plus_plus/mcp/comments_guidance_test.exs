@@ -139,7 +139,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
                work_request_work_package_attrs(id: "WRS-MCP-ARCH-PACKAGE-SURFACES", base_branch: work_request.base_branch)
              )
 
-    work_package = repo.update!(Ecto.Changeset.change(work_package, status: "implementing"))
+    work_package = repo.update!(Ecto.Changeset.change(work_package, status: "blocked"))
 
     {_phase_anchor, phase_session, _phase_grant} =
       create_phase_architect_session(
@@ -232,6 +232,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
     resolve_event_id = get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event", "id"])
     refute Map.has_key?(get_in(resolve_blocker_response, ["result", "structuredContent", "progress_event"]), "payload")
     assert repo.get!(ProgressEvent, resolve_event_id).payload["active"] == false
+    assert repo.get!(WorkPackage, work_package.id).status == "active"
 
     anchor_blocker_id = "arch-policy-anchor-blocker"
 

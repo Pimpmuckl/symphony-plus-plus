@@ -144,6 +144,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
+  @spec reactivate_if_unblocked(repo(), String.t()) :: {:ok, WorkPackage.t()} | {:error, error()}
+  def reactivate_if_unblocked(repo, id) when is_atom(repo) and is_binary(id) do
+    with {:ok, work_package} <- get(repo, id) do
+      maybe_reactivate_if_unblocked(repo, work_package)
+    end
+  end
+
+  defp maybe_reactivate_if_unblocked(repo, %WorkPackage{status: "blocked"} = work_package) do
+    with {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package.id) do
+      if Enum.any?(BlockerProjection.blockers(progress_events), & &1.active) do
+        {:ok, work_package}
+      else
+        update_status(repo, work_package.id, "blocked", "active")
+      end
+    end
+  end
+
+  defp maybe_reactivate_if_unblocked(_repo, %WorkPackage{} = work_package), do: {:ok, work_package}
+
   @doc false
   @spec close_delivery_work_package(repo(), WorkRequest.t(), WorkPackage.t(), String.t()) ::
           {:ok, map() | nil} | {:error, error()}
