@@ -354,7 +354,7 @@ async function certifyJobs({ clients, shell, runtimeFile, backendState, backendP
 
   await closeJob(sentinel);
   await waitFor(() => portAvailable(backendPort), "Final Job close retained the backend listener.");
-  await waitFor(() => activeLeasePids(symppHome).length === 0, "Final Job close retained an active adapter lease.");
+  await waitFor(() => fs.readdirSync(path.join(symppHome, "runtime", "codex-plugin-leases"), { withFileTypes: true }).filter((entry) => entry.isFile()).length === 0, "Final Job close retained an adapter lease file.");
   const seen = [...new Set(clients.flatMap((client) => jobState(client).seen))];
   assert.ok(seen.length >= clients.length * 2, "Job snapshots did not observe launcher descendants.");
   assert.ok(seen.every((pid) => !processAlive(pid)), `Final Job close retained test-owned processes: ${seen.filter(processAlive)}`);
