@@ -272,8 +272,11 @@ function listenerPids(shell, port) {
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim() ? [].concat(JSON.parse(result.stdout.trim())) : [];
 }
-async function closeJob(client) {
-  if (client.child.exitCode === null) process.kill(client.child.pid);
+async function closeJob(client, graceful = false) {
+  if (client.child.exitCode === null) {
+    if (graceful) client.child.stdin.end();
+    else process.kill(client.child.pid);
+  }
   await client.result;
   await waitFor(() => jobState(client).seen.every((pid) => !processAlive(pid)), `Closed Job retained a process. ${JSON.stringify(jobState(client))}`);
 }
@@ -352,7 +355,7 @@ async function certifyJobs({ clients, shell, runtimeFile, backendState, backendP
   assert.equal(readJson(backendState).mutations, 1);
   assert.equal(traceCount(traceDir, "runtime_ready_published"), 6);
 
-  await closeJob(sentinel);
+  await closeJob(sentinel, true);
   await waitFor(() => portAvailable(backendPort), "Final Job close retained the backend listener.");
   await waitFor(() => fs.readdirSync(path.join(symppHome, "runtime", "codex-plugin-leases"), { withFileTypes: true }).filter((entry) => entry.isFile()).length === 0, "Final Job close retained an adapter lease file.");
   const seen = [...new Set(clients.flatMap((client) => jobState(client).seen))];
