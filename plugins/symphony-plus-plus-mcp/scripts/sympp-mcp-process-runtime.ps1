@@ -398,11 +398,19 @@ function Start-Frontend($Plan, [string]$BackendUrl, [string]$AssetsDir, [string]
   }
 }
 
+function ConvertFrom-McpRequestJson([string]$Line) {
+  if ($PSVersionTable.PSEdition -eq "Desktop") {
+    Add-Type -AssemblyName System.Web.Extensions
+    return (New-Object System.Web.Script.Serialization.JavaScriptSerializer).DeserializeObject($Line)
+  }
+  return $Line | ConvertFrom-Json -AsHashtable
+}
+
 function Get-RequestIdForError([string]$Line) {
   try {
-    $payload = $Line | ConvertFrom-Json
-    if ($payload.PSObject.Properties["id"]) {
-      return $payload.id
+    $payload = ConvertFrom-McpRequestJson $Line
+    if ($payload.Keys -ccontains "id") {
+      return $payload["id"]
     }
   } catch {
   }
@@ -591,7 +599,10 @@ function Test-McpBackendUnavailableResponse($Response) {
 }
 
 function Test-McpToolCall([string]$Line) {
-  try { return [string](($Line | ConvertFrom-Json).method) -eq "tools/call" } catch { return $true }
+  try {
+    $payload = ConvertFrom-McpRequestJson $Line
+    return ($payload.Keys -ccontains "method") -and [string]$payload["method"] -ceq "tools/call"
+  } catch { return $false }
 }
 
 function Invoke-McpBackendRecovery([scriptblock]$Recover, [string]$McpUrl, [string]$ClientId, [int]$HeartbeatIntervalSec, $StdinReadState) {

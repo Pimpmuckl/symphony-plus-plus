@@ -449,7 +449,9 @@ async function runCase(clientCount, shell, mode = "normal") {
       recoveryClients = clients.filter((client) => client.child.exitCode === null);
     } else if (backendOnlyReadRecovery) {
       fs.writeFileSync(failReadFile, "ready");
-      const recovered = await requestClient(clients[0], 3500, "tools/list");
+      const recovered = mode.startsWith("powershell_fallback")
+        ? await requestClientLine(clients[0], 3500, '{"jsonrpc":"2.0","id":3500,"method":"tools/list","Method":"other","params":{}}')
+        : await requestClient(clients[0], 3500, "tools/list");
       assert.equal(recovered.result?.tools?.length, expectedTools.length, `Read-only request was not retried after backend exit. ${JSON.stringify(recovered)}`);
     }
     if (["backend_loss", "owner_loss"].includes(mode)) {
@@ -457,8 +459,9 @@ async function runCase(clientCount, shell, mode = "normal") {
       assert.ok(recovered.every((response) => response.result?.tools?.length === expectedTools.length), "Surviving adapters did not rebind tools/list.");
     } else if (mode.endsWith("ambiguous_tool")) {
       const indeterminate = mode.startsWith("powershell_fallback")
-        ? await requestClientLine(clients[0], null, '{"jsonrpc":"2.0","id":2000,"method":"tools/call","Method":"other","params":{"name":"fixture.mutate","arguments":{}}}')
+        ? await requestClientLine(clients[0], 2000, '{"jsonrpc":"2.0","id":2000,"method":"tools/call","Method":"other","params":{"name":"fixture.mutate","arguments":{}}}')
         : await requestClient(clients[0], 2000, "tools/call", { name: "fixture.mutate", arguments: {} });
+      assert.equal(indeterminate.id, 2000);
       assert.equal(indeterminate.error?.code, -32001);
       assert.equal(indeterminate.error?.data?.replayed, false);
       const recovered = await requestClient(clients[0], 2001, "tools/list");
