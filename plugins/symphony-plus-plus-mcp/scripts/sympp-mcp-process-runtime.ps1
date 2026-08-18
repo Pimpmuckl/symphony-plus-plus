@@ -591,7 +591,7 @@ function Test-McpBackendUnavailableResponse($Response) {
 }
 
 function Test-McpToolCall([string]$Line) {
-  try { return [string](($Line | ConvertFrom-Json).method) -eq "tools/call" } catch { return $false }
+  try { $payload = $Line | ConvertFrom-Json; return @($payload | Where-Object { [string]$_.method -eq "tools/call" }).Count -gt 0 } catch { return $false }
 }
 
 function Invoke-McpBackendRecovery([scriptblock]$Recover, [string]$McpUrl, [string]$ClientId, [int]$HeartbeatIntervalSec, $StdinReadState) {

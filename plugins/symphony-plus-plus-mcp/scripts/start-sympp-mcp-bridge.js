@@ -863,7 +863,8 @@ async function bridge(identity, state, runtimeFile) {
         response = { ok: false, error: error.message, lines: [], mayHaveReachedBackend: error.symppRequestMayHaveReachedBackend };
       }
       if (backendUnavailable(response) && current.state.backend.managed === true) {
-        const ambiguousToolCall = parsed && parsed.method === "tools/call" && response.mayHaveReachedBackend !== false;
+        const toolCall = parsed && (parsed.method === "tools/call" || Array.isArray(parsed) && parsed.some((request) => request && request.method === "tools/call"));
+        const ambiguousToolCall = toolCall && response.mayHaveReachedBackend !== false;
         let recovered = false;
         try { await recover(); recovered = true; } catch (error) {
           if (error.symppFatal) throw error;
@@ -873,7 +874,7 @@ async function bridge(identity, state, runtimeFile) {
           process.stdout.write(`${JSON.stringify(indeterminateToolCall(parsed.id))}\n`);
           continue;
         }
-        if (recovered && (replayProvablyUnsent(response) || !parsed || parsed.method !== "tools/call")) {
+        if (recovered && (replayProvablyUnsent(response) || !toolCall)) {
           try {
             if (!requestProtocol) await initializeSession();
             response = await mcpPost(current.mcpUrl, line, sessionId, protocol, timeoutMs);
