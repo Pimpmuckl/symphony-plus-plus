@@ -398,11 +398,21 @@ function Start-Frontend($Plan, [string]$BackendUrl, [string]$AssetsDir, [string]
   }
 }
 
+function ConvertFrom-McpRequestJson([string]$Line) {
+  if ($PSVersionTable.PSEdition -eq "Desktop") {
+    Add-Type -AssemblyName System.Web.Extensions
+    $serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $serializer.MaxJsonLength = [int]::MaxValue
+    return $serializer.DeserializeObject($Line)
+  }
+  return $Line | ConvertFrom-Json -AsHashtable
+}
+
 function Get-RequestIdForError([string]$Line) {
   try {
-    $payload = $Line | ConvertFrom-Json
-    if ($payload.PSObject.Properties["id"]) {
-      return $payload.id
+    $payload = ConvertFrom-McpRequestJson $Line
+    if ($payload.Keys -ccontains "id") {
+      return $payload["id"]
     }
   } catch {
   }
@@ -591,7 +601,10 @@ function Test-McpBackendUnavailableResponse($Response) {
 }
 
 function Test-McpToolCall([string]$Line) {
-  try { return [string](($Line | ConvertFrom-Json).method) -eq "tools/call" } catch { return $false }
+  try {
+    $payload = ConvertFrom-McpRequestJson $Line
+    return ($payload.Keys -ccontains "method") -and [string]$payload["method"] -ceq "tools/call"
+  } catch { return $true }
 }
 
 function Invoke-McpBackendRecovery([scriptblock]$Recover, [string]$McpUrl, [string]$ClientId, [int]$HeartbeatIntervalSec, $StdinReadState) {
@@ -712,7 +725,7 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
         if ($null -ne $recovered) {
           $McpUrl = $recovered.mcp_url; $heartbeatIntervalMs = $recovered.heartbeat_interval_ms
           $sessionId = $null; $protocolVersion = $null; $needsInitialize = $true
-          if (-not $requestMayHaveReachedBackend) {
+          if (-not $requestMayHaveReachedBackend -or -not (Test-McpToolCall $line)) {
             if (-not [string]::IsNullOrWhiteSpace($requestProtocolVersion)) {
               $needsInitialize = $false
             } else {

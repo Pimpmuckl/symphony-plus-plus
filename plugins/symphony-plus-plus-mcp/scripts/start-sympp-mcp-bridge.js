@@ -861,7 +861,7 @@ async function bridge(identity, state, runtimeFile) {
           process.stdout.write(`${JSON.stringify(indeterminateToolCall(parsed.id))}\n`);
           continue;
         }
-        if (recovered && replayProvablyUnsent(response)) {
+        if (recovered && (replayProvablyUnsent(response) || !parsed || parsed.method !== "tools/call")) {
           try {
             if (!requestProtocol) await initializeSession();
             response = await mcpPost(current.mcpUrl, line, sessionId, protocol, timeoutMs);
