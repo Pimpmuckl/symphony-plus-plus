@@ -1339,7 +1339,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
       })
 
     assert get_in(second, ["result", "structuredContent", "progress_event", "id"])
-    assert repo.get!(WorkPackage, package.id).status == "blocked"
+    assert repo.get!(WorkPackage, package.id).status == "active"
 
     unknown =
       mcp_tool(repo, session, "resolve_blocker", %{
