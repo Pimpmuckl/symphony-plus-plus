@@ -26,6 +26,7 @@ let generationWatchStartedAtMs = 0;
 let livenessServer = null;
 let livenessPipe = null;
 let livenessToken = null;
+let preparationChild = null;
 
 function trace(event) {
   const dir = process.env.SYMPP_LAUNCHER_TRACE_DIR;
@@ -422,6 +423,7 @@ function resolveStateIdentity(state, pluginRoot, cachedIdentity) {
   if (String(state.runtime_key || "").toLowerCase() !== key.toLowerCase()) return null;
   return {
     backend, dashboard, contract, runtimeKey: key, revision: identity.revision, headless,
+    epoch: `${Number(state.backend.pid) || 0}:${String(state.publication && state.publication.backend && state.publication.backend.process_start_time_utc_ticks || "external")}`,
     pluginRoot: path.resolve(pluginRoot), sourceRoot: path.resolve(String(sourceRoot)),
     generationKey: identity.generation_key || identity.generationKey,
     generationMarker: identity.generation_marker || identity.generationMarker,
@@ -433,13 +435,23 @@ function request(urlString, method, body, headers, timeoutMs) {
   return new Promise((resolve, reject) => {
     const url = new URL(urlString);
     if (!loopbackOrigin(url.origin)) return reject(new Error(`non-loopback URL rejected: ${url.origin}`));
+    let connected = false;
     const req = http.request(url, { method, headers: headers || {}, agent }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("end", () => resolve({ status: res.statusCode || 0, headers: res.headers, body: Buffer.concat(chunks).toString("utf8") }));
+      res.once("aborted", () => { const error = new Error("response aborted before completion"); error.symppRequestMayHaveReachedBackend = true; reject(error); });
+      res.once("error", (error) => { error.symppRequestMayHaveReachedBackend = true; reject(error); });
+    });
+    req.once("socket", (socket) => {
+      if (socket.connecting) socket.once("connect", () => { connected = true; });
+      else connected = true;
     });
     req.setTimeout(timeoutMs, () => req.destroy(new Error(`request timed out after ${timeoutMs}ms`)));
-    req.on("error", reject);
+    req.on("error", (error) => {
+      error.symppRequestMayHaveReachedBackend = connected;
+      reject(error);
+    });
     if (body !== undefined && body !== null) req.end(body);
     else req.end();
   });
@@ -462,7 +474,7 @@ async function mcpPost(url, body, sessionId, protocol, timeoutMs) {
   if (sessionId) headers["Mcp-Session-Id"] = sessionId;
   if (protocol) headers["MCP-Protocol-Version"] = protocol;
   const response = await request(url, "POST", body, headers, timeoutMs);
-  return { ok: response.status >= 200 && response.status < 300, status: response.status, headers: response.headers, lines: responseLines(response), error: response.body || `HTTP ${response.status}` };
+  return { ok: response.status >= 200 && response.status < 300, status: response.status, headers: response.headers, lines: responseLines(response), error: response.body || `HTTP ${response.status}`, mayHaveReachedBackend: true };
 }
 
 function initializeBody() {
@@ -587,6 +599,7 @@ function createLocalLease(runtimeFile, state, identity) {
     runtime_key: identity.runtimeKey,
     runtime_kind: state.backend.managed === true ? "managed" : String(state.backend.status || ""),
     source_revision: identity.revision,
+    backend_epoch: identity.epoch,
     backend_url: identity.backend,
     dashboard_origin: identity.dashboard,
   };
@@ -621,18 +634,156 @@ function cleanupLastDetach(runtimeFile, key, cleanupScript) {
   else trace("last_detach_cleanup_completed");
 }
 
+function backendUnavailable(response) {
+  return !response.ok && !Number.isInteger(response.status);
+}
+
+function replayProvablyUnsent(response) {
+  return response.mayHaveReachedBackend === false;
+}
+
+function indeterminateToolCall(id) {
+  return {
+    jsonrpc: "2.0",
+    id,
+    error: {
+      code: -32001,
+      message: "Symphony++ tool call outcome is indeterminate.",
+      data: { reason: "backend_lost_after_request_started", replayed: false },
+    },
+  };
+}
+
+async function resolveHealthyRuntime(runtimeFile, pluginRoot, cancelled) {
+  const lockFile = `${runtimeFile}.cold.lock`;
+  const configuredSeconds = Number(process.env.SYMPP_COLD_START_TIMEOUT_SEC || 300);
+  const deadline = Date.now() + (Number.isFinite(configuredSeconds) ? Math.max(30, Math.min(330, configuredSeconds)) : 300) * 1000;
+  while (!cancelled() && Date.now() < deadline) {
+    const state = readJson(runtimeFile);
+    const identity = state && (!state.publication || state.publication.status === "ready")
+      ? resolveStateIdentity(state, pluginRoot, await resolveCachedIdentity(pluginRoot))
+      : null;
+    if (identity) {
+      const health = await backendHealth(identity.backend);
+      if (health && health.healthy && health.contract === identity.contract) return { state, identity };
+      if (state.backend.managed !== true) return null;
+    }
+    if (cancelled()) return null;
+    const lock = tryAcquireProcessLock(lockFile);
+    if (lock) {
+      try {
+        const confirmed = readJson(runtimeFile);
+        const confirmedIdentity = confirmed && (!confirmed.publication || confirmed.publication.status === "ready")
+          ? resolveStateIdentity(confirmed, pluginRoot, await resolveCachedIdentity(pluginRoot))
+          : null;
+        const health = confirmedIdentity && await backendHealth(confirmedIdentity.backend);
+        if (!(health && health.healthy && health.contract === confirmedIdentity.contract)) {
+          try { fs.unlinkSync(path.join(path.dirname(runtimeFile), "codex-plugin-health.json")); } catch (_) { }
+          trace("backend_recovery_leader");
+          if (!cancelled()) await prepareColdRuntime();
+        }
+      } finally {
+        releaseProcessLock(lockFile, lock);
+      }
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 100 + Math.floor(Math.random() * 201)));
+    }
+  }
+  return null;
+}
+
 async function bridge(identity, state, runtimeFile) {
-  const mcpUrl = `${identity.backend}/mcp`;
+  const pluginRoot = path.resolve(__dirname, "..");
   const clientId = `bridge-${process.pid}-${crypto.randomUUID().replace(/-/g, "")}`;
+  let current = { identity, state, mcpUrl: `${identity.backend}/mcp` };
   let localLease = null;
   let cleanupScript = null;
   let cleanupAllowed = true;
   let startupLock = null;
   let attached = false;
   let heartbeat = null;
+  let recoveryPromise = null;
+  let closing = false;
+  let fatalRecoveryError = null;
+  let input = null;
   let sessionId = null;
   let protocol = null;
   const timeoutMs = Math.max(1, Math.min(3600, Number(process.env.SYMPP_MCP_HTTP_TIMEOUT_SEC || 300))) * 1000;
+  const scheduleHeartbeat = (attachedResponse) => {
+    if (heartbeat) clearInterval(heartbeat);
+    heartbeat = null;
+    if (closing) return;
+    const requested = Math.max(5, Math.min(540, Number(process.env.SYMPP_MCP_CLIENT_HEARTBEAT_SEC || 300))) * 1000;
+    const stale = Number(attachedResponse && attachedResponse.stale_after_ms) || 0;
+    const interval = stale > 1000 ? Math.min(requested, Math.max(1000, stale - Math.min(60000, Math.max(1000, Math.floor(stale / 10))))) : requested;
+    heartbeat = setInterval(() => {
+      clientLease(current.mcpUrl, clientId, "heartbeat", false).then((response) => {
+        if (!response && !closing && current.state.backend.managed === true) recover().catch((error) => {
+          if (error.symppFatal) {
+            fatalRecoveryError = error;
+            if (input) input.close();
+          } else diagnostic(`Symphony++ backend recovery failed: ${error.message}`);
+        });
+      });
+    }, interval);
+  };
+  const adopt = async (runtime) => {
+    const next = { ...runtime, mcpUrl: `${runtime.identity.backend}/mcp` };
+    const replacementLease = next.identity.runtimeKey.toLowerCase() === current.identity.runtimeKey.toLowerCase()
+      ? localLease
+      : createLocalLease(runtimeFile, next.state, next.identity);
+    let attachedResponse;
+    let nextCleanupScript;
+    let replacementAttached = false;
+    try {
+      attachedResponse = await clientLease(next.mcpUrl, clientId, "attach", true);
+      replacementAttached = true;
+      trace("replacement_lease_attached");
+      nextCleanupScript = prepareCleanupScript(next.identity);
+      if (nextCleanupScript === CLEANUP_SOURCE_CHANGED) {
+        const error = new Error("Installed Symphony++ cleanup scripts changed during backend recovery.");
+        error.symppFatal = true;
+        throw error;
+      }
+      if (!nextCleanupScript) throw new Error("Symphony++ cleanup scripts were unavailable during backend recovery.");
+      if (!await generationValidAtAttachment(next.identity)) {
+        const error = new Error("Installed Symphony++ generation changed during backend recovery.");
+        error.symppFatal = true;
+        throw error;
+      }
+    } catch (error) {
+      if (replacementAttached) await clientLease(next.mcpUrl, clientId, "detach", false);
+      if (replacementLease !== localLease) { try { fs.unlinkSync(replacementLease); } catch (_) { } }
+      throw error;
+    }
+    if (attached && current.mcpUrl !== next.mcpUrl) await clientLease(current.mcpUrl, clientId, "detach", false);
+    if (replacementLease !== localLease) { try { fs.unlinkSync(localLease); } catch (_) { } }
+    localLease = replacementLease;
+    current = next;
+    cleanupScript = nextCleanupScript;
+    attached = true;
+    sessionId = null;
+    scheduleHeartbeat(attachedResponse);
+    closeGenerationWatchers();
+    trace("backend_recovery_ready");
+  };
+  const recover = () => {
+    if (!recoveryPromise) {
+      recoveryPromise = (async () => {
+        const runtime = await resolveHealthyRuntime(runtimeFile, pluginRoot, () => closing);
+        if (!runtime) throw new Error("No healthy managed Symphony++ backend was elected.");
+        if (runtime.identity.epoch !== current.identity.epoch || runtime.identity.runtimeKey !== current.identity.runtimeKey || !sessionId) await adopt(runtime);
+        else closeGenerationWatchers();
+      })().finally(() => { recoveryPromise = null; });
+    }
+    return recoveryPromise;
+  };
+  const initializeSession = async () => {
+    const initialized = await mcpPost(current.mcpUrl, initializeBody(), null, null, timeoutMs);
+    if (!initialized.ok) throw new Error(initialized.error || "Symphony++ MCP session reinitialization failed.");
+    sessionId = String(initialized.headers["mcp-session-id"] || "");
+    protocol = protocolFrom(initialized.lines) || protocol || "2025-03-26";
+  };
   try {
     try {
       startupLock = await enterStartupLock(runtimeFile);
@@ -662,6 +813,7 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_state");
       return false;
     }
+    current = { identity: confirmed, state: confirmedState, mcpUrl: `${confirmed.backend}/mcp` };
     const preflight = await ensureRuntimeHealth(runtimeFile, confirmedState, confirmed, clientId);
     if (preflight.attachedResponse) {
       attached = true;
@@ -677,7 +829,7 @@ async function bridge(identity, state, runtimeFile) {
     let attachedResponse = preflight.attachedResponse;
     if (!attachedResponse) {
       try {
-        attachedResponse = await clientLease(mcpUrl, clientId, "attach", true);
+        attachedResponse = await clientLease(current.mcpUrl, clientId, "attach", true);
         attached = true;
       } catch (_) {
         trace("warm_miss_backend");
@@ -687,14 +839,11 @@ async function bridge(identity, state, runtimeFile) {
     if (!generationValidForAttachment(identity)) return false;
     closeGenerationWatchers();
     trace("generation_attach_handles_released");
-    const requestedHeartbeat = Math.max(5, Math.min(540, Number(process.env.SYMPP_MCP_CLIENT_HEARTBEAT_SEC || 300))) * 1000;
-    const stale = Number(attachedResponse && attachedResponse.stale_after_ms) || 0;
-    const heartbeatMs = stale > 1000 ? Math.min(requestedHeartbeat, Math.max(1000, stale - Math.min(60000, Math.max(1000, Math.floor(stale / 10))))) : requestedHeartbeat;
-    heartbeat = setInterval(() => { clientLease(mcpUrl, clientId, "heartbeat", false); }, heartbeatMs);
+    scheduleHeartbeat(attachedResponse);
     trace("node_bridge_selected");
     diagnostic(`Symphony++ MCP bridge attached: backend=${confirmed.backend} dashboard=${confirmed.dashboard ? confirmed.dashboard + "/sympp/board" : "disabled"} runtime=${runtimeFile}`);
 
-    const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
+    input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
     for await (const line of input) {
       if (!line.trim()) continue;
       let parsed = null;
@@ -702,19 +851,38 @@ async function bridge(identity, state, runtimeFile) {
       const requestProtocol = parsed && parsed.method === "initialize" && parsed.params ? String(parsed.params.protocolVersion || "") : null;
       let response;
       try {
-        response = await mcpPost(mcpUrl, line, sessionId, protocol, timeoutMs);
+        if (!requestProtocol && !sessionId && protocol) await initializeSession();
+        response = await mcpPost(current.mcpUrl, line, sessionId, protocol, timeoutMs);
         const nextSession = response.headers["mcp-session-id"];
         if (nextSession) sessionId = String(nextSession);
         if (!response.ok && response.status === 404 && sessionId && !requestProtocol) {
-          const initialized = await mcpPost(mcpUrl, initializeBody(), null, null, timeoutMs);
-          if (initialized.ok) {
-            sessionId = String(initialized.headers["mcp-session-id"] || "");
-            protocol = protocolFrom(initialized.lines) || "2025-03-26";
-            response = await mcpPost(mcpUrl, line, sessionId, protocol, timeoutMs);
-          }
+          await initializeSession();
+          response = await mcpPost(current.mcpUrl, line, sessionId, protocol, timeoutMs);
         }
       } catch (error) {
-        response = { ok: false, error: error.message, lines: [] };
+        response = { ok: false, error: error.message, lines: [], mayHaveReachedBackend: error.symppRequestMayHaveReachedBackend };
+      }
+      if (backendUnavailable(response) && current.state.backend.managed === true) {
+        const ambiguousToolCall = parsed && parsed.method === "tools/call" && response.mayHaveReachedBackend !== false;
+        let recovered = false;
+        try { await recover(); recovered = true; } catch (error) {
+          if (error.symppFatal) throw error;
+          response.error = `${response.error} Recovery failed: ${error.message}`;
+        }
+        if (ambiguousToolCall) {
+          process.stdout.write(`${JSON.stringify(indeterminateToolCall(parsed.id))}\n`);
+          continue;
+        }
+        if (recovered && replayProvablyUnsent(response)) {
+          try {
+            if (!requestProtocol) await initializeSession();
+            response = await mcpPost(current.mcpUrl, line, sessionId, protocol, timeoutMs);
+            const nextSession = response.headers["mcp-session-id"];
+            if (nextSession) sessionId = String(nextSession);
+          } catch (error) {
+            response = { ok: false, error: error.message, lines: [] };
+          }
+        }
       }
       if (!response.ok) {
         process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: parsed ? parsed.id : null, error: { code: -32000, message: "Symphony++ HTTP MCP bridge request failed.", data: { detail: response.error } } })}\n`);
@@ -725,24 +893,37 @@ async function bridge(identity, state, runtimeFile) {
       }
       for (const content of response.lines) process.stdout.write(`${content.replace(/\r?\n/g, "")}\n`);
     }
+    if (fatalRecoveryError) throw fatalRecoveryError;
     return true;
   } finally {
+    closing = true;
     if (startupLock) { try { fs.closeSync(startupLock); } catch (_) { } }
     if (heartbeat) clearInterval(heartbeat);
+    agent.destroy();
+    cancelPreparation();
+    if (recoveryPromise) { try { await recoveryPromise; } catch (_) { } }
     if (localLease) { try { fs.unlinkSync(localLease); } catch (_) { } }
-    if (attached) await clientLease(mcpUrl, clientId, "detach", false);
+    if (attached) await clientLease(current.mcpUrl, clientId, "detach", false);
     closeGenerationWatchers();
-    if (cleanupAllowed && cleanupScript) cleanupLastDetach(runtimeFile, identity.runtimeKey, cleanupScript);
+    if (cleanupAllowed && cleanupScript) cleanupLastDetach(runtimeFile, current.identity.runtimeKey, cleanupScript);
     closeLivenessProbe();
   }
 }
 
 function runPreparation(executable, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { env: process.env, stdio: ["ignore", "ignore", "inherit"], windowsHide: true });
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code ?? 1));
+    const child = spawn(executable, args, { env: { ...process.env, SYMPP_BACKEND_OWNER_PID: String(process.pid) }, stdio: ["ignore", "ignore", "inherit"], windowsHide: true });
+    preparationChild = child;
+    child.once("error", (error) => { if (preparationChild === child) preparationChild = null; reject(error); });
+    child.once("exit", (code) => { if (preparationChild === child) preparationChild = null; resolve(code ?? 1); });
   });
+}
+
+function cancelPreparation() {
+  const child = preparationChild;
+  if (!child || !child.pid || child.exitCode !== null) return;
+  if (process.platform === "win32") spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+  else child.kill("SIGTERM");
 }
 
 async function prepareColdRuntime() {
@@ -814,5 +995,5 @@ if (require.main === module) {
     process.exit(1);
   });
 } else {
-  module.exports = { generationFromMarker, generationKey, resolveStateIdentity };
+  module.exports = { backendUnavailable, generationFromMarker, generationKey, replayProvablyUnsent, resolveStateIdentity };
 }
