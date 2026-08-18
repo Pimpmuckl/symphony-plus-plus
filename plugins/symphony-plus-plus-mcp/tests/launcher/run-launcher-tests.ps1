@@ -3,6 +3,9 @@ $ErrorActionPreference = "Stop"
 function Assert-True($Condition, [string]$Message) {
   if (-not $Condition) { throw $Message }
 }
+$inheritedPriority = & (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -NonInteractive -Command '[System.Diagnostics.Process]::GetCurrentProcess().PriorityClass'
+Assert-True ([System.Diagnostics.Process]::GetCurrentProcess().PriorityClass -eq [System.Diagnostics.ProcessPriorityClass]::BelowNormal) "Launcher test parent must run BelowNormal"
+Assert-True ($inheritedPriority -eq "BelowNormal") "Launcher test descendants must inherit BelowNormal priority"
 function Import-ScriptFunction([string]$Path, [string]$Name) {
   $tokens = $null
   $errors = $null
@@ -502,6 +505,13 @@ Assert-True (($coldSmoke.recovery | Where-Object mode -eq "cleanup_source_change
 Assert-True (($coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_recovery").fallback_recovery -and ($coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_recovery").cancelled_recovery) "Surviving PowerShell fallback adapters must retain STDIO, rebind the replacement, cancel recovery on final close, and drain it after final detach"
 Assert-True (($coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_initialize_retry").initialize_retry) "A provably unsent initialize must be retransmitted after PowerShell fallback recovery"
 Assert-True ($coldSmoke.powershell_fallback.clients -eq 30 -and $coldSmoke.powershell_fallback.preparations -eq 1 -and $coldSmoke.powershell_fallback.backends -eq 1) "Direct PowerShell fallback must elect one cold leader before installed identity and runtime work"
+$jobCertificationJson = & (Join-Path $PSScriptRoot "run-job-object-certification.ps1")
+$jobCertificationExitCode = $LASTEXITCODE
+Assert-True ($jobCertificationExitCode -eq 0) "Windows Job Object certification must pass"
+$jobCertification = $jobCertificationJson | ConvertFrom-Json
+Assert-True ($jobCertification.clients -eq 32 -and $jobCertification.initial_epochs -eq 1 -and $jobCertification.owner_rotations -eq 3) "Independent Job clients must preserve singleton startup and three owner rotations"
+Assert-True ($jobCertification.backend_recoveries -eq 2 -and $jobCertification.mutations -eq 1 -and $jobCertification.original_stdio) "Job clients must preserve backend recovery, ambiguous-call safety, and original follower STDIO"
+Assert-True ($jobCertification.processes_after -eq 0 -and $jobCertification.listeners_after -eq 0 -and $jobCertification.active_leases_after -eq 0) "Final Job close must leave no owned process, listener, or active lease"
 $persistentRuntime = @(& (Join-Path $PSScriptRoot "persistent-artifact-runtime-smoke.ps1"))[-1] | ConvertFrom-Json
 Assert-True ($persistentRuntime.installed_waves -eq 2 -and $persistentRuntime.initialize_and_tools_list -eq 3 -and $persistentRuntime.installed_pids_distinct) "Installed command must stop the artifact-static runtime and start a new backend PID for the next wave"
 Assert-True ($persistentRuntime.artifact_last_detach_stopped -and $persistentRuntime.listeners_closed -and $persistentRuntime.source_last_detach_stopped -and $persistentRuntime.isolated_runtime_ledger_ports) "Source and installed artifact cleanup must stop their managed listeners and remain isolated from the main runtime"

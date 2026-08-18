@@ -214,6 +214,157 @@ function startClient(barrier, launcher, environment, clients, latencies, readyTa
   return client;
 }
 
+function startJobClient(root, barrier, launcher, environment, clients, latencies, readyTarget, index) {
+  const wrapper = path.join(root, `job-client-${index}.cmd`);
+  const state = path.join(root, `job-client-${index}.state`);
+  fs.writeFileSync(wrapper, `@echo off\r\n:wait\r\nif not exist "${barrier}" goto wait\r\ncall "${launcher}"\r\nexit /b %ERRORLEVEL%\r\n`);
+  const child = spawn("pwsh.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", process.env.SYMPP_JOB_CLIENT, state, wrapper], { env: environment, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  const client = { child, state, stderr: "", stdout: "", ready: false, jobReady: false, rootPid: 0, result: null, pending: new Map() };
+  clients.push(client);
+  child.stderr.on("data", (chunk) => {
+    client.stderr += chunk;
+    const match = client.stderr.match(/JOB_READY:(\d+)/);
+    if (match) { client.jobReady = true; client.rootPid = Number(match[1]); }
+  });
+  child.stdin.on("error", (error) => { client.stderr += `${error.code || error.message}\n`; });
+  child.stdout.on("data", (chunk) => {
+    client.stdout += chunk;
+    const lines = client.stdout.split(/\r?\n/); client.stdout = lines.pop();
+    for (const line of lines) {
+      if (!line) continue;
+      const response = JSON.parse(line);
+      if (response.id === 1) {
+        latencies.push(Date.now() - readyTarget.startedAt);
+        child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n`);
+      } else if (response.id === 2) {
+        assert.deepEqual(response.result?.tools?.map((tool) => tool.name), expectedTools);
+        client.ready = true;
+        readyTarget.count++;
+        if (readyTarget.count === readyTarget.target) readyTarget.resolve();
+      } else if (client.pending.has(response.id)) {
+        client.pending.get(response.id)(response);
+        client.pending.delete(response.id);
+      }
+    }
+  });
+  client.result = new Promise((resolve) => child.on("exit", (code) => resolve({ code, stderr: client.stderr })));
+  return client;
+}
+
+function jobState(client) {
+  try {
+    const [active = "", seen = ""] = fs.readFileSync(client.state, "utf8").split(/\r?\n/);
+    const parse = (value) => value.split(",").filter(Boolean).map(Number);
+    return { active: parse(active), seen: parse(seen) };
+  } catch (_) { return { active: [], seen: [] }; }
+}
+function activeLeasePids(symppHome) {
+  const directory = path.join(symppHome, "runtime", "codex-plugin-leases");
+  try { return fs.readdirSync(directory).map((name) => readJson(path.join(directory, name))?.pid).filter((pid) => pid && processAlive(pid)); }
+  catch (_) { return []; }
+}
+function runtimeEpoch(runtimeFile) {
+  const state = readJson(runtimeFile);
+  return `${Number(state?.backend?.pid || 0)}:${String(state?.publication?.backend?.process_start_time_utc_ticks || "")}`;
+}
+function listenerPids(shell, port) {
+  const result = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", "@(Get-NetTCPConnection -LocalPort $env:FIXTURE_PORT -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique) | ConvertTo-Json -Compress"], { env: { ...process.env, FIXTURE_PORT: String(port) }, encoding: "utf8", windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim() ? [].concat(JSON.parse(result.stdout.trim())) : [];
+}
+async function closeJob(client, graceful = false) {
+  if (client.child.exitCode === null) {
+    if (graceful) client.child.stdin.end();
+    else process.kill(client.child.pid);
+  }
+  await client.result;
+  await waitFor(() => jobState(client).seen.every((pid) => !processAlive(pid)), `Closed Job retained a process. ${JSON.stringify(jobState(client))}`);
+}
+async function jobOwner(clients, pid) {
+  return waitFor(() => clients.find((client) => client.child.exitCode === null && jobState(client).active.includes(pid)), `No active Job owns PID ${pid}.`);
+}
+
+async function certifyJobs({ clients, shell, runtimeFile, backendState, backendPort, traceDir, symppHome }) {
+  const initial = readJson(backendState);
+  assert.equal(clients.length, 32);
+  assert.equal(new Set(clients.map((client) => client.rootPid)).size, 32);
+  assert.equal(initial.starts, 1);
+  assert.equal(traceCount(traceDir, "runtime_ready_published"), 1);
+  assert.deepEqual(listenerPids(shell, backendPort), [initial.pid]);
+  await waitFor(() => activeLeasePids(symppHome).length === 32, "Initial adapters did not publish 32 active leases.");
+  const initialOwner = await jobOwner(clients, initial.pid);
+  assert.ok(jobState(initialOwner).active.includes(initial.pid), "Initial backend was not owned by its adapter Job.");
+  const sentinel = clients.find((client) => client !== initialOwner);
+  const sentinelAdapter = await waitFor(() => activeLeasePids(symppHome).find((pid) => jobState(sentinel).active.includes(pid)), "Original follower adapter was not observed in its Job.");
+  let requestId = 4000;
+
+  const follower = clients.find((client) => client !== initialOwner && client !== sentinel);
+  const stableEpoch = runtimeEpoch(runtimeFile);
+  await closeJob(follower);
+  assert.equal(runtimeEpoch(runtimeFile), stableEpoch);
+  assert.deepEqual(listenerPids(shell, backendPort), [initial.pid]);
+  assert.equal((await requestClient(sentinel, requestId++, "tools/list")).result?.tools?.length, expectedTools.length);
+
+  async function rotate(trigger) {
+    const before = readJson(backendState);
+    const owner = await jobOwner(clients, before.pid);
+    assert.ok(jobState(owner).active.includes(before.pid), "Published owner Job did not contain the backend.");
+    await closeJob(owner);
+    await waitFor(() => !processAlive(before.pid) && portAvailable(backendPort), "Owner Job close did not kill its backend.");
+    assert.ok(processAlive(sentinelAdapter), "Original follower adapter did not survive owner Job close.");
+    const response = await requestClient(trigger, requestId++, "tools/list");
+    assert.equal(response.result?.tools?.length, expectedTools.length);
+    const after = await waitFor(() => { const value = readJson(backendState); return value?.starts === before.starts + 1 && value; }, "Owner rotation did not create one replacement epoch.");
+    assert.notEqual(after.pid, before.pid);
+    assert.deepEqual(listenerPids(shell, backendPort), [after.pid]);
+    await delay(250);
+    assert.equal(readJson(backendState).starts, before.starts + 1);
+    assert.equal((await requestClient(sentinel, requestId++, "tools/list")).result?.tools?.length, expectedTools.length);
+    assert.ok(processAlive(sentinelAdapter));
+    return after;
+  }
+
+  const firstTrigger = clients.find((client) => client.child.exitCode === null && client !== sentinel && client !== initialOwner);
+  await rotate(firstTrigger);
+  const secondTrigger = clients.find((client) => client.child.exitCode === null && client !== sentinel && client !== firstTrigger);
+  await rotate(secondTrigger);
+
+  const currentOwner = await jobOwner(clients, readJson(backendState).pid);
+  const beforePrune = runtimeEpoch(runtimeFile);
+  for (const client of clients) if (client.child.exitCode === null && client !== sentinel && client !== currentOwner) await closeJob(client);
+  assert.equal(runtimeEpoch(runtimeFile), beforePrune);
+  assert.deepEqual(listenerPids(shell, backendPort), [readJson(backendState).pid]);
+  assert.deepEqual(clients.filter((client) => client.child.exitCode === null), [sentinel, currentOwner]);
+  await rotate(sentinel);
+
+  const beforeBackendCrash = readJson(backendState);
+  const sentinelRoot = sentinel.rootPid;
+  process.kill(beforeBackendCrash.pid);
+  await waitFor(() => !processAlive(beforeBackendCrash.pid), "Backend-only crash did not stop the backend.");
+  assert.ok(processAlive(sentinelAdapter) && processAlive(sentinelRoot), "Backend-only crash killed the original STDIO client.");
+  assert.equal((await requestClient(sentinel, requestId++, "tools/list")).result?.tools?.length, expectedTools.length);
+  const afterBackendCrash = await waitFor(() => { const value = readJson(backendState); return value?.starts === beforeBackendCrash.starts + 1 && value; }, "Backend-only crash did not recover once.");
+  assert.deepEqual(listenerPids(shell, backendPort), [afterBackendCrash.pid]);
+
+  const indeterminate = await requestClient(sentinel, requestId++, "tools/call", { name: "fixture.mutate", arguments: {} });
+  assert.equal(indeterminate.error?.code, -32001);
+  assert.equal(indeterminate.error?.data?.replayed, false);
+  const afterMutation = await waitFor(() => { const value = readJson(backendState); return value?.starts === afterBackendCrash.starts + 1 && value; }, "Ambiguous mutation did not recover one backend.");
+  assert.equal(afterMutation.mutations, 1);
+  assert.equal((await requestClient(sentinel, requestId++, "tools/list")).result?.tools?.length, expectedTools.length);
+  assert.equal(readJson(backendState).mutations, 1);
+  assert.equal(traceCount(traceDir, "runtime_ready_published"), 6);
+
+  await closeJob(sentinel, true);
+  await waitFor(() => portAvailable(backendPort), "Final Job close retained the backend listener.");
+  await waitFor(() => fs.readdirSync(path.join(symppHome, "runtime", "codex-plugin-leases"), { withFileTypes: true }).filter((entry) => entry.isFile()).length === 0, "Final Job close retained an adapter lease file.");
+  const seen = [...new Set(clients.flatMap((client) => jobState(client).seen))];
+  assert.ok(seen.length >= clients.length * 2, "Job snapshots did not observe launcher descendants.");
+  assert.ok(seen.every((pid) => !processAlive(pid)), `Final Job close retained test-owned processes: ${seen.filter(processAlive)}`);
+  assert.ok(clients.every((client) => client.child.exitCode !== null));
+  return { mode: "job_certification", clients: 32, initial_epochs: 1, owner_rotations: 3, backend_recoveries: 2, mutations: 1, original_stdio: true, processes_after: 0, listeners_after: 0, active_leases_after: 0 };
+}
+
 function requestClientLine(client, id, line) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { client.pending.delete(id); reject(new Error(`Client request ${id} timed out. ${client.stderr}`)); }, 90000);
@@ -292,8 +443,12 @@ async function runCase(clientCount, shell, mode = "normal") {
     const readyTarget = { count: 0, target: clientCount, startedAt: 0, resolve: () => readyResolve() };
     const allReady = new Promise((resolve) => { readyResolve = resolve; });
     const latencies = [];
-    for (let index = 0; index < clientCount; index++) startClient(barrier, path.join(installedRoot, "scripts", "start-sympp-mcp.cmd"), environment, clients, latencies, readyTarget);
-    await waitFor(() => clients.every((client) => client.stderr.includes("BARRIER_READY")), "Clients did not reach the start barrier.");
+    const jobCertification = mode === "job_certification";
+    for (let index = 0; index < clientCount; index++) {
+      if (jobCertification) startJobClient(root, barrier, path.join(installedRoot, "scripts", "start-sympp-mcp.cmd"), environment, clients, latencies, readyTarget, index);
+      else startClient(barrier, path.join(installedRoot, "scripts", "start-sympp-mcp.cmd"), environment, clients, latencies, readyTarget);
+    }
+    await waitFor(() => jobCertification ? clients.every((client) => client.jobReady) : clients.every((client) => client.stderr.includes("BARRIER_READY")), "Clients did not reach the start barrier.");
     readyTarget.startedAt = Date.now();
     for (const client of clients) client.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "cold-herd", version: "1" } } })}\n`);
     fs.writeFileSync(barrier, "go");
@@ -329,6 +484,11 @@ async function runCase(clientCount, shell, mode = "normal") {
     const firstBackend = readJson(backendState);
     const firstOwnerPid = Number(readJson(runtimeFile)?.publication?.owner_adapter_pid || 0);
     const backendOnlyReadRecovery = mode.endsWith("backend_only_read_recovery");
+    if (jobCertification) {
+      const result = await certifyJobs({ clients, shell, runtimeFile, backendState, backendPort, traceDir, symppHome });
+      backendPid = 0;
+      return result;
+    }
     let recoveryClients = clients;
     if (mode === "powershell_fallback_initialize_retry") {
       fs.writeFileSync(failAfterProbeFile, "ready");
@@ -535,6 +695,11 @@ async function main() {
   assert.ok(pwsh && windowsPowerShell, "Both pwsh and Windows PowerShell 5.1 are required.");
   if (process.env.SYMPP_COLD_ONLY) {
     const result = await runCase(Number(process.env.SYMPP_COLD_CLIENTS || 3), process.env.SYMPP_COLD_SHELL === "powershell" ? windowsPowerShell : pwsh, process.env.SYMPP_COLD_ONLY);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    return;
+  }
+  if (process.env.SYMPP_JOB_CERTIFICATION) {
+    const result = await runCase(32, pwsh, "job_certification");
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return;
   }
