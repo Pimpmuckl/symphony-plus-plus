@@ -505,7 +505,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           raw_status: work_package.status,
           merge_required: merge_required?(work_package),
           pr_required: pr_required?(work_package),
-          pr: pr_summary(legacy_pr_metadata(metadata)),
+          pr: pr_summary(legacy_pr_metadata(metadata), nil),
           dependency_signal: Signals.dependency(work_package, context),
           blocker_state: Map.fetch!(activity, :blocker_state),
           runtime_state: Map.fetch!(activity, :runtime_state)
@@ -562,7 +562,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           merge_required: merge_required?(work_package),
           pr_required: pr_required?(work_package),
           branch: branch_summary(map_value(metadata, "branch")),
-          pr: pr_summary(legacy_pr_metadata(metadata)),
+          pr: pr_summary(legacy_pr_metadata(metadata), delivery),
           review: review_summary(metadata),
           worker_signal: Map.get(activity, :worker_signal),
           pr_signal: Signals.pr(metadata, delivery),
@@ -621,10 +621,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     |> non_empty_map()
   end
 
-  defp pr_summary(nil), do: nil
-  defp pr_summary(payload) when not is_map(payload), do: nil
+  defp pr_summary(nil, _delivery), do: nil
+  defp pr_summary(payload, _delivery) when not is_map(payload), do: nil
 
-  defp pr_summary(%{} = payload) do
+  defp pr_summary(%{} = payload, delivery) do
     %{
       type: bounded_string(map_value(payload, "type")),
       source_tool: bounded_string(map_value(payload, "source_tool")),
@@ -640,13 +640,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       status: bounded_string(map_value(payload, "status")),
       conclusion: bounded_string(map_value(payload, "conclusion")),
       stale: boolean_or_bounded_string(map_value(payload, "stale")),
-      merge_state: merge_state_summary(map_value(payload, "merge_state"))
+      merge_state: merge_state_summary(map_value(payload, "merge_state"), delivery)
     }
     |> reject_nil_values()
     |> non_empty_map()
   end
 
-  defp merge_state_summary(%{} = merge_state) do
+  defp merge_state_summary(_merge_state, %{outcome: "pr_merged"}), do: %{merged: true, status: "merged"}
+
+  defp merge_state_summary(%{} = merge_state, _delivery) do
     %{
       merged: boolean_or_bounded_string(map_value(merge_state, "merged")),
       state: bounded_string(map_value(merge_state, "state")),
@@ -657,7 +659,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     |> non_empty_map()
   end
 
-  defp merge_state_summary(_merge_state), do: nil
+  defp merge_state_summary(_merge_state, _delivery), do: nil
 
   defp review_completion_summary(nil), do: nil
   defp review_completion_summary(payload) when not is_map(payload), do: nil

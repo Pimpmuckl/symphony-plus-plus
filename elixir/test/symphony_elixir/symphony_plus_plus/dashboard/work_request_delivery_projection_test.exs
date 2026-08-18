@@ -52,6 +52,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
     assert {:ok, _dispatched_ready_merge} =
              CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, ready_merge_slice.id, "approved", ready_merge_package.id)
 
+    assert {:ok, _ready_merge_pr} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: ready_merge_package.id,
+               summary: "PR attached",
+               status: "pr_attached",
+               payload: %{
+                 type: "pr",
+                 source_tool: "attach_pr",
+                 url: "https://github.com/nextide/symphony-plus-plus/pull/905",
+                 merge_state: %{merged: false, status: "blocked"}
+               }
+             })
+
     ready_finish_slice = add_approved_slice!(repo, work_request, id: "WRS-DASH-READY-FINISH", kind: "investigation")
 
     ready_finish_package =
@@ -127,7 +140,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
                  url: "https://github.com/nextide/symphony-plus-plus/pull/904",
                  number: 904,
                  repository: "nextide/symphony-plus-plus",
-                 check_summary: %{status: "completed", conclusion: "success", completed: 2, total: 2}
+                 check_summary: %{status: "completed", conclusion: "success", completed: 2, total: 2},
+                 merge_state: %{merged: false, state: "open", status: "blocked", mergeable_state: "blocked"}
                }
              })
 
@@ -213,6 +227,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestDeliveryProjectio
              "number" => 904,
              "repository" => "nextide/symphony-plus-plus",
              "checks" => %{"status" => "passing", "current" => 2, "total" => 2}
+           }
+
+    assert get_in(slices_by_id, ["WRS-DASH-RECORDED-MERGED", "work_package", "pr", "merge_state"]) == %{
+             "merged" => true,
+             "status" => "merged"
+           }
+
+    assert get_in(slices_by_id, ["WRS-DASH-READY-MERGE", "work_package", "pr", "merge_state"]) == %{
+             "merged" => false,
+             "status" => "blocked"
            }
 
     assert get_in(slices_by_id, ["WRS-DASH-RECORDED-MERGED", "operational_state", "key"]) == "delivered"
