@@ -1047,6 +1047,9 @@ function Test-SymppPublishedRuntimeReadyLocally($State, [string]$PluginRoot, $In
         -not (Test-ProcessOwnsTcpPort $backendPid ([int]$State.backend.port))) {
       return $false
     }
+  } else {
+    $publishedContract = if ($null -ne $InstalledIdentity) { [string]$InstalledIdentity.contract_fingerprint } else { [string]$State.backend.expected_contract_fingerprint }
+    if (-not (Test-BackendLaunchCompatible (Get-SymppBackendHealthWithRetry ([string]$State.backend.url) 1 0) $publishedContract)) { return $false }
   }
   return $true
 }
