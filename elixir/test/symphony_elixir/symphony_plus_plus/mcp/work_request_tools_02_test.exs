@@ -707,7 +707,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     refute inspect(list_response) =~ sibling.id
   end
 
-  test "WorkRequest MCP tools fail closed when handoff WorkRequest leaves eligible status", %{repo: repo} do
+  test "WorkRequest MCP tools remain scoped when handoff WorkRequest moves to draft", %{repo: repo} do
     handoff_work_request =
       create_work_request!(repo,
         id: "WR-MCP-WR-HANDOFF-INELIGIBLE",
@@ -724,8 +724,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert {:ok, _draft} = WorkRequestRepository.update_status(repo, handoff_work_request.id, "ready_for_slicing", "draft")
 
     read_response = mcp_tool(repo, session, "read_work_request", %{"work_request_id" => handoff_work_request.id})
-    assert get_in(read_response, ["error", "code"]) == -32_003
-    assert get_in(read_response, ["error", "data", "reason"]) == "outside_session_scope"
+    assert get_in(read_response, ["result", "structuredContent", "work_request", "id"]) == handoff_work_request.id
+    assert get_in(read_response, ["result", "structuredContent", "work_request", "status"]) == "draft"
   end
 
   test "WorkRequest MCP tools fail closed when handoff WorkRequest file scope changes", %{repo: repo} do

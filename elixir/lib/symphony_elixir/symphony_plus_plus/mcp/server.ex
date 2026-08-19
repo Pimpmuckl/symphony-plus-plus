@@ -1123,9 +1123,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         "message" => ArchitectHandoff.error_message(reason)
       },
       "retry" => %{
-        "type" => "manual_architect_handoff_replay",
+        "type" => "local_architect_assignment_claim",
         "work_request_id" => work_request.id,
-        "operator_action" => "prepare_architect_handoff"
+        "operator_action" => "claim_local_architect_assignment"
       }
     }
   end

@@ -424,7 +424,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
     |> ClaimLease.update_changeset(%{last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -6, :minute)})
     |> repo.update!()
 
-    assert {:ok, _draft} = WorkRequestRepository.update_status(repo, work_request.id, "ready_for_clarification", "draft")
+    assert {:ok, _drifted} =
+             WorkRequestRepository.update(repo, work_request.id, %{"constraints" => %{"allowed_paths" => ["docs"]}})
 
     new_arguments = %{"work_request_id" => work_request.id, "claimed_by" => "Codex janitor"}
 
