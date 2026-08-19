@@ -15,23 +15,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
   @type repo :: module()
   @type dashboard_error :: term()
 
-  @spec worker_context(repo(), WorkPackage.t()) :: {:ok, map()} | {:error, dashboard_error()}
-  def worker_context(_repo, %WorkPackage{work_request_id: work_request_id}) when work_request_id in [nil, ""] do
+  @spec worker_context(repo(), WorkPackage.t(), WorkPackage.t()) :: {:ok, map()} | {:error, dashboard_error()}
+  def worker_context(_repo, %WorkPackage{work_request_id: work_request_id}, _work_package) when work_request_id in [nil, ""] do
     {:ok, worker_completion()}
   end
 
-  def worker_context(repo, %WorkPackage{} = work_package) do
-    with {:ok, work_request} <- WorkRequestService.get(repo, work_package.work_request_id),
+  def worker_context(repo, %WorkPackage{} = context_anchor, %WorkPackage{} = work_package) do
+    with {:ok, work_request} <- WorkRequestService.get(repo, context_anchor.work_request_id),
          {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request.id),
          {:ok, tree} <- ProductTree.tree_for_work_request(repo, work_request.id),
          execution_graph = ProductTree.ExecutionGraph.evaluate(tree, work_packages, []),
          {:ok, selected_decisions} <-
-           selected_worker_decisions(repo, work_request.id, execution_graph.effective_edges, tree.dependency_edges, work_package.id) do
+           selected_worker_decisions(
+             repo,
+             work_request.id,
+             execution_graph.effective_edges,
+             tree.dependency_edges,
+             context_anchor,
+             work_package
+           ) do
       packages_by_id = Map.new(work_packages, &{&1.id, &1})
 
       direct_dependencies =
         execution_graph.effective_edges
-        |> Enum.filter(&(&1.dependent_work_package_id == work_package.id))
+        |> Enum.filter(&(&1.dependent_work_package_id == context_anchor.id))
         |> Enum.map(& &1.prerequisite_work_package_id)
         |> Enum.uniq()
         |> Enum.sort()
@@ -51,28 +58,57 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestPayloads do
     end
   end
 
-  defp selected_worker_decisions(repo, work_request_id, effective_edges, dependency_edges, work_package_id) do
+  defp selected_worker_decisions(repo, work_request_id, effective_edges, dependency_edges, context_anchor, work_package) do
     dependency_ids =
       effective_edges
-      |> Enum.filter(&(&1.dependent_work_package_id == work_package_id))
+      |> Enum.filter(&(&1.dependent_work_package_id == context_anchor.id))
       |> Enum.flat_map(& &1.dependency_ids)
       |> MapSet.new()
 
-    ids =
+    dependency_decision_ids =
       dependency_edges
       |> Enum.filter(&MapSet.member?(dependency_ids, &1.id))
       |> Enum.map(&get_in(&1.decision_ref || %{}, ["id"]))
       |> Enum.filter(&is_binary/1)
       |> MapSet.new()
 
-    if MapSet.size(ids) == 0 do
-      {:ok, []}
-    else
-      with {:ok, decisions} <- WorkRequestService.list_decisions(repo, work_request_id) do
-        {:ok, decisions |> Enum.filter(&MapSet.member?(ids, &1.id)) |> Enum.map(&worker_decision/1)}
-      end
+    with {:ok, decisions} <- WorkRequestService.list_decisions(repo, work_request_id) do
+      selected =
+        Enum.filter(decisions, fn decision ->
+          MapSet.member?(dependency_decision_ids, decision.id) or
+            work_package_references_decision?(work_package, decision.id)
+        end)
+
+      {:ok, Enum.map(selected, &worker_decision/1)}
     end
   end
+
+  defp work_package_references_decision?(%WorkPackage{} = work_package, decision_id) do
+    [
+      work_package.title,
+      work_package.goal,
+      work_package.product_description,
+      work_package.engineering_scope,
+      work_package.acceptance_criteria,
+      work_package.validation_steps,
+      work_package.stop_conditions,
+      work_package.review_requirement
+    ]
+    |> Redactor.redact_output()
+    |> Enum.any?(&contains_decision_reference?(&1, decision_id))
+  end
+
+  defp contains_decision_reference?(value, decision_id) when is_binary(value) do
+    Regex.match?(~r/(?:^|[^A-Za-z0-9_-])#{Regex.escape(decision_id)}(?:$|[^A-Za-z0-9_-])/, value)
+  end
+
+  defp contains_decision_reference?(value, decision_id) when is_list(value),
+    do: Enum.any?(value, &contains_decision_reference?(&1, decision_id))
+
+  defp contains_decision_reference?(value, decision_id) when is_map(value),
+    do: value |> Map.values() |> Enum.any?(&contains_decision_reference?(&1, decision_id))
+
+  defp contains_decision_reference?(_value, _decision_id), do: false
 
   defp worker_decision(%DecisionLogEntry{} = decision) do
     %{
