@@ -67,21 +67,27 @@ Assert-True ($null -ne $identity) "Current-contract artifact-static runtime shou
 $publishedControls = New-SymppPublicationControls 19998 19999 $false $false $null $null
 $publishedState = $state | ConvertTo-Json -Depth 8 | ConvertFrom-Json
 $publishedState.backend.managed = $false
+$publishedState.backend.status = "external_loopback"
+$publishedState.frontend.status = "external_loopback"
 $publishedState | Add-Member -NotePropertyName publication -NotePropertyValue ([pscustomobject]@{ status = "ready"; generation_key = "published-generation"; controls = $publishedControls })
 $publishedIdentity = [pscustomobject]@{ generation_key = "published-generation"; contract_fingerprint = $fingerprint }
+$staleFingerprint = $(if ($fingerprint[0] -eq "0") { "1" } else { "0" }) + $fingerprint.Substring(1)
 function Get-SymppBackendHealthWithRetry { return $script:publishedExternalHealth }
 try {
   $script:publishedExternalHealth = [pscustomobject]@{ healthy = $false; contract_fingerprint = $fingerprint }
   Assert-True (-not (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $null $publishedControls)) "A stopped external backend must not satisfy initial ready publication"
+  $script:publishedExternalHealth = [pscustomobject]@{ healthy = $true; contract_fingerprint = $staleFingerprint }
+  Assert-True (-not (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $null $publishedControls)) "A live incompatible external backend must not satisfy initial ready publication"
   $script:publishedExternalHealth = [pscustomobject]@{ healthy = $true; contract_fingerprint = $fingerprint }
   Assert-True (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $null $publishedControls) "A live compatible external backend should keep initial followers lock-free"
   Assert-True (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $publishedIdentity $publishedControls) "A live compatible external backend should satisfy ready publication"
+  $publishedPlan = Resolve-FastAttachRuntimePlan $publishedState $publishedState.backend.source_revision $fingerprint 0 0 $false $false $null $null $script:publishedExternalHealth $true $true
+  Assert-True ($null -ne $publishedPlan) "A live compatible external publication should produce a follower attach plan"
 } finally {
   Remove-Item Function:Get-SymppBackendHealthWithRetry
 }
 Assert-True ($null -eq (Resolve-LocalWarmAttachIdentity $state $pluginRoot 20000 19999 $true $false $null $null)) "Explicit backend port mismatch must reject fallback warm attach"
 Assert-True ($null -eq (Resolve-LocalWarmAttachIdentity $state (Join-Path $pluginRoot "other") 19998 19999 $false $false $null $null)) "Different plugin payload must reject fallback warm attach"
-$staleFingerprint = $(if ($fingerprint[0] -eq "0") { "1" } else { "0" }) + $fingerprint.Substring(1)
 $staleState = $state | ConvertTo-Json -Depth 8 | ConvertFrom-Json
 $staleState.runtime_key = New-RuntimeKey $backendUrl $backendUrl $staleFingerprint
 $staleState.backend.expected_contract_fingerprint = $staleFingerprint
