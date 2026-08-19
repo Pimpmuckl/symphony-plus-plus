@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 function Assert-True($Condition, [string]$Message) {
   if (-not $Condition) { throw $Message }
 }
@@ -79,8 +79,10 @@ try {
   $script:publishedExternalHealth = [pscustomobject]@{ healthy = $true; contract_fingerprint = $staleFingerprint }
   Assert-True (-not (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $null $publishedControls)) "A live incompatible external backend must not satisfy initial ready publication"
   $script:publishedExternalHealth = [pscustomobject]@{ healthy = $true; contract_fingerprint = $fingerprint }
-  Assert-True (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $null $publishedControls) "A live compatible external backend should keep initial followers lock-free"
+  Assert-True (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $null $publishedControls) "A live compatible external backend should satisfy local readiness"
   Assert-True (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $publishedIdentity $publishedControls) "A live compatible external backend should satisfy ready publication"
+  $mismatchedIdentity = [pscustomobject]@{ generation_key = "other-generation"; contract_fingerprint = $fingerprint }
+  Assert-True (-not (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $mismatchedIdentity $publishedControls)) "A different installed generation must reject the publication"
   $publishedPlan = Resolve-FastAttachRuntimePlan $publishedState $publishedState.backend.source_revision $fingerprint 0 0 $false $false $null $null $script:publishedExternalHealth $true $true
   Assert-True ($null -ne $publishedPlan) "A live compatible external publication should produce a follower attach plan"
 } finally {
