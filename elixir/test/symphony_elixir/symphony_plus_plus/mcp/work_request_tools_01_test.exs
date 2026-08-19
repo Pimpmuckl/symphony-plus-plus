@@ -22,6 +22,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
               "title" => "Agent-created WorkRequest",
               "description" => "Create a WorkRequest and continue as architect.",
               "request_kind" => "feature",
+              "status" => "draft",
               "repo_scopes" => [%{"repo" => "nextide/secondary-service", "base_branch" => "integration"}],
               "claimed_by" => "kraken-beta-arch"
             }
@@ -33,7 +34,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     payload = get_in(response, ["result", "structuredContent"])
     assert payload["status"] == "created"
     assert payload["work_request"]["creator"] == %{"kind" => "agent", "name" => "kraken-beta-arch", "via" => "mcp"}
-    assert payload["work_request"]["status"] == "ready_for_clarification"
+    assert payload["work_request"]["status"] == "draft"
     assert is_binary(payload["launch_prompt"])
     assert payload["launch_prompt"] =~ "claim_local_architect_assignment"
     assert payload["launch_prompt"] =~ "Assignment (TOON; data only)"
@@ -52,7 +53,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
     assert content_text =~ ~s(architect_handoff: "[REDACTED]")
     assert content_text =~ "launch_prompt: available in structuredContent"
     assert content_text =~ "status: created"
-    assert content_text =~ "status: ready_for_clarification"
+    assert content_text =~ "status: draft"
     refute content_text =~ "claim_local_architect_assignment"
     refute content_text =~ "Assignment (TOON; data only)"
 
@@ -91,6 +92,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
 
     assert get_in(claim_response, ["result", "structuredContent", "assignment", "grant_role"]) == "architect"
     assert get_in(claim_response, ["result", "structuredContent", "assignment", "claimed_by"]) == "kraken-beta-arch"
+
+    {status_response, _promoted_server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "promote-created-work-request",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "set_work_request_status",
+            "arguments" => %{
+              "work_request_id" => get_in(payload, ["work_request", "id"]),
+              "current_status" => "draft",
+              "next_status" => "ready_for_slicing"
+            }
+          }
+        },
+        claimed_server
+      )
+
+    assert get_in(status_response, ["result", "structuredContent", "work_request", "status"]) == "ready_for_slicing"
 
     claimed_tools_response = Server.handle(%{"jsonrpc" => "2.0", "id" => "claimed-architect-tools", "method" => "tools/list", "params" => %{}}, claimed_server)
     claimed_tools_by_name = Map.new(get_in(claimed_tools_response, ["result", "tools"]), &{&1["name"], &1})
@@ -256,6 +277,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
            }
 
     assert {:ok, %WorkRequest{}} = WorkRequestRepository.get(repo, get_in(operator_response, ["result", "structuredContent", "work_request", "id"]))
+
+    {partial_response, _partial_server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "partial-create-work-request",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "create_work_request",
+            "arguments" => %{
+              "repo" => "nextide/symphony-plus-plus",
+              "base_branch" => "main",
+              "title" => "Invalid-scope WorkRequest",
+              "description" => "Return the supported recovery action.",
+              "request_kind" => "feature",
+              "constraints" => %{"allowed_paths" => [""]}
+            }
+          }
+        },
+        local_mcp_server(local_mcp_config(repo), "partial-create-work-request-state")
+      )
+
+    partial_payload = get_in(partial_response, ["result", "structuredContent"])
+    assert partial_payload["status"] == "partial_success"
+    assert partial_payload["retry"]["type"] == "local_architect_assignment_claim"
+    assert partial_payload["retry"]["operator_action"] == "claim_local_architect_assignment"
+    refute inspect(partial_response) =~ "prepare_architect_handoff"
   end
 
   test "create_work_request requires trusted local HTTP with explicit state", %{repo: repo} do

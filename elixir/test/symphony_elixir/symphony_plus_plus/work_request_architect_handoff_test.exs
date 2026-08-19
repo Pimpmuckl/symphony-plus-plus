@@ -353,7 +353,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
     assert repo.aggregate(AccessGrant, :count) == 0
   end
 
-  test "rejects untrusted, ineligible, and invalid-scope requests", %{repo: repo, database_path: database_path} do
+  test "accepts drafts and rejects untrusted and invalid-scope requests", %{repo: repo, database_path: database_path} do
     ready = create_work_request!(repo, id: "WR-ARCH-HANDOFF-READY")
     draft = create_work_request!(repo, id: "WR-ARCH-HANDOFF-DRAFT", status: "draft")
 
@@ -365,11 +365,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
 
     assert {:error, :forbidden} = ArchitectHandoff.create_or_replay(repo, ready.id, handoff_opts: handoff_opts(database_path))
 
-    assert {:error, :invalid_status} =
+    assert {:ok, draft_handoff} =
              ArchitectHandoff.create_or_replay(repo, draft.id,
                local_operator?: true,
                handoff_opts: handoff_opts(database_path)
              )
+
+    assert draft_handoff.work_request.status == "draft"
 
     assert {:error, :invalid_scope} =
              ArchitectHandoff.create_or_replay(repo, invalid_scope.id,

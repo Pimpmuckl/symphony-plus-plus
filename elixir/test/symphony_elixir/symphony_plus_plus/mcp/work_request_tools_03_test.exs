@@ -210,7 +210,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert get_in(branch_response, ["error", "data", "reason"]) == "base_branch_scope_mismatch"
   end
 
-  test "claim_local_architect_assignment returns actionable phase-scope repair evidence", %{repo: repo} do
+  test "claim_local_architect_assignment claims an existing draft handoff", %{repo: repo} do
     work_request =
       create_work_request!(repo,
         id: "WR-MCP-LOCAL-ARCHITECT-ACTIONABLE-SCOPE",
@@ -220,17 +220,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     _handoff = create_architect_handoff!(repo, work_request)
     assert {:ok, _draft} = WorkRequestRepository.update_status(repo, work_request.id, "ready_for_clarification", "draft")
 
-    {response, _server} =
+    {response, server} =
       claim_local_architect(
         repo,
         %{"work_request_id" => work_request.id, "claimed_by" => "architect-actionable"},
         "local-architect-actionable-scope"
       )
 
-    assert get_in(response, ["error", "data", "reason"]) == "phase_scope_not_available"
-    assert get_in(response, ["error", "data", "action"]) == "repair_local_architect_handoff_scope"
-    assert get_in(response, ["error", "data", "missing_evidence"]) == ["work_request_status"]
-    assert get_in(response, ["error", "data", "hint"]) =~ "replay architect handoff"
+    assert get_in(response, ["result", "structuredContent", "assignment", "grant_role"]) == "architect"
+    assert server.session.assignment.work_package_id == ArchitectHandoff.anchor_id_for_work_request(work_request)
   end
 
   test "claim_local_architect_assignment reports archived WorkRequests as terminal", %{repo: repo} do

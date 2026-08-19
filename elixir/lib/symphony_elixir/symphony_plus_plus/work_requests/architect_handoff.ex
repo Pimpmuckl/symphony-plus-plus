@@ -16,6 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   @eligible_statuses [
+    "draft",
     "ready_for_clarification",
     "clarifying",
     "human_info_needed",
