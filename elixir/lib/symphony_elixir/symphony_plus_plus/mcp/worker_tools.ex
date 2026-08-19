@@ -301,7 +301,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
          {:ok, state} <- PlanningRepository.get_render_state(repo, work_package_id),
          {:ok, markdown} <- PlanningRenderer.render_state(state, file_name),
          {:ok, context_anchor} <- PhaseChildScope.context_anchor(repo, state.work_package),
-         {:ok, worker_context} <- WorkRequestPayloads.worker_context(repo, context_anchor) do
+         {:ok, worker_context} <- WorkRequestPayloads.worker_context(repo, context_anchor, state.work_package) do
       worker_context =
         worker_context
         |> Map.put("work_package", worker_package_context(state.work_package))

@@ -441,6 +441,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
                  repo: parent_work_request.repo,
                  base_branch: parent_work_request.base_branch,
                  allowed_file_globs: ["elixir/**"],
+                 acceptance_criteria: ["Honor decision WRD-WORKER-CONTEXT-UNRELATED."],
                  phase_id: "phase-worker-context",
                  status: "active"
                )
@@ -470,6 +471,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
                  repo: parent.repo,
                  base_branch: parent.base_branch,
                  allowed_file_globs: ["elixir/lib/**"],
+                 acceptance_criteria: ["Honor decision WRD-WORKER-CONTEXT-CONTRACT."],
                  parent_id: parent.id,
                  phase_id: parent.phase_id,
                  status: "active"
@@ -485,6 +487,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
                  decision: "Use the direct dependency contract.",
                  rationale: "It controls this worker's sequencing.",
                  scope_impact: "Read only the selected decision."
+               )
+             )
+
+    assert {:ok, contract_decision} =
+             WorkRequestRepository.record_decision(
+               repo,
+               parent_work_request.id,
+               work_request_decision_attrs(
+                 id: "WRD-WORKER-CONTEXT-CONTRACT",
+                 decision: "Keep referenced decisions in worker context.",
+                 rationale: "The worker cannot read the parent decision log.",
+                 scope_impact: "Expose only explicitly referenced decisions."
                )
              )
 
@@ -533,6 +547,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
                "decision" => selected_decision.decision,
                "rationale" => selected_decision.rationale,
                "scope_impact" => selected_decision.scope_impact
+             },
+             %{
+               "id" => contract_decision.id,
+               "decision" => contract_decision.decision,
+               "rationale" => contract_decision.rationale,
+               "scope_impact" => contract_decision.scope_impact
              }
            ]
 
