@@ -1003,7 +1003,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp metadata_tool("branch"), do: "attach_branch"
   defp metadata_tool("pr"), do: "attach_pr"
-  defp metadata_tool("review_package"), do: "submit_review_package"
 
   defp head_sha_matches?(left, right) when is_binary(left) and is_binary(right) do
     PullRequest.head_sha_matches?(String.downcase(left), String.downcase(right))
