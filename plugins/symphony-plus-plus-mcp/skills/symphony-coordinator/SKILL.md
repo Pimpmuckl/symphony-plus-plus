@@ -14,16 +14,17 @@ ledger-backed claims, scoped grants, delivery boards, or MCP merge gates, use
 - Optionally attach a coordinator-owned `symphony-plus-plus-mcp:symphony-solo-session`
   for parent planning. Do not share that session with workers.
 - Scout repo context before slicing.
-- Identify outcome, base branch, acceptance, owned/forbidden areas,
-  validation, optional review requirement, risk, and line/PR-size budget.
+- Identify outcome, base branch, acceptance, owned/forbidden areas, optional
+  validation and review context, risk, and line/PR-size budget.
 - Resolve material ambiguity before dispatch.
 
 ## Slice
 
 - Prefer one PR-sized slice per worker.
 - Use fresh worktrees/branches when isolation or parallelism matters.
-- Give workers goal, scope, base/branch/worktree, acceptance, validation,
-  optional review requirement, budget, stop conditions, and expected PR/evidence.
+- Give workers goal, scope, base/branch/worktree, acceptance, optional
+  validation, review, and stop-condition context, budget, and expected
+  PR/evidence.
 - PR-size or line-budget guidance; add slice-specific PR-size or line-budget
   constraints when the default boundary is not enough. These budgets should
   always be used and split between implementation- and test work when possible.

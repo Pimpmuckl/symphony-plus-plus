@@ -369,7 +369,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
 
     assert creation.virtual_files["context.md"] =~ "Fix flaky uploader"
     assert creation.virtual_files["task_plan.md"] =~ "Implement requested scope"
-    assert creation.virtual_files["task_plan.md"] =~ "Required gates:"
     assert creation.virtual_files["acceptance.md"] =~ "Focused regression coverage exists."
     assert creation.virtual_files["review.md"] =~ "No review required."
 
@@ -489,9 +488,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     assert creation.virtual_files["task_plan.md"] =~ "Investigate requested scope"
     refute creation.virtual_files["task_plan.md"] =~ "Implement requested scope"
     assert creation.virtual_files["task_plan.md"] =~ "Use the engineering scope from context.md."
-    refute creation.virtual_files["task_plan.md"] =~ "Satisfy the package acceptance criteria"
-    assert creation.virtual_files["task_plan.md"] =~ "Required gates:"
-    assert creation.virtual_files["task_plan.md"] =~ "findings_documented"
     assert creation.virtual_files["acceptance.md"] =~ "No acceptance criteria recorded."
   end
 
@@ -535,8 +531,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     assert get_in(plan_response, ["result", "structuredContent", "uri"]) ==
              "sympp://work-packages/#{creation.work_package.id}/task_plan.md"
 
-    assert get_in(plan_response, ["result", "structuredContent", "text"]) =~ "Complete acceptance and review gates"
-
     resource_response =
       MCPHarness.request(
         %{
@@ -579,8 +573,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     assert creation.work_package.parent_id == nil
     assert creation.work_package.status == "ready_for_worker"
     assert creation.policy.template == "hotfix"
-    assert "review_complete" in creation.policy.required_gates
-
     config = local_mcp_config(repo)
     server = local_mcp_server(config, "hotfix-worker-state")
 

@@ -8,61 +8,47 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
       planning_depth: "package",
       terminal_readiness_status: "ready_for_merge"
     },
-    required_gates: ["package_acceptance", "focused_tests", "human_merge"],
-    readiness_requirements: ["acceptance_criteria_met", "tests_passed"]
+    required_gates: ["package_acceptance", "human_merge"]
   }
-
-  @mcp_ci_required_policy @worker_package_policy
-                          |> Map.put(:kind, "mcp")
-                          |> Map.update!(:required_gates, &(&1 ++ ["ci_waiting"]))
-                          |> Map.update!(:readiness_requirements, &(&1 ++ ["ci_waiting"]))
 
   @templates %{
     "quick_fix" => %{
       template: "quick_fix",
       constraints: %{expiry_seconds: nil, planning_depth: "brief", terminal_readiness_status: "ready_for_merge"},
-      required_gates: ["focused_tests"],
-      readiness_requirements: ["implementation_complete", "tests_passed"]
+      required_gates: []
     },
     "hotfix" => %{
       template: "hotfix",
       constraints: %{expiry_seconds: nil, planning_depth: "incident", terminal_readiness_status: "ready_for_merge"},
-      required_gates: ["focused_tests", "human_merge"],
-      readiness_requirements: ["implementation_complete", "tests_passed"]
+      required_gates: ["human_merge"]
     },
     "docs" => %{
       template: "docs",
       constraints: %{expiry_seconds: nil, planning_depth: "brief", terminal_readiness_status: "ready_for_merge"},
-      required_gates: ["focused_tests"],
-      readiness_requirements: ["tests_passed"]
+      required_gates: []
     },
     "adapter" => @worker_package_policy,
     "standard_pr" => @worker_package_policy,
     "mcp" => @worker_package_policy,
-    "mcp_ci_required" => @mcp_ci_required_policy,
     "mcp_current_pr_state" =>
       @worker_package_policy
       |> Map.put(:kind, "mcp")
-      |> Map.update!(:required_gates, &(&1 ++ ["current_pr_state"]))
-      |> Map.update!(:readiness_requirements, &(&1 ++ ["current_pr_state"])),
+      |> Map.update!(:required_gates, &(&1 ++ ["current_pr_state"])),
     "mcp_changed_file_scope_guard" =>
       @worker_package_policy
       |> Map.put(:kind, "mcp")
-      |> Map.update!(:required_gates, &(&1 ++ ["current_pr_state", "scope_guard"]))
-      |> Map.update!(:readiness_requirements, &(&1 ++ ["current_pr_state", "scope_guard"])),
+      |> Map.update!(:required_gates, &(&1 ++ ["current_pr_state", "scope_guard"])),
     "skill" => @worker_package_policy,
     "hooks" => @worker_package_policy,
     "phase_child" => %{
       template: "phase_child",
       constraints: %{expiry_seconds: nil, planning_depth: "package", terminal_readiness_status: "ready_for_architect_merge"},
-      required_gates: ["package_acceptance", "focused_tests", "architect_merge"],
-      readiness_requirements: ["acceptance_criteria_met", "tests_passed", "architect_ready"]
+      required_gates: ["package_acceptance", "architect_merge"]
     },
     "investigation" => %{
       template: "investigation",
       constraints: %{expiry_seconds: nil, planning_depth: "findings", terminal_readiness_status: "ready_for_merge"},
-      required_gates: ["findings_documented"],
-      readiness_requirements: ["findings_complete"]
+      required_gates: ["findings_documented"]
     }
   }
 
@@ -73,8 +59,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
             planning_depth: String.t(),
             terminal_readiness_status: String.t()
           },
-          required_gates: [String.t()],
-          readiness_requirements: [String.t()]
+          required_gates: [String.t()]
         }
 
   @spec expand(String.t()) :: {:ok, template()} | {:error, :unknown_policy_template}

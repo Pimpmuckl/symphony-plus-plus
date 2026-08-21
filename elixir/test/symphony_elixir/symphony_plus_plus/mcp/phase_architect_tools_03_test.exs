@@ -522,20 +522,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools03Test do
 
     assert get_in(worker_attach_pr_mutation_response, ["error", "data", "reason"]) == "child_under_architect_control"
 
-    worker_review_package_replay_response =
-      mcp_tool(repo, worker_session, "submit_review_package", ready_review_package_args("p7-003-flow-head"))
-
-    assert get_in(worker_review_package_replay_response, ["result", "structuredContent", "progress_event", "id"])
-
     worker_review_package_mutation_response =
-      mcp_tool(
-        repo,
-        worker_session,
-        "submit_review_package",
-        "p7-003-flow-head"
-        |> ready_review_package_args()
-        |> Map.put("summary", "Late worker review package")
-      )
+      mcp_tool(repo, worker_session, "submit_review_package", %{
+        "summary" => "Late worker review package",
+        "head_sha" => "p7-003-flow-head"
+      })
 
     assert get_in(worker_review_package_mutation_response, ["error", "data", "reason"]) == "child_under_architect_control"
 

@@ -5,21 +5,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
 
   test "attach_pr alone satisfies pr_attached for policies without current PR state", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-PR-ATTACH-READY", kind: "mcp", status: "ci_waiting"))
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-PR-ATTACH-READY/worker", "head_sha" => "head-a"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/790", "head_sha" => "head-a"})
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review",
-      "tests" => ["mix test"],
-      "artifacts" => ["review.txt"],
-      "head_sha" => "head-a",
-      "acceptance_criteria_met" => true
-    })
 
     attach_only_response =
       MCPHarness.request(
@@ -33,21 +24,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
 
   test "legacy attached PR URL still satisfies pr_attached evidence", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-PR-LEGACY-URL-READY", kind: "mcp", status: "ci_waiting"))
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/#{package.id}", "head_sha" => "legacy-head"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://git.example.com/org/repo/pulls/7", "head_sha" => "legacy-head"})
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review",
-      "tests" => ["mix test"],
-      "artifacts" => ["review.txt"],
-      "head_sha" => "legacy-head",
-      "acceptance_criteria_met" => true
-    })
 
     ready_response =
       MCPHarness.request(
@@ -71,7 +53,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
                )
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -87,14 +68,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
         "review_state" => %{"state" => "approved"},
         "merge_state" => %{"state" => "clean"}
       }
-    })
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review",
-      "tests" => ["mix test"],
-      "artifacts" => ["review.txt"],
-      "head_sha" => head_sha,
-      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -119,21 +92,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
                )
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-PR-SYNC-READY/worker", "head_sha" => "head-a"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/790", "head_sha" => "head-a"})
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review",
-      "tests" => ["mix test"],
-      "artifacts" => ["review.txt"],
-      "head_sha" => "head-a",
-      "acceptance_criteria_met" => true
-    })
 
     missing_state_response =
       MCPHarness.request(
@@ -244,14 +208,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
       }
     })
 
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review for advanced head",
-      "tests" => ["mix test"],
-      "artifacts" => ["review-head-b.txt"],
-      "head_sha" => "head-b",
-      "acceptance_criteria_met" => true
-    })
-
     ready_response =
       MCPHarness.request(
         %{"jsonrpc" => "2.0", "id" => "ready-synced-pr", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
@@ -274,7 +230,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
                )
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -290,14 +245,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
         "review_state" => %{"status" => "approved"},
         "merge_state" => %{"status" => "clean", "merged" => false}
       }
-    })
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review",
-      "tests" => ["mix test"],
-      "artifacts" => ["review.txt"],
-      "head_sha" => "head-a",
-      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -322,7 +269,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
                )
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -339,14 +285,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
         "review_state" => %{"status" => "approved"},
         "merge_state" => %{"status" => "clean", "merged" => false}
       }
-    })
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review after sync",
-      "tests" => ["mix test"],
-      "artifacts" => ["review-head-b.txt"],
-      "head_sha" => "head-b",
-      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -371,7 +309,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
                )
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -386,14 +323,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
         "review_state" => %{"state" => "approved"},
         "merge_state" => %{"state" => "clean"}
       }
-    })
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review",
-      "tests" => ["mix test"],
-      "artifacts" => ["review.txt"],
-      "head_sha" => "head-a",
-      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -413,7 +342,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
                WorkPackageFactory.attrs(id: "SYMPP-PR-SHORT-HEAD-READY", kind: "mcp", status: "ci_waiting")
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -426,14 +354,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
     attach_tool(repo, session, "attach_pr", %{
       "url" => "https://github.com/example/repo/pull/790",
       "head_sha" => "abcdef1234567890abcdef1234567890abcdef12"
-    })
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Short head review",
-      "tests" => ["mix test"],
-      "artifacts" => ["short-head-review.txt"],
-      "head_sha" => "abcdef1",
-      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -453,21 +373,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
                WorkPackageFactory.attrs(id: "SYMPP-PR-TINY-HEAD-READY", kind: "mcp", status: "ci_waiting")
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-PR-TINY-HEAD-READY/worker", "head_sha" => "abc"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/790", "head_sha" => "abcdef1234567890abcdef1234567890abcdef12"})
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Tiny head review",
-      "tests" => ["mix test"],
-      "artifacts" => ["tiny-head-review.txt"],
-      "head_sha" => "abc",
-      "acceptance_criteria_met" => true
-    })
 
     ready_response =
       MCPHarness.request(
@@ -494,7 +405,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
                )
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -514,14 +424,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
         "review_state" => %{"state" => "approved"},
         "merge_state" => %{"state" => "clean"}
       }
-    })
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review package",
-      "tests" => ["mix test"],
-      "artifacts" => ["review.txt"],
-      "head_sha" => head_sha,
-      "acceptance_criteria_met" => true
     })
 
     ready_response =
@@ -549,7 +451,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
                )
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -571,14 +472,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools05Test do
         "review_state" => %{"status" => "approved"},
         "merge_state" => %{"status" => "clean", "merged" => false}
       }
-    })
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review package",
-      "tests" => ["mix test"],
-      "artifacts" => ["review.txt"],
-      "head_sha" => head_sha,
-      "acceptance_criteria_met" => true
     })
 
     request_response =

@@ -10,9 +10,9 @@ PR-sized assignment.
 
 ## Contract
 
-1. Understand scope, owned paths, forbidden paths, acceptance, validation,
-   optional review requirement, branch/base target, stop conditions, and any line or PR-size
-   budget before coding.
+1. Understand scope, owned paths, forbidden paths, acceptance, optional review
+   requirement, branch/base target, and any supplied validation, stop condition,
+   or line/PR-size context before coding.
 2. Pick the correct state layer:
    - Assigned WorkPackage: use
      `symphony-plus-plus-mcp:symphony-work-package` and claim by WorkPackage
@@ -67,21 +67,13 @@ seeking architect-only tools.
 - After material changes, rerun any declared review for the new exact head.
 - If an architect accepts review rework after readiness, keep the old evidence
   as history and advance to a different exact head. Refresh the attached PR
-  with `sync_pr`, submit a new review package, and complete the required review
-  before calling `mark_ready` again.
-- Record validation and review evidence in the active Symphony++ state. For
-  WorkPackages, that state is the ledger-backed claim opened by the
-  WorkPackage skill.
-- Keep the WorkPackage task plan current through its single atomic
-  `expected_version` plus `nodes` write contract; use only `pending`,
-  `in_progress`, `done`, and `skipped`.
-- For WorkPackages, use the shortest valid ready path from the WorkPackage
-  skill. Package-depth policies still need terminal package plan evidence; do
-  not add lifecycle calls only to restate existing plan, PR, branch, or review
-  evidence.
-- Policy-approved no-PR work may submit evidence and become ready without a
-  branch head. PR-backed or review-required work still needs current exact-head
-  evidence.
+  with `sync_pr` and complete the required review before calling `mark_ready`
+  again.
+- Record material findings, progress, or validation context when it helps the
+  handoff. Do not add task-plan, review-package, or progress calls only to
+  restate work already proved elsewhere.
+- Policy-approved no-PR work may become ready without a branch head. PR-backed
+  or review-required work still needs current exact-head evidence.
 - Classify Review Suite's ordinary structured result before recording review
   completion. Call `complete_review` only for an accepted terminal result on
   the exact head. A worker may select bounded `CONTINUE` only while the

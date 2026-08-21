@@ -361,7 +361,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       "stop_conditions" => ["Stop before dispatch."]
     }
 
-    required_fields = ["title", "goal", "allowed_file_globs", "acceptance_criteria", "validation_steps", "stop_conditions"]
+    required_fields = ["title", "goal", "allowed_file_globs", "acceptance_criteria"]
 
     invalid_contracts =
       Enum.map(required_fields, &Map.delete(contract, &1)) ++

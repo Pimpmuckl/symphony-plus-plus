@@ -8,12 +8,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
   alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
-  @spec persisted_review_artifact?([term()], String.t(), String.t() | nil, String.t()) :: boolean()
-  def persisted_review_artifact?(artifacts, work_package_id, head_sha, path) do
-    expected_id = review_artifact_id(work_package_id, head_sha, path)
-    Enum.any?(artifacts, &(&1.id == expected_id and &1.kind == "review" and &1.path == path))
-  end
-
   @spec latest_review_completion_event([ProgressEvent.t()], String.t(), String.t(), map()) :: ProgressEvent.t() | nil
   def latest_review_completion_event(progress_events, work_package_id, head_sha, requirement) do
     progress_events
@@ -41,21 +35,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
     end
   end
 
-  defp review_artifact_id(work_package_id, head_sha, artifact) do
-    material = [work_package_id, head_sha || "no-head", artifact] |> Enum.join(":")
-    "artifact_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
-  end
-
   @spec filled_string?(term()) :: boolean()
   def filled_string?(value), do: is_binary(value) and String.trim(value) != ""
-
-  @spec review_head_matches?(term(), String.t() | :any_head) :: boolean()
-  def review_head_matches?(payload, :any_head) when is_map(payload), do: true
-
-  def review_head_matches?(payload, head_sha) when is_map(payload) and is_binary(head_sha),
-    do: PullRequest.head_sha_matches?(Map.get(payload, "head_sha"), head_sha)
-
-  def review_head_matches?(_payload, _head_sha), do: false
 
   @spec latest_current_head_sha([ProgressEvent.t()]) :: String.t() | nil
   def latest_current_head_sha(progress_events) do

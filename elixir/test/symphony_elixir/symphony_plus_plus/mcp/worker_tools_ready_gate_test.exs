@@ -46,59 +46,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     defp maybe_advance_head(%Changeset{}), do: :ok
   end
 
-  test "mark_ready requires plan nodes when package-depth planning is meaningful", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-READY-PACKAGE-PLAN", kind: "mcp", status: "ci_waiting")
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-READY-PACKAGE-PLAN/worker", "head_sha" => "abc126"})
-    attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/126", "head_sha" => "abc126"})
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready except package plan",
-      "tests" => ["mix test"],
-      "artifacts" => ["review-log.txt"],
-      "head_sha" => "abc126",
-      "acceptance_criteria_met" => true
-    })
-
-    missing_plan_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-missing-package-plan", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    assert "plan_complete" in get_in(missing_plan_response, ["error", "data", "missing"])
-
-    append_done_plan(repo, package.id)
-
-    ready_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-package-plan", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
-    assert get_in(ready_response, ["result", "structuredContent", "next_owner"]) == "architect"
-    assert get_in(ready_response, ["result", "structuredContent", "next_action"]) == "return_to_architect"
-  end
-
-  test "mark_ready rejects empty review packages and requires an external blocker resolution", %{repo: repo} do
+  test "mark_ready keeps provider state and external blocker resolution gates", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
                WorkPackageFactory.attrs(id: "SYMPP-READY-BLOCKER", kind: "standard_pr", status: "ci_waiting")
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -111,7 +65,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
       )
 
     assert "pr_attached" in get_in(missing_merge_evidence_response, ["error", "data", "missing"])
-    assert "tests_passed" in get_in(missing_merge_evidence_response, ["error", "data", "missing"])
 
     empty_review_response =
       MCPHarness.request(
@@ -133,14 +86,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-READY-BLOCKER/worker", "head_sha" => "abc125"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/125", "head_sha" => "abc125"})
     sync_pr_state(repo, session, "https://github.com/example/repo/pull/125", "abc125")
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready",
-      "tests" => ["mix test"],
-      "artifacts" => ["review-log.txt"],
-      "head_sha" => "abc125",
-      "acceptance_criteria_met" => true
-    })
 
     blocked_response =
       MCPHarness.request(
@@ -211,7 +156,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
                )
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -229,14 +173,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/generic-review", "head_sha" => "review-head-a"})
     attach_tool(repo, session, "attach_pr", %{"url" => pr_url, "head_sha" => "review-head-a"})
     sync_pr_state(repo, session, pr_url, "review-head-a")
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Validation passed",
-      "tests" => ["mix test worker_tools_ready_gate_test.exs"],
-      "artifacts" => ["validation-log.txt"],
-      "head_sha" => "review-head-a",
-      "acceptance_criteria_met" => true
-    })
 
     attach_tool(repo, session, "append_progress", %{
       "summary" => "Spoofed review completion",
@@ -292,14 +228,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     attach_tool(repo, session, "attach_pr", %{"url" => pr_url, "head_sha" => "review-head-b"})
     sync_pr_state(repo, session, pr_url, "review-head-b")
 
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Validation passed at new head",
-      "tests" => ["mix test worker_tools_ready_gate_test.exs"],
-      "artifacts" => ["validation-log.txt"],
-      "head_sha" => "review-head-b",
-      "acceptance_criteria_met" => true
-    })
-
     stale_review = mark_ready(repo, session, "ready-stale-review")
     assert "review_complete" in get_in(stale_review, ["error", "data", "missing"])
 
@@ -318,8 +246,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
       "summary" => "Review at head A",
       "tests" => ["mix test"],
       "artifacts" => ["head-a.txt"],
-      "head_sha" => live.head_a,
-      "acceptance_criteria_met" => true
+      "head_sha" => live.head_a
     })
 
     live_tool(repo, live.session, config, "complete_review", %{"reference" => "review-a"})
@@ -329,8 +256,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
       "summary" => "Review at head B",
       "tests" => ["mix test"],
       "artifacts" => ["head-b.txt"],
-      "head_sha" => String.upcase(head_b),
-      "acceptance_criteria_met" => true
+      "head_sha" => String.upcase(head_b)
     }
 
     response = live_tool(repo, live.session, config, "submit_review_package", review_arguments)
@@ -427,106 +353,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert Enum.count(events, &(get_in(&1.payload, ["type"]) == "branch")) == 1
     refute Enum.any?(events, &(get_in(&1.payload, ["type"]) == "review_package"))
     assert {:ok, []} = PlanningRepository.list_artifacts(repo, live.package.id)
-  end
-
-  test "mark_ready does not require review-package metadata for non-merge-gated policies", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-READY-QUICK-FIX", kind: "quick_fix", status: "ci_waiting")
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-quick-fix", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    missing = get_in(response, ["error", "data", "missing"])
-    assert get_in(response, ["error", "data", "reason"]) == "readiness_failed"
-    refute "plan_complete" in missing
-    refute "branch_attached" in missing
-    refute "pr_attached" in missing
-    refute "review_package_submitted" in missing
-    assert "tests_passed" in missing
-
-    attach_tool(repo, session, "request_scope_expansion", %{
-      "summary" => "Unrelated scope request",
-      "status" => "tests_passed",
-      "payload" => %{"lane" => "brief", "verdict" => "green"},
-      "idempotency_key" => "quick-fix-unrelated-status"
-    })
-
-    unrelated_status_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-quick-fix-unrelated-status", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    unrelated_missing = get_in(unrelated_status_response, ["error", "data", "missing"])
-    assert "tests_passed" in unrelated_missing
-
-    attach_tool(repo, session, "append_progress", %{
-      "summary" => "Focused tests passed",
-      "status" => "tests_passed",
-      "idempotency_key" => "quick-fix-tests"
-    })
-
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-READY-QUICK-FIX/worker", "head_sha" => "quick-fix-head-b"})
-
-    stale_progress_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-quick-fix-stale-progress", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    stale_progress_missing = get_in(stale_progress_response, ["error", "data", "missing"])
-    assert "tests_passed" in stale_progress_missing
-
-    attach_tool(repo, session, "append_progress", %{
-      "summary" => "Focused tests passed for latest head",
-      "status" => "tests_passed",
-      "idempotency_key" => "quick-fix-tests-head-b"
-    })
-
-    attach_tool(repo, session, "append_progress", %{
-      "summary" => "Focused tests failed after latest pass",
-      "status" => "tests_failed",
-      "idempotency_key" => "quick-fix-tests-head-b-failed"
-    })
-
-    stale_green_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-quick-fix-stale-green", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    stale_green_missing = get_in(stale_green_response, ["error", "data", "missing"])
-    assert "tests_passed" in stale_green_missing
-
-    attach_tool(repo, session, "append_progress", %{
-      "summary" => "Focused tests passed after failure",
-      "status" => "tests_passed",
-      "idempotency_key" => "quick-fix-tests-head-b-repassed"
-    })
-
-    ready_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-quick-fix-after-progress", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
-    assert get_in(ready_response, ["result", "structuredContent", "work_package", "status"]) == "ready_for_merge"
   end
 
   test "legacy stored merge-ready status can still transition to merged", %{repo: repo} do
@@ -657,8 +483,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
       "summary" => "Review new head",
       "tests" => ["mix test"],
       "artifacts" => ["new-head.txt"],
-      "head_sha" => head_sha,
-      "acceptance_criteria_met" => true
+      "head_sha" => head_sha
     })
   end
 

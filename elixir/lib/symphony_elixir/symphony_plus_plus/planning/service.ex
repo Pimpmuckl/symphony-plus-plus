@@ -77,7 +77,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Service do
                :task_plan,
                :progress,
                :finding,
-               :validation_note,
                :review_evidence,
                :blocker,
                :comment,

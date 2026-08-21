@@ -30,9 +30,9 @@ delivery. It owns:
 
 - One bounded goal and file scope.
 - Delivery repository and target base branch.
-- Acceptance criteria, validation, stop conditions, and optional review.
+- Acceptance criteria plus optional validation, stop conditions, and review context.
 - Worker claim, worktree, branch, pull request, progress, and findings.
-- Readiness and terminal delivery evidence.
+- Provider-backed readiness, blockers, findings, and terminal delivery evidence.
 
 Dispatch activates the planned WorkPackage; it does not create a second
 execution record.

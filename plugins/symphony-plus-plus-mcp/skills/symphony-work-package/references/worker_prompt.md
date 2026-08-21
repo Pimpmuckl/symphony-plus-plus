@@ -31,13 +31,9 @@ Before coding:
 4. If claim fails because the lease is paused, another active owner exists, or
    the local ledger scope mismatches, stop and ask the architect or operator to
    repair that state. Do not request raw secrets.
-5. Read `read_context()`, `read_task_plan()`, findings, progress,
-   acceptance, review, and handoff virtual resources.
-6. Update the virtual task plan with
-   `update_task_plan({"expected_version": <read version>, "nodes": [...]})`.
-   Omit a node `id` only to create it with a required `title`; use the
-   returned server-owned `id` for updates. Use `pending`, `in_progress`,
-   `done`, or `skipped`.
+5. Read `read_context()`, findings, progress, acceptance, review, and handoff
+   virtual resources. Read and update the task plan only when it contains
+   useful execution context.
 7. Stop and ask the architecture agent if dependency evidence, permission
    grants, or source context are missing.
 8. If you need guidance, ask the parent or architect through ordinary agent
@@ -85,25 +81,26 @@ Before ready:
 4. Refresh current state only for the attached PR with zero-state-argument
    `sync_pr()`. Use explicit PR identity only to repair a missing attachment;
    put manual canonical state only in the validated `recovery` import.
-5. Submit validation evidence with
-   `submit_review_package(summary, tests, artifacts)`. Policy-approved no-PR
-   work may omit branch/head metadata; PR-backed or review-required work must
-   use its current exact head.
+5. Optionally record useful validation context with
+   `submit_review_package(summary, tests?, artifacts?)`. It is not readiness
+   proof. When used for PR-backed or review-required work, it must use the
+   current exact head.
 6. If `review.md` declares a review requirement, consume and classify its
    provider-neutral structured result. Call `complete_review(reference?, note?)`
    only after accepting a terminal result for the current exact head.
    Use bounded `CONTINUE` only while the package contract is unchanged; return
    findings, contract ambiguity, `REPLAN`, or `RESLICE` to the architect
    without calling `complete_review`.
-7. Call `mark_ready()` only after acceptance criteria, tests, required review,
-   progress, findings, branch/PR evidence, and blockers are settled. Do not add
-   lifecycle calls only to restate existing evidence. Resolve worker-owned
-   blockers with `resolve_blocker`; architect-owned human blockers still
-   require the architect or trusted local operator.
+7. Call `mark_ready()` after provider-backed branch/PR state, scope, required
+   review, blockers, and investigation findings are settled. Do not add
+   task-plan, review-package, or progress calls only to restate work proved
+   elsewhere. Resolve worker-owned blockers with `resolve_blocker`;
+   architect-owned human blockers still require the architect or trusted
+   local operator.
 8. If the architect accepts a review finding after readiness, advance to a
-   different exact head, refresh the attached PR with `sync_pr`, submit a new
-   review package, and complete the required review. Old-head evidence remains
-   in the ledger but is not readiness evidence for the rework cycle.
+   different exact head, refresh the attached PR with `sync_pr`, and complete
+   the required review. Old-head evidence remains in the ledger but is not
+   readiness evidence for the rework cycle.
 
 Final output:
 - PR URL and final head SHA.

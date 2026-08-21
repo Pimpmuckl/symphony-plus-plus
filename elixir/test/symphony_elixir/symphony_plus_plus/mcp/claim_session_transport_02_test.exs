@@ -749,7 +749,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
 
   test "final sync tools remain idempotent after claim_local_assignment reconnect", %{repo: repo} do
     package = create_local_claim_package!(repo, "SYMPP-LOCAL-FINAL-SYNC", status: "ci_waiting")
-    append_done_plan(repo, package.id)
     assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     arguments = local_assignment_claim_args(package)
     config = local_mcp_config(repo)
@@ -792,8 +791,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
       "summary" => "Ready after local reconnect",
       "tests" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
       "artifacts" => ["review-log.txt"],
-      "head_sha" => head_sha,
-      "acceptance_criteria_met" => true
+      "head_sha" => head_sha
     }
 
     review_response = attach_tool(repo, claimed_server.session, "submit_review_package", review_args)

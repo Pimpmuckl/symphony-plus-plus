@@ -40,8 +40,9 @@ cross-slice target, successor relation, audit closeout, or concurrency guard.
 6. Call `get_current_assignment()` and treat that WorkPackage as authoritative.
 7. Read `sympp://work-packages/{id}/acceptance.md` with the other MCP-backed
    package resources.
-8. Read current context before coding: `read_context()`, `read_task_plan()`,
-   acceptance/review/handoff resources, findings, and progress.
+8. Read current context before coding: `read_context()`,
+   acceptance/review/handoff resources, findings, and progress. Read the task
+   plan only when it contains useful package context.
    `read_context()` includes the assigned package contract and binding, a
    parent WorkRequest summary, direct dependencies, selected relevant
    decisions, and the architect-owned completion step. It excludes siblings
@@ -60,10 +61,11 @@ machine-readable response.
 
 Keep S++ current as the work changes:
 
-- `update_task_plan({"expected_version": <read version>, "nodes": [...]})`.
-  Each node is `{id?, title?, body?, status?}`. Omit `id` to create a node
-  with a required `title`; use the returned server-owned `id` for updates.
-  Statuses are `pending`, `in_progress`, `done`, and `skipped`.
+- When a task plan helps execution, use
+  `update_task_plan({"expected_version": <read version>, "nodes": [...]})`.
+  Each node is `{id?, title?, body?, status?}`. Omit `id` to create it with a
+  required `title`; use the returned server-owned `id` for updates. Statuses
+  are `pending`, `in_progress`, `done`, and `skipped`.
 - `append_finding(finding, idempotency_key)`.
 - `append_progress(event, idempotency_key)`.
 - `add_comment(body)`, `list_comments()`, and
@@ -103,9 +105,9 @@ S++ explicitly gives scoped context.
   to repair missing attachment identity. Put manual canonical state only in
   the schema-validated `recovery` import; never infer freshness from an
   unavailable provider or an unknown state.
-- `submit_review_package(summary, tests, artifacts)` records validation and
-  acceptance evidence. Policy-approved no-PR work may submit without a branch
-  head; PR-backed or review-required work must use its attached exact head.
+- `submit_review_package(summary, tests?, artifacts?)` may record useful
+  validation context. It is not readiness proof. When used for PR-backed or
+  review-required work, it must use the attached exact head.
 - If `review.md` declares a review requirement, use that provider and its
   optional arguments. Classify its provider-neutral structured result first.
   Call `complete_review(reference?, note?)` only after accepting a terminal
@@ -129,14 +131,12 @@ S++ explicitly gives scoped context.
 
 Before `mark_ready()`:
 
-- Acceptance is satisfied or explicitly blocked.
-- Required tests, static checks, review, and CI/check status are complete or
-  accurately reported as absent/blocked.
-- Task plan, findings, progress, branch, PR, and any required review completion are current.
-  Package-depth policies still require at least one terminal task-plan node.
-  Do not add lifecycle calls only to restate facts already present; `mark_ready`
-  infers completed plan, PR, branch, and review facts from existing evidence
-  when the matching facts are already recorded.
+- Acceptance is satisfied or explicitly blocked, and requested tests or static
+  checks have run outside the readiness ledger.
+- Provider-backed branch, PR, current-head state, scope, blockers,
+  investigation findings, and any required review completion are current.
+- Do not add task-plan, review-package, or progress calls only to restate facts
+  already proved elsewhere.
 - No active blocker remains.
   Resolve worker-owned blockers with `resolve_blocker`. Architect-owned human
   blockers still require the architect or trusted local operator.
@@ -144,8 +144,8 @@ Before `mark_ready()`:
 After `mark_ready()` succeeds, evidence is frozen except idempotent replay of
 already-recorded writes. If an architect accepts a verified review finding and
 returns the package to `active`, advance to a different exact head, run
-`sync_pr` for fresh provider state, submit a new review package, and complete
-the required review. Evidence for the old head remains immutable but cannot
+`sync_pr` for fresh provider state, and complete the required review. Evidence
+for the old head remains immutable but cannot
 satisfy readiness again.
 Return ready or terminal packages to the architect named by `next_owner`; the
 worker does not need or receive architect tools for that handoff.

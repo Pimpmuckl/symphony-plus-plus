@@ -71,8 +71,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     session = claim_worker_grant(repo, creation.worker_grant.id, "hotfix-worker")
     assert read_resource(repo, session, "sympp://work-packages/#{creation.work_package.id}/context.md") =~ "Fix hotfix incident"
 
-    update_plan(repo, session)
-    append_progress(repo, session, "Hotfix regression passed", "tests_passed", "hotfix-tests")
     assert_worker_active(repo, session)
 
     head_sha = "p8-001-hotfix-head"
@@ -108,7 +106,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
                )
              )
 
-    append_done_plan(repo, package.id)
     session = minted_worker_session(repo, package.id, "gate-worker")
     head_sha = "p8-001-gates-head"
 
@@ -476,37 +473,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     claim_worker_grant(repo, minted.grant.id, claimed_by)
   end
 
-  defp update_plan(repo, session) do
-    read_response = mcp_tool(repo, session, "read_task_plan", %{})
-
-    response =
-      mcp_tool(repo, session, "update_task_plan", %{
-        "expected_version" => get_in(read_response, ["result", "structuredContent", "version"]),
-        "nodes" => [%{"title" => "Record deterministic harness proof", "status" => "done"}]
-      })
-
-    assert get_in(response, ["result", "structuredContent", "version"])
-  end
-
-  defp append_done_plan(repo, work_package_id) do
-    assert {:ok, _plan_node} =
-             PlanningRepository.append_plan_node(repo, %{
-               "work_package_id" => work_package_id,
-               "title" => "Complete implementation",
-               "status" => "done"
-             })
-  end
-
   defp assert_worker_active(repo, session) do
     assert {:ok, package} = WorkPackageRepository.get(repo, session.assignment.work_package_id)
     assert package.status == "active"
   end
 
   defp attach_phase_child_ready_evidence(repo, session, child_id, head_sha) do
-    append_done_plan(repo, child_id)
     attach_branch(repo, session, "agent/#{child_id}/worker", head_sha)
     attach_pr(repo, session, phase_child_pr_url(child_id), head_sha)
-    submit_validation_package(repo, session, head_sha)
   end
 
   defp phase_child_pr_url("SYMPP-P8-001-PHASE-A"), do: "https://github.com/nextide/symphony-plus-plus/pull/8003"
@@ -539,24 +513,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
       "summary" => "Deterministic local validation evidence for P8 integration harness.",
       "tests" => ["mix sympp.integration"],
       "artifacts" => ["validation/p8-001-local.json"],
-      "head_sha" => head_sha,
-      "acceptance_criteria_met" => true
+      "head_sha" => head_sha
     })
   end
 
   defp complete_review(repo, session, reference) do
     attach_tool(repo, session, "complete_review", %{"reference" => reference})
-  end
-
-  defp append_progress(repo, session, summary, status, idempotency_key) do
-    response =
-      mcp_tool(repo, session, "append_progress", %{
-        "summary" => summary,
-        "status" => status,
-        "idempotency_key" => idempotency_key
-      })
-
-    assert get_in(response, ["result", "structuredContent", "progress_event", "id"])
   end
 
   defp read_resource(repo, session, uri) do
