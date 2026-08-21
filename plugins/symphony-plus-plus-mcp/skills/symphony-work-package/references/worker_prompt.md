@@ -34,9 +34,9 @@ Before coding:
 5. Read `read_context()`, findings, progress, acceptance, review, and handoff
    virtual resources. Read and update the task plan only when it contains
    useful execution context.
-7. Stop and ask the architecture agent if dependency evidence, permission
+6. Stop and ask the architecture agent if dependency evidence, permission
    grants, or source context are missing.
-8. If you need guidance, ask the parent or architect through ordinary agent
+7. If you need guidance, ask the parent or architect through ordinary agent
    messaging. State the decision, evidence checked, impact, and candidate
    options with pros/cons when you can supply them.
 

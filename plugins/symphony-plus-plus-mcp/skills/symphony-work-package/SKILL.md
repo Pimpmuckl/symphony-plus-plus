@@ -131,8 +131,6 @@ S++ explicitly gives scoped context.
 
 Before `mark_ready()`:
 
-- Acceptance is satisfied or explicitly blocked, and requested tests or static
-  checks have run outside the readiness ledger.
 - Provider-backed branch, PR, current-head state, scope, blockers,
   investigation findings, and any required review completion are current.
 - Do not add task-plan, review-package, or progress calls only to restate facts
