@@ -85,7 +85,7 @@ function Get-SymppStringSha256([string]$Value) {
   }
 }
 
-function Get-SymppPluginGenerationKey([string]$PluginRoot, [string]$SourcePluginRoot, [string]$SourceRoot) {
+function Get-SymppPluginGenerationKey([string]$PluginRoot, [string]$SourceRoot) {
   $revision = Get-SymppMarketplaceSourceRevision $SourceRoot
   try {
     $contractFingerprint = [string]((Get-Content -LiteralPath (Join-Path $SourceRoot "elixir/priv/symphony_plus_plus/mcp_contract.json") -Raw | ConvertFrom-Json).mcp_contract_fingerprint)
@@ -96,30 +96,6 @@ function Get-SymppPluginGenerationKey([string]$PluginRoot, [string]$SourcePlugin
     return $null
   }
   return Get-SymppStringSha256 "$([System.IO.Path]::GetFullPath($PluginRoot).ToLowerInvariant())`n$($revision.ToLowerInvariant())`n$($contractFingerprint.ToLowerInvariant())"
-}
-
-function Test-InstalledPluginPayloadMatchesMarketplaceSource([string]$PluginRoot, [string]$SourceRoot) {
-  $packageRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($PluginRoot))
-  $sourcePluginRoot = Join-Path $SourceRoot ("plugins/" + (Split-Path -Leaf $packageRoot))
-  $relativePaths = @(
-    ".codex-plugin/plugin.json",
-    ".mcp.json",
-    "scripts/start-sympp-mcp.ps1",
-    "scripts/sympp-launcher-runtime.ps1",
-    "scripts/sympp-mcp-artifact-manifest.ps1",
-    "scripts/sympp-mcp-artifact-runtime.ps1",
-    "scripts/sympp-mcp-process-runtime.ps1",
-    "scripts/sympp-mcp-launcher-helpers.ps1"
-  )
-  $checked = 0
-  foreach ($relativePath in $relativePaths) {
-    $installedPath = Join-Path $PluginRoot $relativePath
-    if (-not (Test-Path -LiteralPath $installedPath)) { continue }
-    $sourcePath = Join-Path $sourcePluginRoot $relativePath
-    if (-not (Test-Path -LiteralPath $sourcePath) -or (Get-FileSha256 $installedPath) -ne (Get-FileSha256 $sourcePath)) { return $false }
-    $checked += 1
-  }
-  return $checked -gt 0
 }
 
 function Get-SymppInstalledIdentityCachePath([string]$PluginRoot) {
@@ -177,12 +153,11 @@ function Resolve-SymppInstalledMarketplaceIdentity([string]$PluginRoot, [switch]
   $codexHome = Split-Path -Parent $pluginsRoot
   $marketplaceName = Split-Path -Leaf $marketplaceRoot
   $sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $codexHome ".tmp/marketplaces/$marketplaceName"))
-  $sourcePluginRoot = Join-Path $sourceRoot ("plugins/" + (Split-Path -Leaf $packageRoot))
-  if (-not (Test-SymphonySourceRoot $sourceRoot) -or -not (Test-Path -LiteralPath $sourcePluginRoot -PathType Container)) {
+  if (-not (Test-SymphonySourceRoot $sourceRoot)) {
     throw "installed_marketplace_identity_invalid: marketplace source is missing for $versionRoot. Run codex plugin marketplace upgrade."
   }
 
-  $generationKey = Get-SymppPluginGenerationKey $versionRoot $sourcePluginRoot $sourceRoot
+  $generationKey = Get-SymppPluginGenerationKey $versionRoot $sourceRoot
   $cachePath = Get-SymppInstalledIdentityCachePath $versionRoot
   $cached = Read-SymppInstalledIdentityCache $cachePath $versionRoot $sourceRoot $generationKey
   if ($cached) {
@@ -234,67 +209,11 @@ function Resolve-RepoRootFromMarketplaceCache([string]$PluginRoot) {
   return $null
 }
 
-function Test-SymphonySourceTreeMatchesRevision([string]$Path, [string]$ExpectedRevision) {
-  $headRevision = Get-SymppGitHeadRevision $Path
-  if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($ExpectedRevision, $headRevision)) {
-    return $false
-  }
-
-  $git = Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $git) {
-    return $false
-  }
-
-  try {
-    $status = @(& $git.Source @("-C", $Path, "status", "--porcelain=v1", "--untracked-files=all") 2>$null)
-    return $LASTEXITCODE -eq 0 -and $status.Count -eq 0
-  } catch {
-    return $false
-  }
-}
-
-function Resolve-RepoRootFromSourceCache([string]$PluginRoot) {
-  $pluginRoot = [System.IO.Path]::GetFullPath($PluginRoot)
-  $installedRevision = Get-SymppPinnedSourceRevision $pluginRoot
-  if (-not $installedRevision) {
-    return $null
-  }
-
-  $sourceCacheRoot = [System.IO.Path]::GetFullPath((Join-Path (Resolve-SymppPluginHome) "source-cache"))
-  if (-not (Test-Path -LiteralPath $sourceCacheRoot)) {
-    return $null
-  }
-
-  $candidates = @(
-    Get-ChildItem -LiteralPath $sourceCacheRoot -Directory -Filter "symphony-plus-plus-*" -ErrorAction SilentlyContinue |
-      Sort-Object LastWriteTime -Descending
-  )
-
-  foreach ($candidate in $candidates) {
-    $candidatePath = [System.IO.Path]::GetFullPath($candidate.FullName)
-    if (-not (Test-SymphonySourceRoot $candidatePath)) {
-      continue
-    }
-
-    if ((Test-SymphonySourceTreeMatchesRevision $candidatePath $installedRevision) -and
-        (Test-InstalledPluginPayloadMatchesMarketplaceSource $pluginRoot $candidatePath)) {
-      return $candidatePath
-    }
-  }
-
-  return $null
-}
-
 function Resolve-RepoRootFromPluginRoot([string]$PluginRoot) {
   $pluginRoot = [System.IO.Path]::GetFullPath($PluginRoot)
   $sourceCandidate = [System.IO.Path]::GetFullPath((Join-Path $pluginRoot "../.."))
   if (Test-SymphonySourceRoot $sourceCandidate) {
     return $sourceCandidate
-  }
-
-  $sourceCacheRoot = Resolve-RepoRootFromSourceCache $pluginRoot
-  if ($sourceCacheRoot) {
-    return $sourceCacheRoot
   }
 
   $marketplaceRoot = Resolve-RepoRootFromMarketplaceCache $pluginRoot

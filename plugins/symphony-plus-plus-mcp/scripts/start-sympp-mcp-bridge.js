@@ -64,9 +64,9 @@ function readJson(file) {
   }
 }
 
-function generationKey(pluginRoot, sourcePluginRoot, sourceRoot) {
+function generationKey(pluginRoot, sourceRoot) {
   try {
-    if (!fs.statSync(pluginRoot).isDirectory() || !fs.statSync(sourcePluginRoot).isDirectory()) return null;
+    if (!fs.statSync(pluginRoot).isDirectory()) return null;
     const install = readJson(path.join(sourceRoot, ".codex-marketplace-install.json"));
     const contract = readJson(path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus", "mcp_contract.json"));
     const revision = String(install && (install.revision || install.source_revision || install.sourceRevision) || "").toLowerCase();
@@ -146,21 +146,6 @@ function releaseProcessLock(lockFile, lock) {
   if (owner && owner.lock_id === lock.lockId) { try { fs.unlinkSync(lockFile); } catch (_) { } }
 }
 
-async function enterStartupLock(runtimeFile) {
-  const lockFile = path.join(path.dirname(runtimeFile), "codex-plugin.lock");
-  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
-  const configuredSeconds = Number(process.env.SYMPP_STARTUP_LOCK_TIMEOUT_SEC || 1800);
-  const timeoutSeconds = Number.isFinite(configuredSeconds) && configuredSeconds >= 1 ? Math.min(1800, configuredSeconds) : 1800;
-  const deadline = Date.now() + timeoutSeconds * 1000;
-  while (Date.now() < deadline) {
-    try { return fs.openSync(lockFile, "a+"); } catch (error) {
-      if (!["EACCES", "EBUSY", "EPERM"].includes(error.code)) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
-  }
-  throw new Error(`Timed out waiting for Symphony++ launcher startup lock: ${lockFile}`);
-}
-
 function closeGenerationWatchers() {
   const count = generationWatchers.length;
   for (const watcher of generationWatchers.splice(0)) {
@@ -198,10 +183,9 @@ function liveGeneration(markerFile) {
   return generationFromMarker(readJson(markerFile), generationWatchStartedAtMs);
 }
 
-async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, markerFile) {
+async function coalescedGenerationKey(pluginRoot, sourceRoot, markerFile) {
   const watched = watchGeneration([
     { path: pluginRoot, recursive: true },
-    { path: sourcePluginRoot, recursive: true },
     { path: path.join(sourceRoot, ".codex-marketplace-install.json"), recursive: false },
     { path: path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus", "mcp_contract.json"), recursive: false },
   ], markerFile);
@@ -225,11 +209,11 @@ async function coalescedGenerationKey(pluginRoot, sourcePluginRoot, sourceRoot, 
         if (generation && generationWatchVersion === watchVersion) return { key: generation, watchVersion };
         for (let attempt = 0; attempt < 3; attempt += 1) {
           watchVersion = generationWatchVersion;
-          generation = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
+          generation = generationKey(pluginRoot, sourceRoot);
           if (!generation) return null;
           trace("generation_scan_complete");
           await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
-          const confirmed = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
+          const confirmed = generationKey(pluginRoot, sourceRoot);
           if (!confirmed || confirmed !== generation || generationWatchVersion !== watchVersion) {
             trace("generation_scan_retry");
             continue;
@@ -272,11 +256,10 @@ async function resolveCachedIdentity(pluginRoot) {
   const codexHome = path.dirname(pluginsRoot);
   const marketplaceName = path.basename(marketplaceRoot);
   const sourceRoot = path.resolve(codexHome, ".tmp", "marketplaces", marketplaceName);
-  const sourcePluginRoot = path.join(sourceRoot, "plugins", path.basename(packageRoot));
   const cacheName = sha256(versionRoot.toLowerCase()).slice(0, 12) + ".json";
   const cacheFile = path.join(resolveHome(), "runtime", "launcher-validation", cacheName);
   const generationMarker = `${cacheFile}.generation`;
-  const generation = await coalescedGenerationKey(versionRoot, sourcePluginRoot, sourceRoot, generationMarker);
+  const generation = await coalescedGenerationKey(versionRoot, sourceRoot, generationMarker);
   if (!generation) return null;
   const cache = readJson(cacheFile);
   if (!cache || cache.schema_version !== 1 ||
@@ -361,10 +344,9 @@ async function generationValidAtAttachment(identity) {
   if (!generationValidForAttachment(identity)) return false;
   const pluginRoot = identity.pluginRoot;
   const sourceRoot = identity.sourceRoot;
-  const sourcePluginRoot = path.join(sourceRoot, "plugins", path.basename(path.dirname(pluginRoot)));
-  const generation = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
+  const generation = generationKey(pluginRoot, sourceRoot);
   await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
-  const confirmed = generationKey(pluginRoot, sourcePluginRoot, sourceRoot);
+  const confirmed = generationKey(pluginRoot, sourceRoot);
   const valid = generationValidForAttachment(identity) && generation === identity.generationKey && confirmed === identity.generationKey;
   trace("generation_attach_full_validation");
   return valid;
@@ -627,19 +609,12 @@ async function bridge(identity, state, runtimeFile) {
   let localLease = null;
   let cleanupScript = null;
   let cleanupAllowed = true;
-  let startupLock = null;
   let attached = false;
   let heartbeat = null;
   let sessionId = null;
   let protocol = null;
   const timeoutMs = Math.max(1, Math.min(3600, Number(process.env.SYMPP_MCP_HTTP_TIMEOUT_SEC || 300))) * 1000;
   try {
-    try {
-      startupLock = await enterStartupLock(runtimeFile);
-    } catch (_) {
-      trace("warm_miss_lock");
-      return false;
-    }
     trace("generation_attach_preflight");
     if (!generationValidForAttachment(identity)) return false;
     cleanupScript = prepareCleanupScript(identity);
@@ -653,9 +628,6 @@ async function bridge(identity, state, runtimeFile) {
       return false;
     }
     localLease = createLocalLease(runtimeFile, state, identity);
-    fs.closeSync(startupLock);
-    startupLock = null;
-    trace("generation_attach_lock_released");
     const confirmedState = readJson(runtimeFile);
     const confirmed = resolveStateIdentity(confirmedState, path.resolve(__dirname, ".."), identity);
     if (!confirmed || confirmed.runtimeKey.toLowerCase() !== identity.runtimeKey.toLowerCase()) {
@@ -727,7 +699,6 @@ async function bridge(identity, state, runtimeFile) {
     }
     return true;
   } finally {
-    if (startupLock) { try { fs.closeSync(startupLock); } catch (_) { } }
     if (heartbeat) clearInterval(heartbeat);
     if (localLease) { try { fs.unlinkSync(localLease); } catch (_) { } }
     if (attached) await clientLease(mcpUrl, clientId, "detach", false);
