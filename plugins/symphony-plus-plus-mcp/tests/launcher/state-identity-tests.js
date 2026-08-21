@@ -68,20 +68,18 @@ const marketplaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sympp-node-market
 try {
   const installedRoot = path.join(marketplaceRoot, "installed");
   const sourceRoot = path.join(marketplaceRoot, "source");
-  const sourcePluginRoot = path.join(sourceRoot, "plugins", "symphony-plus-plus-mcp");
   fs.mkdirSync(installedRoot, { recursive: true });
-  fs.mkdirSync(sourcePluginRoot, { recursive: true });
   fs.mkdirSync(path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus"), { recursive: true });
   fs.writeFileSync(path.join(sourceRoot, ".codex-marketplace-install.json"), JSON.stringify({ revision }));
   fs.writeFileSync(
     path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus", "mcp_contract.json"),
     JSON.stringify({ mcp_contract_fingerprint: contract }),
   );
-  const first = generationKey(installedRoot, sourcePluginRoot, sourceRoot);
+  const first = generationKey(installedRoot, sourceRoot);
   assert.match(first, /^[0-9a-f]{64}$/, "Codex marketplace metadata must identify a marker-free install");
   fs.writeFileSync(path.join(installedRoot, "payload.txt"), "locally changed");
   assert.equal(
-    generationKey(installedRoot, sourcePluginRoot, sourceRoot),
+    generationKey(installedRoot, sourceRoot),
     first,
     "Node warm attach must trust the Codex-owned installed cache instead of hashing every file",
   );

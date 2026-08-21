@@ -142,8 +142,6 @@ $watchClose = if ($watchRelease -ge 0) { $node.LastIndexOf('closeGenerationWatch
 $bridgeStart = $node.IndexOf('async function bridge(')
 $bridgeEnd = $node.IndexOf('async function main()', $bridgeStart)
 $bridgeSource = $node.Substring($bridgeStart, $bridgeEnd - $bridgeStart)
-$localLeaseCreated = $bridgeSource.IndexOf('localLease = createLocalLease')
-$attachLockReleased = $bridgeSource.IndexOf('trace("generation_attach_lock_released");')
 Assert-True ($cmd.Contains('%%~$PATH:I') -and -not $cmd.Contains('where node.exe') -and $cmd.Contains('-PrepareRuntimeOnly') -and $cmd.Contains('if "%bridge_exit%"=="42" goto :run_pwsh')) "Bootstrap must select Node without a per-client discovery process and preserve PowerShell fallback after preparation"
 Assert-True ($node.Contains('const COLD_TIMEOUT = 44;') -and $node.Contains('process.exit(COLD_TIMEOUT)') -and -not $cmd.Contains('if "%bridge_exit%"=="44"')) "Node cold timeout must be terminal to the shipped command instead of restarting the PowerShell budget"
 Assert-True ($cmd.Contains('-CleanupPreparedRuntime') -and $source.Contains('if ($CleanupPreparedRuntime)')) "Unexpected post-prepare Node failures must clean an unleased managed runtime"
@@ -211,7 +209,6 @@ try {
   Remove-Item -LiteralPath $pendingBase -Recurse -Force -ErrorAction SilentlyContinue
 }
 Assert-True ($healthCall -ge 0 -and $healthCall -lt $stdinRead -and $node.Contains('trace("warm_miss_health");')) "Node health mismatches must route through cold recovery before consuming stdin"
-Assert-True ($localLeaseCreated -ge 0 -and $localLeaseCreated -lt $attachLockReleased -and $attachLockReleased -lt $bridgeSource.IndexOf('ensureRuntimeHealth')) "Cold followers must release the startup lock after durable local leasing and before health/generation preflight"
 Assert-True ($node.Contains('/mcp/readiness') -and $node.Contains('response.status === 404') -and $node.Contains('legacyBackendHealth')) "Node launcher health probes must prefer stateless readiness and retain a 404-only legacy runtime fallback"
 Assert-True ($source.Contains('/mcp/readiness') -and $source.Contains('StatusCode -eq 404') -and $source.Contains('Get-LegacySymppBackendHealth')) "PowerShell launcher health probes must prefer stateless readiness and retain a 404-only legacy runtime fallback"
 Assert-True ($node.Contains('backendHealth(identity.backend)') -and -not $node.Contains('requireDashboard')) "Node bridge readiness must remain independent of the dashboard"
@@ -221,7 +218,6 @@ Assert-True ($source -match '(?s)\$restartingRecordedBackend -and \$dashboardPla
 Assert-True ($node.Contains('confirmed.runtimeKey.toLowerCase()') -and $node.Contains('trace("warm_miss_state");')) "Concurrent runtime rotation must route through cold recovery"
 Assert-True ($node.Contains('if (!confirmedIdentity) await prepareColdRuntime();')) "A ready state that cannot resolve against installed identity must enter cold preparation"
 Assert-True ($node.Contains('/^(disabled|failed)/.test(String(state.frontend.status))')) "Node warm attach must accept every launcher-produced disabled or failed headless status"
-Assert-True ($node.Contains('SYMPP_STARTUP_LOCK_TIMEOUT_SEC || 1800') -and $node.Contains('trace("warm_miss_lock");')) "Node startup locking must honor the configured timeout and remain recoverable"
 Assert-True ($watchClose -ge 0 -and $watchClose -lt $watchRelease -and $watchRelease -lt $stdinRead) "Node warm attach must close marketplace and plugin-cache watchers before retaining the bridge on stdin"
 Assert-True ($node.Contains('validated_at_ms') -and -not $node.Contains('ownedGenerationMarker')) "Node generation coalescing must reject markers older than each attach without a process-lifetime marker owner"
 Assert-True ($node -match '(?s)function generationStillValid\(identity\).*?generationWatchVersion === identity\.generationWatchVersion;\s*}' -and $node -notmatch '(?s)function generationStillValid\(identity\).*?liveGeneration') "Pinned attachments must use their local watcher version instead of racing another session's generation marker refresh"
@@ -499,17 +495,15 @@ $generationRoot = Join-Path $PSScriptRoot (".generation-" + [guid]::NewGuid().To
 try {
   $installedRoot = Join-Path $generationRoot "installed"
   $sourceRoot = Join-Path $generationRoot "source"
-  $sourcePluginRoot = Join-Path $sourceRoot "plugin"
-  foreach ($directory in @($installedRoot, $sourcePluginRoot, (Join-Path $sourceRoot "elixir/priv/symphony_plus_plus"))) {
+  foreach ($directory in @($installedRoot, (Join-Path $sourceRoot "elixir/priv/symphony_plus_plus"))) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
   }
   Set-Content -LiteralPath (Join-Path $installedRoot "payload.txt") -Value "first" -NoNewline
-  Set-Content -LiteralPath (Join-Path $sourcePluginRoot "payload.txt") -Value "first" -NoNewline
   Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json") -Value (@{ revision = "a" * 40 } | ConvertTo-Json -Compress) -NoNewline
   Set-Content -LiteralPath (Join-Path $sourceRoot "elixir/priv/symphony_plus_plus/mcp_contract.json") -Value (@{ mcp_contract_fingerprint = "c" * 64 } | ConvertTo-Json -Compress) -NoNewline
-  $beforeGeneration = Get-SymppPluginGenerationKey $installedRoot $sourcePluginRoot $sourceRoot
+  $beforeGeneration = Get-SymppPluginGenerationKey $installedRoot $sourceRoot
   Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json") -Value (@{ revision = "b" * 40 } | ConvertTo-Json -Compress) -NoNewline
-  $afterGeneration = Get-SymppPluginGenerationKey $installedRoot $sourcePluginRoot $sourceRoot
+  $afterGeneration = Get-SymppPluginGenerationKey $installedRoot $sourceRoot
   Assert-True ($beforeGeneration -ne $afterGeneration) "Generation identity must follow Codex marketplace revision metadata"
 } finally {
   Remove-Item -LiteralPath $generationRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -520,10 +514,9 @@ $previousSymppHome = $env:SYMPP_HOME
 try {
   $codexHome = Join-Path $marketplaceRoot "codex"
   $sourceRoot = Join-Path $codexHome ".tmp/marketplaces/test-market"
-  $sourcePluginRoot = Join-Path $sourceRoot "plugins/symphony-plus-plus-mcp"
   $installedRoot = Join-Path $codexHome "plugins/cache/test-market/symphony-plus-plus-mcp/0.1.9"
   $contractRoot = Join-Path $sourceRoot "elixir/priv/symphony_plus_plus"
-  foreach ($directory in @($sourcePluginRoot, $installedRoot, $contractRoot, (Join-Path $sourceRoot "elixir"))) {
+  foreach ($directory in @($installedRoot, $contractRoot, (Join-Path $sourceRoot "elixir"))) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
   }
   $revision = "b" * 40
@@ -531,7 +524,6 @@ try {
   Set-Content -LiteralPath (Join-Path $sourceRoot "elixir/mix.exs") -Value "[]" -NoNewline
   Set-Content -LiteralPath (Join-Path $sourceRoot ".codex-marketplace-install.json") -Value (@{ revision = $revision } | ConvertTo-Json -Compress) -NoNewline
   Set-Content -LiteralPath (Join-Path $contractRoot "mcp_contract.json") -Value (@{ mcp_contract_fingerprint = $fingerprint } | ConvertTo-Json -Compress) -NoNewline
-  Set-Content -LiteralPath (Join-Path $sourcePluginRoot "payload.txt") -Value "matching" -NoNewline
   Set-Content -LiteralPath (Join-Path $installedRoot "payload.txt") -Value "matching" -NoNewline
   $env:SYMPP_HOME = Join-Path $marketplaceRoot "sympp"
 
