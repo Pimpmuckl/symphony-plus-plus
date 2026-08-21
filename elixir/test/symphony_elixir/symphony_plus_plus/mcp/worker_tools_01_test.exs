@@ -3,7 +3,7 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildScope
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{PhaseChildScope, WorktreeScope}
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
 
   defmodule BusyParentRepo do
@@ -644,8 +644,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
   end
 
   test "compact worker metadata calls infer current package targets and keep verbose compatibility", %{repo: repo} do
-    branch = "agent/SYMPP-COMPACT-METADATA/worker"
-    assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-COMPACT-METADATA", kind: "mcp", branch_pattern: branch))
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-compact-metadata")
+
+    assert {:ok, package} =
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(
+                 id: "SYMPP-COMPACT-METADATA",
+                 kind: "mcp",
+                 branch_pattern: "agent/{{work_package_id}}/{{slug}}",
+                 worktree_path: fixture.repo_root
+               )
+             )
+
+    assert {:ok, branch} = WorktreeScope.prepare_branch(package, nil)
+    TestSupport.git_output!(fixture.repo_root, ["checkout", "-b", branch])
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -719,6 +732,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
       )
 
     assert verbose_list_response |> get_in(["result", "structuredContent", "comments"]) |> length() == 2
+
+    repo.update_all(
+      from(work_package in WorkPackage, where: work_package.id == ^package.id),
+      set: [branch_pattern: "legacy/*"]
+    )
+
+    invalid_inferred_branch_response =
+      MCPHarness.request(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "invalid-inferred-branch",
+          "method" => "tools/call",
+          "params" => %{"name" => "attach_branch", "arguments" => %{"head_sha" => "invalid-head"}}
+        },
+        repo: repo,
+        session: session
+      )
+
+    assert get_in(invalid_inferred_branch_response, ["error", "code"]) == -32_602
+    assert get_in(invalid_inferred_branch_response, ["error", "data", "reason"]) == "unsupported_branch_pattern_wildcard"
+    assert get_in(invalid_inferred_branch_response, ["error", "data", "validation_errors", Access.at(0), "field"]) == "branch_pattern"
   end
 
   test "worker-facing WorkPackage tools and resources emit TOON agent text without changing JSON structured content", %{repo: repo} do

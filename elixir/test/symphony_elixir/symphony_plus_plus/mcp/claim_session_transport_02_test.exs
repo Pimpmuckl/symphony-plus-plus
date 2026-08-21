@@ -3,72 +3,169 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
+
   test "claim_local_assignment accepts prepared concrete branch for templated package branch", %{repo: repo} do
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-local-prepared-branch")
+
     package =
-      create_local_claim_package!(repo, "SYMPP-LOCAL-PREPARED-BRANCH", branch_pattern: "agent/{{work_package_id}}/{{slug}}")
+      create_local_claim_package!(repo, "SYMPP-LOCAL-PREPARED-BRANCH",
+        branch_pattern: "agent/{{work_package_id}}/{{slug}}",
+        worktree_path: fixture.repo_root
+      )
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    prepared_branch = "agent/SYMPP-LOCAL-PREPARED-BRANCH/final-review-corrections"
-    File.mkdir_p!(Path.join(package.worktree_path, ".git"))
-    File.write!(Path.join([package.worktree_path, ".git", "HEAD"]), "ref: refs/heads/#{prepared_branch}\n")
+    assert {:ok, prepared_branch} = WorktreeScope.prepare_branch(package, nil)
+    TestSupport.git_output!(fixture.repo_root, ["checkout", "-b", prepared_branch])
 
-    try do
-      {response, claimed_server} =
-        Server.handle_state(
-          %{
-            "jsonrpc" => "2.0",
-            "id" => "local-prepared-branch",
-            "method" => "tools/call",
-            "params" => %{
-              "name" => "claim_local_assignment",
-              "arguments" => local_assignment_claim_args(package, %{"branch" => prepared_branch})
-            }
-          },
-          local_mcp_server(local_mcp_config(repo), "local-prepared-branch-state")
-        )
+    {response, claimed_server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "local-prepared-branch",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "claim_local_assignment",
+            "arguments" => local_assignment_claim_args(package, %{"branch" => prepared_branch})
+          }
+        },
+        local_mcp_server(local_mcp_config(repo), "local-prepared-branch-state")
+      )
 
-      assert get_in(response, ["result", "structuredContent", "assignment", "work_package_id"]) == package.id
-      assert claimed_server.session.assignment.work_package_id == package.id
-      refute inspect(response) =~ minted.work_key.secret
-    after
-      File.rm_rf!(package.worktree_path)
-    end
+    assert get_in(response, ["result", "structuredContent", "assignment", "work_package_id"]) == package.id
+    assert claimed_server.session.assignment.work_package_id == package.id
+    refute inspect(response) =~ minted.work_key.secret
   end
 
   test "claim_local_assignment rejects unrelated prepared branch for templated package branch", %{repo: repo} do
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-local-unrelated-branch")
+
     package =
-      create_local_claim_package!(repo, "SYMPP-LOCAL-TEMPLATE-BRANCH-SCOPE", branch_pattern: "agent/{{work_package_id}}/{{slug}}")
+      create_local_claim_package!(repo, "SYMPP-LOCAL-TEMPLATE-BRANCH-SCOPE",
+        branch_pattern: "agent/{{work_package_id}}/{{slug}}",
+        worktree_path: fixture.repo_root
+      )
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"capture_failed_mcp_calls" => true})
     unrelated_branch = "feature/main-retarget"
-    File.mkdir_p!(Path.join(package.worktree_path, ".git"))
-    File.write!(Path.join([package.worktree_path, ".git", "HEAD"]), "ref: refs/heads/#{unrelated_branch}\n")
+    TestSupport.git_output!(fixture.repo_root, ["checkout", "-b", unrelated_branch])
+    parent = self()
 
-    try do
-      {response, _server} =
-        Server.handle_state(
-          %{
-            "jsonrpc" => "2.0",
-            "id" => "local-template-branch-scope",
-            "method" => "tools/call",
-            "params" => %{
-              "name" => "claim_local_assignment",
-              "arguments" => local_assignment_claim_args(package, %{"branch" => unrelated_branch})
-            }
-          },
-          local_mcp_server(local_mcp_config(repo), "local-template-branch-scope-state")
-        )
+    log =
+      capture_log(fn ->
+        result =
+          Server.handle_state(
+            %{
+              "jsonrpc" => "2.0",
+              "id" => "local-template-branch-scope",
+              "method" => "tools/call",
+              "params" => %{
+                "name" => "claim_local_assignment",
+                "arguments" => local_assignment_claim_args(package, %{"branch" => unrelated_branch})
+              }
+            },
+            local_mcp_server(local_mcp_config(repo), "local-template-branch-scope-state")
+          )
 
-      assert get_in(response, ["error", "data", "reason"]) == "branch_scope_mismatch"
-      assert {:ok, unclaimed_grant} = AccessGrantRepository.get(repo, minted.grant.id)
-      assert unclaimed_grant.claimed_at == nil
-    after
-      File.rm_rf!(package.worktree_path)
-    end
+        send(parent, {:claim_result, result})
+      end)
+
+    assert_receive {:claim_result, {response, _server}}
+    assert get_in(response, ["error", "data", "reason"]) == "branch_scope_mismatch"
+    assert log =~ ~s("failure_reason":"branch_scope_mismatch")
+    assert {:ok, unclaimed_grant} = AccessGrantRepository.get(repo, minted.grant.id)
+    assert unclaimed_grant.claimed_at == nil
+  end
+
+  test "claim_local_assignment rejects ancestor repository branch state as prepared worktree evidence", %{repo: repo} do
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-local-ancestor-branch")
+    worktree_path = Path.join(fixture.repo_root, "not-a-worktree")
+    File.mkdir!(worktree_path)
+
+    package =
+      create_local_claim_package!(repo, "SYMPP-LOCAL-ANCESTOR-BRANCH",
+        branch_pattern: "agent/{{work_package_id}}/{{slug}}",
+        worktree_path: worktree_path
+      )
+
+    assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    assert {:ok, prepared_branch} = WorktreeScope.prepare_branch(package, nil)
+    TestSupport.git_output!(fixture.repo_root, ["checkout", "-b", prepared_branch])
+
+    {response, _server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "local-ancestor-branch",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "claim_local_assignment",
+            "arguments" => local_assignment_claim_args(package, %{"branch" => prepared_branch})
+          }
+        },
+        local_mcp_server(local_mcp_config(repo), "local-ancestor-branch-state")
+      )
+
+    assert get_in(response, ["error", "data", "reason"]) == "branch_scope_mismatch"
+  end
+
+  test "claim_local_assignment rejects invalid prepared worktree Git states", %{repo: repo} do
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-local-detached-branch")
+
+    package =
+      create_local_claim_package!(repo, "SYMPP-LOCAL-DETACHED-BRANCH", worktree_path: fixture.repo_root)
+
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    TestSupport.git_output!(fixture.repo_root, ["checkout", "-b", package.branch_pattern])
+    TestSupport.git_output!(fixture.repo_root, ["checkout", "--detach"])
+
+    {response, _server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "local-detached-branch",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "claim_local_assignment",
+            "arguments" => local_assignment_claim_args(package)
+          }
+        },
+        local_mcp_server(local_mcp_config(repo), "local-detached-branch-state")
+      )
+
+    assert get_in(response, ["error", "data", "reason"]) == "branch_scope_mismatch"
+
+    dot_git = Path.join(fixture.repo_root, ".git")
+    File.rm_rf!(dot_git)
+    File.write!(dot_git, "malformed git marker")
+
+    {malformed_response, _server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "local-malformed-git-marker",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "claim_local_assignment",
+            "arguments" => local_assignment_claim_args(package)
+          }
+        },
+        local_mcp_server(local_mcp_config(repo), "local-malformed-git-marker-state")
+      )
+
+    assert get_in(malformed_response, ["error", "data", "reason"]) == "branch_scope_mismatch"
+    assert {:ok, unclaimed_grant} = AccessGrantRepository.get(repo, minted.grant.id)
+    assert unclaimed_grant.claimed_at == nil
   end
 
   test "claim_local_assignment diagnoses legacy wildcard branch patterns before claiming", %{repo: repo} do
-    package = create_local_claim_package!(repo, "SYMPP-LOCAL-WILDCARD-BRANCH")
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-local-wildcard-branch")
+
+    package =
+      create_local_claim_package!(repo, "SYMPP-LOCAL-WILDCARD-BRANCH", worktree_path: fixture.repo_root)
+
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
 
     repo.update_all(
@@ -78,32 +175,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
 
     wildcard_package = repo.get!(WorkPackage, package.id)
     prepared_branch = "feat/live-triggers-v1-native-audio-evidence-worker"
-    File.mkdir_p!(Path.join(wildcard_package.worktree_path, ".git"))
-    File.write!(Path.join([wildcard_package.worktree_path, ".git", "HEAD"]), "ref: refs/heads/#{prepared_branch}\n")
+    TestSupport.git_output!(fixture.repo_root, ["checkout", "-b", prepared_branch])
 
-    try do
-      {response, _server} =
-        Server.handle_state(
-          %{
-            "jsonrpc" => "2.0",
-            "id" => "local-wildcard-branch-pattern",
-            "method" => "tools/call",
-            "params" => %{
-              "name" => "claim_local_assignment",
-              "arguments" => local_assignment_claim_args(wildcard_package, %{"branch" => prepared_branch})
-            }
-          },
-          local_mcp_server(local_mcp_config(repo), "local-wildcard-branch-pattern-state")
-        )
+    {response, _server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "local-wildcard-branch-pattern",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "claim_local_assignment",
+            "arguments" => local_assignment_claim_args(wildcard_package, %{"branch" => prepared_branch})
+          }
+        },
+        local_mcp_server(local_mcp_config(repo), "local-wildcard-branch-pattern-state")
+      )
 
-      assert get_in(response, ["error", "code"]) == -32_602
-      assert get_in(response, ["error", "data", "reason"]) == "unsupported_branch_pattern_wildcard"
-      assert {:ok, unclaimed_grant} = AccessGrantRepository.get(repo, minted.grant.id)
-      assert unclaimed_grant.claimed_at == nil
-      refute repo.one(from(claim_lease in ClaimLease, where: claim_lease.work_package_id == ^package.id))
-    after
-      File.rm_rf!(wildcard_package.worktree_path)
-    end
+    assert get_in(response, ["error", "code"]) == -32_602
+    assert get_in(response, ["error", "data", "reason"]) == "unsupported_branch_pattern_wildcard"
+    assert {:ok, unclaimed_grant} = AccessGrantRepository.get(repo, minted.grant.id)
+    assert unclaimed_grant.claimed_at == nil
+    refute repo.one(from(claim_lease in ClaimLease, where: claim_lease.work_package_id == ^package.id))
   end
 
   test "claim_local_assignment rejects literal templated branch without prepared git metadata", %{repo: repo} do

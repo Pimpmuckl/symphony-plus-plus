@@ -135,6 +135,53 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope do
     end
   end
 
+  @spec require_local_branch_scope(WorkPackage.t(), String.t(), String.t() | nil) :: scope_result()
+  def require_local_branch_scope(%WorkPackage{} = work_package, branch, worktree_path) when is_binary(branch) do
+    case live_branch(worktree_path) do
+      {:ok, ^branch} ->
+        require_local_branch_pattern_scope(work_package, branch, prepared_worktree?: true)
+
+      {:ok, _branch} ->
+        {:error, :branch_scope_mismatch}
+
+      {:error, :git_metadata_invalid} ->
+        {:error, :branch_scope_mismatch}
+
+      {:error, :git_metadata_missing} ->
+        require_local_branch_pattern_scope(work_package, branch, prepared_worktree?: false)
+    end
+  end
+
+  @spec live_branch(String.t() | nil) :: {:ok, String.t()} | {:error, :git_metadata_missing | :git_metadata_invalid}
+  def live_branch(nil), do: {:error, :git_metadata_missing}
+
+  def live_branch(worktree_path) when is_binary(worktree_path) do
+    case live_git_head(worktree_path) do
+      {:ok, %{branch: branch}} ->
+        {:ok, branch}
+
+      {:tool_error, "invalid_worktree_path"} ->
+        if File.exists?(Path.join(worktree_path, ".git")),
+          do: {:error, :git_metadata_invalid},
+          else: {:error, :git_metadata_missing}
+    end
+  end
+
+  @spec prepared_branch(WorkPackage.t()) :: {:ok, String.t()} | tool_error()
+  def prepared_branch(%WorkPackage{worktree_path: worktree_path} = work_package) when is_binary(worktree_path) do
+    with {:ok, branch} <- live_branch(worktree_path),
+         :ok <- require_local_branch_pattern_scope(work_package, branch, prepared_worktree?: true) do
+      {:ok, branch}
+    else
+      {:error, :branch_scope_mismatch} -> {:tool_error, "branch_scope_mismatch"}
+      {:error, :git_metadata_invalid} -> {:tool_error, "branch_scope_mismatch"}
+      {:error, :git_metadata_missing} -> {:tool_error, "missing_branch"}
+      {:tool_error, {:branch_pattern, _pattern, _reason} = reason} -> {:tool_error, reason}
+    end
+  end
+
+  def prepared_branch(%WorkPackage{}), do: {:tool_error, "missing_branch"}
+
   defp require_local_supported_branch_pattern_scope(%WorkPackage{} = work_package, pattern, branch, opts) do
     cond do
       pattern == branch and not local_branch_template_pattern?(pattern) ->
@@ -278,7 +325,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope do
   end
 
   defp live_git_head(worktree_path) do
-    with git when is_binary(git) <- System.find_executable("git") || System.find_executable("git.exe"),
+    with true <- File.exists?(Path.join(worktree_path, ".git")),
+         git when is_binary(git) <- System.find_executable("git") || System.find_executable("git.exe"),
          {output, 0} <-
            System.cmd(git, ["-C", worktree_path, "status", "--porcelain=v2", "--branch", "--untracked-files=no"], stderr_to_stdout: true),
          {:ok, head_sha} <- git_status_value(output, "# branch.oid "),
