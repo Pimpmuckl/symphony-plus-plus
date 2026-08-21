@@ -3,10 +3,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
 
   import Ecto.Query, only: [from: 2]
 
+  import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
+    only: [
+      local_architect_assignment_claim_tool_arguments: 1,
+      optional_string_argument: 2,
+      optional_string_argument: 3,
+      required_argument: 2,
+      worker_tool_arguments: 2
+    ]
+
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
-  alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
@@ -15,12 +23,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Auth,
     Config,
+    ErrorDetails,
     LocalArchitectGrantClaim,
     LocalClaimLeases,
     LocalTrustedTools,
     Repository,
     Session,
-    ToolCatalog
+    ToolCatalog,
+    WorktreeScope
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
@@ -52,7 +62,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
       {:ok, result, new_session}
     else
       {:error, code, message, data} -> {:error, code, message, data}
-      {:tool_error, reason} -> invalid_params_error(@local_assignment_claim_tool, reason)
+      {:tool_error, reason} -> ErrorDetails.invalid_params_error(@local_assignment_claim_tool, reason)
       {:error, reason} -> local_assignment_claim_error(reason)
     end
   rescue
@@ -152,167 +162,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   end
 
   defp require_optional_local_branch_scope(%WorkPackage{}, nil, _worktree_path), do: :ok
-  defp require_optional_local_branch_scope(%WorkPackage{} = work_package, branch, worktree_path), do: require_local_branch_scope(work_package, branch, worktree_path)
 
-  defp require_local_branch_scope(%WorkPackage{} = work_package, branch, worktree_path) do
-    case local_assignment_worktree_branch(worktree_path) do
-      {:ok, ^branch} ->
-        require_local_branch_pattern_scope(work_package, branch, prepared_worktree?: true)
-
-      {:ok, _branch} ->
-        {:error, :branch_scope_mismatch}
-
-      {:error, :git_metadata_missing} ->
-        require_local_branch_pattern_scope(work_package, branch, prepared_worktree?: false)
-
-      {:error, _reason} ->
-        {:error, :branch_scope_mismatch}
-    end
-  end
-
-  defp require_local_branch_pattern_scope(%WorkPackage{branch_pattern: branch_pattern} = work_package, branch, opts) do
-    case normalize_optional_value(branch_pattern) do
-      nil ->
-        :ok
-
-      pattern ->
-        case require_supported_branch_pattern(pattern) do
-          :ok -> require_local_supported_branch_pattern_scope(work_package, pattern, branch, opts)
-          error -> error
-        end
-    end
-  end
-
-  defp require_local_supported_branch_pattern_scope(%WorkPackage{} = work_package, pattern, branch, opts) do
-    cond do
-      pattern == branch and not local_branch_template_pattern?(pattern) ->
-        :ok
-
-      Keyword.get(opts, :prepared_worktree?, false) and local_branch_template_matches?(work_package, pattern, branch) ->
-        :ok
-
-      true ->
-        {:error, :branch_scope_mismatch}
-    end
-  end
-
-  defp local_branch_template_pattern?(pattern) when is_binary(pattern) do
-    Regex.match?(~r/\{\{\s*[a-zA-Z0-9_]+\s*\}\}/, pattern)
-  end
-
-  defp local_branch_template_pattern?(_pattern), do: false
-
-  defp require_supported_branch_pattern(branch_pattern) do
-    case BranchPattern.validate(branch_pattern) do
-      :ok -> :ok
-      {:error, reason} -> {:tool_error, {:branch_pattern, branch_pattern, reason}}
-    end
-  end
-
-  defp local_branch_template_matches?(%WorkPackage{} = work_package, pattern, branch)
-       when is_binary(pattern) and is_binary(branch) do
-    case Regex.scan(~r/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/, pattern, return: :index) do
-      [] ->
-        false
-
-      matches ->
-        source = "^" <> local_branch_template_regex_source(pattern, matches, work_package) <> "$"
-        Regex.match?(Regex.compile!(source), branch)
-    end
-  end
-
-  defp local_branch_template_matches?(%WorkPackage{}, _pattern, _branch), do: false
-
-  defp local_branch_template_regex_source(pattern, matches, work_package) do
-    {parts, cursor} =
-      Enum.reduce(matches, {[], 0}, fn [{match_start, match_length}, {capture_start, capture_length}], {parts, cursor} ->
-        literal = pattern |> binary_part(cursor, match_start - cursor) |> Regex.escape()
-        placeholder = binary_part(pattern, capture_start, capture_length)
-        replacement = local_branch_template_placeholder_regex(work_package, placeholder)
-
-        {[replacement, literal | parts], match_start + match_length}
-      end)
-
-    suffix = pattern |> binary_part(cursor, byte_size(pattern) - cursor) |> Regex.escape()
-    IO.iodata_to_binary(Enum.reverse([suffix | parts]))
-  end
-
-  defp local_branch_template_placeholder_regex(%WorkPackage{} = work_package, placeholder) do
-    case placeholder do
-      "work_package_id" -> local_branch_template_literal_regex(work_package.id)
-      "id" -> local_branch_template_literal_regex(work_package.id)
-      "phase_id" -> local_branch_template_literal_regex(work_package.phase_id)
-      "parent_id" -> local_branch_template_literal_regex(work_package.parent_id)
-      "owner_id" -> local_branch_template_literal_regex(work_package.owner_id)
-      _placeholder -> "[^/]+"
-    end
-  end
-
-  defp local_branch_template_literal_regex(value) do
-    case normalize_optional_value(value) do
-      nil -> "[^/]+"
-      value -> Regex.escape(value)
-    end
-  end
-
-  @dialyzer {:nowarn_function, local_assignment_worktree_branch: 1}
-  @spec local_assignment_worktree_branch(term()) :: {:ok, String.t()} | {:error, atom()}
-  defp local_assignment_worktree_branch(worktree_path) do
-    case normalize_optional_value(worktree_path) do
-      path when is_binary(path) -> local_assignment_worktree_branch_from_path(path)
-      _missing -> {:error, :git_metadata_missing}
-    end
-  end
-
-  defp local_assignment_worktree_branch_from_path(worktree_path) do
-    case File.dir?(worktree_path) do
-      true ->
-        with {:ok, git_dir} <- local_assignment_git_dir(worktree_path),
-             {:ok, head} <- File.read(Path.join(git_dir, "HEAD")),
-             {:ok, branch} <- local_assignment_head_branch(head) do
-          {:ok, branch}
-        else
-          {:error, :enoent} -> {:error, :git_metadata_missing}
-          {:error, reason} -> {:error, reason}
-        end
-
-      false ->
-        {:error, :git_metadata_missing}
-    end
-  end
-
-  defp local_assignment_git_dir(worktree_path) do
-    dot_git = Path.join(worktree_path, ".git")
-
-    cond do
-      File.dir?(dot_git) ->
-        {:ok, dot_git}
-
-      File.regular?(dot_git) ->
-        dot_git
-        |> File.read()
-        |> local_assignment_git_dir_from_file(worktree_path)
-
-      true ->
-        {:error, :git_metadata_missing}
-    end
-  end
-
-  defp local_assignment_git_dir_from_file({:ok, contents}, worktree_path) do
-    case contents |> String.trim() |> String.split(":", parts: 2) do
-      ["gitdir", git_dir] -> {:ok, Path.expand(String.trim(git_dir), worktree_path)}
-      _contents -> {:error, :git_metadata_invalid}
-    end
-  end
-
-  defp local_assignment_git_dir_from_file({:error, reason}, _worktree_path), do: {:error, reason}
-
-  defp local_assignment_head_branch(head) when is_binary(head) do
-    case String.trim(head) do
-      "ref: refs/heads/" <> branch when branch != "" -> {:ok, branch}
-      _detached_or_invalid -> {:error, :git_head_invalid}
-    end
-  end
+  defp require_optional_local_branch_scope(%WorkPackage{} = work_package, branch, worktree_path),
+    do: WorktreeScope.require_local_branch_scope(work_package, branch, worktree_path)
 
   defp require_local_worktree_scope(%WorkPackage{worktree_path: worktree_path}, claim_worktree_path) do
     case normalize_optional_value(worktree_path) do
@@ -348,12 +200,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
              WorkPackage.repo(work_request, work_package),
              work_package.repo,
              :work_request_repo_scope_mismatch
-           ),
-         :ok <-
-           require_local_value_match(
-             work_package.base_branch,
-             work_package.base_branch,
-             :package_delivery_base_mismatch
            ) do
       :ok
     else
@@ -391,8 +237,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
 
     with {:ok, grant, grant_action} <-
            LocalClaimLeases.claim_worker_grant(repo, work_package.id, claim, lease, lease_action, existing_grant_ids, claim_now),
-         {:ok, session} <- Auth.session_from_grant(repo, grant, proof_hash: grant.secret_hash),
-         :ok <- require_worker_assignment(session.assignment) do
+         {:ok, session} <- Auth.session_from_grant(repo, grant, proof_hash: grant.secret_hash) do
       assignment = %{"assignment" => Session.public_assignment(session)}
       {:ok, assignment, session, grant_action}
     end
@@ -803,8 +648,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
 
     with {:ok, grant, grant_action} <- LocalArchitectGrantClaim.claim(repo, anchor, claim, lease_action, validate_grant),
          :ok <- validate_local_architect_assignment_grant(repo, grant, anchor, claim),
-         {:ok, session} <- Auth.session_from_grant(repo, grant, proof_hash: grant.secret_hash),
-         :ok <- require_architect_assignment(session.assignment) do
+         {:ok, session} <- Auth.session_from_grant(repo, grant, proof_hash: grant.secret_hash) do
       assignment = %{"assignment" => Session.public_assignment(session)}
       {:ok, assignment, session, grant_action}
     end
@@ -979,7 +823,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   defp local_assignment_worktree_branch_or_nil(nil), do: nil
 
   defp local_assignment_worktree_branch_or_nil(worktree_path) do
-    case local_assignment_worktree_branch(worktree_path) do
+    case WorktreeScope.live_branch(worktree_path) do
       {:ok, branch} -> branch
       {:error, _reason} -> nil
     end
@@ -1134,170 +978,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
     }
   end
 
-  defp worker_tool_arguments(params, name) do
-    case Map.get(params, "arguments", %{}) do
-      arguments when is_map(arguments) -> validate_worker_arguments(name, arguments)
-      _arguments -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments"}}
-    end
-  end
-
-  defp local_architect_assignment_claim_tool_arguments(params) do
-    case Map.get(params, "arguments", %{}) do
-      arguments when is_map(arguments) -> validate_local_architect_assignment_claim_arguments(arguments)
-      _arguments -> {:error, -32_602, "Invalid params", %{"tool" => @local_architect_assignment_claim_tool, "reason" => "invalid_tool_arguments"}}
-    end
-  end
-
-  defp validate_worker_arguments(name, arguments) do
-    allowed = MapSet.new(allowed_worker_argument_keys(name))
-    unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
-
-    if unexpected == [] do
-      {:ok, arguments}
-    else
-      {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "unexpected_argument", "arguments" => unexpected}}
-    end
-  end
-
-  defp validate_local_architect_assignment_claim_arguments(arguments) do
-    schema = ToolCatalog.local_architect_assignment_claim_tool_input_schema()
-    allowed = schema |> Map.get("properties", %{}) |> Map.keys() |> MapSet.new()
-    unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
-
-    if unexpected != [] do
-      {:error, -32_602, "Invalid params", %{"tool" => @local_architect_assignment_claim_tool, "reason" => "unexpected_argument", "arguments" => unexpected}}
-    else
-      case validate_tool_required_arguments(schema, arguments) do
-        :ok -> {:ok, arguments}
-        {:error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => @local_architect_assignment_claim_tool, "reason" => reason}}
-      end
-    end
-  end
-
-  defp allowed_worker_argument_keys(name) do
-    name
-    |> ToolCatalog.worker_tool_input_schema()
-    |> Map.get("properties", %{})
-    |> Map.keys()
-    |> Kernel.++(ToolCatalog.hidden_worker_argument_keys(name))
-  end
-
-  defp validate_tool_required_arguments(schema, arguments) do
-    properties = Map.get(schema, "properties", %{})
-
-    schema
-    |> Map.get("required", [])
-    |> Enum.find_value(:ok, fn key ->
-      case validate_required_argument(arguments, properties, key) do
-        :ok -> nil
-        {:error, reason} -> {:error, reason}
-      end
-    end)
-  end
-
-  defp validate_required_argument(arguments, properties, key) do
-    case Map.fetch(arguments, key) do
-      :error -> {:error, "missing_#{key}"}
-      {:ok, nil} -> {:error, "missing_#{key}"}
-      {:ok, value} -> validate_required_argument_value(properties, key, value)
-    end
-  end
-
-  defp validate_required_argument_value(properties, key, value) do
-    case get_in(properties, [key, "type"]) do
-      "string" -> validate_required_string_argument(key, value)
-      "object" -> validate_required_object_argument(key, value)
-      "array" -> validate_required_array_argument_value(properties, key, value)
-      _type -> {:error, "invalid_#{key}"}
-    end
-  end
-
-  defp validate_required_string_argument(key, value) when is_binary(value) do
-    if String.trim(value) == "", do: {:error, "missing_#{key}"}, else: :ok
-  end
-
-  defp validate_required_string_argument(key, _value), do: {:error, "invalid_#{key}"}
-  defp validate_required_object_argument(_key, value) when is_map(value), do: :ok
-  defp validate_required_object_argument(key, _value), do: {:error, "invalid_#{key}"}
-
-  defp validate_required_array_argument_value(properties, key, values) when is_list(values) do
-    validate_required_array_argument(properties, key, values)
-  end
-
-  defp validate_required_array_argument_value(_properties, key, _value), do: {:error, "invalid_#{key}"}
-
-  defp validate_required_array_argument(properties, key, values) do
-    cond do
-      properties |> Map.get(key, %{}) |> Map.get("minItems", 0) > 0 and values == [] ->
-        {:error, "missing_#{key}"}
-
-      get_in(properties, [key, "items", "type"]) == "string" ->
-        if Enum.all?(values, &(is_binary(&1) and String.trim(&1) != "")), do: :ok, else: {:error, "invalid_#{key}"}
-
-      true ->
-        if Enum.all?(values, &is_map/1), do: :ok, else: {:error, "invalid_#{key}"}
-    end
-  end
-
-  defp required_argument(arguments, key) do
-    case Map.get(arguments, key) do
-      value when is_binary(value) ->
-        case String.trim(value) do
-          "" -> {:tool_error, "missing_#{key}"}
-          trimmed -> {:ok, trimmed}
-        end
-
-      _value ->
-        {:tool_error, "missing_#{key}"}
-    end
-  end
-
-  defp optional_string_argument(arguments, key, default \\ nil) do
-    case Map.fetch(arguments, key) do
-      :error ->
-        {:ok, default}
-
-      {:ok, nil} ->
-        {:ok, default}
-
-      {:ok, value} when is_binary(value) ->
-        case String.trim(value) do
-          "" -> {:ok, default}
-          trimmed -> {:ok, trimmed}
-        end
-
-      {:ok, _value} ->
-        {:tool_error, "invalid_#{key}"}
-    end
-  end
-
-  defp require_worker_assignment(%{grant_role: "worker"}), do: :ok
-  defp require_worker_assignment(_assignment), do: {:error, :worker_grant_required}
-
-  defp require_architect_assignment(%{grant_role: "architect"}), do: :ok
-  defp require_architect_assignment(_assignment), do: {:error, :architect_grant_required}
-
   defp prepare_mcp_repository(repo), do: Repository.ensure_migrated(repo)
-
-  defp invalid_params_error(tool, {:branch_pattern, value, reason}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => Atom.to_string(reason),
-       "validation_errors" => [
-         %{
-           "field" => "branch_pattern",
-           "value" => value,
-           "reason" => Atom.to_string(reason),
-           "message" => BranchPattern.error_message(reason)
-         }
-       ]
-     }}
-  end
-
-  defp invalid_params_error(tool, reason) do
-    {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
-  end
 
   defp service_error(_reason, resource) do
     {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}

@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
   @moduledoc false
 
+  alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
+
   @lifecycle_detail_fields ["actual_status", "allowed_authoring_states", "current_contract_revision"]
 
   @spec lifecycle_error(String.t(), atom(), map()) :: {:error, integer(), String.t(), map()}
@@ -18,6 +20,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
   end
 
   @spec invalid_params_error(String.t(), term()) :: {:error, integer(), String.t(), map()}
+  def invalid_params_error(tool, {:branch_pattern, value, reason}) do
+    {:error, -32_602, "Invalid params",
+     %{
+       "tool" => tool,
+       "reason" => Atom.to_string(reason),
+       "validation_errors" => [
+         %{
+           "field" => "branch_pattern",
+           "value" => value,
+           "reason" => Atom.to_string(reason),
+           "message" => BranchPattern.error_message(reason)
+         }
+       ]
+     }}
+  end
+
   def invalid_params_error(tool, {:invalid_enum, field, allowed_values}) do
     field = to_string(field)
 

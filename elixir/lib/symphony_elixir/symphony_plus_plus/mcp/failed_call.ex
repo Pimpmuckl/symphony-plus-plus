@@ -17,6 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
     already_initialized
     architect_grant_required
     batch_not_supported
+    branch_scope_mismatch
     body_read_failed
     body_too_large
     claim_required

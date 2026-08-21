@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog
 
   @assignment_release_tool ToolCatalog.assignment_release_tool()
+  @local_architect_assignment_claim_tool ToolCatalog.local_architect_assignment_claim_tool()
 
   @type arguments :: %{optional(String.t()) => term()}
   @type tool_call_result :: {:ok, arguments()} | {:error, integer(), String.t(), map()}
@@ -31,14 +32,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
     end
   end
 
+  @spec local_architect_assignment_claim_tool_arguments(map()) :: tool_call_result()
+  def local_architect_assignment_claim_tool_arguments(params) do
+    schema_tool_arguments(
+      params,
+      @local_architect_assignment_claim_tool,
+      ToolCatalog.local_architect_assignment_claim_tool_input_schema()
+    )
+  end
+
   @spec assignment_release_tool_arguments(map()) :: tool_call_result()
   def assignment_release_tool_arguments(params) do
+    schema_tool_arguments(params, @assignment_release_tool, ToolCatalog.assignment_release_tool_input_schema())
+  end
+
+  defp schema_tool_arguments(params, name, schema) do
     case Map.get(params, "arguments", %{}) do
       arguments when is_map(arguments) ->
-        validate_assignment_release_arguments(arguments)
+        validate_schema_arguments(name, schema, arguments)
 
       _arguments ->
-        {:error, -32_602, "Invalid params", %{"tool" => @assignment_release_tool, "reason" => "invalid_tool_arguments"}}
+        {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "invalid_tool_arguments"}}
     end
   end
 
@@ -257,17 +271,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
     end
   end
 
-  defp validate_assignment_release_arguments(arguments) do
-    schema = ToolCatalog.assignment_release_tool_input_schema()
+  defp validate_schema_arguments(name, schema, arguments) do
     allowed = schema |> Map.get("properties", %{}) |> Map.keys() |> MapSet.new()
     unexpected = arguments |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
 
     if unexpected != [] do
-      {:error, -32_602, "Invalid params", %{"tool" => @assignment_release_tool, "reason" => "unexpected_argument", "arguments" => unexpected}}
+      {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => "unexpected_argument", "arguments" => unexpected}}
     else
       case validate_tool_required_arguments(schema, arguments) do
         :ok -> {:ok, arguments}
-        {:error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => @assignment_release_tool, "reason" => reason}}
+        {:error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => name, "reason" => reason}}
       end
     end
   end

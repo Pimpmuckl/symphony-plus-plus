@@ -185,7 +185,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
          {:ok, head_sha} <- required_argument(arguments, "head_sha") do
       ProgressEvents.append_metadata(config.repo, session, arguments, "attach_branch", "branch_attached", %{"type" => "branch", "branch" => branch, "head_sha" => head_sha})
     else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "attach_branch", "reason" => reason}}
+      {:tool_error, reason} -> ErrorDetails.invalid_params_error("attach_branch", reason)
       {:error, reason} -> worker_error(reason, "attach_branch")
     end
   end
@@ -885,15 +885,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   defp inferred_attach_branch(repo, %Session{} = session) do
     with {:ok, %WorkPackage{} = work_package} <- WorkPackageRepository.get(repo, Session.work_package_id(session)) do
-      case normalize_optional_value(work_package.branch_pattern) do
-        nil -> {:tool_error, "missing_branch"}
-        branch when is_binary(branch) -> inferred_literal_branch(branch)
-      end
+      WorktreeScope.prepared_branch(work_package)
     end
   end
-
-  defp inferred_literal_branch(branch),
-    do: if(WorktreeScope.local_branch_template_pattern?(branch), do: {:tool_error, "missing_branch"}, else: {:ok, branch})
 
   defp scoped_session(repo, session, arguments) when is_map(arguments) do
     case Auth.require_session(session, repo) do
@@ -948,15 +942,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp metadata_tool_response({:error, _code, _message, _data} = error, _tool), do: error
   defp metadata_tool_response({:tool_error, reason}, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
   defp metadata_tool_response({:error, reason}, tool), do: worker_error(reason, tool)
-
-  defp normalize_optional_value(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
-  defp normalize_optional_value(nil), do: nil
 
   defp actor(%Session{} = session) do
     %{
