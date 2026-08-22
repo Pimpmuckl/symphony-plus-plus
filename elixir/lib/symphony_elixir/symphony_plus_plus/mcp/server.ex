@@ -860,9 +860,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
       if name in @delivery_policy_tools do
         {:ok, Map.get(params, "arguments", %{})}
       else
-        architect_tool_arguments(params, name)
+        architect_tool_arguments_for_binding(server, params, name)
       end
     end
+  end
+
+  defp architect_tool_arguments_for_binding(%__MODULE__{} = server, params, name) do
+    case architect_tool_arguments(params, name) do
+      {:error, _code, _message, _data} = error -> mask_non_architect_argument_error(server, name, error)
+      {:ok, _arguments} = result -> result
+    end
+  end
+
+  defp mask_non_architect_argument_error(
+         %__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}},
+         _name,
+         error
+       ),
+       do: error
+
+  defp mask_non_architect_argument_error(%__MODULE__{session: nil}, _name, error), do: error
+
+  defp mask_non_architect_argument_error(%__MODULE__{session: %Session{}}, name, _error) do
+    architect_error(:architect_grant_required, name)
   end
 
   defp require_worker_tool_binding(%__MODULE__{session: nil}, name) do
@@ -877,6 +897,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp require_architect_tool_binding(%__MODULE__{session: nil}, name) do
     {:error, -32_001, "Unauthorized", %{"resource" => name, "reason" => "claim_required", "action" => @local_architect_assignment_claim_tool}}
+  end
+
+  defp require_architect_tool_binding(%__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}}, _name), do: :ok
+
+  defp require_architect_tool_binding(%__MODULE__{session: %Session{}}, name) when name in @delivery_policy_tools do
+    architect_error(:architect_grant_required, name)
   end
 
   defp require_architect_tool_binding(%__MODULE__{session: %Session{}}, _name), do: :ok

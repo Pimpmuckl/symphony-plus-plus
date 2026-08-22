@@ -76,8 +76,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   @spec call(String.t(), Config.t(), Session.t() | nil, map()) :: mcp_tool_result()
   def call("reconcile_work_request", %Config{} = config, session, arguments) do
-    with {:ok, apply?} <- optional_boolean(arguments, "apply", false),
-         {:ok, live_session} <- architect_session(config.repo, session, reconcile_work_request_capability(apply?)),
+    with {:ok, live_session} <- architect_session(config.repo, session),
+         {:ok, apply?} <- optional_boolean(arguments, "apply", false),
+         :ok <- require_architect_capability(live_session, reconcile_work_request_capability(apply?)),
          {:ok, arguments} <- validate_arguments(arguments, "reconcile_work_request"),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
          {:ok, recorded_by} <- optional_string_argument(arguments, "recorded_by", session_claimed_by(live_session)),
@@ -684,14 +685,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   defp architect_session(repo, session, capability) do
-    with {:ok, session} <- Auth.require_session(session, repo),
-         :ok <- require_architect_assignment(session.assignment),
-         true <- capability in List.wrap(session.assignment.capabilities) do
+    with {:ok, session} <- architect_session(repo, session),
+         :ok <- require_architect_capability(session, capability) do
       {:ok, session}
-    else
-      false -> {:error, :insufficient_capability}
-      {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp architect_session(repo, session) do
+    with {:ok, session} <- Auth.require_session(session, repo),
+         :ok <- require_architect_assignment(session.assignment) do
+      {:ok, session}
+    end
+  end
+
+  defp require_architect_capability(%Session{} = session, capability) do
+    if capability in List.wrap(session.assignment.capabilities), do: :ok, else: {:error, :insufficient_capability}
   end
 
   defp require_architect_assignment(%{grant_role: "architect"}), do: :ok
