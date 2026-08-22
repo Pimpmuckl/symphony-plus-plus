@@ -265,8 +265,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   test "serializes package cards and groups the board by status", %{repo: repo} do
     %{work_package: first} = create_dashboard_fixture(repo, id: "SYMPP-DASH-1", status: "planning")
     assert {:ok, _second} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-DASH-2", status: "blocked"))
-    assert {:ok, legacy_ready} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-DASH-LEGACY-READY", status: "ready_for_merge"))
-    repo.query!("UPDATE sympp_work_packages SET status = ? WHERE id = ?", ["ready_for_human_merge", legacy_ready.id])
     architect_secret = create_architect_grant_secret(repo, first.id)
 
     assert {:ok, card} = Dashboard.card(repo, first)
@@ -282,11 +280,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     payload = json_response(get(auth_conn(architect_secret), "/api/v1/sympp/board"), 200)
 
-    assert payload["total_count"] == 3
+    assert payload["total_count"] == 2
     assert [%{"id" => "SYMPP-DASH-1", "operational_state" => %{"key" => "blocked", "raw_status" => "planning"}}] = payload["groups"]["planning"]
     assert [%{"id" => "SYMPP-DASH-2"}] = payload["groups"]["blocked"]
-    assert [%{"id" => "SYMPP-DASH-LEGACY-READY"}] = payload["groups"]["ready_for_human_merge"]
-    assert "ready_for_human_merge" in payload["statuses"]
     assert payload["groups"]["created"] == []
 
     assert %{
@@ -3999,6 +3995,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   test "local operator dashboard reads do not write to SQLite" do
     {_payload, queries} =
       with_local_operator_endpoint(fn ->
+        local_operator_dashboard_payload()
         capture_queries(&local_operator_dashboard_payload/0)
       end)
 

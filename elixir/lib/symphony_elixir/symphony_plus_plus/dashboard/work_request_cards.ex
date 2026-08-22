@@ -31,7 +31,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.WorkRequestCards do
     "merge_ready",
     "ready_to_finish",
     "ready_for_merge",
-    "ready_for_human_merge",
     "merging",
     "needs_closeout",
     "prepared",

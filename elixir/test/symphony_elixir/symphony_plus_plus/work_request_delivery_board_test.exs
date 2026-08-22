@@ -290,24 +290,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     assert slice.attention_reason_codes == []
   end
 
-  test "legacy stored merge-ready status projects with current visible label", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-BOARD-LEGACY-READY")
-
-    {_work_package, linked_package} =
-      linked_slice!(repo, work_request,
-        id: "WRS-BOARD-LEGACY-READY",
-        work_package_id: "WP-BOARD-LEGACY-READY",
-        status: "ready_for_merge"
-      )
-
-    repo.query!("UPDATE sympp_work_packages SET status = ? WHERE id = ?", ["ready_for_human_merge", linked_package.id])
-
-    assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
-    assert slice.work_package.raw_status == "ready_for_human_merge"
-    assert slice.operational_state.key == "merge_ready"
-    assert slice.operational_state.label == "Ready"
-  end
-
   test "newer PR attachments replace older merged sync metadata", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-REATTACHED-PR")
 
