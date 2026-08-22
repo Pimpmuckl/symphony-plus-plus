@@ -4,7 +4,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   import Ecto.Query, only: [from: 2]
 
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
@@ -13,6 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
+    ArchitectWorkRequestTools,
     Auth,
     Config,
     PhaseChildScope,
@@ -20,7 +20,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
     ProgressEvents,
     ReviewReadiness,
     Session,
-    ToolResult
+    ToolResult,
+    WorkRequestScope
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
@@ -32,8 +33,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @child_work_package_keys [
     "acceptance_criteria",
@@ -163,13 +162,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
       lock_access_grant: &lock_access_grant/2,
       lock_work_package: &lock_work_package/2,
       require_child_ready_for_mint: &require_child_ready_for_mint/4,
-      require_live_architect_grant: &require_live_architect_grant/2,
+      require_live_architect_grant: &WorkRequestScope.require_live_architect_grant/2,
       require_transaction_current_child_scope: &require_transaction_current_child_scope/4
     }
   end
 
   defp require_architect_phase_board_grant(repo, %Session{} = session, phase_id) do
-    with {:ok, grant} <- require_live_architect_grant(repo, session),
+    with {:ok, grant} <- WorkRequestScope.architect_grant(repo, session),
          {:ok, anchor} <- architect_anchor_work_package(repo, session),
          :ok <- require_architect_anchor_scope(anchor, grant, phase_id),
          {:ok, _filters} <- Dashboard.phase_board_filters_for_grant(grant) do
@@ -179,219 +178,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
       {:error, :forbidden} -> {:error, :phase_scope_not_available}
       {:error, reason} -> {:error, reason}
     end
-  end
-
-  defp scoped_work_request_filters(repo, %Session{} = session, opts \\ []) do
-    with {:ok, grant} <- require_live_architect_grant(repo, session),
-         {:ok, filters} <- work_request_filters_for_architect_grant(repo, session, grant),
-         {:ok, scope} <- work_request_scope_payload(filters),
-         {:ok, scope} <- maybe_put_handoff_phase_scope(repo, scope, grant, opts) do
-      {:ok, work_request_filters_from_scope(scope), scope}
-    else
-      {:error, :forbidden} -> {:error, :phase_scope_not_available}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp work_request_filters_for_architect_grant(repo, %Session{} = session, %AccessGrant{} = grant) do
-    case frozen_work_request_filters_for_architect_grant(repo, session, grant) do
-      {:ok, filters} ->
-        {:ok, filters}
-
-      {:error, reason} = error when reason in [:forbidden, :phase_scope_not_available] ->
-        if missing_frozen_work_request_scope?(grant) do
-          legacy_handoff_work_request_filters(repo, session, grant)
-        else
-          error
-        end
-
-      {:error, _reason} = error ->
-        error
-    end
-  end
-
-  defp frozen_work_request_filters_for_architect_grant(repo, %Session{} = session, %AccessGrant{} = grant) do
-    with :ok <- require_work_request_anchor_scope(repo, session, grant) do
-      Dashboard.phase_board_filters_for_grant(grant)
-    end
-  end
-
-  defp legacy_handoff_work_request_filters(repo, %Session{} = session, %AccessGrant{} = grant) do
-    with {:ok, true} <- ArchitectHandoff.handoff_phase_grant?(repo, grant),
-         {:ok, anchor} <- architect_anchor_work_package(repo, session),
-         true <- grant.work_package_id == anchor.id,
-         true <- grant.phase_id == anchor.phase_id,
-         {:ok, work_request} <- legacy_handoff_work_request(repo, grant, anchor),
-         {:ok, repo_name} <- required_scope_value(work_request.repo),
-         {:ok, base_branch} <- required_scope_value(work_request.base_branch) do
-      {:ok, repo: repo_name, base_branch: base_branch}
-    else
-      false -> {:error, :phase_scope_not_available}
-      {:ok, false} -> {:error, :phase_scope_not_available}
-      {:error, :not_found} -> {:error, :phase_scope_not_available}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp legacy_handoff_work_request(repo, %AccessGrant{} = grant, %WorkPackage{} = anchor) do
-    with {:ok, repo_name} <- required_scope_value(anchor.repo),
-         {:ok, base_branch} <- required_scope_value(anchor.base_branch),
-         {:ok, work_requests} <- WorkRequestRepository.list(repo, %{"repo" => repo_name, "base_branch" => base_branch}) do
-      case Enum.find(work_requests, &legacy_handoff_work_request?(&1, grant, anchor)) do
-        %WorkRequest{} = work_request -> {:ok, work_request}
-        nil -> {:error, :phase_scope_not_available}
-      end
-    end
-  end
-
-  defp legacy_handoff_work_request?(%WorkRequest{} = work_request, %AccessGrant{} = grant, %WorkPackage{} = anchor) do
-    ArchitectHandoff.eligible_status?(work_request.status) and
-      ArchitectHandoff.eligible_scope?(work_request) and
-      grant.work_package_id == anchor.id and
-      grant.phase_id == anchor.phase_id and
-      ArchitectHandoff.anchor_id_for_work_request(work_request) == anchor.id and
-      ArchitectHandoff.phase_id_for_work_request(work_request) == anchor.phase_id
-  end
-
-  defp require_work_request_anchor_scope(repo, %Session{} = session, %AccessGrant{} = grant) do
-    if architect_explicit_phase_grant?(grant) do
-      require_architect_phase_anchor(repo, session, grant.phase_id)
-    else
-      {:error, :phase_scope_not_available}
-    end
-  end
-
-  defp missing_frozen_work_request_scope?(%AccessGrant{} = grant) do
-    not filled_string?(grant.scope_repo) and not filled_string?(grant.scope_base_branch)
-  end
-
-  defp required_scope_value(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> {:error, :phase_scope_not_available}
-      trimmed -> {:ok, trimmed}
-    end
-  end
-
-  defp required_scope_value(_value), do: {:error, :phase_scope_not_available}
-
-  defp work_request_scope_payload(filters) when is_list(filters) do
-    repo = Keyword.get(filters, :repo)
-    base_branch = Keyword.get(filters, :base_branch)
-
-    if filled_string?(repo) and filled_string?(base_branch) do
-      {:ok, %{"repo" => String.trim(repo), "base_branch" => String.trim(base_branch)}}
-    else
-      {:error, :phase_scope_not_available}
-    end
-  end
-
-  defp work_request_filters_from_scope(%{"repo" => repo, "base_branch" => base_branch, "phase_id" => phase_id}) do
-    %{"repo" => repo, "base_branch" => base_branch, "phase_id" => phase_id}
-  end
-
-  defp work_request_filters_from_scope(%{"repo" => repo, "base_branch" => base_branch}) do
-    %{"repo" => repo, "base_branch" => base_branch}
-  end
-
-  defp maybe_put_handoff_phase_scope(repo, scope, %AccessGrant{} = grant) do
-    case ArchitectHandoff.handoff_phase_grant?(repo, grant) do
-      {:ok, true} -> {:ok, Map.put(scope, "phase_id", grant.phase_id)}
-      {:ok, false} -> {:ok, scope}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp maybe_put_handoff_phase_scope(repo, scope, %AccessGrant{} = grant, opts) do
-    if Keyword.get(opts, :handoff_phase_scope?, true) do
-      maybe_put_handoff_phase_scope(repo, scope, grant)
-    else
-      {:ok, scope}
-    end
-  end
-
-  defp scoped_worktree_work_package(repo, %Session{} = session, work_package_id) do
-    with {:ok, %WorkPackage{} = work_package} <- WorkPackageRepository.get(repo, work_package_id),
-         {:ok, filters, scope} <- scoped_work_request_filters(repo, session),
-         :ok <- require_worktree_work_package_scope(repo, work_package, filters) do
-      {:ok, work_package, scope}
-    else
-      {:error, :forbidden} -> {:error, :not_found}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp require_worktree_work_package_scope(_repo, %WorkPackage{work_request_id: nil}, _filters), do: {:error, :forbidden}
-
-  defp require_worktree_work_package_scope(repo, %WorkPackage{} = work_package, filters) do
-    case repo.get(WorkRequest, work_package.work_request_id) do
-      %WorkRequest{} = work_request ->
-        with :ok <- require_work_package_repo_scope(work_package, work_request, work_package),
-             :ok <- require_work_package_delivery_base_scope(work_package, work_package),
-             :ok <- require_work_request_scope(repo, work_request, filters) do
-          require_delivery_work_package_filter_scope(repo, work_package, work_request, filters)
-        end
-
-      nil ->
-        {:error, :forbidden}
-    end
-  end
-
-  defp require_delivery_work_package_filter_scope(repo, %WorkPackage{} = work_package, %WorkRequest{} = work_request, filters) do
-    primary_scope? = primary_work_request_scope?(repo, work_request, filters)
-    require_delivery_work_package_filter_scope(work_package, primary_scope?, filters)
-  end
-
-  defp require_delivery_work_package_filter_scope(%WorkPackage{} = work_package, primary_scope?, filters) do
-    if delivery_work_package_visible_to_filters?(work_package, primary_scope?, filters, []) do
-      :ok
-    else
-      {:error, :not_found}
-    end
-  end
-
-  defp require_work_request_scope(repo, %WorkRequest{} = work_request, filters) do
-    with {:ok, matches?} <- work_request_matches_primary_filters?(repo, work_request, filters, []) do
-      if matches?, do: :ok, else: {:error, :forbidden}
-    end
-  end
-
-  defp require_work_package_repo_scope(%WorkPackage{} = work_package, %WorkRequest{} = work_request, %WorkPackage{} = work_package) do
-    if repo_scope_name_matches?(work_package.repo, WorkPackage.repo(work_request, work_package), []), do: :ok, else: {:error, :forbidden}
-  end
-
-  defp require_work_package_delivery_base_scope(%WorkPackage{base_branch: base_branch}, %WorkPackage{base_branch: base_branch}),
-    do: :ok
-
-  defp require_work_package_delivery_base_scope(%WorkPackage{}, %WorkPackage{}), do: {:error, :forbidden}
-
-  defp primary_work_request_scope?(repo, %WorkRequest{} = work_request, filters) do
-    {:ok, matches?} = work_request_matches_primary_filters?(repo, work_request, filters, [])
-    matches?
-  end
-
-  defp delivery_work_package_visible_to_filters?(_work_package, true, _filters, _opts), do: true
-
-  defp delivery_work_package_visible_to_filters?(%WorkPackage{} = work_package, false, filters, opts) do
-    work_package_matches_filters?(work_package, filters, opts)
-  end
-
-  defp work_request_matches_primary_filters?(_repo, %WorkRequest{} = work_request, filters, opts) do
-    {:ok,
-     Enum.all?(filters, fn
-       {"repo", repo} when is_binary(repo) -> repo_scope_name_matches?(repo, work_request.repo, opts)
-       {"base_branch", base_branch} when is_binary(base_branch) -> work_request.base_branch == base_branch
-       {"status", status} when is_binary(status) -> work_request.status == status
-       {"phase_id", phase_id} when is_binary(phase_id) -> ArchitectHandoff.phase_id_for_work_request(work_request) == phase_id
-       _filter -> true
-     end)}
-  end
-
-  defp work_package_matches_filters?(%WorkPackage{} = work_package, filters, opts) do
-    Enum.all?(filters, fn
-      {"repo", repo} when is_binary(repo) -> repo_scope_name_matches?(repo, work_package.repo, opts)
-      {"base_branch", base_branch} when is_binary(base_branch) -> work_package.base_branch == base_branch
-      _filter -> true
-    end)
   end
 
   defp require_architect_child_status_scope(repo, %Session{} = session, work_package_id) do
@@ -418,9 +204,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   end
 
   defp require_architect_dispatched_work_package_status_scope(repo, %Session{} = session, work_package_id) do
-    with {:ok, grant} <- require_live_architect_grant(repo, session),
+    with {:ok, grant} <- WorkRequestScope.architect_grant(repo, session),
          {:ok, true} <- ArchitectHandoff.handoff_phase_grant?(repo, grant),
-         {:ok, _work_package, _scope} <- scoped_worktree_work_package(repo, session, work_package_id) do
+         {:ok, _work_package, _scope} <-
+           ArchitectWorkRequestTools.scoped_worktree_work_package(repo, session, work_package_id) do
       :ok
     else
       {:ok, false} -> {:error, :phase_scope_not_available}
@@ -430,7 +217,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   end
 
   defp require_architect_anchor_status_scope(repo, %Session{} = session) do
-    with {:ok, grant} <- require_live_architect_grant(repo, session),
+    with {:ok, grant} <- WorkRequestScope.architect_grant(repo, session),
          {:ok, anchor} <- architect_anchor_work_package(repo, session) do
       require_anchor_status_phase_scope(repo, session, anchor, grant)
     else
@@ -503,7 +290,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
 
   defp create_child_work_package_in_transaction(repo, %Session{} = session, package) do
     with :ok <- lock_access_grant(repo, session.assignment.grant_id),
-         {:ok, _architect_grant} <- require_live_architect_grant(repo, session),
+         {:ok, _architect_grant} <- WorkRequestScope.require_live_architect_grant(repo, session),
          :ok <- lock_work_package(repo, Session.work_package_id(session)),
          {:ok, attrs} <- child_work_package_attrs(repo, session, package) do
       WorkPackageRepository.create(repo, attrs)
@@ -518,7 +305,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
 
   defp approve_child_ready_state_in_transaction(repo, %Session{} = session, work_package_id, rationale, request_id) do
     with :ok <- lock_access_grant(repo, session.assignment.grant_id),
-         {:ok, architect_grant} <- require_live_architect_grant(repo, session),
+         {:ok, architect_grant} <- WorkRequestScope.require_live_architect_grant(repo, session),
          :ok <- lock_work_package(repo, Session.work_package_id(session)),
          {:ok, phase_id, anchor} <- architect_child_phase_anchor(repo, session, architect_grant),
          {:ok, child} <- require_transaction_current_child_scope(repo, work_package_id, anchor, phase_id),
@@ -577,7 +364,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   defp merge_child_into_phase_in_transaction(repo, %Session{} = session, work_package_id, merge_artifact) do
     with {:ok, merge_artifact} <- normalized_merge_artifact(merge_artifact),
          :ok <- lock_access_grant(repo, session.assignment.grant_id),
-         {:ok, architect_grant} <- require_live_architect_grant(repo, session),
+         {:ok, architect_grant} <- WorkRequestScope.require_live_architect_grant(repo, session),
          :ok <- lock_work_package(repo, Session.work_package_id(session)),
          {:ok, phase_id, anchor} <- architect_child_phase_anchor(repo, session, architect_grant),
          {:ok, child} <- require_transaction_current_child_scope(repo, work_package_id, anchor, phase_id),
@@ -1265,79 +1052,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   defp rollback_architect_transaction_result(repo, {:error, reason}), do: repo.rollback({:error, reason})
 
   defp architect_session(repo, session, capability) when is_binary(capability) do
-    with {:ok, session} <- Auth.require_session(session, repo),
-         :ok <- require_architect_assignment(session.assignment),
-         :ok <- require_architect_capabilities(repo, session.assignment, [capability]) do
-      {:ok, session}
-    end
+    architect_session(repo, session, [capability])
   end
 
   defp architect_session(repo, session, capabilities) when is_list(capabilities) do
     with {:ok, session} <- Auth.require_session(session, repo),
          :ok <- require_architect_assignment(session.assignment),
-         :ok <- require_architect_capabilities(repo, session.assignment, capabilities) do
+         :ok <- require_architect_capabilities(session.assignment, capabilities) do
       {:ok, session}
-    end
-  end
-
-  defp require_live_architect_grant(repo, %Session{} = session) do
-    case AccessGrantRepository.get(repo, session.assignment.grant_id) do
-      {:ok, %AccessGrant{} = grant} ->
-        assignment = assignment_with_live_grant_capabilities(session.assignment, grant)
-
-        with :ok <- require_session_grant_match(assignment, grant),
-             :ok <- require_live_grant(grant, DateTime.utc_now(:microsecond)),
-             :ok <- require_architect_assignment(assignment) do
-          {:ok, grant}
-        end
-
-      {:error, :not_found} ->
-        {:error, :phase_scope_not_available}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp assignment_with_live_grant_capabilities(assignment, %AccessGrant{} = grant) do
-    %{assignment | capabilities: grant.capabilities || []}
-  end
-
-  defp require_session_grant_match(assignment, %AccessGrant{} = grant) do
-    with {:ok, assignment_capabilities} <- comparable_capabilities(assignment.capabilities),
-         {:ok, grant_capabilities} <- comparable_capabilities(grant.capabilities),
-         true <- assignment.grant_id == grant.id,
-         true <- assignment.work_package_id == grant.work_package_id,
-         true <- assignment.phase_id == grant.phase_id,
-         true <- assignment.display_key == grant.display_key,
-         true <- assignment.grant_role == grant.grant_role,
-         true <- assignment_capabilities == grant_capabilities,
-         true <- assignment.claimed_at == grant.claimed_at,
-         true <- assignment.claimed_by == grant.claimed_by do
-      :ok
-    else
-      _mismatch -> {:error, :phase_scope_not_available}
-    end
-  end
-
-  defp comparable_capabilities(capabilities) when is_list(capabilities), do: {:ok, capabilities}
-  defp comparable_capabilities(nil), do: {:ok, []}
-
-  defp require_live_grant(%AccessGrant{revoked_at: %DateTime{}}, _now), do: {:error, :assignment_revoked}
-
-  defp require_live_grant(%AccessGrant{expires_at: %DateTime{} = expires_at}, %DateTime{} = now) do
-    if DateTime.compare(expires_at, now) == :gt do
-      :ok
-    else
-      {:error, :expired}
-    end
-  end
-
-  defp require_live_grant(%AccessGrant{expires_at: nil}, %DateTime{}), do: :ok
-
-  defp require_architect_capabilities(repo, assignment, capabilities) do
-    with {:ok, effective_assignment} <- effective_architect_assignment(repo, assignment) do
-      require_architect_capabilities(effective_assignment, capabilities)
     end
   end
 
@@ -1348,21 +1070,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
         {:error, reason} -> {:halt, {:error, reason}}
       end
     end)
-  end
-
-  defp effective_architect_assignment(repo, %{grant_role: "architect", grant_id: grant_id} = assignment) do
-    with {:ok, %AccessGrant{} = grant} <- AccessGrantRepository.get(repo, grant_id) do
-      case ArchitectHandoff.handoff_phase_grant?(repo, grant) do
-        {:ok, true} ->
-          {:ok, %{assignment | capabilities: ArchitectHandoff.effective_capabilities(grant.capabilities)}}
-
-        {:ok, false} ->
-          {:ok, %{assignment | capabilities: grant.capabilities || []}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
   end
 
   defp require_architect_assignment(%{grant_role: "architect"}), do: :ok
@@ -1412,7 +1119,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
   end
 
   defp architect_child_phase_anchor(repo, %Session{} = session) do
-    with {:ok, grant} <- require_live_architect_grant(repo, session) do
+    with {:ok, grant} <- WorkRequestScope.architect_grant(repo, session) do
       architect_child_phase_anchor(repo, session, grant)
     end
   end
@@ -1430,16 +1137,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseChildTools do
 
   defp explicit_grant_phase_id(%AccessGrant{phase_id: phase_id}) when is_binary(phase_id) and phase_id != "", do: {:ok, phase_id}
   defp explicit_grant_phase_id(%AccessGrant{}), do: {:error, :phase_scope_not_available}
-
-  defp require_architect_phase_anchor(repo, %Session{} = session, phase_id) when is_atom(repo) and is_binary(phase_id) do
-    with {:ok, grant} <- require_live_architect_grant(repo, session),
-         {:ok, anchor} <- architect_anchor_work_package(repo, session) do
-      require_architect_anchor_scope(anchor, grant, phase_id)
-    else
-      {:error, :not_found} -> {:error, :phase_scope_not_available}
-      {:error, reason} -> {:error, reason}
-    end
-  end
 
   defp require_architect_anchor_scope(%WorkPackage{} = anchor, %AccessGrant{} = grant, phase_id) do
     cond do

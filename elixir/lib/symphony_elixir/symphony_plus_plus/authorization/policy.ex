@@ -56,7 +56,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
     :work_package_skip,
     :work_package_dispatch,
     :work_package_read,
-    :work_package_update,
     :work_package_repair_state,
     :task_plan_read,
     :task_plan_update,
