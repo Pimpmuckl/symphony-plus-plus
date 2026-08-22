@@ -144,7 +144,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
            WorkPackageRepository.update_status(repo, work_package.id, "planned", "ready_for_worker", expected_contract_revision: work_package.contract_revision),
          {:ok, activated} <- WorkPackageRepository.update(repo, activated.id, %{dispatched_at: DateTime.utc_now(:microsecond)}),
          {:ok, _scope_node} <- append_scope_plan_node(repo, activated),
-         {:ok, _review_node} <- append_review_plan_node(repo, activated, policy),
          {:ok, minted} <- mint_worker_grant(repo, activated.id, policy),
          {:ok, virtual_files} <- Renderer.render_all(repo, activated.id) do
       %{
@@ -237,7 +236,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
 
     with {:ok, work_package} <- WorkPackageRepository.create(repo, work_package_attrs),
          {:ok, _scope_node} <- append_scope_plan_node(repo, work_package),
-         {:ok, _review_node} <- append_review_plan_node(repo, work_package, policy),
          {:ok, minted} <- mint_worker_grant(repo, work_package.id, policy),
          {:ok, virtual_files} <- Renderer.render_all(repo, work_package.id) do
       {:ok,
@@ -261,41 +259,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
 
   defp initial_scope_title(%WorkPackage{kind: "investigation"}), do: "Investigate requested scope"
   defp initial_scope_title(%WorkPackage{}), do: "Implement requested scope"
-
-  defp append_review_plan_node(repo, %WorkPackage{} = work_package, policy) do
-    PlanningRepository.append_plan_node(repo, %{
-      work_package_id: work_package.id,
-      title: "Complete acceptance and review gates",
-      body: review_plan_body(policy, work_package.review_requirement),
-      status: "pending"
-    })
-  end
-
-  defp review_plan_body(policy, review_requirement) do
-    [
-      acceptance_plan_line(policy),
-      "Required gates:",
-      gates_line(policy.required_gates),
-      "",
-      "Review requirement:",
-      review_requirement_line(review_requirement)
-    ]
-    |> Enum.join("\n")
-  end
-
-  defp acceptance_plan_line(%{required_gates: required_gates}) do
-    if "package_acceptance" in required_gates do
-      "Acceptance criteria:\n- Satisfy the package acceptance criteria in acceptance.md.\n"
-    else
-      ""
-    end
-  end
-
-  defp gates_line([]), do: "- None."
-  defp gates_line(gates), do: Enum.map_join(gates, "\n", &("- " <> &1))
-
-  defp review_requirement_line(nil), do: "- None."
-  defp review_requirement_line(requirement), do: "- " <> Jason.encode!(requirement)
 
   defp nonblank_or(value, fallback) when is_binary(value) do
     value = String.trim(value)
@@ -378,8 +341,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
     %{
       template: policy.template,
       constraints: policy.constraints,
-      required_gates: policy.required_gates,
-      readiness_requirements: policy.readiness_requirements
+      required_gates: policy.required_gates
     }
   end
 
@@ -641,13 +603,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
 
   defp normalize_optional_review_requirement(attrs), do: ReviewRequirement.normalize(Map.get(attrs, "review_requirement"))
 
-  defp effective_policy(policy, nil), do: policy
-
-  defp effective_policy(policy, _review_requirement) do
-    policy
-    |> Map.update!(:required_gates, &Enum.uniq(&1 ++ ["review_complete"]))
-    |> Map.update!(:readiness_requirements, &Enum.uniq(&1 ++ ["review_current_head"]))
-  end
+  defp effective_policy(policy, _review_requirement), do: policy
 
   defp maybe_put_review_requirement(request, nil), do: request
   defp maybe_put_review_requirement(request, review_requirement), do: Map.put(request, "review_requirement", review_requirement)

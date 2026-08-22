@@ -114,12 +114,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
     assert get_in(replay_response, ["result", "structuredContent", "next_action"]) == "return_to_architect"
   end
 
-  test "mark_ready does not require ci_waiting when package policy omits CI", %{repo: repo} do
+  test "mark_ready uses attached delivery evidence without a manual CI lifecycle state", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-READY-NO-CI", kind: "mcp", status: "reviewing"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-    append_done_plan(repo, package.id)
 
     missing_response =
       MCPHarness.request(
@@ -130,12 +129,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
 
     missing = get_in(missing_response, ["error", "data", "missing"])
     refute "status_ci_waiting" in missing
-    refute "plan_complete" in missing
-    assert "acceptance_criteria_met" in missing
-    assert "tests_passed" in missing
     assert "pr_attached" in missing
 
-    append_merge_ready_evidence(repo, session, package.id, "head-no-ci")
+    pr_url = "https://github.com/example/repo/pull/#{System.unique_integer([:positive])}"
+    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/#{package.id}/worker", "head_sha" => "head-no-ci"})
+    attach_tool(repo, session, "attach_pr", %{"url" => pr_url, "head_sha" => "head-no-ci"})
 
     ready_response =
       MCPHarness.request(
@@ -146,41 +144,5 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools03Test do
 
     assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
     assert get_in(ready_response, ["result", "structuredContent", "work_package", "status"]) == "ready_for_merge"
-  end
-
-  test "mark_ready derives CI readiness from evidence without a manual ci_waiting state", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-READY-CI-REQUIRED", kind: "mcp", status: "active", policy_template: "mcp_ci_required")
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    append_merge_ready_evidence(repo, session, package.id, "head-ci-required")
-
-    ready_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-ci-required", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
-    assert get_in(ready_response, ["result", "structuredContent", "work_package", "status"]) == "ready_for_merge"
-  end
-
-  test "state machine accepts fact-owned readiness from active packages", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-READY-CI-STATE-MACHINE", kind: "mcp", status: "active", policy_template: "mcp_ci_required")
-             )
-
-    actor = %{grant_role: "worker", capabilities: ["worker:lifecycle.transition"], work_package_id: package.id}
-
-    assert :ok = StateMachine.validate_ready_transition(package, "ready_for_merge", actor)
   end
 end

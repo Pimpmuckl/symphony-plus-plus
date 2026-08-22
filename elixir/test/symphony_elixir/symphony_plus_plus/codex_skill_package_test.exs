@@ -151,8 +151,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageTest do
       assert content =~ "Worker branch: <PREPARED_BRANCH>"
       assert content =~ "Worktree path: <PREPARED_WORKTREE_PATH>"
       assert content =~ ~s({"work_package_id":"<WORK_PACKAGE_ID>"})
-      assert content =~ ~s|update_task_plan({"expected_version": <read version>, "nodes": [...]})|
-      refute content =~ "update_task_plan(patch"
       assert content =~ "resolve_blocker"
       assert content =~ "request_scope_expansion(summary, idempotency_key, payload)"
       assert content =~ "attach_pr(url, head_sha)"

@@ -19,7 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
-  @complete_plan_statuses ["done", "completed", "skipped"]
   @scope_guard_gate "scope_guard"
 
   @type repo :: module()
@@ -29,16 +28,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   @spec submit_review_package(repo(), Session.t(), map(), Config.t()) :: worker_result()
   def submit_review_package(repo, %Session{} = session, arguments, %Config{} = config) do
     with {:ok, summary} <- required_argument(arguments, "summary"),
-         {:ok, tests} <- required_string_list(arguments, "tests"),
-         {:ok, artifacts} <- required_string_list(arguments, "artifacts"),
-         artifacts = Enum.uniq(artifacts),
-         {:ok, acceptance_criteria_met} <- optional_boolean(arguments, "acceptance_criteria_met", nil) do
+         {:ok, tests} <- optional_string_list(arguments, "tests"),
+         {:ok, artifacts} <- optional_string_list(arguments, "artifacts") do
+      artifacts = Enum.uniq(artifacts)
+
       submit_review_package_transaction(repo, session, arguments, artifacts, config, %{
         "type" => "review_package",
         "summary" => summary,
         "tests" => tests,
-        "artifacts" => artifacts,
-        "acceptance_criteria_met" => acceptance_criteria_met
+        "artifacts" => artifacts
       })
     end
   end
@@ -418,7 +416,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
          {:ok, requirement} <- required_review_requirement(state.work_package),
          {:ok, head_sha} <- required_current_review_head(state.progress_events),
          :ok <- require_rework_head_advanced(state.progress_events, head_sha),
-         :ok <- require_new_review_package_after_rework(state.progress_events, head_sha),
          rework_id = accepted_review_rework_id(state.progress_events),
          payload <- review_completion_payload(work_package_id, requirement, head_sha, reference, note, rework_id),
          arguments <- review_completion_arguments(requirement, head_sha, note, rework_id),
@@ -494,16 +491,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp base_readiness_failure_reasons(state) do
     [
       {active_blocker?(state.progress_events), "no_active_blockers"},
-      {incomplete_plan?(state), "plan_complete"},
-      {acceptance_missing?(state), "acceptance_criteria_met"},
-      {tests_missing?(state), "tests_passed"},
       {merge_metadata_missing?(state, "branch"), "branch_attached"},
       {merge_metadata_missing?(state, "pr"), "pr_attached"},
       {current_pr_state_missing?(state), "current_pr_state"},
       {rework_head_not_advanced?(state), "rework_head_advanced"},
       {rework_current_pr_state_missing?(state), "rework_current_pr_state"},
       {ScopeGuard.missing?(state.work_package, state.progress_events), @scope_guard_gate},
-      {review_artifacts_missing?(state), "review_artifacts_attached"},
       {review_current_head_missing?(state), "review_current_head"},
       {review_completion_missing?(state), "review_complete"},
       {investigation_findings_missing?(state), "findings_documented"}
@@ -587,15 +580,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   end
 
   defp readiness_failure_message("no_active_blockers"), do: "Active blockers must be resolved."
-  defp readiness_failure_message("plan_complete"), do: "Package plan is missing or still has pending items."
-  defp readiness_failure_message("acceptance_criteria_met"), do: "Acceptance criteria evidence is missing."
-  defp readiness_failure_message("tests_passed"), do: "Focused test evidence is missing."
   defp readiness_failure_message("branch_attached"), do: "Current branch metadata is missing."
   defp readiness_failure_message("pr_attached"), do: "Current PR metadata is missing."
   defp readiness_failure_message("current_pr_state"), do: "Current synced PR state is missing."
   defp readiness_failure_message("rework_head_advanced"), do: "Accepted review rework requires a different exact head."
   defp readiness_failure_message("rework_current_pr_state"), do: "Accepted review rework requires fresh synced PR state for the new head."
-  defp readiness_failure_message("review_artifacts_attached"), do: "Current-head validation artifacts are missing."
   defp readiness_failure_message("review_current_head"), do: "Required review cannot be completed until the current exact head is attached."
   defp readiness_failure_message("review_complete"), do: "Required review is not completed for the current exact head and requirement."
   defp readiness_failure_message("findings_documented"), do: "Investigation findings are missing."
@@ -679,26 +668,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       )
   end
 
-  defp review_artifacts_missing?(state) do
-    merge_required?(state.work_package) and not current_review_artifacts_present?(state)
-  end
-
-  defp current_review_artifacts_present?(state) do
-    current_head_sha = latest_current_head_sha(state.progress_events)
-
-    case latest_review_package_event(state.progress_events, current_head_sha) do
-      %ProgressEvent{} = event ->
-        review_head_sha = Map.get(event.payload, "head_sha")
-        artifacts = review_package_artifact_paths(event, current_head_sha)
-
-        artifacts != [] and
-          Enum.all?(artifacts, &persisted_review_artifact?(state.artifacts, state.work_package.id, review_head_sha, &1))
-
-      nil ->
-        false
-    end
-  end
-
   defp investigation_findings_missing?(state), do: state.work_package.kind == "investigation" and state.findings == []
 
   defp merge_required?(%WorkPackage{} = work_package) do
@@ -707,13 +676,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp exact_head_required?(%WorkPackage{} = work_package) do
     merge_required?(work_package) or is_map(work_package.review_requirement)
-  end
-
-  defp latest_review_package_event(progress_events, current_head_sha) do
-    progress_events
-    |> events_after_latest_rework()
-    |> current_head_review_package_events(current_head_sha)
-    |> List.last()
   end
 
   defp require_rework_head_advanced(progress_events, head_sha) do
@@ -730,22 +692,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       nil ->
         :ok
     end
-  end
-
-  defp require_new_review_package_after_rework(progress_events, head_sha) do
-    case latest_accepted_review_rework(progress_events) do
-      %ProgressEvent{} ->
-        if Enum.any?(events_after_latest_rework(progress_events), &exact_review_package_event?(&1, head_sha)),
-          do: :ok,
-          else: {:tool_error, "new_review_package_required"}
-
-      nil ->
-        :ok
-    end
-  end
-
-  defp exact_review_package_event?(%ProgressEvent{payload: payload} = event, head_sha) do
-    payload_type?(event, "review_package", "submit_review_package") and exact_head_sha?(payload["head_sha"], head_sha)
   end
 
   defp accepted_review_rework_id(progress_events) do
@@ -772,38 +718,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
         progress_events
     end
   end
-
-  defp current_head_review_package_events(progress_events, current_head_sha) do
-    Enum.filter(progress_events, fn event ->
-      payload_type?(event, "review_package", "submit_review_package") and current_head_review_package?(event, current_head_sha)
-    end)
-  end
-
-  defp current_head_review_package?(%ProgressEvent{payload: payload}, current_head_sha) when is_map(payload) do
-    review_head_matches?(payload, current_head_sha)
-  end
-
-  defp current_head_review_package?(%ProgressEvent{}, _current_head_sha), do: false
-
-  defp review_head_matches?(payload, :any_head) when is_map(payload), do: true
-
-  defp review_head_matches?(payload, current_head_sha) when is_map(payload) and is_binary(current_head_sha) do
-    head_sha_matches?(Map.get(payload, "head_sha"), current_head_sha)
-  end
-
-  defp review_head_matches?(_payload, _current_head_sha), do: false
-
-  defp review_package_artifact_paths(%ProgressEvent{payload: payload}, current_head_sha) when is_map(payload) do
-    artifacts = Map.get(payload, "artifacts")
-
-    if is_list(artifacts) and review_head_matches?(payload, current_head_sha) do
-      Enum.filter(artifacts, &(is_binary(&1) and String.trim(&1) != ""))
-    else
-      []
-    end
-  end
-
-  defp review_package_artifact_paths(%ProgressEvent{}, _current_head_sha), do: []
 
   defp persisted_review_artifact?(artifacts, work_package_id, head_sha, path) do
     expected_id = review_artifact_id(work_package_id, head_sha, path)
@@ -861,28 +775,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     normalize_blocker_id(blocker_id || idempotency_key || id)
   end
 
-  defp incomplete_plan?(state) do
-    plan_required?(state.work_package) and (Enum.any?(state.plan_nodes, &(&1.status not in @complete_plan_statuses)) or missing_meaningful_plan?(state))
-  end
-
-  defp missing_meaningful_plan?(%{plan_nodes: []}), do: true
-  defp missing_meaningful_plan?(_state), do: false
-
-  defp plan_required?(%WorkPackage{} = work_package) do
-    case LifecycleService.policy_for(work_package) do
-      {:ok, policy} -> get_in(policy, [:constraints, :planning_depth]) == "package"
-      {:error, _reason} -> true
-    end
-  end
-
-  defp acceptance_missing?(state) do
-    required_gate?(state.work_package, "package_acceptance") and not acceptance_recorded?(state)
-  end
-
-  defp tests_missing?(state) do
-    required_gate?(state.work_package, "focused_tests") and not tests_recorded?(state)
-  end
-
   defp required_gate?(%WorkPackage{} = work_package, gate) do
     case LifecycleService.policy_for(work_package) do
       {:ok, policy} -> gate in Map.get(policy, :required_gates, [])
@@ -890,96 +782,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     end
   end
 
-  defp acceptance_recorded?(state) do
-    case latest_review_package_event(state.progress_events, review_head_sha_for_readiness(state)) do
-      %ProgressEvent{payload: payload} when is_map(payload) -> Map.get(payload, "acceptance_criteria_met") == true
-      _event -> false
-    end
-  end
-
-  defp tests_recorded?(state) do
-    if merge_required?(state.work_package) do
-      review_package_tests_recorded?(state.progress_events)
-    else
-      review_package_tests_recorded?(state) or progress_status_recorded?(state.progress_events, "tests_passed")
-    end
-  end
-
-  defp review_package_tests_recorded?(progress_events) when is_list(progress_events) do
-    review_package_tests_recorded?(progress_events, latest_current_head_sha(progress_events))
-  end
-
-  defp review_package_tests_recorded?(%{progress_events: progress_events} = state) do
-    review_package_tests_recorded?(progress_events, review_head_sha_for_readiness(state))
-  end
-
-  defp review_package_tests_recorded?(progress_events, readiness_head_sha) do
-    readiness_head_sha = normalize_review_readiness_head_sha(readiness_head_sha)
-
-    case latest_review_package_event(progress_events, readiness_head_sha) do
-      %ProgressEvent{payload: payload} when is_map(payload) ->
-        tests = Map.get(payload, "tests")
-        is_list(tests) and Enum.any?(tests, &(is_binary(&1) and String.trim(&1) != ""))
-
-      _event ->
-        false
-    end
-  end
-
-  defp review_head_sha_for_readiness(%{work_package: %WorkPackage{} = work_package, progress_events: progress_events}) do
-    current_head_sha = latest_current_head_sha(progress_events)
-
-    cond do
-      is_binary(current_head_sha) -> current_head_sha
-      merge_required?(work_package) -> nil
-      true -> :any_head
-    end
-  end
-
-  defp normalize_review_readiness_head_sha(head_sha) when is_binary(head_sha), do: head_sha
-  defp normalize_review_readiness_head_sha(:any_head), do: :any_head
-  defp normalize_review_readiness_head_sha(_head_sha), do: nil
-
-  defp progress_status_recorded?(progress_events, expected_status) do
-    head_boundary_sequence = latest_branch_event_sequence(progress_events)
-    statuses = [expected_status, failed_status(expected_status)]
-
-    latest_generic_progress_status(progress_events, head_boundary_sequence, statuses) == expected_status
-  end
-
-  defp latest_generic_progress_status(progress_events, head_boundary_sequence, statuses) do
-    statuses = MapSet.new(statuses)
-
-    progress_events
-    |> Enum.reverse()
-    |> Enum.find_value(fn
-      %ProgressEvent{status: status} = event ->
-        status = normalized_status(status)
-
-        if generic_append_progress_event?(event) and progress_after_head_boundary?(event, head_boundary_sequence) and MapSet.member?(statuses, status) do
-          status
-        end
-
-      _event ->
-        nil
-    end)
-  end
-
-  defp failed_status("tests_passed"), do: "tests_failed"
-  defp failed_status(status), do: status <> "_failed"
-
-  defp latest_branch_event_sequence(progress_events) do
-    case latest_current_branch_event(progress_events) do
-      %ProgressEvent{sequence: sequence} when is_integer(sequence) -> sequence
-      _event -> nil
-    end
-  end
-
-  defp progress_after_head_boundary?(%ProgressEvent{}, nil), do: true
-  defp progress_after_head_boundary?(%ProgressEvent{sequence: sequence}, boundary_sequence) when is_integer(sequence), do: sequence > boundary_sequence
-  defp progress_after_head_boundary?(%ProgressEvent{}, _boundary_sequence), do: false
-  defp normalized_status(status) when is_binary(status), do: status |> String.trim() |> String.downcase()
-  defp normalized_status(_status), do: ""
   defp pr_required?(%WorkPackage{kind: "investigation"}), do: false
   defp pr_required?(%WorkPackage{}), do: true
 
@@ -1201,7 +1003,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp metadata_tool("branch"), do: "attach_branch"
   defp metadata_tool("pr"), do: "attach_pr"
-  defp metadata_tool("review_package"), do: "submit_review_package"
 
   defp head_sha_matches?(left, right) when is_binary(left) and is_binary(right) do
     PullRequest.head_sha_matches?(String.downcase(left), String.downcase(right))
@@ -1224,10 +1025,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   end
 
   defp payload_type?(%ProgressEvent{}, _type, _source_tool), do: false
-
-  defp generic_append_progress_event?(%ProgressEvent{payload: payload}) when is_map(payload), do: Map.get(payload, "source_tool") == nil
-  defp generic_append_progress_event?(%ProgressEvent{payload: nil}), do: true
-  defp generic_append_progress_event?(%ProgressEvent{}), do: false
 
   defp put_remaining_readiness_gates(repo, %Session{} = session, %{"structuredContent" => payload}) do
     with {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
@@ -1518,30 +1315,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     end
   end
 
-  defp required_list(arguments, key) do
-    case Map.get(arguments, key) do
-      [_head | _tail] = value -> {:ok, value}
-      nil -> {:tool_error, "missing_#{key}"}
-      [] -> {:tool_error, "missing_#{key}"}
-      _value -> {:tool_error, "invalid_#{key}"}
-    end
-  end
+  defp optional_string_list(arguments, key) do
+    case Map.get(arguments, key, []) do
+      values when is_list(values) ->
+        if Enum.all?(values, &(is_binary(&1) and String.trim(&1) != "")) do
+          {:ok, Enum.map(values, &String.trim/1)}
+        else
+          {:tool_error, "invalid_#{key}"}
+        end
 
-  defp required_string_list(arguments, key) do
-    with {:ok, values} <- required_list(arguments, key) do
-      if Enum.all?(values, &(is_binary(&1) and String.trim(&1) != "")) do
-        {:ok, Enum.map(values, &String.trim/1)}
-      else
+      _value ->
         {:tool_error, "invalid_#{key}"}
-      end
-    end
-  end
-
-  defp optional_boolean(arguments, key, default) do
-    case Map.fetch(arguments, key) do
-      {:ok, value} when is_boolean(value) -> {:ok, value}
-      {:ok, _value} -> {:tool_error, "invalid_#{key}"}
-      :error -> {:ok, default}
     end
   end
 

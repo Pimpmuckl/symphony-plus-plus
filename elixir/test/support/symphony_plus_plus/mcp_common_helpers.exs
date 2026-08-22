@@ -209,29 +209,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
              )
   end
 
-  def append_done_plan(repo, work_package_id) do
-    assert {:ok, _plan_node} =
-             PlanningRepository.append_plan_node(repo, %{
-               "work_package_id" => work_package_id,
-               "title" => "Complete implementation",
-               "status" => "done"
-             })
-  end
-
   def append_merge_ready_evidence(repo, session, work_package_id, head_sha) do
-    append_done_plan(repo, work_package_id)
     pr_url = "https://github.com/example/repo/pull/#{System.unique_integer([:positive])}"
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/#{work_package_id}/worker", "head_sha" => head_sha})
     attach_tool(repo, session, "attach_pr", %{"url" => pr_url, "head_sha" => head_sha})
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready",
-      "tests" => ["mix test"],
-      "artifacts" => ["review-log.txt"],
-      "head_sha" => head_sha,
-      "acceptance_criteria_met" => true
-    })
   end
 
   def review_suite_artifact_id(work_package_id, head_sha) do

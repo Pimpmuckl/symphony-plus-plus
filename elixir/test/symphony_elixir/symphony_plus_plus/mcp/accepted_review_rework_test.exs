@@ -6,7 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AcceptedReviewReworkTest do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
 
   @head_a "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  test "an accepted current-head finding atomically reopens once and requires fresh head-B evidence", %{repo: repo} do
+  test "an accepted current-head finding atomically reopens once and requires fresh head-B provider review", %{repo: repo} do
     fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-accepted-review-rework")
     branch = "agent/accepted-review-rework"
     worktree = Path.join(fixture.root, "worktree")
@@ -41,7 +41,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AcceptedReviewReworkTest do
                )
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, worker_assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     worker_session = MCPHarness.session(worker_assignment, proof_hash: minted.grant.secret_hash)
@@ -59,7 +58,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AcceptedReviewReworkTest do
     attach_tool(repo, worker_session, "attach_branch", %{"branch" => package.branch_pattern, "head_sha" => head_a})
     attach_tool(repo, worker_session, "attach_pr", %{"url" => pr_url, "head_sha" => head_a})
     sync_pr_state(repo, worker_session, pr_url, head_a)
-    review_a = submit_review(repo, worker_session, head_a, "review-a")
     completion_a = attach_tool(repo, worker_session, "complete_review", %{"reference" => "review-a-complete"})
 
     assert get_in(mcp_tool(repo, worker_session, "mark_ready", %{}), ["result", "structuredContent", "work_package", "status"]) ==
@@ -188,21 +186,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AcceptedReviewReworkTest do
     stale_ready = mcp_tool(repo, worker_session, "mark_ready", %{})
     assert "rework_head_advanced" in get_in(stale_ready, ["error", "data", "missing"])
 
-    File.write!(Path.join(worktree, "unreviewed-head.txt"), "unreviewed\n")
-    TestSupport.git_output!(worktree, ["add", "unreviewed-head.txt"])
-    TestSupport.git_output!(worktree, ["commit", "-m", "Unreviewed intermediate head"])
-    intermediate_head = worktree |> TestSupport.git_output!(["rev-parse", "HEAD"]) |> String.trim()
-    attach_tool(repo, worker_session, "attach_branch", %{"branch" => package.branch_pattern, "head_sha" => intermediate_head})
-
-    assert get_in(mcp_tool(repo, worker_session, "complete_review", %{}), ["error", "data", "reason"]) ==
-             "new_review_package_required"
-
     File.write!(Path.join(worktree, "head-b.txt"), "head B\n")
     TestSupport.git_output!(worktree, ["add", "head-b.txt"])
     TestSupport.git_output!(worktree, ["commit", "-m", "Head B"])
     head_b = worktree |> TestSupport.git_output!(["rev-parse", "HEAD"]) |> String.trim()
-    config = Config.default(repo: repo, repo_root: fixture.repo_root)
-    review_b = submit_live_review(repo, worker_session, config, head_b, "review-b")
+    attach_tool(repo, worker_session, "attach_branch", %{"branch" => package.branch_pattern, "head_sha" => head_b})
     assert {:ok, refreshed_events} = PlanningRepository.list_progress_events(repo, package.id)
 
     assert refreshed_events
@@ -234,16 +222,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AcceptedReviewReworkTest do
     ready_b = mcp_tool(repo, worker_session, "mark_ready", %{})
     assert get_in(ready_b, ["result", "structuredContent", "work_package", "status"]) == "ready_for_merge"
 
-    assert get_in(review_a, ["result", "structuredContent", "progress_event", "id"]) !=
-             get_in(review_b, ["result", "structuredContent", "progress_event", "id"])
-
     assert get_in(completion_a, ["result", "structuredContent", "progress_event", "id"]) !=
              get_in(completion_b, ["result", "structuredContent", "progress_event", "id"])
 
     assert {:ok, final_events} = PlanningRepository.list_progress_events(repo, package.id)
     assert Enum.any?(final_events, &(&1.id == accepted_event_id and &1.payload["head_sha"] == head_a))
-    assert Enum.any?(final_events, &(&1.payload["type"] == "review_package" and &1.payload["head_sha"] == head_a))
-    assert Enum.any?(final_events, &(&1.payload["type"] == "review_package" and &1.payload["head_sha"] == head_b))
   end
 
   test "phase children and terminal packages cannot use accepted review rework", %{repo: repo} do
@@ -297,31 +280,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AcceptedReviewReworkTest do
     mcp_tool(repo, session, "submit_review_package", review_arguments(head_sha, idempotency_key))
   end
 
-  defp submit_live_review(repo, session, config, head_sha, idempotency_key) do
-    response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => idempotency_key,
-          "method" => "tools/call",
-          "params" => %{"name" => "submit_review_package", "arguments" => review_arguments(head_sha, idempotency_key)}
-        },
-        repo: repo,
-        session: session,
-        config: config
-      )
-
-    assert get_in(response, ["result", "structuredContent", "progress_event", "id"])
-    response
-  end
-
   defp review_arguments(head_sha, idempotency_key) do
     %{
       "summary" => "Validated #{head_sha}",
       "tests" => ["mix test accepted_review_rework_test.exs"],
       "artifacts" => ["review-suite-#{head_sha}.json"],
       "head_sha" => head_sha,
-      "acceptance_criteria_met" => true,
       "idempotency_key" => idempotency_key
     }
   end

@@ -944,9 +944,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              "title",
              "goal",
              "allowed_file_globs",
-             "acceptance_criteria",
-             "validation_steps",
-             "stop_conditions"
+             "acceptance_criteria"
            ]
 
     assert get_in(package_schema, ["properties", "review", "type"]) == "object"

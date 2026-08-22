@@ -3,37 +3,11 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  test "docs mark_ready uses docs gates without investigation recommendation artifacts", %{repo: repo} do
+  test "docs mark_ready does not require manufactured delivery evidence", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-READY-DOCS", kind: "docs", status: "reviewing"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "docs-worker")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    missing_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-docs-missing", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    missing = get_in(missing_response, ["error", "data", "missing"])
-    assert get_in(missing_response, ["error", "data", "reason"]) == "readiness_failed"
-    assert "tests_passed" in missing
-    refute "findings_documented" in missing
-
-    scope_response =
-      attach_tool(repo, session, "request_scope_expansion", %{
-        "summary" => "Docs scope note",
-        "idempotency_key" => "docs-scope-note"
-      })
-
-    assert response_progress_payload(repo, scope_response)["type"] == "scope_expansion_request"
-
-    attach_tool(repo, session, "append_progress", %{
-      "summary" => "Docs validation passed",
-      "status" => "tests_passed",
-      "idempotency_key" => "docs-validation"
-    })
 
     ready_response =
       MCPHarness.request(
@@ -73,7 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
   end
 
-  test "hotfix mark_ready accepts incident-depth review evidence without plan nodes", %{repo: repo} do
+  test "hotfix mark_ready uses provider-backed delivery evidence", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-READY-HOTFIX", kind: "hotfix", status: "ci_waiting"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
@@ -82,13 +56,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-READY-HOTFIX/worker", "head_sha" => "hotfix-head"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/812", "head_sha" => "hotfix-head"})
     sync_pr_state(repo, session, "https://github.com/example/repo/pull/812", "hotfix-head")
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready hotfix",
-      "tests" => ["mix test"],
-      "artifacts" => ["hotfix-review.txt"],
-      "head_sha" => "hotfix-head"
-    })
 
     ready_response =
       MCPHarness.request(
@@ -107,17 +74,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    evidence =
-      attach_tool(repo, session, "submit_review_package", %{
-        "summary" => "No code change needed",
-        "tests" => ["Investigation evidence reviewed"],
-        "artifacts" => ["investigation-notes.md"],
-        "acceptance_criteria_met" => true
-      })
-
-    refute Map.has_key?(response_progress_payload(repo, evidence), "head_sha")
-    assert get_in(evidence, ["result", "structuredContent", "remaining_readiness_gates"]) == ["findings_documented"]
-
     finding_response =
       MCPHarness.request(
         %{
@@ -134,16 +90,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
       )
 
     assert get_in(finding_response, ["result", "structuredContent", "finding", "title"]) == "Recommendation"
-
-    attach_tool(repo, session, "request_scope_expansion", %{
-      "summary" => "No scope expansion needed",
-      "body" => "The recommendation stays in findings; this request must not create readiness evidence.",
-      "idempotency_key" => "investigation-scope-request"
-    })
-
-    assert {:ok, [artifact]} = PlanningRepository.list_artifacts(repo, package.id)
-    assert artifact.kind == "review"
-    assert artifact.path == "investigation-notes.md"
 
     ready_response =
       MCPHarness.request(
@@ -275,19 +221,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     assert get_in(response, ["error", "data", "reason"]) == "claim_required"
   end
 
-  test "mark_ready rejects spoofed metadata and accepts skipped plan nodes", %{repo: repo} do
+  test "mark_ready rejects spoofed provider metadata", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-READY-SPOOF", kind: "mcp", status: "ci_waiting"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    assert {:ok, _skipped} =
-             PlanningRepository.append_plan_node(repo, %{
-               "work_package_id" => package.id,
-               "title" => "Skipped with rationale",
-               "body" => "No longer needed",
-               "status" => "skipped"
-             })
 
     Enum.each(["branch", "pr", "review_package"], fn type ->
       response =
@@ -322,11 +260,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     assert get_in(ready_response, ["error", "data", "reason"]) == "readiness_failed"
 
     assert get_in(ready_response, ["error", "data", "missing"]) == [
-             "acceptance_criteria_met",
-             "tests_passed",
              "branch_attached",
-             "pr_attached",
-             "review_artifacts_attached"
+             "pr_attached"
            ]
   end
 
@@ -357,7 +292,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
 
   test "mark_ready uses lifecycle capability checks", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-READY-CAP", kind: "mcp", status: "ci_waiting"))
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id, capabilities: ["worker:claim"])
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -365,14 +299,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-READY-CAP/worker", "head_sha" => "abc124"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/124", "head_sha" => "abc124"})
     sync_pr_state(repo, session, "https://github.com/example/repo/pull/124", "abc124")
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready",
-      "tests" => ["mix test"],
-      "artifacts" => ["review-log.txt"],
-      "head_sha" => "abc124",
-      "acceptance_criteria_met" => true
-    })
 
     response =
       MCPHarness.request(

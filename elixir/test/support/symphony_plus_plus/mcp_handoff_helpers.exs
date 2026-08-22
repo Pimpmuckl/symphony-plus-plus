@@ -165,21 +165,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.HandoffHelpers do
   end
 
   def attach_phase_child_ready_evidence(repo, worker_session, child_id, head_sha) do
-    append_done_plan(repo, child_id)
     attach_tool(repo, worker_session, "attach_branch", %{"branch" => "agent/#{child_id}/worker", "head_sha" => head_sha})
     attach_tool(repo, worker_session, "attach_pr", %{"url" => "https://github.com/nextide/symphony-plus-plus/pull/7003", "head_sha" => head_sha})
-
-    attach_tool(repo, worker_session, "submit_review_package", ready_review_package_args(head_sha))
-  end
-
-  def ready_review_package_args(head_sha) do
-    %{
-      "summary" => "Ready for architect review",
-      "tests" => ["mix test elixir/test/symphony_elixir/symphony_plus_plus/mcp"],
-      "artifacts" => ["review-log.txt"],
-      "head_sha" => head_sha,
-      "acceptance_criteria_met" => true
-    }
   end
 
   def create_child_work_package(repo, session, child_id) do

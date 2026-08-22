@@ -81,12 +81,14 @@ Each WorkPackage needs:
   delivery repo. Branch pattern and forbidden globs may be omitted when their
   safe empty defaults are sufficient.
 - Acceptance criteria the worker can prove.
-- Validation commands or blocked-validation owner.
+- Validation commands or a blocked-validation owner when package-specific
+  guidance adds value.
 - Optional provider-agnostic review requirement.
 - PR-size or line-budget guidance; add package-specific PR-size or line-budget
   constraints when the default boundary is not enough. These budgets should
   always be used and split between implementation- and test work when possible.
-- Stop conditions and guidance routing.
+- Stop conditions when a concrete package risk needs them, plus guidance
+  routing.
 - Dependencies and recorded decisions needed to avoid scope drift.
 
 Express execution order with `upsert_dependency`. Either endpoint may be a
@@ -109,8 +111,9 @@ tools explicit.
 `slice_work_request` atomically creates one or more planned canonical
 WorkPackages. The selected WorkRequest supplies the default primary delivery
 repo and target base branch. Pass the target base branch with a secondary
-delivery repo. Package kind defaults to `standard_pr`; title, goal, owned
-globs, acceptance criteria, validation, and stop conditions remain explicit.
+  delivery repo. Package kind defaults to `standard_pr`; title, goal, owned
+  globs, and acceptance criteria remain explicit. Validation steps and stop
+  conditions are optional context.
 Assign `group_id` only when the WorkPackage belongs in a real Group; root-level
 WorkPackages need no synthetic wrapper Group.
 
@@ -149,8 +152,8 @@ Worker prompts must include:
 
 - Preferred packaged setup: `symphony-plus-plus-mcp:symphony-worker` plus
   `symphony-plus-plus-mcp:symphony-work-package`.
-- WorkPackage id, branch/base, scope, acceptance, validation, optional review requirement,
-  line/PR-size budget, and stop conditions.
+- WorkPackage id, branch/base, scope, acceptance, optional validation, review,
+  and stop-condition context, plus line/PR-size budget.
 - The ledger claim payload or clear recovery/legacy bootstrap label. The normal
   worker claim is WorkPackage-id-only; do not add repo, base, branch, or
   worktree fields unless they are needed as validation context. Never include

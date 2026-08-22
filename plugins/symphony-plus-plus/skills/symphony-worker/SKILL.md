@@ -10,9 +10,9 @@ PR-sized assignment.
 
 ## Contract
 
-1. Understand scope, owned paths, forbidden paths, acceptance, validation,
-   review profile, branch/base target, stop conditions, and any line or PR-size
-   budget before coding.
+1. Understand scope, owned paths, forbidden paths, acceptance, review profile,
+   branch/base target, and any supplied validation, stop condition, or
+   line/PR-size context before coding.
 2. Pick the correct state layer:
    - Assigned WorkPackage: use
      `symphony-plus-plus-mcp:symphony-work-package` and claim by WorkPackage
@@ -49,9 +49,9 @@ PR-sized assignment.
   no CI exists, say so.
 - After material changes, rerun the same required review profile; do not step
   down to a lower review level.
-- Record validation and review evidence in the active Symphony++ state. For
-  WorkPackages, that state is the ledger-backed claim opened by the
-  WorkPackage skill.
+- Record material findings, progress, or validation context when it helps the
+  handoff. Do not add ledger calls only to restate work already proved
+  elsewhere.
 
 ## Delivery
 

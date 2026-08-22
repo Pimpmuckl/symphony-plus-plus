@@ -20,7 +20,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
   @stale_heartbeat_after_seconds 300
   @ready_statuses ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"]
-  @complete_plan_statuses ["done", "completed", "skipped"]
   @merge_required_gates ["human_merge", "architect_merge"]
   @runtime_merge_required_kinds ["hotfix", "adapter", "mcp", "skill", "hooks", "phase_child"]
   @started_package_statuses ["active", "claimed", "planning", "implementing"]
@@ -851,14 +850,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   defp readiness_failure_reasons(%{work_package: %WorkPackage{}} = context) do
     [
       {active_blocker?(context.progress_events), "no_active_blockers"},
-      {incomplete_plan?(context), "plan_complete"},
-      {acceptance_missing?(context), "acceptance_criteria_met"},
-      {tests_missing?(context), "tests_passed"},
       {merge_metadata_missing?(context, "branch"), "branch_attached"},
       {merge_metadata_missing?(context, "pr"), "pr_attached"},
       {current_pr_state_missing?(context), "current_pr_state"},
       {ScopeGuard.missing?(context.work_package, context.progress_events), @scope_guard_gate},
-      {review_artifacts_missing?(context), "review_artifacts_attached"},
       {review_current_head_missing?(context), "review_current_head"},
       {review_completion_missing?(context), "review_complete"},
       {investigation_findings_missing?(context), "findings_documented"}
@@ -879,13 +874,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   end
 
   defp readiness_failure_message("no_active_blockers"), do: "Active blockers must be resolved before readiness."
-  defp readiness_failure_message("plan_complete"), do: "Package plan is missing or still has pending items."
-  defp readiness_failure_message("acceptance_criteria_met"), do: "Acceptance criteria evidence is missing."
-  defp readiness_failure_message("tests_passed"), do: "Focused test evidence is missing."
   defp readiness_failure_message("branch_attached"), do: "Current branch metadata is missing."
   defp readiness_failure_message("pr_attached"), do: "Current PR metadata is missing."
   defp readiness_failure_message("current_pr_state"), do: "Current synced PR state is missing."
-  defp readiness_failure_message("review_artifacts_attached"), do: "Current-head validation artifacts are missing."
   defp readiness_failure_message("review_current_head"), do: "Required review is waiting for an attached exact head."
   defp readiness_failure_message("review_complete"), do: "Required review is not completed for the current exact head and requirement."
   defp readiness_failure_message("findings_documented"), do: "Investigation findings are missing."
@@ -936,45 +927,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
   defp review_requirement(context), do: Map.get(context, :review_requirement, context.work_package.review_requirement)
 
-  defp review_artifacts_missing?(context) do
-    merge_required?(context.work_package) and not current_review_artifacts_present?(context)
-  end
-
-  defp current_review_artifacts_present?(context) do
-    current_head_sha = latest_current_head_sha(context.progress_events)
-
-    case latest_review_package_event(context.progress_events, current_head_sha) do
-      %ProgressEvent{payload: payload} when is_map(payload) ->
-        artifacts = Map.get(payload, "artifacts")
-
-        is_list(artifacts) and artifacts != [] and
-          Enum.all?(artifacts, fn path ->
-            is_binary(path) and String.trim(path) != "" and
-              MetadataProjection.persisted_review_artifact?(context.artifacts, context.work_package.id, Map.get(payload, "head_sha"), path)
-          end)
-
-      _event ->
-        false
-    end
-  end
-
   defp investigation_findings_missing?(context), do: context.work_package.kind == "investigation" and context.findings == []
-
-  defp incomplete_plan?(context) do
-    plan_required?(context.work_package) and
-      (Enum.any?(context.plan_nodes, &(&1.status not in @complete_plan_statuses)) or missing_meaningful_plan?(context))
-  end
-
-  defp missing_meaningful_plan?(%{plan_nodes: []}), do: true
-  defp missing_meaningful_plan?(_context), do: false
-
-  defp acceptance_missing?(context) do
-    required_gate?(context.work_package, "package_acceptance") and not acceptance_recorded?(context)
-  end
-
-  defp tests_missing?(context) do
-    required_gate?(context.work_package, "focused_tests") and not tests_recorded?(context)
-  end
 
   defp active_blocker?(progress_events) do
     progress_events
@@ -988,13 +941,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
   defp blocker_id(%ProgressEvent{payload: payload, idempotency_key: idempotency_key, id: id}) do
     normalize_blocker_id(Map.get(payload || %{}, "blocker_id") || idempotency_key || id)
-  end
-
-  defp plan_required?(%WorkPackage{} = work_package) do
-    case policy_for(work_package) do
-      {:ok, policy} -> get_in(policy, [:constraints, :planning_depth]) == "package"
-      {:error, _reason} -> true
-    end
   end
 
   @spec required_gate?(WorkPackage.t(), String.t()) :: boolean()
@@ -1027,137 +973,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     end
   end
 
-  defp acceptance_recorded?(context) do
-    progress_events = progress_events_for_review_payload(context)
-
-    if merge_required?(context.work_package) do
-      review_package_acceptance_recorded?(progress_events, review_head_sha_for_readiness(context))
-    else
-      review_package_acceptance_recorded?(progress_events, review_head_sha_for_readiness(context)) or
-        current_branch_acceptance_recorded?(progress_events)
-    end
-  end
-
-  defp review_package_acceptance_recorded?(progress_events, readiness_head_sha) do
-    case latest_review_package_event(progress_events, readiness_head_sha) do
-      %ProgressEvent{payload: payload} when is_map(payload) -> Map.get(payload, "acceptance_criteria_met") == true
-      _event -> false
-    end
-  end
-
-  defp current_branch_acceptance_recorded?(progress_events) do
-    progress_events
-    |> Enum.reverse()
-    |> Enum.any?(fn
-      %ProgressEvent{payload: payload} = event when is_map(payload) ->
-        payload_type?(event, "review_package", "submit_review_package") and Map.get(payload, "acceptance_criteria_met") == true
-
-      %ProgressEvent{} ->
-        false
-    end)
-  end
-
-  defp tests_recorded?(context) do
-    if merge_required?(context.work_package) do
-      review_package_tests_recorded?(context.progress_events, review_head_sha_for_readiness(context))
-    else
-      progress_events = current_branch_progress_events(context.progress_events)
-
-      review_package_tests_recorded?(progress_events, review_head_sha_for_readiness(context)) or
-        progress_status_recorded?(progress_events, "tests_passed")
-    end
-  end
-
-  defp review_package_tests_recorded?(progress_events, readiness_head_sha) do
-    case latest_review_package_event(progress_events, readiness_head_sha) do
-      %ProgressEvent{payload: payload} when is_map(payload) ->
-        case Map.get(payload, "tests") do
-          tests when is_list(tests) -> Enum.any?(tests, &(is_binary(&1) and String.trim(&1) != ""))
-          _tests -> false
-        end
-
-      _event ->
-        false
-    end
-  end
-
-  defp progress_status_recorded?(progress_events, expected_status) do
-    latest_generic_progress_status(progress_events, [expected_status, failed_status(expected_status)]) ==
-      expected_status
-  end
-
-  defp current_branch_progress_events(progress_events) do
-    case latest_branch_event_index(progress_events) do
-      nil -> progress_events
-      index -> Enum.drop(progress_events, index + 1)
-    end
-  end
-
-  defp latest_branch_event_index(progress_events) do
-    progress_events
-    |> Enum.with_index()
-    |> Enum.reverse()
-    |> Enum.find_value(fn
-      {%ProgressEvent{} = event, index} ->
-        if payload_type?(event, "branch", "attach_branch"), do: index
-
-      _entry ->
-        nil
-    end)
-  end
-
-  defp latest_generic_progress_status(progress_events, statuses) do
-    statuses = MapSet.new(statuses)
-
-    progress_events
-    |> Enum.reverse()
-    |> Enum.find_value(fn
-      %ProgressEvent{status: status} = event ->
-        status = normalized_status(status)
-        if generic_append_progress_event?(event) and MapSet.member?(statuses, status), do: status
-
-      _event ->
-        nil
-    end)
-  end
-
-  defp generic_append_progress_event?(%ProgressEvent{payload: payload}) when is_map(payload), do: Map.get(payload, "source_tool") == nil
-  defp generic_append_progress_event?(%ProgressEvent{payload: nil}), do: true
-  defp generic_append_progress_event?(%ProgressEvent{}), do: false
-
-  defp failed_status("tests_passed"), do: "tests_failed"
-  defp failed_status(status), do: status <> "_failed"
-
-  defp latest_review_package_event(progress_events, readiness_head_sha) do
-    progress_events
-    |> current_head_review_package_events(readiness_head_sha)
-    |> List.last()
-  end
-
-  defp current_head_review_package_events(progress_events, readiness_head_sha) do
-    Enum.filter(progress_events, fn event ->
-      payload_type?(event, "review_package", "submit_review_package") and review_head_matches?(event.payload, readiness_head_sha)
-    end)
-  end
-
-  defp review_head_sha_for_readiness(context) do
-    current_head_sha = latest_current_head_sha(context.progress_events)
-
-    cond do
-      is_binary(current_head_sha) -> current_head_sha
-      merge_required?(context.work_package) -> nil
-      true -> :any_head
-    end
-  end
-
-  defp progress_events_for_review_payload(context) do
-    if merge_required?(context.work_package) do
-      context.progress_events
-    else
-      current_branch_progress_events(context.progress_events)
-    end
-  end
-
   defp status_label(status) when is_binary(status) do
     status
     |> String.replace("_", " ")
@@ -1169,14 +984,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   defp normalize_blocker_id(value) when is_binary(value), do: String.trim(value)
   defp normalize_blocker_id(value), do: to_string(value)
 
-  defp review_head_matches?(payload, :any_head) when is_map(payload), do: true
-  defp review_head_matches?(payload, readiness_head_sha), do: MetadataProjection.review_head_matches?(payload, readiness_head_sha)
   defp latest_current_head_sha(progress_events), do: MetadataProjection.latest_current_head_sha(progress_events)
   defp metadata_present?(progress_events, type, head_sha), do: MetadataProjection.metadata_present?(progress_events, type, head_sha)
   defp current_pr_state_present?(progress_events, head_sha), do: MetadataProjection.current_pr_state_present?(progress_events, head_sha)
-  defp normalized_status(status), do: MetadataProjection.normalized_status(status)
   defp chronological_progress_events(progress_events), do: MetadataProjection.chronological_progress_events(progress_events)
-  defp payload_type?(event, type, source_tool), do: MetadataProjection.payload_type?(event, type, source_tool)
   defp blocker_event?(event), do: BlockerProjection.blocker_event?(event)
   defp redacted_text(value), do: Sanitizer.redacted_text(value)
   defp timestamp(value), do: Sanitizer.timestamp(value)

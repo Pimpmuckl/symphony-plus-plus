@@ -28,7 +28,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerScopeExpansionTest do
                )
              )
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -75,14 +74,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerScopeExpansionTest do
     count_only_payload = response_progress_payload(repo, count_only_sync_response)
     assert count_only_payload["changed_files_available"] == false
     assert count_only_payload["changed_files_count"] == 7
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Ready review package",
-      "tests" => ["mix test"],
-      "artifacts" => ["review.txt"],
-      "head_sha" => head_sha,
-      "acceptance_criteria_met" => true
-    })
 
     ready_response =
       MCPHarness.request(

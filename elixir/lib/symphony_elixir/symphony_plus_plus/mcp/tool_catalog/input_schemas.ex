@@ -238,12 +238,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(
       metadata_properties(%{
         "summary" => string_schema(),
-        "tests" => nonempty_string_array_schema(),
-        "artifacts" => nonempty_string_array_schema(),
-        "head_sha" => string_schema(),
-        "acceptance_criteria_met" => boolean_schema()
+        "tests" => string_array_schema(),
+        "artifacts" => string_array_schema(),
+        "head_sha" => string_schema()
       }),
-      ["summary", "tests", "artifacts"]
+      ["summary"]
     )
   end
 
@@ -885,7 +884,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   defp work_package_contract_schema do
     schema(
       work_package_contract_properties(),
-      ["title", "goal", "allowed_file_globs", "acceptance_criteria", "validation_steps", "stop_conditions"]
+      ["title", "goal", "allowed_file_globs", "acceptance_criteria"]
     )
   end
 

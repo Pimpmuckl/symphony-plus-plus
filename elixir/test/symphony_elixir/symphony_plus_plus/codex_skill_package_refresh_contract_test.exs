@@ -47,9 +47,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshContractTest d
              "title",
              "goal",
              "allowed_file_globs",
-             "acceptance_criteria",
-             "validation_steps",
-             "stop_conditions"
+             "acceptance_criteria"
            ]
   end
 end

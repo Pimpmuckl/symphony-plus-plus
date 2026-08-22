@@ -1,6 +1,6 @@
 {
   "version": 7,
-  "mcp_contract_fingerprint": "17d168c3dabecfe05077c37fed9ece2f919d35f876c3bcdc0f511c9c4945fea3",
+  "mcp_contract_fingerprint": "547a7935cda2597959670615489e48bfc3e950100f6826e5d621fc6451cffbfe",
   "tool_sets": {
     "unbound_tools": [
       "sympp.health",

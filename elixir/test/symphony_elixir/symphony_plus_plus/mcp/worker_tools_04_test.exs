@@ -3,8 +3,6 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{MetadataProjection, OperationalProjection}
-
   defmodule RecordingProvider do
     @behaviour SymphonyElixir.SymphonyPlusPlus.GitHub.Client
 
@@ -32,22 +30,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     :ok
   end
 
-  test "review package submitted before PR attach does not satisfy later PR readiness", %{repo: repo} do
+  test "PR metadata must match the latest attached branch head", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-PRE-PR-REVIEW", kind: "mcp", status: "ci_waiting"))
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-PRE-PR-REVIEW/worker", "head_sha" => "pre-pr-head"})
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Pre-PR review",
-      "tests" => ["mix test"],
-      "artifacts" => ["pre-pr-review.txt"],
-      "head_sha" => "pre-pr-head",
-      "acceptance_criteria_met" => true
-    })
 
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/456", "head_sha" => "later-head"})
 
@@ -60,43 +49,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
 
     missing = get_in(ready_response, ["error", "data", "missing"])
     assert "pr_attached" in missing
-    refute "review_artifacts_attached" in missing
-  end
-
-  test "branch-only readiness rejects review evidence from an older branch head", %{repo: repo} do
-    assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-BRANCH-HEAD-REVIEW", kind: "quick_fix", status: "ci_waiting"))
-    append_done_plan(repo, package.id)
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-BRANCH-HEAD-REVIEW/worker", "head_sha" => "old-head"})
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Old head review",
-      "tests" => ["mix test"],
-      "artifacts" => ["old-head-review.txt"],
-      "head_sha" => "old-head"
-    })
-
-    attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-BRANCH-HEAD-REVIEW/worker", "head_sha" => "new-head"})
-
-    ready_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    missing = get_in(ready_response, ["error", "data", "missing"])
-    assert "tests_passed" in missing
   end
 
   test "submit_review_package replay remains idempotent after branch head changes", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-REVIEW-REPLAY", kind: "mcp", status: "ci_waiting"))
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -107,8 +65,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "summary" => "Review head A",
       "tests" => ["mix test"],
       "artifacts" => ["review-head-a.txt"],
-      "head_sha" => "head-a",
-      "acceptance_criteria_met" => true
+      "head_sha" => "head-a"
     }
 
     first_response = attach_tool(repo, session, "submit_review_package", review_arguments)
@@ -130,23 +87,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       )
 
     assert get_in(retry_response, ["result", "structuredContent", "progress_event", "id"]) == first_event_id
-
-    ready_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-after-replay", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    assert "acceptance_criteria_met" in get_in(ready_response, ["error", "data", "missing"])
-    assert "tests_passed" in get_in(ready_response, ["error", "data", "missing"])
   end
 
   test "submit_review_package exact replay survives worker grant renewal", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-REVIEW-REGRANT", kind: "mcp", status: "ci_waiting"))
 
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -157,8 +103,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "summary" => "Review head A",
       "tests" => ["mix test"],
       "artifacts" => ["review-head-a.txt"],
-      "head_sha" => "head-a",
-      "acceptance_criteria_met" => true
+      "head_sha" => "head-a"
     }
 
     first_response = attach_tool(repo, session, "submit_review_package", review_arguments)
@@ -454,10 +399,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
   end
 
   test "agent transcript attaches, zero-syncs, submits review, and exposes remaining gate", %{repo: repo} do
-    {package, session} =
+    {_package, session} =
       sync_package(repo, "SYMPP-PROVIDER-TRANSCRIPT", 47, "head-a", review_requirement: %{"type" => "review_suite", "args" => %{"mode" => "fast"}})
 
-    append_done_plan(repo, package.id)
     SymphonyElixir.FakeGitHubClient.put_response("nextide/repo", 47, provider_metadata(47, "head-a"))
     attach_tool(repo, session, "sync_pr", %{})
     assert_receive {:provider_fetch, "nextide/repo", 47}
@@ -466,8 +410,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "summary" => "Provider snapshot implementation",
       "tests" => ["mix test"],
       "artifacts" => ["review-suite-fast.txt"],
-      "head_sha" => "head-a",
-      "acceptance_criteria_met" => true
+      "head_sha" => "head-a"
     })
 
     ready =
@@ -480,7 +423,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     missing = get_in(ready, ["error", "data", "missing"])
     assert "review_complete" in missing
     refute "pr_attached" in missing
-    refute "tests_passed" in missing
   end
 
   test "attach_pr number requires unambiguous repository context for short package repos", %{repo: repo} do
@@ -612,11 +554,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     assert get_in(response, ["error", "data", "reason"]) == "ledger_unavailable"
   end
 
-  test "latest branch head supersedes earlier PR head for review evidence", %{repo: repo} do
+  test "submit_review_package accepts a full SHA matching the abbreviated branch head", %{repo: repo} do
     full_head_sha = "abcdef1234567890abcdef1234567890abcdef12"
     short_head_sha = "abcdef12"
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-PR-BRANCH-HEAD", kind: "quick_fix", status: "ci_waiting"))
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -654,26 +595,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
       "artifacts" => ["latest-branch-head-review.txt"],
       "head_sha" => full_head_sha
     })
-
-    assert MetadataProjection.review_head_matches?(%{"head_sha" => full_head_sha}, short_head_sha)
-    refute MetadataProjection.review_head_matches?(%{"head_sha" => full_head_sha}, "bbcdef12")
-    assert {:ok, state} = PlanningRepository.get_state(repo, package.id)
-    context = OperationalProjection.readiness_context(state, repo, 0, 0)
-    refute "review_artifacts_attached" in OperationalProjection.missing_readiness_evidence(context)
-
-    ready_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
   end
 
   test "latest branch head requires matching PR metadata for merge-gated readiness", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-CURRENT-HEAD-PR", kind: "mcp", status: "ci_waiting"))
-    append_done_plan(repo, package.id)
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
@@ -681,14 +606,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools04Test do
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-CURRENT-HEAD-PR/worker", "head_sha" => "head-a"})
     attach_tool(repo, session, "attach_pr", %{"url" => "https://github.com/example/repo/pull/790", "head_sha" => "head-a"})
     attach_tool(repo, session, "attach_branch", %{"branch" => "agent/SYMPP-CURRENT-HEAD-PR/worker", "head_sha" => "head-b"})
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Latest branch head review",
-      "tests" => ["mix test"],
-      "artifacts" => ["latest-branch-head-review.txt"],
-      "head_sha" => "head-b",
-      "acceptance_criteria_met" => true
-    })
 
     ready_response =
       MCPHarness.request(

@@ -64,35 +64,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     end
   end
 
-  test "policy templates expand into deterministic constraints and readiness requirements" do
+  test "policy templates expand into deterministic constraints and provider-backed gates" do
     assert {:ok, quick_fix} = Templates.expand("quick_fix")
     assert quick_fix.constraints.expiry_seconds == nil
     assert quick_fix.constraints.planning_depth == "brief"
     assert quick_fix.constraints.terminal_readiness_status == "ready_for_merge"
-    assert quick_fix.readiness_requirements == ["implementation_complete", "tests_passed"]
 
     assert {:ok, hotfix} = Templates.expand("hotfix")
     assert hotfix.constraints.expiry_seconds == nil
-    assert hotfix.required_gates == ["focused_tests", "human_merge"]
+    assert hotfix.required_gates == ["human_merge"]
     assert hotfix.constraints.terminal_readiness_status == "ready_for_merge"
 
     assert {:ok, docs} = Templates.expand("docs")
     assert docs.constraints.expiry_seconds == nil
     assert docs.constraints.planning_depth == "brief"
     assert docs.constraints.terminal_readiness_status == "ready_for_merge"
-    assert docs.readiness_requirements == ["tests_passed"]
 
     assert {:ok, phase_child} = Templates.expand("phase_child")
     assert phase_child.constraints.expiry_seconds == nil
     assert phase_child.constraints.planning_depth == "package"
     assert phase_child.constraints.terminal_readiness_status == "ready_for_architect_merge"
-    assert "architect_ready" in phase_child.readiness_requirements
 
     assert {:ok, investigation} = Templates.expand("investigation")
     assert investigation.constraints.expiry_seconds == nil
     assert investigation.constraints.planning_depth == "findings"
     assert investigation.required_gates == ["findings_documented"]
-    assert investigation.readiness_requirements == ["findings_complete"]
 
     for kind <- ["mcp", "skill", "hooks"] do
       assert {:ok, policy} = Templates.expand(kind)

@@ -18,7 +18,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
     child_id = create_child_work_package(repo, architect_session, "SYMPP-P7-003-APPROVAL-REPLAY-CHILD")
     worker_session = claim_phase_child_worker(repo, architect_session, child_id)
     assert_child_worker_active(repo, worker_session)
-    attach_phase_child_ready_evidence(repo, worker_session, child_id, "p7-003-approval-replay-head")
+    attach_phase_child_delivery_evidence(repo, worker_session, child_id, "p7-003-approval-replay-head")
 
     assert get_in(mcp_tool(repo, worker_session, "mark_ready", %{}), ["result", "structuredContent", "ready"]) == true
 
@@ -80,7 +80,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
 
     assert reactivated_child.status == "active"
 
-    attach_phase_child_ready_evidence(repo, worker_session, child_id, "p7-003-approval-replay-head-reworked")
+    attach_phase_child_delivery_evidence(repo, worker_session, child_id, "p7-003-approval-replay-head-reworked")
 
     assert get_in(mcp_tool(repo, worker_session, "mark_ready", %{}), ["result", "structuredContent", "work_package", "status"]) ==
              "ready_for_architect_merge"
@@ -127,7 +127,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
 
     assert active_again.status == "active"
 
-    attach_phase_child_ready_evidence(repo, worker_session, child_id, "p7-003-approval-replay-head-second-reworked")
+    attach_phase_child_delivery_evidence(repo, worker_session, child_id, "p7-003-approval-replay-head-second-reworked")
 
     assert get_in(mcp_tool(repo, worker_session, "mark_ready", %{}), ["result", "structuredContent", "work_package", "status"]) ==
              "ready_for_architect_merge"
@@ -150,46 +150,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
 
     assert get_in(stale_approval_replay_response, ["error", "code"]) == -32_602
     assert get_in(stale_approval_replay_response, ["error", "data", "reason"]) == "child_not_ready_for_architect"
-  end
-
-  test "phase architect cannot approve child readiness when gates are failed", %{repo: repo} do
-    {anchor, architect_session} =
-      create_architect_session(repo, "SYMPP-P7-003-FAILED-GATES-ANCHOR", [
-        "read:child_progress",
-        "read:child_findings",
-        "read:phase",
-        "approve:child_ready_state"
-      ])
-
-    assert {:ok, child} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-P7-003-FAILED-GATES-CHILD",
-                 kind: "phase_child",
-                 policy_template: "phase_child",
-                 phase_id: @architect_phase_id,
-                 parent_id: anchor.id,
-                 repo: anchor.repo,
-                 base_branch: anchor.base_branch,
-                 allowed_file_globs: anchor.allowed_file_globs,
-                 status: "ready_for_architect_merge"
-               )
-             )
-
-    response =
-      mcp_tool(repo, architect_session, "approve_child_ready_state", %{
-        "work_package_id" => child.id,
-        "rationale" => "should fail without evidence"
-      })
-
-    assert get_in(response, ["error", "code"]) == -32_602
-    assert get_in(response, ["error", "data", "reason"]) == "readiness_failed"
-    assert "plan_complete" in get_in(response, ["error", "data", "missing"])
-    assert "acceptance_criteria_met" in get_in(response, ["error", "data", "missing"])
-
-    assert {:ok, unchanged_child} = WorkPackageRepository.get(repo, child.id)
-    assert unchanged_child.status == "ready_for_architect_merge"
   end
 
   test "phase architect merge record validates merge artifact", %{repo: repo} do
@@ -380,5 +340,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.PhaseArchitectTools04Test do
 
     assert get_in(stale_mint_response, ["error", "code"]) == -32_003
     assert get_in(stale_mint_response, ["error", "data", "reason"]) == "outside_session_scope"
+  end
+
+  defp attach_phase_child_delivery_evidence(repo, worker_session, child_id, head_sha) do
+    attach_tool(repo, worker_session, "attach_branch", %{
+      "branch" => "agent/#{child_id}/worker",
+      "head_sha" => head_sha
+    })
+
+    attach_tool(repo, worker_session, "attach_pr", %{
+      "url" => "https://github.com/nextide/symphony-plus-plus/pull/7003",
+      "head_sha" => head_sha
+    })
   end
 end
