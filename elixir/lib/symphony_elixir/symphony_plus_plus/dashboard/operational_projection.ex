@@ -15,7 +15,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
-  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @stale_heartbeat_after_seconds 300
@@ -26,7 +25,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   @prepared_worktree_statuses ["prepared", "already_prepared"]
   @merged_package_statuses ["merged"]
   @closed_package_statuses ["closed", "abandoned", "skipped"]
-  @scope_guard_gate "scope_guard"
 
   @type repo :: module()
 
@@ -142,8 +140,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       blocker_indicator(readiness_context.work_package, blockers),
       stale_heartbeat_indicator(runtime),
       failed_run_indicator(runtime),
-      missing_readiness_indicator(readiness_context),
-      scope_drift_indicator(readiness_context)
+      missing_readiness_indicator(readiness_context)
     ]
   end
 
@@ -788,49 +785,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     alert_indicator("missing_readiness_evidence", "Missing readiness evidence", "info", false, "Package is not in a ready state", %{missing: [], reasons: []})
   end
 
-  defp scope_drift_indicator(%{work_package: %WorkPackage{} = work_package, progress_events: progress_events}) do
-    reasons = ScopeGuard.failure_reasons(work_package, progress_events)
-    drift_reasons = Enum.filter(reasons, &scope_drift_reason?/1)
-    blocked_reasons = Enum.filter(reasons, &scope_guard_blocked_reason?/1)
-    active_reasons = drift_reasons ++ blocked_reasons
-    active? = active_reasons != []
-
-    detail =
-      cond do
-        drift_reasons != [] -> missing_detail(Enum.map(drift_reasons, &Map.get(&1, "code", @scope_guard_gate)))
-        blocked_reasons != [] -> "Scope guard evidence unavailable: " <> missing_detail(Enum.map(blocked_reasons, &Map.get(&1, "code", @scope_guard_gate)))
-        reasons != [] -> "Scope guard is awaiting required PR metadata"
-        true -> "Scope guard satisfied or not required"
-      end
-
-    severity =
-      cond do
-        drift_reasons != [] -> "critical"
-        blocked_reasons != [] -> "warning"
-        true -> "info"
-      end
-
-    alert_indicator("scope_drift", "Scope guard", severity, active?, detail, %{
-      placeholder: false,
-      reasons: reasons
-    })
-  end
-
-  defp scope_drift_reason?(%{"code" => code}) do
-    code in [
-      "wrong_base_branch",
-      "out_of_scope_files",
-      "scope_constraints_missing",
-      "overbroad_scope_constraints",
-      "invalid_changed_file_paths"
-    ]
-  end
-
-  defp scope_drift_reason?(_reason), do: false
-
-  defp scope_guard_blocked_reason?(%{"code" => "changed_files_unavailable"}), do: true
-  defp scope_guard_blocked_reason?(_reason), do: false
-
   defp alert_indicator(type, label, severity, active, detail, extra \\ %{}) do
     Map.merge(%{type: type, label: label, severity: severity, active: active, detail: detail}, extra)
   end
@@ -850,13 +804,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       {merge_metadata_missing?(context, "branch"), "branch_attached"},
       {merge_metadata_missing?(context, "pr"), "pr_attached"},
       {current_pr_state_missing?(context), "current_pr_state"},
-      {ScopeGuard.missing?(context.work_package, context.progress_events), @scope_guard_gate},
       {review_current_head_missing?(context), "review_current_head"},
       {review_completion_missing?(context), "review_complete"},
       {investigation_findings_missing?(context), "findings_documented"}
     ]
     |> Enum.flat_map(fn
-      {true, @scope_guard_gate} -> ScopeGuard.failure_reasons(context.work_package, context.progress_events)
       {true, gate} -> [readiness_failure_reason(gate)]
       {false, _gate} -> []
     end)

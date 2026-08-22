@@ -728,30 +728,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert get_in(read_response, ["result", "structuredContent", "work_request", "status"]) == "draft"
   end
 
-  test "WorkRequest MCP tools fail closed when handoff WorkRequest file scope changes", %{repo: repo} do
-    handoff_work_request =
-      create_work_request!(repo,
-        id: "WR-MCP-WR-HANDOFF-FILE-SCOPE",
-        repo: "nextide/symphony-plus-plus",
-        base_branch: "main",
-        status: "ready_for_slicing"
-      )
-
-    {_anchor, session, _grant} =
-      create_work_request_handoff_architect_session(repo, handoff_work_request, [
-        "read:work_request"
-      ])
-
-    assert {:ok, _narrowed} =
-             WorkRequestRepository.update(repo, handoff_work_request.id, %{
-               "constraints" => %{"allowed_paths" => ["docs"], "requires_secret" => false}
-             })
-
-    read_response = mcp_tool(repo, session, "read_work_request", %{"work_request_id" => handoff_work_request.id})
-    assert get_in(read_response, ["error", "code"]) == -32_003
-    assert get_in(read_response, ["error", "data", "reason"]) == "outside_session_scope"
-  end
-
   test "architect WorkRequest mutation tools update scoped clarification state and redact responses", %{repo: repo} do
     {anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-MUTATE", [

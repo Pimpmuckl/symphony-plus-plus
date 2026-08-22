@@ -23,7 +23,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     "attach_pr",
     "sync_pr",
     "report_blocker",
-    "request_scope_expansion",
     "resolve_blocker",
     "submit_review_package",
     "complete_review"
@@ -104,16 +103,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     matching_progress_event(progress_events, idempotency_key)
   end
 
-  @spec request_scope_expansion_payload(repo(), Session.t()) :: {:ok, map()} | {:error, term()}
-  def request_scope_expansion_payload(_repo, %Session{}) do
-    {:ok,
-     %{
-       "type" => "scope_expansion_request",
-       "source_tool" => "request_scope_expansion",
-       "approved" => false
-     }}
-  end
-
   @spec metadata_attrs(Session.t(), map(), String.t(), String.t(), map()) ::
           {:ok, String.t(), map()} | {:tool_error, term()}
   def metadata_attrs(%Session{} = session, arguments, tool, status, payload) do
@@ -173,12 +162,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
 
   def merge_payload(_tool, caller_payload, tool_payload) when tool_payload == %{} do
     Map.drop(caller_payload, ["source_tool"])
-  end
-
-  def merge_payload(_tool, caller_payload, %{"type" => "scope_expansion_request", "source_tool" => "request_scope_expansion"} = tool_payload) do
-    caller_payload
-    |> Map.drop(["source_tool"])
-    |> Map.merge(tool_payload)
   end
 
   def merge_payload(_tool, caller_payload, tool_payload), do: Map.merge(caller_payload, tool_payload)
@@ -349,29 +332,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
   defp validate_metadata_caller_payload("complete_review", _caller_payload), do: {:tool_error, "unexpected_payload"}
   defp validate_metadata_caller_payload(_tool, _caller_payload), do: :ok
 
-  defp drop_protected_append_progress_payload(%{"type" => type} = caller_payload) when type in ["scope_expansion_request", "scope_expansion_approval"] do
-    Map.drop(caller_payload, [
-      "type",
-      "source_tool",
-      "approved",
-      "requested_file_globs",
-      "approved_file_globs",
-      "allowed_file_globs",
-      "previous_allowed_file_globs",
-      "request_id"
-    ])
-  end
-
   defp drop_protected_append_progress_payload(caller_payload) do
-    Map.drop(caller_payload, [
-      "source_tool",
-      "approved",
-      "requested_file_globs",
-      "approved_file_globs",
-      "allowed_file_globs",
-      "previous_allowed_file_globs",
-      "request_id"
-    ])
+    Map.delete(caller_payload, "source_tool")
   end
 
   defp required_argument(arguments, key) do

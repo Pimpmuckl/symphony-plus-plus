@@ -13,7 +13,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.CompletionRecovery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RepoScope
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @completion_blocking_statuses ["human_info_needed"]
@@ -1093,8 +1092,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
     with :ok <- validate_executable_work_package_kind(attrs),
          :ok <- WorkPackageDeliveryScope.validate(repo, work_request, attrs),
-         :ok <- ScopeConstraints.validate_allowed_file_globs(work_request, Map.get(attrs, "allowed_file_globs", [])),
-         :ok <- validate_docs_work_package_scope(attrs),
          :ok <- validate_product_tree_node(repo, work_request.id, Map.get(attrs, "product_tree_node_id")) do
       {:ok, attrs}
     end
@@ -1107,12 +1104,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       attrs
     end
   end
-
-  defp validate_docs_work_package_scope(%{"kind" => "docs", "allowed_file_globs" => globs}) do
-    ScopeConstraints.validate_docs_allowed_file_globs(globs)
-  end
-
-  defp validate_docs_work_package_scope(_attrs), do: :ok
 
   defp validate_executable_work_package_kind(%{"kind" => kind}) do
     if kind in WorkPackage.executable_kinds(), do: :ok, else: {:error, :invalid_work_package}
@@ -1183,9 +1174,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     with :ok <- validate_executable_work_package_kind(effective_contract),
          :ok <- validate_product_tree_node(repo, work_package.work_request_id, Map.get(attrs, "product_tree_node_id")),
          {:ok, %WorkRequest{} = work_request} <- get(repo, work_package.work_request_id),
-         :ok <- WorkPackageDeliveryScope.validate(repo, work_request, effective_contract),
-         :ok <- ScopeConstraints.validate_allowed_file_globs(work_request, Map.get(effective_contract, "allowed_file_globs", [])),
-         :ok <- validate_docs_work_package_scope(effective_contract) do
+         :ok <- WorkPackageDeliveryScope.validate(repo, work_request, effective_contract) do
       work_package
       |> WorkPackage.update_changeset(attrs)
       |> Ecto.Changeset.optimistic_lock(:status, & &1)

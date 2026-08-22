@@ -70,7 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProductTreeRevisionIdempotencyTest
       "active",
       ["planned"],
       package.contract_revision,
-      "request_scope_expansion"
+      "create_successor"
     )
 
     repo.update!(Ecto.Changeset.change(package, status: "closed"))

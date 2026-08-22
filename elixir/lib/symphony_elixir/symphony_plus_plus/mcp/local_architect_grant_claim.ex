@@ -13,7 +13,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalArchitectGrantClaim do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.CompletionRecovery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @type recovered_grant :: %{
@@ -142,7 +141,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalArchitectGrantClaim do
   defp recoverable_work_request?(%WorkRequest{} = work_request, %WorkPackage{} = anchor, claim) do
     recoverable_work_request_status?(work_request) and
       recoverable_work_request_identity?(work_request, anchor, claim) and
-      work_request_file_scope_matches?(work_request, anchor) and
       work_request_repo_scope_matches?(work_request, claim)
   end
 
@@ -165,84 +163,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalArchitectGrantClaim do
       local_path_remotes?: true
     )
   end
-
-  defp work_request_file_scope_matches?(%WorkRequest{} = work_request, %WorkPackage{} = anchor) do
-    case work_request_allowed_file_globs(work_request) do
-      {:ok, allowed_file_globs} -> normalized_strings(anchor.allowed_file_globs || []) == allowed_file_globs
-      {:error, _reason} -> false
-    end
-  end
-
-  defp work_request_allowed_file_globs(%WorkRequest{constraints: constraints}) when is_map(constraints) do
-    case work_request_constraint_value(constraints, :allowed_paths) do
-      :missing -> validate_allowed_file_globs(constraints, [])
-      values when is_list(values) -> normalize_allowed_file_globs(constraints, values)
-      _values -> {:error, :invalid_scope}
-    end
-  end
-
-  defp work_request_allowed_file_globs(%WorkRequest{}), do: {:ok, []}
-
-  defp work_request_constraint_value(constraints, key) when is_map(constraints) do
-    string_key = Atom.to_string(key)
-
-    cond do
-      Map.has_key?(constraints, string_key) -> Map.fetch!(constraints, string_key)
-      Map.has_key?(constraints, key) -> Map.fetch!(constraints, key)
-      true -> :missing
-    end
-  end
-
-  defp normalize_allowed_file_globs(constraints, values) do
-    case normalized_nonblank_strings(values) do
-      {:ok, allowed_paths} ->
-        allowed_file_globs = allowed_paths_to_file_globs(allowed_paths)
-        validate_allowed_file_globs(constraints, allowed_file_globs)
-
-      {:error, :invalid_scope} ->
-        {:error, :invalid_scope}
-    end
-  end
-
-  defp allowed_paths_to_file_globs(allowed_paths) do
-    allowed_paths
-    |> Enum.flat_map(&allowed_path_to_file_globs/1)
-    |> normalized_strings()
-  end
-
-  defp allowed_path_to_file_globs(allowed_path) do
-    if String.contains?(allowed_path, ["*", "?", "["]) do
-      [allowed_path]
-    else
-      [allowed_path, "#{allowed_path}/**"]
-    end
-  end
-
-  defp validate_allowed_file_globs(constraints, allowed_file_globs) do
-    case ScopeConstraints.validate_allowed_file_globs(constraints, allowed_file_globs) do
-      :ok -> {:ok, allowed_file_globs}
-      {:error, _errors} -> {:error, :invalid_scope}
-    end
-  end
-
-  defp normalized_nonblank_strings(values) when is_list(values) do
-    if Enum.all?(values, &(is_binary(&1) and String.trim(&1) != "")) do
-      {:ok, normalized_strings(values)}
-    else
-      {:error, :invalid_scope}
-    end
-  end
-
-  defp normalized_nonblank_strings(_values), do: {:error, :invalid_scope}
-
-  defp normalized_strings(values) when is_list(values) do
-    values
-    |> Enum.map(&String.trim/1)
-    |> Enum.uniq()
-    |> Enum.sort()
-  end
-
-  defp normalized_strings(_values), do: []
 
   defp replace_work_request_scope(repo, %AccessGrant{} = grant, work_request_id) when is_binary(work_request_id) do
     repo.transaction(fn ->

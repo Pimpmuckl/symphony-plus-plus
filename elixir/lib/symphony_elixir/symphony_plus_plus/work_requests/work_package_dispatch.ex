@@ -9,7 +9,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDeliveryScope
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @mcp_worker_skill "symphony-plus-plus-mcp:symphony-worker"
@@ -96,17 +95,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
 
   defp validate_contract(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package) do
     with :ok <- require_supported_branch_pattern(work_package.branch_pattern),
-         :ok <- WorkPackageDeliveryScope.validate(repo, work_request, work_package),
-         :ok <- validate_scope_constraints(work_request, work_package) do
-      validate_docs_scope_constraints(work_package)
-    end
-  end
-
-  defp validate_scope_constraints(work_request, work_package) do
-    case ScopeConstraints.validate_allowed_file_globs(work_request, work_package) do
-      :ok -> :ok
-      {:error, errors} -> {:error, {:work_package_scope_violation, errors}}
-    end
+         do: WorkPackageDeliveryScope.validate(repo, work_request, work_package)
   end
 
   defp require_supported_branch_pattern(branch_pattern) do
@@ -115,15 +104,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
       {:error, reason} -> {:error, {:unsupported_branch_pattern, branch_pattern, reason}}
     end
   end
-
-  defp validate_docs_scope_constraints(%WorkPackage{kind: "docs", allowed_file_globs: globs}) do
-    case ScopeConstraints.validate_docs_allowed_file_globs(globs || []) do
-      :ok -> :ok
-      {:error, errors} -> {:error, {:work_package_scope_violation, errors}}
-    end
-  end
-
-  defp validate_docs_scope_constraints(%WorkPackage{}), do: :ok
 
   defp worker_bootstrap(%WorkRequest{} = work_request, %WorkPackage{} = work_package, handoff_opts) do
     claimed_by = Keyword.get(handoff_opts, :claimed_by)

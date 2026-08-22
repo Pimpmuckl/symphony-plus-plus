@@ -70,7 +70,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageCase do
         "list_comments",
         "resolve_comment",
         "read_guidance_request",
-        "request_scope_expansion",
         "attach_branch",
         "attach_pr",
         "sync_pr",

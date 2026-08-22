@@ -56,7 +56,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     "report_blocker",
     "resolve_blocker",
     "abandon",
-    "request_scope_expansion",
     "attach_branch",
     "attach_pr",
     "sync_pr",
@@ -164,16 +163,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
       {:tool_error, reason} -> invalid_params_error("abandon", reason)
       {:error, _code, _message, _data} = error -> error
       {:error, reason} -> worker_error(reason, "abandon")
-    end
-  end
-
-  def call("request_scope_expansion", %Config{} = config, session, arguments) do
-    with {:ok, session} <- Auth.require_session(session, config.repo),
-         :ok <- require_worker_assignment(session.assignment),
-         {:ok, payload} <- ProgressEvents.request_scope_expansion_payload(config.repo, session) do
-      append_scoped_progress(config.repo, session, arguments, "request_scope_expansion", payload)
-    else
-      {:error, reason} -> worker_error(reason, "request_scope_expansion")
     end
   end
 

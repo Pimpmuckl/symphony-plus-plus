@@ -359,38 +359,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     assert get_in(missing_slice_response, ["error", "code"]) == -32_004
     assert get_in(missing_slice_response, ["error", "data", "reason"]) == "not_found"
 
-    assert {:ok, invalid_glob_slice} =
-             CanonicalWorkPackageFixtures.add_work_package(
-               repo,
-               in_scope.id,
-               work_request_work_package_attrs(
-                 id: "WRS-MCP-WR-DISPATCH-GLOBSTAR",
-                 base_branch: anchor.base_branch,
-                 allowed_file_globs: ["scripts/**deploy**"]
-               )
-             )
-
-    assert {:ok, approved_invalid_glob_slice} =
-             CanonicalWorkPackageFixtures.approve_work_package(repo, in_scope.id, invalid_glob_slice.id, "planned")
-
-    counts_before_invalid_glob = {repo.aggregate(WorkPackage, :count), repo.aggregate(AccessGrant, :count)}
-
-    invalid_glob_response =
-      mcp_tool(repo, session, "dispatch_work_package", %{
-        "work_request_id" => in_scope.id,
-        "work_package_id" => approved_invalid_glob_slice.id,
-        "claimed_by" => "worker-dispatch-invalid-glob"
-      })
-
-    assert get_in(invalid_glob_response, ["error", "code"]) == -32_602
-    assert get_in(invalid_glob_response, ["error", "data", "reason"]) == "work_package_scope_violation"
-
-    assert get_in(invalid_glob_response, ["error", "data", "validation_errors"]) == [
-             %{"field" => "allowed_file_globs", "value" => "scripts/**deploy**", "reason" => "unsupported_globstar"}
-           ]
-
-    assert {repo.aggregate(WorkPackage, :count), repo.aggregate(AccessGrant, :count)} == counts_before_invalid_glob
-
     assert {:ok, live_database_slice} =
              CanonicalWorkPackageFixtures.add_work_package(
                repo,

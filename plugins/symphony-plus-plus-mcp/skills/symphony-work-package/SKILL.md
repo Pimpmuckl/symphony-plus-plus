@@ -77,7 +77,6 @@ Keep S++ current as the work changes:
 - `abandon(reason)` only when this worker must terminally abandon an active or
   blocked assignment.
   Active blocker facts remain preserved in the closeout audit trail.
-- `request_scope_expansion` when the assignment must grow.
 - Use comments for ordinary parent-agent coordination. Worker blocker tools
   record execution blockers; they do not create or resolve architect-owned
   human blockers or guidance.
@@ -131,7 +130,7 @@ S++ explicitly gives scoped context.
 
 Before `mark_ready()`:
 
-- Provider-backed branch, PR, current-head state, scope, blockers,
+- Provider-backed branch, PR, current-head state, blockers,
   investigation findings, and any required review completion are current.
 - Do not add task-plan, review-package, or progress calls only to restate facts
   already proved elsewhere.

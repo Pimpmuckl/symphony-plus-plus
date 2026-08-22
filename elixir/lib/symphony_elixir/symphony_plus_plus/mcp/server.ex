@@ -1,8 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @moduledoc false
 
-  import Ecto.Query, only: [from: 2]
-
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
       architect_tool_arguments: 2,
@@ -22,15 +20,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads,
     only: [
       comment_payload: 1,
-      json_safe_payload: 1,
-      work_package_payload: 1
+      json_safe_payload: 1
     ]
 
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Comment
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
-  alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     ArchitectDeliveryTools,
@@ -47,7 +43,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     LocalAssignmentClaims,
     LocalTrustedTools,
     Payloads,
-    ProgressEvents,
     Repository,
     Response,
     Session,
@@ -57,19 +52,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     ToolCatalog,
     ToolResult,
     WorkerTools,
-    WorkRequestPayloads,
-    WorkRequestScope
+    WorkRequestPayloads
   }
 
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
-  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -828,21 +815,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp require_worker_assignment(%{grant_role: "worker"}), do: :ok
   defp require_worker_assignment(_assignment), do: {:error, :worker_grant_required}
 
-  defp require_architect_assignment(%{grant_role: "architect"}), do: :ok
-  defp require_architect_assignment(_assignment), do: {:error, :architect_grant_required}
-
   defp require_assignment_introspection(%{grant_role: role}) when role in ["worker", "architect"], do: :ok
   defp require_assignment_introspection(_assignment), do: {:error, :unsupported_grant_role}
-
-  defp require_architect_capability(%{capabilities: capabilities}, capability) when is_list(capabilities) do
-    if capability in capabilities do
-      :ok
-    else
-      {:error, :insufficient_capability}
-    end
-  end
-
-  defp require_architect_capability(_assignment, _capability), do: {:error, :insufficient_capability}
 
   defp prepare_worker_tool_call(%__MODULE__{} = server, params, name) do
     with :ok <- require_tool_arguments_object(params, name),
@@ -1233,30 +1207,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     ArchitectProductTreeTools.call(name, config, session, arguments)
   end
 
-  defp architect_tool("approve_scope_expansion", arguments, %__MODULE__{config: config, session: session}) do
-    with {:ok, session} <- approve_scope_expansion_session(config.repo, session),
-         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, work_package, work_request} <- approve_scope_expansion_work_package(config.repo, session, work_package_id),
-         {:ok, allowed_file_globs} <- required_string_list(arguments, "allowed_file_globs"),
-         :ok <- require_scope_expansion_work_request_scope(work_request, allowed_file_globs),
-         {:ok, rationale} <- required_argument(arguments, "rationale"),
-         {:ok, result} <-
-           approve_scope_expansion_transaction(
-             config.repo,
-             session,
-             work_package,
-             work_request,
-             arguments,
-             allowed_file_globs,
-             rationale
-           ) do
-      {:ok, ToolResult.tool_result(result)}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "approve_scope_expansion", "reason" => reason}}
-      {:error, reason} -> architect_error(reason, "approve_scope_expansion")
-    end
-  end
-
   defp optional_put(attrs, _key, nil), do: attrs
   defp optional_put(attrs, key, value), do: Map.put(attrs, key, value)
 
@@ -1299,376 +1249,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp approve_scope_expansion_transaction(
-         repo,
-         %Session{} = session,
-         %WorkPackage{} = work_package,
-         work_request,
-         arguments,
-         allowed_file_globs,
-         rationale
-       ) do
-    repo.transaction(fn ->
-      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
-           :ok <- lock_work_package(repo, work_package.id),
-           {:ok, state} <- PlanningRepository.get_state(repo, work_package.id),
-           {:ok, result} <-
-             approve_scope_expansion_result(
-               repo,
-               session,
-               state.work_package,
-               work_request,
-               arguments,
-               allowed_file_globs,
-               rationale
-             ) do
-        result
-      else
-        {:tool_error, reason} -> repo.rollback({:tool_error, reason})
-        {:error, reason} -> repo.rollback({:error, reason})
-      end
-    end)
-    |> case do
-      {:ok, result} -> {:ok, result}
-      {:error, {:tool_error, reason}} -> {:tool_error, reason}
-      {:error, {:error, reason}} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
-    end
-    |> DashboardPubSub.broadcast_changed_on_success()
-  end
-
-  defp approve_scope_expansion_result(
-         repo,
-         %Session{} = session,
-         %WorkPackage{} = work_package,
-         work_request,
-         arguments,
-         allowed_file_globs,
-         rationale
-       ) do
-    case existing_scope_expansion_approval(
-           repo,
-           session,
-           work_package.id,
-           arguments,
-           allowed_file_globs,
-           rationale
-         ) do
-      {:ok, event} ->
-        {:ok, scope_expansion_approval_result(work_package, event)}
-
-      {:error, :not_found} ->
-        with :ok <- reject_ready_work_package(work_package),
-             {:ok, effective_globs} <- ScopeGuard.approve_file_globs(work_package, allowed_file_globs),
-             {:ok, effective_globs} <- scope_expansion_effective_work_request_globs(work_request, effective_globs),
-             {:ok, updated_work_package} <-
-               WorkPackageRepository.update(repo, work_package.id, %{"allowed_file_globs" => effective_globs}),
-             {:ok, event} <-
-               PlanningRepository.append_audit_progress_event_for_work_package(
-                 repo,
-                 session.assignment,
-                 work_package.id,
-                 scope_expansion_approval_attrs(
-                   work_package,
-                   updated_work_package,
-                   arguments,
-                   allowed_file_globs,
-                   rationale
-                 )
-               ) do
-          {:ok, scope_expansion_approval_result(updated_work_package, event)}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp existing_scope_expansion_approval(
-         repo,
-         %Session{} = session,
-         work_package_id,
-         arguments,
-         allowed_file_globs,
-         rationale
-       ) do
-    idempotency_key =
-      scope_expansion_approval_idempotency_key(
-        work_package_id,
-        arguments,
-        allowed_file_globs,
-        rationale
-      )
-
-    case PlanningRepository.get_progress_event_by_idempotency_key(
-           repo,
-           work_package_id,
-           idempotency_key,
-           session.assignment.grant_id
-         ) do
-      {:ok, event} ->
-        validate_scope_expansion_approval_event(event, session, arguments, allowed_file_globs, rationale)
-
-      {:error, :not_found} ->
-        with {:ok, event} <- ProgressEvents.existing_for_work_package(repo, work_package_id, idempotency_key) do
-          validate_scope_expansion_approval_event(event, session, arguments, allowed_file_globs, rationale)
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp validate_scope_expansion_approval_event(
-         %ProgressEvent{} = event,
-         %Session{} = session,
-         arguments,
-         allowed_file_globs,
-         rationale
-       ) do
-    with :ok <- scope_expansion_approval_actor_matches?(event, session),
-         :ok <- scope_expansion_approval_payload_matches?(event, arguments, allowed_file_globs, rationale) do
-      {:ok, event}
-    end
-  end
-
-  defp scope_expansion_approval_actor_matches?(%ProgressEvent{actor_id: event_actor_id}, %Session{} = session) do
-    current_actor_id = session.assignment.claimed_by
-
-    cond do
-      filled_string?(event_actor_id) and filled_string?(current_actor_id) ->
-        if String.trim(event_actor_id) == String.trim(current_actor_id), do: :ok, else: {:error, :idempotency_conflict}
-
-      filled_string?(event_actor_id) ->
-        {:error, :idempotency_conflict}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp scope_expansion_approval_payload_matches?(
-         %ProgressEvent{summary: summary, body: body, status: status, payload: payload},
-         arguments,
-         allowed_file_globs,
-         rationale
-       )
-       when is_map(payload) do
-    expected_request_id = optional_trimmed_string(arguments, "request_id")
-
-    if summary == "Scope expansion approved" and
-         body == rationale and
-         status == "scope_expansion_approved" and
-         Map.get(payload, "type") == "scope_expansion_approval" and
-         Map.get(payload, "source_tool") == "approve_scope_expansion" and
-         Map.get(payload, "approved") == true and
-         Map.get(payload, "request_id") == expected_request_id and
-         Map.get(payload, "approved_file_globs") == allowed_file_globs do
-      :ok
-    else
-      {:error, :idempotency_conflict}
-    end
-  end
-
-  defp scope_expansion_approval_payload_matches?(%ProgressEvent{}, _arguments, _allowed_file_globs, _rationale) do
-    {:error, :idempotency_conflict}
-  end
-
-  defp scope_expansion_approval_result(%WorkPackage{} = work_package, %ProgressEvent{} = event) do
-    %{
-      "work_package" => work_package_payload(work_package),
-      "allowed_file_globs" => Map.get(event.payload || %{}, "allowed_file_globs", work_package.allowed_file_globs),
-      "progress_event" => ProgressEvents.payload(event)
-    }
-  end
-
-  defp scope_expansion_approval_attrs(%WorkPackage{} = previous_work_package, %WorkPackage{} = updated_work_package, arguments, allowed_file_globs, rationale) do
-    request_id = optional_trimmed_string(arguments, "request_id")
-
-    payload =
-      %{
-        "type" => "scope_expansion_approval",
-        "source_tool" => "approve_scope_expansion",
-        "approved" => true,
-        "request_id" => request_id,
-        "approved_file_globs" => allowed_file_globs,
-        "previous_allowed_file_globs" => previous_work_package.allowed_file_globs || [],
-        "allowed_file_globs" => updated_work_package.allowed_file_globs || []
-      }
-      |> Map.reject(fn {_key, value} -> is_nil(value) end)
-
-    %{
-      "summary" => "Scope expansion approved",
-      "body" => rationale,
-      "status" => "scope_expansion_approved",
-      "idempotency_key" =>
-        scope_expansion_approval_idempotency_key(
-          previous_work_package.id,
-          arguments,
-          allowed_file_globs,
-          rationale
-        ),
-      "payload" => payload
-    }
-  end
-
-  defp scope_expansion_approval_idempotency_key(
-         work_package_id,
-         arguments,
-         allowed_file_globs,
-         rationale
-       ) do
-    request_id = optional_trimmed_string(arguments, "request_id")
-
-    %{
-      "type" => "scope_expansion_approval",
-      "source_tool" => "approve_scope_expansion",
-      "work_package_id" => work_package_id,
-      "request_id" => request_id,
-      "approved_file_globs" => allowed_file_globs,
-      "rationale" => rationale
-    }
-    |> Map.reject(fn {_key, value} -> is_nil(value) end)
-    |> ProgressEvents.metadata_idempotency_key()
-  end
-
-  defp optional_trimmed_string(arguments, key) do
-    case Map.get(arguments, key) do
-      value when is_binary(value) ->
-        value = String.trim(value)
-        if value == "", do: nil, else: value
-
-      _value ->
-        nil
-    end
-  end
-
-  defp approve_scope_expansion_session(repo, session) do
-    with {:ok, session} <- Auth.require_session(session, repo),
-         :ok <- require_architect_assignment(session.assignment),
-         :ok <- require_scope_expansion_approval_authority(repo, session) do
-      {:ok, session}
-    end
-  end
-
-  defp require_scope_expansion_approval_authority(repo, %Session{} = session) do
-    case require_architect_capabilities(session.assignment, ["approve:scope_expansion"]) do
-      :ok -> :ok
-      {:error, :insufficient_capability} -> require_work_request_handoff_write_authority(repo, session)
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp require_work_request_handoff_write_authority(repo, %Session{} = session) do
-    with :ok <- require_architect_capabilities(session.assignment, ["write:work_request"]),
-         {:ok, grant} <- WorkRequestScope.require_live_architect_grant(repo, session),
-         {:ok, true} <- ArchitectHandoff.handoff_phase_grant?(repo, grant) do
-      :ok
-    else
-      {:ok, false} -> {:error, :insufficient_capability}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp require_architect_capabilities(assignment, capabilities) do
-    Enum.reduce_while(capabilities, :ok, fn capability, :ok ->
-      case require_architect_capability(assignment, capability) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp approve_scope_expansion_work_package(repo, %Session{} = session, work_package_id) do
-    if Session.work_package_id(session) == work_package_id do
-      with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
-           {:ok, work_request} <- optional_scope_expansion_work_request(repo, work_package),
-           :ok <- require_current_scope_expansion_work_request_scope(session, work_request) do
-        {:ok, work_package, work_request}
-      end
-    else
-      approve_scope_expansion_scoped_work_package(repo, session, work_package_id)
-    end
-  end
-
-  defp approve_scope_expansion_scoped_work_package(repo, %Session{} = session, work_package_id) do
-    with :ok <- require_scope_expansion_handoff_package_scope(repo, session),
-         {:ok, work_package, _scope} <-
-           ArchitectWorkRequestTools.scoped_worktree_work_package(repo, session, work_package_id),
-         {:ok, work_request} <- optional_scope_expansion_work_request(repo, work_package) do
-      {:ok, work_package, work_request}
-    else
-      {:error, :not_found} -> {:error, :phase_scope_not_available}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp require_scope_expansion_handoff_package_scope(repo, %Session{} = session) do
-    with {:ok, grant} <- WorkRequestScope.require_live_architect_grant(repo, session),
-         {:ok, true} <- ArchitectHandoff.handoff_phase_grant?(repo, grant),
-         :ok <- require_architect_capabilities(session.assignment, ["write:work_request"]) do
-      :ok
-    else
-      {:ok, false} -> {:error, :phase_scope_not_available}
-      {:error, :insufficient_capability} -> {:error, :phase_scope_not_available}
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp optional_scope_expansion_work_request(_repo, %WorkPackage{work_request_id: nil}), do: {:ok, nil}
-
-  defp optional_scope_expansion_work_request(repo, %WorkPackage{work_request_id: work_request_id}) do
-    case repo.get(WorkRequest, work_request_id) do
-      %WorkRequest{} = work_request -> {:ok, work_request}
-      nil -> {:error, :not_found}
-    end
-  end
-
-  defp require_current_scope_expansion_work_request_scope(%Session{}, %WorkRequest{}), do: :ok
-
-  defp require_current_scope_expansion_work_request_scope(%Session{} = session, nil) do
-    case require_architect_capability(session.assignment, "approve:scope_expansion") do
-      :ok -> :ok
-      {:error, :insufficient_capability} -> {:error, :phase_scope_not_available}
-    end
-  end
-
-  defp require_scope_expansion_work_request_scope(nil, _allowed_file_globs), do: :ok
-
-  defp require_scope_expansion_work_request_scope(%WorkRequest{} = work_request, allowed_file_globs) do
-    case ScopeConstraints.validate_allowed_file_globs(work_request, allowed_file_globs) do
-      :ok -> :ok
-      {:error, _errors} -> {:tool_error, "scope_expansion_outside_work_request"}
-    end
-  end
-
-  defp scope_expansion_effective_work_request_globs(nil, effective_globs), do: {:ok, effective_globs}
-
-  defp scope_expansion_effective_work_request_globs(%WorkRequest{} = work_request, effective_globs) do
-    scoped_globs =
-      Enum.filter(effective_globs, fn glob ->
-        ScopeConstraints.validate_allowed_file_globs(work_request, [glob]) == :ok
-      end)
-
-    {:ok, scoped_globs}
-  end
-
-  defp lock_work_package(repo, work_package_id) do
-    query = from(work_package in WorkPackage, where: work_package.id == ^work_package_id)
-
-    case repo.update_all(query, set: [id: work_package_id]) do
-      {1, _rows} -> :ok
-      {0, _rows} -> {:error, :not_found}
-    end
-  end
-
-  defp reject_ready_work_package(%WorkPackage{status: "ready_for_merge"}),
-    do: {:tool_error, "already_ready"}
-
-  defp reject_ready_work_package(%WorkPackage{}), do: :ok
-
-  defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
-
   defp drop_nil_values(map), do: Map.reject(map, fn {_key, value} -> is_nil(value) end)
 
   defp create_work_request_error(%Ecto.Changeset{} = changeset) do
@@ -1708,67 +1288,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
   defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
-  defp architect_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
-  defp architect_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
 
   defp architect_error(:architect_grant_required, resource) do
     {:error, code, message, data} = auth_error({:unauthorized, :architect_grant_required}, resource)
     {:error, code, message, Map.put(data, "recovery", %{"next_action" => "return_to_architect", "next_owner" => "architect"})}
   end
 
-  defp architect_error(:insufficient_capability, resource), do: auth_error({:unauthorized, :insufficient_capability}, resource)
   defp architect_error({:authorization_policy_denied, %Decision{} = decision}, resource), do: MCPError.from_decision(decision, resource)
-  defp architect_error({:authorization_policy_denied, code, message, data}, _resource), do: {:error, code, message, data}
-  defp architect_error(:phase_scope_not_available, resource), do: auth_error(:forbidden, resource)
-  defp architect_error({:phase_scope_not_available, _missing_evidence}, resource), do: auth_error(:forbidden, resource)
-  defp architect_error(:ambiguous_phase_scope, resource), do: auth_error(:forbidden, resource)
-  defp architect_error({:work_request_terminal, _terminal_state}, resource), do: auth_error(:forbidden, resource)
-  defp architect_error(:forbidden, resource), do: auth_error(:forbidden, resource)
   defp architect_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
   defp architect_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
-  defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
-
-  defp architect_error({:work_package_scope_violation, errors}, tool) do
-    invalid_params_error(tool, {:work_package_scope_violation, errors})
-  end
-
-  defp architect_error(:open_questions, tool) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "open_questions",
-       "message" => "Answer or close all open clarification questions before adding WorkPackages."
-     }}
-  end
-
-  defp architect_error(reason, tool) when reason in [:invalid_repo_root, :missing_repo_root] do
-    invalid_params_error(tool, reason)
-  end
-
-  defp architect_error(reason, tool) when reason in [:invalid_target_repo_root, :missing_target_repo_root] do
-    invalid_params_error(tool, reason)
-  end
-
-  defp architect_error({:git_failed, status, details}, tool) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "git_failed",
-       "git" => details |> Map.put(:status, status) |> json_safe_payload() |> Redactor.redact_output()
-     }}
-  end
 
   defp architect_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
-
-  defp invalid_params_error(tool, {:work_package_scope_violation, errors}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "work_package_scope_violation",
-       "validation_errors" => scope_validation_details(errors)
-     }}
-  end
 
   defp invalid_params_error(tool, reason) when reason in [:missing_repo_root, "missing_repo_root"] do
     {:error, -32_602, "Invalid params",
@@ -1813,51 +1344,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp changeset_invalid_params_error(tool, reason, %Ecto.Changeset{} = changeset) do
     ErrorDetails.changeset_invalid_params_error(tool, reason, changeset)
-  end
-
-  defp scope_validation_details(errors) when is_list(errors), do: Enum.map(errors, &scope_validation_detail/1)
-  defp scope_validation_details(error), do: scope_validation_details([error])
-
-  defp scope_validation_detail({:invalid_constraints, field}) do
-    %{"field" => Atom.to_string(field), "reason" => "invalid_constraints"}
-  end
-
-  defp scope_validation_detail({:invalid_allowed_file_globs, field}) do
-    %{"field" => Atom.to_string(field), "reason" => "invalid_allowed_file_globs"}
-  end
-
-  defp scope_validation_detail({:invalid_path, field, value, reason}) do
-    %{
-      "field" => Atom.to_string(field),
-      "value" => value,
-      "reason" => Atom.to_string(reason)
-    }
-  end
-
-  defp scope_validation_detail({:non_documentation_owned_glob, value}) do
-    %{
-      "field" => "allowed_file_globs",
-      "value" => value,
-      "reason" => "non_documentation_owned_glob"
-    }
-  end
-
-  defp scope_validation_detail({:outside_allowed_paths, value, allowed_paths}) do
-    %{
-      "field" => "allowed_file_globs",
-      "value" => value,
-      "reason" => "outside_allowed_paths",
-      "allowed_paths" => allowed_paths
-    }
-  end
-
-  defp scope_validation_detail({:forbidden_path_overlap, value, forbidden_path}) do
-    %{
-      "field" => "allowed_file_globs",
-      "value" => value,
-      "reason" => "forbidden_path_overlap",
-      "forbidden_path" => forbidden_path
-    }
   end
 
   defp scoped_session(repo, session, arguments) when is_map(arguments) do
@@ -1988,25 +1474,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
         "fallback" => "If release_current_assignment is unavailable or returns fresh_mcp_session_required=true, start a fresh MCP session before using Solo tools."
       }
     }
-  end
-
-  defp required_list(arguments, key) do
-    case Map.get(arguments, key) do
-      [_head | _tail] = value -> {:ok, value}
-      nil -> {:tool_error, "missing_#{key}"}
-      [] -> {:tool_error, "missing_#{key}"}
-      _value -> {:tool_error, "invalid_#{key}"}
-    end
-  end
-
-  defp required_string_list(arguments, key) do
-    with {:ok, values} <- required_list(arguments, key) do
-      if Enum.all?(values, &(is_binary(&1) and String.trim(&1) != "")) do
-        {:ok, Enum.map(values, &String.trim/1)}
-      else
-        {:tool_error, "invalid_#{key}"}
-      end
-    end
   end
 
   defp not_found_error(tool) do

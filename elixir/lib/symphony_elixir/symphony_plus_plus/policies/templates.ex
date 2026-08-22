@@ -34,10 +34,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
       @worker_package_policy
       |> Map.put(:kind, "mcp")
       |> Map.update!(:required_gates, &(&1 ++ ["current_pr_state"])),
-    "mcp_changed_file_scope_guard" =>
-      @worker_package_policy
-      |> Map.put(:kind, "mcp")
-      |> Map.update!(:required_gates, &(&1 ++ ["current_pr_state", "scope_guard"])),
     "skill" => @worker_package_policy,
     "hooks" => @worker_package_policy,
     "investigation" => %{

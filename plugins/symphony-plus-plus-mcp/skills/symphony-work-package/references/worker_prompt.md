@@ -56,10 +56,8 @@ During coding:
    resolve only that same worker-owned blocker with
    `resolve_blocker(blocker_id, resolution, summary, idempotency_key)`.
    Architect-owned human blockers and guidance remain architect/operator work.
-6. Use `request_scope_expansion(summary, idempotency_key, payload)` instead of
-   silently expanding scope.
-7. Do not create local planning files as the WorkPackage source of truth.
-8. Do not use broad Linear/GitHub state as permission authority.
+6. Do not create local planning files as the WorkPackage source of truth.
+7. Do not use broad Linear/GitHub state as permission authority.
 
 Human-facing bodies, notes, findings, progress details, blockers, and guidance
 context are Markdown. Keep titles, ids, statuses, branch names, and PR metadata
@@ -91,7 +89,7 @@ Before ready:
    Use bounded `CONTINUE` only while the package contract is unchanged; return
    findings, contract ambiguity, `REPLAN`, or `RESLICE` to the architect
    without calling `complete_review`.
-7. Call `mark_ready()` after provider-backed branch/PR state, scope, required
+7. Call `mark_ready()` after provider-backed branch/PR state, required
    review, blockers, and investigation findings are settled. Do not add
    task-plan, review-package, or progress calls only to restate work proved
    elsewhere. Resolve worker-owned blockers with `resolve_blocker`;
