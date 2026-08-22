@@ -25,6 +25,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "resolve_comment",
     "resolve_blocker",
     "read_delivery_board",
+    "sync_pr",
     "reconcile_work_request",
     "cleanup_work_request_work_package_runtime",
     "record_work_package_delivery",

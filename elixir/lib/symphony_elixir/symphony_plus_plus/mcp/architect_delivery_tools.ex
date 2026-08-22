@@ -29,6 +29,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
+  alias SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Auth,
@@ -120,6 +121,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
       {:error, reason} ->
         architect_error(reason, "reconcile_work_request")
+    end
+  end
+
+  def call("sync_pr", %Config{} = config, session, arguments) do
+    with {:ok, live_session} <- architect_session(config.repo, session, "write:work_request"),
+         {:ok, arguments} <- validate_arguments(arguments, "sync_pr"),
+         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
+         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
+         {:ok, _work_request, work_package, _filters, scope} <-
+           WorkRequestScope.authorized_work_package_scope(
+             config.repo,
+             live_session,
+             work_request_id,
+             work_package_id,
+             :review_evidence_append,
+             "sync_pr"
+           ),
+         {:ok, pr_sync} <- MergeReconciler.reconcile_work_package(config.repo, work_package.id),
+         {:ok, result} <- architect_sync_pr_result(config.repo, work_package.id, pr_sync, scope) do
+      {:ok, result}
+    else
+      {:tool_error, reason} -> invalid_params_error("sync_pr", reason)
+      {:error, :not_found} -> not_found_error("sync_pr")
+      {:error, _code, _message, _data} = error -> error
+      {:error, reason} -> architect_error(reason, "sync_pr")
     end
   end
 
@@ -648,6 +674,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp reconcile_work_request_mode(true), do: :apply
   defp reconcile_work_request_mode(false), do: :dry_run
+
+  defp architect_sync_pr_result(repo, work_package_id, %{status: status} = pr_sync, scope)
+       when status in ["merged", "already_merged"] do
+    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
+      {:ok,
+       ToolResult.tool_result(%{
+         "work_package" => work_package_payload(work_package),
+         "pr_sync" => json_safe_payload(pr_sync),
+         "scope" => scope
+       })}
+    end
+  end
+
+  defp architect_sync_pr_result(_repo, _work_package_id, pr_sync, _scope) do
+    data =
+      pr_sync
+      |> json_safe_payload()
+      |> Map.take(~w(reason expected_repository actual_repository expected_base_branch actual_base_branch expected_head_sha actual_head_sha delivery_error))
+      |> Map.put("tool", "sync_pr")
+      |> Map.put_new("reason", "terminal_pr_sync_failed")
+
+    {:error, -32_602, "Invalid params", data}
+  end
 
   defp reconcile_work_request(repo, %Session{} = session, work_request_id, true = _apply?, recorded_by, opts) do
     opts = Keyword.put(opts, :recorded_by, recorded_by)

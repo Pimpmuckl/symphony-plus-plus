@@ -264,6 +264,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
+  def architect_tool_input_schema("sync_pr") do
+    schema(
+      %{
+        "work_request_id" => current_work_request_id_schema(),
+        "work_package_id" => described_string_schema("Explicit descendant WorkPackage to synchronize through its attached GitHub PR.")
+      },
+      ["work_package_id"]
+    )
+  end
+
   def architect_tool_input_schema("reconcile_work_request") do
     schema(
       %{

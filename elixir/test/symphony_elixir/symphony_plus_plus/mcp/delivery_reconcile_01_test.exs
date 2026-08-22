@@ -153,6 +153,121 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     assert persisted_slice.id == work_package.id
   end
 
+  test "claimed architect syncs only an explicit descendant PR through the merge reconciler", %{repo: repo} do
+    original_client = Application.get_env(:symphony_elixir, :sympp_github_client)
+    Application.put_env(:symphony_elixir, :sympp_github_client, SymphonyElixir.FakeGitHubClient)
+    SymphonyElixir.FakeGitHubClient.clear()
+
+    on_exit(fn ->
+      SymphonyElixir.FakeGitHubClient.clear()
+
+      case original_client do
+        nil -> Application.delete_env(:symphony_elixir, :sympp_github_client)
+        client -> Application.put_env(:symphony_elixir, :sympp_github_client, client)
+      end
+    end)
+
+    {anchor, session, _grant} =
+      create_phase_architect_session(repo, "SYMPP-ARCHITECT-SYNC-PR", ["write:work_request"],
+        repo: "nextide/repo",
+        base_branch: "main"
+      )
+
+    work_request =
+      create_work_request!(repo,
+        id: "WR-MCP-ARCHITECT-SYNC-PR",
+        repo: anchor.repo,
+        base_branch: anchor.base_branch,
+        status: "sliced"
+      )
+
+    grant_work_request_scope!(repo, session, work_request.id)
+
+    assert {:ok, package} =
+             CanonicalWorkPackageFixtures.add_work_package(
+               repo,
+               work_request.id,
+               work_request_work_package_attrs(
+                 id: "WRS-MCP-ARCHITECT-SYNC-PR",
+                 repo: work_request.repo,
+                 base_branch: work_request.base_branch,
+                 status: "ready_for_merge"
+               )
+             )
+
+    assert {:ok, _attached_pr} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: package.id,
+               summary: "PR attached",
+               status: "pr_attached",
+               payload: %{
+                 type: "pr",
+                 source_tool: "attach_pr",
+                 url: "https://github.com/nextide/repo/pull/411",
+                 head_sha: "head-411"
+               }
+             })
+
+    SymphonyElixir.FakeGitHubClient.put_response(
+      "nextide/repo",
+      411,
+      SymphonyElixir.GitHubPullRequestFixtures.metadata(411, "head-411",
+        merged?: true,
+        base_branch: work_request.base_branch
+      )
+    )
+
+    tools =
+      %{test_mcp_config(repo) | surface_profile: :architect}
+      |> Server.new(initialized: true, session: session)
+      |> tools_for_server()
+      |> Map.new(&{&1["name"], &1})
+
+    refute Map.has_key?(tools, "attach_pr")
+    assert get_in(tools, ["sync_pr", "inputSchema", "required"]) == ["work_package_id"]
+    assert Map.keys(get_in(tools, ["sync_pr", "inputSchema", "properties"])) |> Enum.sort() == ["work_package_id", "work_request_id"]
+
+    forged =
+      mcp_tool(repo, session, "sync_pr", %{
+        "work_package_id" => package.id,
+        "head_sha" => "caller-supplied-state"
+      })
+
+    assert get_in(forged, ["error", "data", "reason"]) == "unexpected_argument"
+
+    other_work_request =
+      create_work_request!(repo,
+        id: "WR-MCP-ARCHITECT-SYNC-PR-OTHER",
+        repo: anchor.repo,
+        base_branch: anchor.base_branch
+      )
+
+    assert {:ok, other_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
+               repo,
+               other_work_request.id,
+               work_request_work_package_attrs(id: "WRS-MCP-ARCHITECT-SYNC-PR-OTHER")
+             )
+
+    outside_scope =
+      mcp_tool(repo, session, "sync_pr", %{
+        "work_request_id" => work_request.id,
+        "work_package_id" => other_package.id
+      })
+
+    assert get_in(outside_scope, ["error", "data", "reason"]) == "not_found"
+
+    synced = mcp_tool(repo, session, "sync_pr", %{"work_package_id" => package.id})
+
+    assert get_in(synced, ["result", "structuredContent", "work_package", "status"]) == "merged"
+    assert get_in(synced, ["result", "structuredContent", "pr_sync", "status"]) == "merged"
+
+    assert get_in(synced, ["result", "structuredContent", "scope"]) == %{
+             "repo" => work_request.repo,
+             "base_branch" => work_request.base_branch
+           }
+  end
+
   test "architect WorkRequest work-package dispatch tool creates safe worker handoff", %{repo: repo} do
     {anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-SLICE-DISPATCH", [

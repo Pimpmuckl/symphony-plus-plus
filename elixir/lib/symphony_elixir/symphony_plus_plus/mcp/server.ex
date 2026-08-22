@@ -602,7 +602,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          %{"name" => name} = params,
          %__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}} = server
        )
-       when name in ["add_comment", "resolve_comment", "resolve_blocker"] do
+       when name in ["add_comment", "resolve_comment", "resolve_blocker", "sync_pr"] do
     case prepare_architect_tool_call(server, params, name) do
       {:ok, arguments} -> architect_tool(name, arguments, server)
       {:error, code, message, data} -> {:error, code, message, data}
@@ -1192,6 +1192,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_tool(name, arguments, %__MODULE__{config: config, session: session})
        when name in [
               "reconcile_work_request",
+              "sync_pr",
               "record_work_package_delivery",
               "cleanup_work_request_work_package_runtime",
               "revoke_work_package_worker_key"
