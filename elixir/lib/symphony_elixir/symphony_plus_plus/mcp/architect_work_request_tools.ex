@@ -16,8 +16,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
       worktree_lifecycle_payload: 3
     ]
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.BranchPattern
@@ -43,7 +41,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -121,6 +118,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     repo_scope_opts = WorkRequestScope.work_request_repo_scope_opts(config)
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
+         :ok <- authorize_list_work_requests_role(session, repo_scope_opts),
          {:ok, status} <- optional_work_request_status(arguments),
          {:ok, pagination} <- list_pagination(arguments),
          {:ok, filters, scope} <-
@@ -504,6 +502,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     end
   end
 
+  defp authorize_list_work_requests_role(%Session{assignment: %{grant_role: "architect"}}, _repo_scope_opts), do: :ok
+
+  defp authorize_list_work_requests_role(%Session{} = session, repo_scope_opts) do
+    WorkRequestScope.authorize_work_request_list_policy(
+      session,
+      %{"repo" => "role-boundary", "base_branch" => nil},
+      "list_work_requests",
+      repo_scope_opts
+    )
+  end
+
   defp authorize_local_trusted_work_request_read_tool_call(opts, tool) do
     opts
     |> Keyword.fetch!(:server)
@@ -797,7 +806,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     case repo.get(WorkRequest, work_package.work_request_id) do
       %WorkRequest{} = work_request ->
         with :ok <- WorkRequestScope.require_work_package_repo_scope(work_package, work_request, work_package),
-             :ok <- WorkRequestScope.require_work_package_delivery_base_scope(work_package, work_package),
              :ok <- WorkRequestScope.require_work_request_scope(repo, work_request, filters) do
           WorkRequestScope.require_delivery_work_package_filter_scope(repo, work_package, work_request, filters)
         end
@@ -810,19 +818,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp architect_session(repo, session, capability) when is_binary(capability) do
     with {:ok, session} <- Auth.require_session(session, repo),
          :ok <- require_architect_assignment(session.assignment),
-         :ok <- require_architect_capabilities(repo, session.assignment, [capability]) do
+         :ok <- require_architect_capabilities(session.assignment, [capability]) do
       {:ok, session}
     end
   end
 
   defp require_architect_assignment(%{grant_role: "architect"}), do: :ok
   defp require_architect_assignment(_assignment), do: {:error, :architect_grant_required}
-
-  defp require_architect_capabilities(repo, assignment, capabilities) do
-    with {:ok, effective_assignment} <- effective_architect_assignment(repo, assignment) do
-      require_architect_capabilities(effective_assignment, capabilities)
-    end
-  end
 
   defp require_architect_capabilities(assignment, capabilities) do
     Enum.reduce_while(capabilities, :ok, fn capability, :ok ->
@@ -842,21 +844,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   end
 
   defp require_architect_capability(_assignment, _capability), do: {:error, :insufficient_capability}
-
-  defp effective_architect_assignment(repo, %{grant_role: "architect", grant_id: grant_id} = assignment) do
-    with {:ok, %AccessGrant{} = grant} <- AccessGrantRepository.get(repo, grant_id) do
-      case ArchitectHandoff.handoff_phase_grant?(repo, grant) do
-        {:ok, true} ->
-          {:ok, %{assignment | capabilities: ArchitectHandoff.effective_capabilities(grant.capabilities)}}
-
-        {:ok, false} ->
-          {:ok, %{assignment | capabilities: grant.capabilities || []}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    end
-  end
 
   defp default_claimed_by(%Config{claimed_by: claimed_by}) do
     case normalize_optional_value(claimed_by) do

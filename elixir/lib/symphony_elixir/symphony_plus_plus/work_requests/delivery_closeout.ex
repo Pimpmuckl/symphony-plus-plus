@@ -191,11 +191,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
          %WorkPackage{work_request_id: work_request_id},
          %WorkPackageDelivery{outcome: "superseded"} = delivery
        ) do
-    with %WorkPackage{work_request_id: ^work_request_id} = successor_slice <-
-           repo.get(WorkPackage, delivery.successor_work_package_id),
-         true <- delivery.successor_work_package_id in [nil, successor_slice.id] do
-      :ok
-    else
+    case repo.get(WorkPackage, delivery.successor_work_package_id) do
+      %WorkPackage{work_request_id: ^work_request_id} -> :ok
       _result -> {:error, :not_found}
     end
   end
@@ -365,9 +362,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
         refresh_replayed_closeout(repo, work_request, delivery)
 
       false ->
-        with :ok <- validate_terminal_evidence(work_package, delivery) do
-          perform_closeout(repo, work_request, work_package, delivery, opts)
-        end
+        perform_closeout(repo, work_request, work_package, delivery, opts)
     end
   end
 
