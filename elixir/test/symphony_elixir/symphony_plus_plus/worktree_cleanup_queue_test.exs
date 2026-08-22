@@ -52,6 +52,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeCleanupQueueTest do
     assert repo.get!(WorkPackage, package.id).worktree_path == nil
   end
 
+  test "dirty worktree stays queued until clean", %{repo: repo} do
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-cleanup-queue-dirty")
+    codex_home = use_codex_home!(fixture.root)
+    package = prepared_package!(repo, fixture.repo_root, codex_home, "WP-CLEANUP-DIRTY", "fix/cleanup-dirty")
+    dirty_path = Path.join(package.worktree_path, "dirty.txt")
+    File.write!(dirty_path, "dirty")
+
+    assert {:ok, _terminal} = WorkPackageRepository.update_status(repo, package.id, "created", "merged")
+    assert [%Entry{attempts: 0}] = repo.all(Entry)
+
+    assert :ok = WorktreeCleanupQueue.reconcile(repo, codex_home: codex_home, base_backoff_ms: 1, max_backoff_ms: 1)
+    assert [%Entry{attempts: 1, last_error: ":dirty_worktree"}] = repo.all(Entry)
+    assert File.exists?(dirty_path)
+    assert repo.get!(WorkPackage, package.id).worktree_path == package.worktree_path
+
+    File.rm!(dirty_path)
+    Process.sleep(5)
+
+    assert :ok = WorktreeCleanupQueue.reconcile(repo, codex_home: codex_home)
+    assert repo.all(Entry) == []
+    refute File.exists?(package.worktree_path)
+    assert repo.get!(WorkPackage, package.id).worktree_path == nil
+  end
+
   test "supervised startup resumes an archived request cleanup", %{repo: repo} do
     fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-cleanup-queue-startup")
     codex_home = use_codex_home!(fixture.root)
