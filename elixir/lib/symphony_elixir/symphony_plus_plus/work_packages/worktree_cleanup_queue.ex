@@ -176,8 +176,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue do
             do: {:error, :active_runtime},
             else: WorktreeLifecycle.cleanup(repo, work_package.id, cleanup_opts)
 
-        _missing_or_changed ->
+        {:ok, %WorkPackage{}} ->
           WorktreeLifecycle.cleanup_obligation(repo, entry, cleanup_opts)
+
+        {:error, :not_found} ->
+          WorktreeLifecycle.cleanup_obligation(repo, entry, cleanup_opts)
+
+        {:error, reason} ->
+          {:error, reason}
       end
 
     case result do
