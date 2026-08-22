@@ -444,58 +444,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     end)
   end
 
-  @spec timeline(repo(), String.t()) :: {:ok, map()} | {:error, dashboard_error()}
-  def timeline(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
-    safe_read(fn ->
-      with {:ok, state} <- planning_state(repo, work_package_id) do
-        events =
-          (Enum.map(state.progress_events, &timeline_progress_event/1) ++ Enum.map(state.findings, &timeline_finding/1))
-          |> Enum.sort_by(&timeline_sort_key/1)
-
-        {:ok, %{work_package_id: work_package_id, events: events}}
-      end
-    end)
-  end
-
-  @spec artifacts(repo(), String.t()) :: {:ok, map()} | {:error, dashboard_error()}
-  def artifacts(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
-    safe_read(fn ->
-      with {:ok, _work_package} <- WorkPackageRepository.get(repo, work_package_id),
-           {:ok, artifacts} <- PlanningRepository.list_artifacts(repo, work_package_id) do
-        {:ok, %{work_package_id: work_package_id, artifacts: Enum.map(artifacts, &artifact/1)}}
-      end
-    end)
-  end
-
-  @spec blockers(repo(), String.t()) :: {:ok, map()} | {:error, dashboard_error()}
-  def blockers(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
-    safe_read(fn ->
-      with {:ok, state} <- planning_state(repo, work_package_id) do
-        {:ok, %{work_package_id: work_package_id, blockers: OperationalProjection.blockers(state.progress_events)}}
-      end
-    end)
-  end
-
-  @spec grants(repo(), String.t()) :: {:ok, map()} | {:error, dashboard_error()}
-  def grants(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
-    safe_read(fn ->
-      with {:ok, _work_package} <- WorkPackageRepository.get(repo, work_package_id),
-           {:ok, grants} <- AccessGrantRepository.list_for_work_package(repo, work_package_id) do
-        {:ok, %{work_package_id: work_package_id, grants: Enum.map(grants, &grant/1)}}
-      end
-    end)
-  end
-
-  @spec agent_runs(repo(), String.t()) :: {:ok, map()} | {:error, dashboard_error()}
-  def agent_runs(repo, work_package_id) when is_atom(repo) and is_binary(work_package_id) do
-    safe_read(fn ->
-      with {:ok, _work_package} <- WorkPackageRepository.get(repo, work_package_id),
-           {:ok, agent_runs} <- AgentRunRepository.list_for_work_package(repo, work_package_id) do
-        {:ok, %{work_package_id: work_package_id, agent_runs: Enum.map(agent_runs, &agent_run/1)}}
-      end
-    end)
-  end
-
   @spec card(repo(), WorkPackage.t()) :: {:ok, map()} | {:error, dashboard_error()}
   def card(repo, %WorkPackage{} = work_package) when is_atom(repo) do
     safe_read(fn ->
@@ -1729,22 +1677,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       payload: redacted_json(event.payload || %{}),
       created_at: timestamp(event.created_at)
     }
-  end
-
-  defp timeline_progress_event(%ProgressEvent{} = event) do
-    event
-    |> progress_event()
-    |> Map.merge(%{type: "progress", timeline_order: event.sequence || 0})
-  end
-
-  defp timeline_finding(%Finding{} = finding) do
-    finding
-    |> finding()
-    |> Map.merge(%{type: "finding", timeline_order: finding.sequence || 0})
-  end
-
-  defp timeline_sort_key(%{created_at: created_at, timeline_order: order, id: id}) do
-    {timestamp_sort_value(created_at), order || 0, id || ""}
   end
 
   defp artifact(%Artifact{} = artifact) do
