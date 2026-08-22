@@ -5108,7 +5108,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
   test "spp.localhost dashboard origin can load local operator config" do
     with_local_operator_endpoint(fn ->
-      with_local_operator_dashboard_origin("http://127.0.0.1:5174", fn ->
+      with_local_operator_dashboard_origin("http://spp.localhost:5174", fn ->
         index = "<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>"
 
         with_static_dashboard_file("index.html", index, fn ->
@@ -5120,7 +5120,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
             |> put_req_header("sec-fetch-mode", "navigate")
             |> ReactDashboardController.index(%{})
 
-          assert redirected_to(shell_conn, 302) == "http://127.0.0.1:5174/sympp/board"
+          assert redirected_to(shell_conn, 302) == "http://spp.localhost:5174/sympp/board"
 
           conn =
             build_conn()
@@ -5231,20 +5231,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "configured dashboard origin accepts localhost aliases" do
+  test "configured dashboard origin rejects a different localhost hostname" do
     with_local_operator_endpoint(fn ->
-      with_local_operator_dashboard_origin("http://127.0.0.1:5174", fn ->
+      with_local_operator_dashboard_origin("http://spp.localhost:5174", fn ->
         conn =
           build_conn()
           |> Map.put(:host, "127.0.0.1")
           |> Map.put(:remote_ip, {127, 0, 0, 1})
-          |> put_req_header("origin", "http://spp.localhost:5174")
+          |> put_req_header("origin", "http://other.localhost:5174")
           |> put_req_header("sec-fetch-site", "same-site")
           |> put_req_header("sec-fetch-mode", "cors")
           |> put_req_header("sec-fetch-dest", "empty")
           |> get("/api/v1/sympp/operator/config")
 
-        json_response(conn, 200)
+        assert %{"error" => %{"code" => "unauthorized"}} = json_response(conn, 401)
+        assert Plug.Conn.get_resp_header(conn, "access-control-allow-origin") == []
       end)
     end)
   end

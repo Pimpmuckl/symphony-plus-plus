@@ -194,18 +194,11 @@ defmodule SymphonyElixirWeb.Router do
        })
        when is_binary(actual_scheme) and is_binary(actual_host) do
     String.downcase(actual_scheme) == String.downcase(expected_scheme) and
-      local_hosts_match?(actual_host, expected_host) and
+      String.downcase(actual_host) == String.downcase(expected_host) and
       normalize_origin_port(actual_scheme, actual_port) == normalize_origin_port(expected_scheme, expected_port)
   end
 
   defp origin_matches?(_expected_origin, _actual_origin), do: false
-
-  defp local_hosts_match?(actual_host, expected_host) do
-    actual_host = String.downcase(actual_host)
-    expected_host = String.downcase(expected_host)
-
-    actual_host == expected_host or (local_host?(actual_host) and local_host?(expected_host))
-  end
 
   defp normalize_origin_port("http", nil), do: 80
   defp normalize_origin_port(_scheme, port), do: port
