@@ -89,7 +89,7 @@ Before ready:
    Use bounded `CONTINUE` only while the package contract is unchanged; return
    findings, contract ambiguity, `REPLAN`, or `RESLICE` to the architect
    without calling `complete_review`.
-7. Call `mark_ready()` after provider-backed branch/PR state, scope, required
+7. Call `mark_ready()` after provider-backed branch/PR state, required
    review, blockers, and investigation findings are settled. Do not add
    task-plan, review-package, or progress calls only to restate work proved
    elsewhere. Resolve worker-owned blockers with `resolve_blocker`;
