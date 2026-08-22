@@ -23,7 +23,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
     "planning",
     "ready_to_finish",
     "ready_for_architect_merge",
-    "ready_for_human_merge",
     "ready_for_merge",
     "reviewing",
     "started_paused"

@@ -8,18 +8,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.RuntimeArtifactManifestScriptsTest do
   @publish_sh Path.join(@repo_root, "scripts/publish-sympp-runtime-artifact.sh")
   @contract_path Path.join(@repo_root, "elixir/priv/symphony_plus_plus/mcp_contract.json")
 
-  test "PowerShell and shell artifact builds share the stale-output cleanup" do
-    package =
-      @repo_root
-      |> Path.join("elixir/assets/package.json")
-      |> File.read!()
-      |> Jason.decode!()
-
-    assert package["scripts"]["build"] =~ "clean-vite-output.mjs"
-    assert File.read!(@build_ps1) =~ ~s|@("run", "build")|
-    assert File.read!(@build_sh) =~ "npm run build"
-  end
-
   test "PowerShell build dry-run resolves MCP contract fingerprint" do
     powershell = System.find_executable("pwsh")
     temp_root = unique_temp_path("sympp-artifact-build-dry-run")

@@ -474,5 +474,5 @@ function readyWithoutMerge(pkg: WorkPackageCard, operational: WorkPackageCard["o
   const key = operational?.key || "";
   if (key === "ready_to_finish") return operational?.tone !== "warning";
   if (key === "merge_ready") return false;
-  return ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"].includes(operational?.raw_status || pkg.status || "") && (operational?.merge_required ?? pkg.merge_required) === false;
+  return ["ready_for_merge", "ready_for_architect_merge"].includes(operational?.raw_status || pkg.status || "") && (operational?.merge_required ?? pkg.merge_required) === false;
 }

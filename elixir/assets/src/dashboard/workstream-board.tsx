@@ -468,7 +468,7 @@ function frontierCurrentActivity(
 ) {
   if (review?.status === "in_progress") return `Review${signalProgress(review.current, review.total)}`;
   if (checks?.status === "pending") return `CI${signalProgress(checks.current, checks.total)}`;
-  if (["merge_ready", "ready_for_merge", "ready_for_architect_merge", "ready_for_human_merge"].includes(status)) return "Ready to merge";
+  if (["merge_ready", "ready_for_merge", "ready_for_architect_merge"].includes(status)) return "Ready to merge";
   if (slice.worker_signal?.status === "active") return "Implementing";
   return undefined;
 }

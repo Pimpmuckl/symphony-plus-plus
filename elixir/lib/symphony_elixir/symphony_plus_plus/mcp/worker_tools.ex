@@ -388,7 +388,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp sync_pr_tool_response(result), do: metadata_tool_response(result, "sync_pr")
 
   defp sync_pr_for_package(repo, session, %WorkPackage{status: status} = work_package, arguments, payload)
-       when status in ["ready_for_merge", "ready_for_human_merge", "merged"] do
+       when status in ["ready_for_merge", "merged"] do
     with :ok <-
            PullRequestMetadata.validate_sync_target_unless_replay(
              repo,

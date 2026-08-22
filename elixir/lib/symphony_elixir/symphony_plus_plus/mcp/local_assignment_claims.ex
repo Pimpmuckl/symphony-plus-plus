@@ -320,7 +320,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
               "reviewing",
               "ci_waiting",
               "ready_for_merge",
-              "ready_for_human_merge",
               "ready_for_architect_merge",
               "merging_into_phase"
             ],

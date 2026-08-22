@@ -537,11 +537,6 @@ defmodule SymphonyElixir.StatusDashboard do
   def format_snapshot_content_for_test(snapshot_data, tps), do: format_snapshot_content(snapshot_data, tps)
 
   @doc false
-  @spec format_snapshot_content_for_test(term(), number(), integer() | nil) :: String.t()
-  def format_snapshot_content_for_test(snapshot_data, tps, terminal_columns),
-    do: format_snapshot_content(snapshot_data, tps, terminal_columns)
-
-  @doc false
   @spec dashboard_url_for_test(String.t(), non_neg_integer() | nil, non_neg_integer() | nil) ::
           String.t() | nil
   def dashboard_url_for_test(host, configured_port, bound_port),

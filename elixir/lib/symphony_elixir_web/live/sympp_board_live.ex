@@ -1238,7 +1238,7 @@ defmodule SymphonyElixirWeb.SymppBoardLive do
   defp review_ready_count(cards) when is_list(cards) do
     cards
     |> Enum.count(fn card ->
-      Map.get(card, :status) in ["reviewing", "ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge", "merged_into_phase"] or review_present?(card)
+      Map.get(card, :status) in ["reviewing", "ready_for_merge", "ready_for_architect_merge", "merged_into_phase"] or review_present?(card)
     end)
   end
 
@@ -1599,7 +1599,6 @@ defmodule SymphonyElixirWeb.SymppBoardLive do
       "reviewing",
       "ci_waiting",
       "ready_for_merge",
-      "ready_for_human_merge",
       "ready_for_architect_merge",
       "merging_into_phase",
       "merged",
@@ -1631,7 +1630,7 @@ defmodule SymphonyElixirWeb.SymppBoardLive do
       "merged" -> pipeline_step("Merge", "merged", :ready)
       "merged_into_phase" -> pipeline_step("Merge", "merged", :ready)
       "merging_into_phase" -> pipeline_step("Merge", "merging", :active)
-      status when status in ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"] -> pipeline_step("Merge", "ready", :ready)
+      status when status in ["ready_for_merge", "ready_for_architect_merge"] -> pipeline_step("Merge", "ready", :ready)
       "ci_waiting" -> pipeline_step("Merge", "CI waiting", :active)
       "blocked" -> pipeline_step("Merge", "blocked", :danger)
       _status -> pipeline_step("Merge", "not ready", :muted)

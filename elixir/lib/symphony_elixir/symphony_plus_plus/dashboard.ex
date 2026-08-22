@@ -45,7 +45,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   import Ecto.Query, only: [from: 2]
 
-  @ready_statuses ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"]
+  @ready_statuses ["ready_for_merge", "ready_for_architect_merge"]
   @dropped_child_statuses ["abandoned"]
   @non_open_child_statuses ["merged_into_phase", "closed", "abandoned"]
   @work_package_context_chunk_size 500
