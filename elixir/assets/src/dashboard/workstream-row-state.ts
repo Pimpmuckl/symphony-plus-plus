@@ -278,7 +278,6 @@ const ACTIVE_WORK_STATUSES = new Set([
   "needs_closeout",
   "ready_for_architect_merge",
   "ready_for_merge",
-  "ready_for_human_merge",
   "reviewing",
 ]);
 

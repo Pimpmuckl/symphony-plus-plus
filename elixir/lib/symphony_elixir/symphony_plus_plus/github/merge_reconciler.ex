@@ -70,7 +70,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHub.MergeReconciler do
     end
   end
 
-  defp merge_ready_candidate?(%WorkPackage{status: status, kind: kind}) when status in ["ready_for_merge", "ready_for_human_merge"] do
+  defp merge_ready_candidate?(%WorkPackage{status: "ready_for_merge", kind: kind}) do
     kind in StateMachine.dispatchable_kinds()
   end
 

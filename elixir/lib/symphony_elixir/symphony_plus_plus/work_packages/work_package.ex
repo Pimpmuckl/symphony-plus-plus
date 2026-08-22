@@ -27,21 +27,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   @phase_child_kind "phase_child"
   @anchor_kinds ["delegation"]
   @kinds @executable_kinds ++ [@phase_child_kind] ++ @anchor_kinds
-  @legacy_kinds [
-    "review_only",
-    "setup",
-    "core",
-    "product",
-    "dashboard",
-    "integration",
-    "security",
-    "hardening",
-    "pilot",
-    "e2e",
-    "analysis"
-  ]
-  @persisted_kinds @kinds ++ @legacy_kinds
-  @legacy_ready_status "ready_for_human_merge"
   @ready_status "ready_for_merge"
 
   @statuses [
@@ -64,8 +49,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     "blocked",
     "abandoned"
   ]
-  @persisted_statuses @statuses ++ [@legacy_ready_status]
-
   @type t :: %__MODULE__{
           id: String.t() | nil,
           work_request_id: String.t() | nil,
@@ -140,9 +123,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   @spec statuses() :: [String.t()]
   def statuses, do: @statuses
 
-  @spec persisted_statuses() :: [String.t()]
-  def persisted_statuses, do: @persisted_statuses
-
   @spec repo(map(), t()) :: String.t() | nil
   def repo(work_request, %__MODULE__{} = work_package) do
     nonblank(work_package.repo) || nonblank(Map.get(work_request, :repo))
@@ -165,17 +145,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   def update_changeset(%__MODULE__{} = work_package, attrs) do
     attrs = Map.drop(normalize_keys(attrs), ["id", "inserted_at", "updated_at", "created_at"])
 
-    work_package
-    |> changeset(attrs, update_valid_kinds(work_package, attrs))
+    changeset(work_package, attrs)
   end
 
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(%__MODULE__{} = work_package, attrs) do
-    changeset(work_package, attrs, @kinds)
-  end
-
-  defp changeset(%__MODULE__{} = work_package, attrs, valid_kinds) do
-    attrs = attrs |> normalize_keys() |> BaseBranch.canonicalize_attrs() |> normalize_status()
+    attrs = attrs |> normalize_keys() |> BaseBranch.canonicalize_attrs()
 
     work_package
     |> cast(attrs, [
@@ -209,21 +184,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
       :dispatched_at
     ])
     |> validate_required([:id, :kind, :title, :repo, :base_branch, :acceptance_criteria, :status])
-    |> validate_inclusion(:kind, valid_kinds)
-    |> validate_inclusion(:status, valid_statuses(work_package))
+    |> validate_inclusion(:kind, @kinds)
+    |> validate_inclusion(:status, @statuses)
     |> validate_number(:sequence, greater_than: 0)
     |> validate_number(:contract_revision, greater_than: 0)
     |> validate_branch_pattern()
     |> validate_policy_template()
     |> validate_review_requirement()
-  end
-
-  defp update_valid_kinds(%__MODULE__{} = work_package, attrs) do
-    case Map.get(attrs, "kind") do
-      nil -> @persisted_kinds
-      kind when kind == work_package.kind -> @persisted_kinds
-      _kind -> @kinds
-    end
   end
 
   defp validate_branch_pattern(changeset) do
@@ -273,16 +240,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
   end
 
   defp nonblank(_value), do: nil
-
-  defp valid_statuses(%__MODULE__{status: @legacy_ready_status}), do: @persisted_statuses
-  defp valid_statuses(%__MODULE__{}), do: @statuses
-
-  defp normalize_status(attrs) do
-    case Map.fetch(attrs, "status") do
-      {:ok, @legacy_ready_status} -> Map.put(attrs, "status", @ready_status)
-      _status -> attrs
-    end
-  end
 
   defp normalize_keys(attrs) when is_map(attrs) do
     Map.new(attrs, fn {key, value} -> {normalize_key(key), value} end)

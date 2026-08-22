@@ -11,7 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity do
   import Ecto.Query, only: [from: 2]
 
   @active_grant_roles ["worker", "architect"]
-  @ready_package_statuses ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"]
+  @ready_package_statuses ["ready_for_merge", "ready_for_architect_merge"]
   @terminal_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
   @recycle_source_tools ["claim_local_assignment", "revoke_child_worker_key", "revoke_work_package_worker_key", "cleanup_work_request_work_package_runtime"]
   @stale_heartbeat_after_seconds 300

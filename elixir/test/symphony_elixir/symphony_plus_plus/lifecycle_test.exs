@@ -129,27 +129,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert {:error, :worker_cannot_mark_merged} = Service.transition(repo, package.id, "merged", worker_actor!(repo, package))
   end
 
-  test "metadata-only updates preserve legacy stored merge-ready packages", %{repo: repo} do
-    assert {:ok, package} =
-             Repository.create(repo, WorkPackageFactory.attrs(kind: "hotfix", status: "ready_for_merge", title: "Ready package"))
-
-    repo.query!("UPDATE sympp_work_packages SET status = ? WHERE id = ?", ["ready_for_human_merge", package.id])
-
-    assert {:ok, updated} = Repository.update(repo, package.id, %{title: "Renamed ready package"})
-    assert updated.title == "Renamed ready package"
-    assert updated.status == "ready_for_human_merge"
-  end
-
-  test "direct changesets normalize atom-keyed legacy ready status" do
-    attrs =
-      WorkPackageFactory.attrs(id: "SYMPP-LEGACY-ATOM-KEYS", kind: "hotfix", status: "ready_for_human_merge", title: "Ready package")
-
-    changeset = WorkPackage.changeset(%WorkPackage{}, attrs)
-
-    assert changeset.valid?
-    assert Ecto.Changeset.get_field(changeset, :status) == "ready_for_merge"
-  end
-
   test "hotfix happy path reaches ready for human merge", %{repo: repo} do
     assert {:ok, package} = Repository.create(repo, WorkPackageFactory.attrs(kind: "hotfix"))
 

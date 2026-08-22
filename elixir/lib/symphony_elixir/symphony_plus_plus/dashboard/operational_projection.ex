@@ -19,7 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @stale_heartbeat_after_seconds 300
-  @ready_statuses ["ready_for_merge", "ready_for_human_merge", "ready_for_architect_merge"]
+  @ready_statuses ["ready_for_merge", "ready_for_architect_merge"]
   @merge_required_gates ["human_merge", "architect_merge"]
   @runtime_merge_required_kinds ["hotfix", "adapter", "mcp", "skill", "hooks", "phase_child"]
   @started_package_statuses ["active", "claimed", "planning", "implementing"]
