@@ -23,6 +23,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   @version_resource "sympp://health/version"
 
   @spec tool_specs_for_server(map()) :: {:ok, [map()]} | {:error, term()}
+  def tool_specs_for_server(%{
+        config: %Config{surface_profile: :full} = config,
+        session: %Session{assignment: %{grant_role: "architect"}}
+      }) do
+    architect_sync_pr =
+      ToolCatalog.startup_tool_specs(:architect, config)
+      |> Enum.find(&(&1["name"] == "sync_pr"))
+
+    tools =
+      :full
+      |> ToolCatalog.startup_tool_specs(config)
+      |> Enum.map(fn
+        %{"name" => "sync_pr"} -> architect_sync_pr
+        tool -> tool
+      end)
+
+    {:ok, tools}
+  end
+
   def tool_specs_for_server(%{config: %Config{} = config}),
     do: {:ok, ToolCatalog.startup_tool_specs(config.surface_profile, config)}
 

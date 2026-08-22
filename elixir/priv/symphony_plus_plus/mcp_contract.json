@@ -1,5 +1,5 @@
 {
-  "mcp_contract_fingerprint": "0a748b310efa17ad92589c0f32c83e5dfadd16f068e1aae6ac48cc864951d084",
+  "mcp_contract_fingerprint": "431f9af170e2c96d8b7a0e501313f513bf1cd3c7e71e1a935a9c0620cd46c0ff",
   "tool_sets": {
     "architect_tools": [
       "list_work_requests",
@@ -10,6 +10,7 @@
       "resolve_comment",
       "resolve_blocker",
       "read_delivery_board",
+      "sync_pr",
       "reconcile_work_request",
       "cleanup_work_request_work_package_runtime",
       "record_work_package_delivery",
