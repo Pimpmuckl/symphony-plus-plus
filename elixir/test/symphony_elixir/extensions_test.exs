@@ -491,20 +491,6 @@ defmodule SymphonyElixir.ExtensionsTest do
              }
   end
 
-  test "dashboard root shell does not reference legacy static assets" do
-    with_static_dashboard_file("index.html", File.read!(dashboard_source_index_path()), fn ->
-      start_test_endpoint(snapshot_timeout_ms: 50)
-
-      html = html_response(get(build_conn(), "/"), 200)
-      refute html =~ "/dashboard.css"
-      refute html =~ "/vendor/phoenix_html/phoenix_html.js"
-      refute html =~ "/vendor/phoenix/phoenix.js"
-      refute html =~ "/vendor/phoenix_live_view/phoenix_live_view.js"
-      refute html =~ "/assets/app.js"
-      refute html =~ "<style>"
-    end)
-  end
-
   test "http server serves embedded assets, accepts form posts, and rejects invalid hosts" do
     spec = HttpServer.child_spec(port: 0)
     assert spec.id == HttpServer
@@ -592,33 +578,6 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     start_supervised!({SymphonyElixirWeb.Endpoint, []})
-  end
-
-  defp with_static_dashboard_file(file_name, contents, fun) when is_function(fun, 0) do
-    static_dir =
-      :symphony_elixir
-      |> :code.priv_dir()
-      |> Path.join("static")
-
-    path = Path.join(static_dir, file_name)
-    original = File.read(path)
-    File.mkdir_p!(Path.dirname(path))
-    File.write!(path, contents)
-
-    try do
-      fun.()
-    after
-      case original do
-        {:ok, previous} -> File.write!(path, previous)
-        {:error, _reason} -> File.rm(path)
-      end
-    end
-  end
-
-  defp dashboard_source_index_path do
-    __DIR__
-    |> Path.join("../../assets/index.html")
-    |> Path.expand()
   end
 
   defp static_snapshot do

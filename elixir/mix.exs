@@ -6,7 +6,7 @@ defmodule SymphonyElixir.MixProject do
       app: :symphony_elixir,
       version: "0.1.0",
       elixir: "~> 1.20",
-      compilers: [:phoenix_live_view] ++ Mix.compilers(),
+      compilers: Mix.compilers(),
       start_permanent: Mix.env() == :prod,
       test_coverage: [
         summary: [
@@ -26,11 +26,9 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.StatusDashboard,
           SymphonyElixir.LogFile,
           SymphonyElixir.Workspace,
-          SymphonyElixirWeb.DashboardLive,
           SymphonyElixirWeb.Endpoint,
           SymphonyElixirWeb.ErrorHTML,
           SymphonyElixirWeb.ErrorJSON,
-          SymphonyElixirWeb.Layouts,
           SymphonyElixirWeb.ObservabilityApiController,
           SymphonyElixirWeb.Presenter,
           SymphonyElixirWeb.StaticAssetController,
@@ -84,11 +82,7 @@ defmodule SymphonyElixir.MixProject do
   defp deps do
     [
       {:bandit, "~> 1.12"},
-      {:floki, "~> 0.38.3", only: :test},
-      {:lazy_html, "~> 0.1.11", only: :test},
       {:phoenix, "~> 1.8"},
-      {:phoenix_html, "~> 4.3"},
-      {:phoenix_live_view, "~> 1.2"},
       {:req, "~> 0.6.1"},
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.12"},

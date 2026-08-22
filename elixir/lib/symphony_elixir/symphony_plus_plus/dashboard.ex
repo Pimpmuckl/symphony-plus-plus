@@ -31,7 +31,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.State
-  alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.SoloSession
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
@@ -39,7 +38,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ClarificationQuestion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DecisionLogEntry
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -160,31 +158,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     with {:ok, filters} <- phase_board_filters_for_grant(grant) do
       phase_board(repo, phase_id, filters)
     end
-  end
-
-  @spec work_requests_for_grant(repo(), AccessGrant.t()) :: {:ok, map()} | {:error, dashboard_error()}
-  def work_requests_for_grant(repo, %AccessGrant{} = grant) when is_atom(repo) do
-    work_requests_for_grant(repo, grant, [])
-  end
-
-  @spec work_requests_for_grant(repo(), AccessGrant.t(), keyword()) :: {:ok, map()} | {:error, dashboard_error()}
-  def work_requests_for_grant(repo, %AccessGrant{} = grant, opts) when is_atom(repo) and is_list(opts) do
-    safe_read(fn ->
-      with {:ok, filters} <- work_request_filters_for_grant(repo, grant),
-           query_filters = filters |> Keyword.delete(:base_branch) |> Map.new() |> Map.put(:include_archived, true),
-           {:ok, work_requests} <- WorkRequestRepository.list(repo, query_filters),
-           work_requests = Enum.filter(work_requests, &work_request_matches_filters?(&1, filters)),
-           repo_identity_catalog = repo_identity_catalog_from_opts(opts, Enum.map(work_requests, & &1.repo)),
-           {:ok, cards} <- work_request_cards(repo, ordered_work_requests(work_requests), Keyword.merge(opts, grant: grant, repo_identity_catalog: repo_identity_catalog)) do
-        cards = visible_work_request_cards(cards)
-
-        {:ok,
-         %{
-           work_requests: cards,
-           total_count: length(cards)
-         }}
-      end
-    end)
   end
 
   @spec work_requests(repo()) :: {:ok, map()} | {:error, dashboard_error()}
@@ -321,68 +294,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     Map.merge(payload, RepoIdentity.fields(repo_identity_catalog, repo_value))
   end
 
-  @spec work_request_detail_for_grant(repo(), String.t(), AccessGrant.t()) :: {:ok, map()} | {:error, dashboard_error()}
-  def work_request_detail_for_grant(repo, work_request_id, %AccessGrant{} = grant)
-      when is_atom(repo) and is_binary(work_request_id) do
-    work_request_detail_for_grant(repo, work_request_id, grant, [])
-  end
-
-  @spec work_request_detail_for_grant(repo(), String.t(), AccessGrant.t(), keyword()) ::
-          {:ok, map()} | {:error, dashboard_error()}
-  def work_request_detail_for_grant(repo, work_request_id, %AccessGrant{} = grant, opts)
-      when is_atom(repo) and is_binary(work_request_id) and is_list(opts) do
-    safe_read(fn ->
-      with {:ok, work_request} <- WorkRequestRepository.get(repo, work_request_id),
-           :ok <- require_visible_work_request_scope(repo, work_request, grant),
-           {:ok, questions} <- WorkRequestRepository.list_questions(repo, work_request_id),
-           {:ok, decisions} <- WorkRequestRepository.list_decisions(repo, work_request_id),
-           {:ok, work_packages} <- WorkRequestRepository.list_work_packages(repo, work_request_id),
-           {:ok, work_package_contexts} <- work_package_work_package_contexts_for_grant(repo, work_packages, grant),
-           delivery_board_opts = delivery_board_opts(work_request, work_packages, work_package_contexts, opts),
-           {:ok, delivery_board} <- DeliveryBoard.project(repo, work_request_id, delivery_board_opts),
-           visible_work_packages = visible_work_packages(work_packages, delivery_board),
-           {:ok, comment_context} <- work_request_comment_context(repo, work_request, work_packages),
-           {:ok, repo_identity_catalog} <-
-             work_request_detail_repo_identity_catalog_for_grant(repo, grant, [work_request.repo]) do
-        all_work_packages = ordered_sequence_records(work_packages)
-        questions = ordered_sequence_records(questions)
-        decisions = ordered_sequence_records(decisions)
-        work_packages = ordered_sequence_records(visible_work_packages)
-
-        work_request_payload =
-          work_request_payload(
-            work_request,
-            questions,
-            work_packages,
-            work_package_contexts,
-            repo_identity_catalog,
-            comment_context,
-            delivery_board: delivery_board,
-            delivery_state_opts: [include_package_fields?: false],
-            comment_work_packages: all_work_packages
-          )
-
-        work_package_payloads =
-          work_package_payloads(work_packages, %{}, false, comment_context, delivery_board: delivery_board)
-
-        {:ok,
-         %{
-           work_request: work_request_payload,
-           clarification_questions: Enum.map(questions, &clarification_question/1),
-           decision_logs: Enum.map(decisions, &decision_log_entry/1),
-           work_packages: work_package_payloads,
-           product_tree:
-             ProductTree.project(repo, work_request.id, work_package_payloads,
-               visible_only?: true,
-               include_unowned_nodes?: true
-             ),
-           comments: CommentProjection.comments_for(comment_context, "work_request", work_request.id),
-           summary: work_request_summary(questions, decisions, work_packages, comment_context)
-         }}
-      end
-    end)
-  end
-
   @spec work_request_detail(repo(), String.t()) :: {:ok, map()} | {:error, dashboard_error()}
   def work_request_detail(repo, work_request_id) when is_atom(repo) and is_binary(work_request_id) do
     work_request_detail(repo, work_request_id, [])
@@ -437,15 +348,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
   @spec all_work_packages([WorkRequest.t()], map()) :: [WorkPackage.t()]
   def all_work_packages(work_requests, work_packages_by_request) do
     Enum.flat_map(work_requests, &Map.get(work_packages_by_request, &1.id, []))
-  end
-
-  defp delivery_board_opts(%WorkRequest{} = work_request, work_packages, work_package_contexts, _opts) do
-    [
-      work_request: work_request,
-      work_packages: work_packages,
-      visible_work_package_ids: Map.keys(work_package_contexts),
-      work_package_contexts: work_package_contexts
-    ]
   end
 
   @spec work_request_filters_for_grant(repo(), AccessGrant.t()) :: {:ok, keyword()} | {:error, dashboard_error()}
@@ -987,37 +889,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     end)
   end
 
-  defp require_work_request_scope(repo, %WorkRequest{} = work_request, %AccessGrant{} = grant) do
-    with {:ok, filters} <- work_request_filters_for_grant(repo, grant) do
-      if work_request_matches_filters?(work_request, filters) do
-        :ok
-      else
-        {:error, :forbidden}
-      end
-    end
-  end
-
-  defp require_visible_work_request_scope(repo, %WorkRequest{} = work_request, %AccessGrant{} = grant) do
-    case require_work_request_scope(repo, work_request, grant) do
-      :ok -> :ok
-      {:error, :forbidden} -> {:error, :not_found}
-      error -> error
-    end
-  end
-
-  defp work_request_matches_filters?(%WorkRequest{} = work_request, filters) do
-    Enum.all?(filters, fn
-      {:repo, repo} when is_binary(repo) ->
-        repo_scope_match?(work_request.repo, repo)
-
-      {:base_branch, base_branch} when is_binary(base_branch) ->
-        BaseBranch.equivalent?(work_request.base_branch, base_branch)
-
-      _filter ->
-        true
-    end)
-  end
-
   defp explicit_phase_architect_grant?(%AccessGrant{grant_role: "architect", phase_id: phase_id}) when is_binary(phase_id) do
     String.trim(phase_id) != ""
   end
@@ -1255,13 +1126,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     )
   end
 
-  defp work_request_detail_repo_identity_catalog_for_grant(repo, %AccessGrant{} = grant, fallback_repo_values) do
-    with {:ok, filters} <- work_request_filters_for_grant(repo, grant),
-         {:ok, work_requests} <- WorkRequestRepository.list(repo, Map.new(filters)) do
-      {:ok, build_repo_identity_catalog(Enum.map(work_requests, & &1.repo) ++ fallback_repo_values)}
-    end
-  end
-
   defp repo_identity_catalog_from_repo(repo, opts, repo_values) do
     case Keyword.fetch(opts, :repo_identity_catalog) do
       {:ok, repo_identity_catalog} ->
@@ -1363,10 +1227,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       latest_progress_at: latest_progress_at(state.progress_events),
       plan: OperationalProjection.plan_summary(state.plan_nodes)
     }
-  end
-
-  defp work_request_comment_context(repo, %WorkRequest{} = work_request, work_packages) do
-    comment_context(repo, [{"work_request", work_request.id} | Enum.map(work_packages, &{"work_package", &1.id})])
   end
 
   @doc false
@@ -1626,20 +1486,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
       {:ok, %{}}
     else
       {:ok, work_package_contexts(repo, work_packages)}
-    end
-  end
-
-  defp work_package_work_package_contexts_for_grant(repo, work_packages, %AccessGrant{} = grant) do
-    with {:ok, filters} <- work_request_filters_for_grant(repo, grant),
-         {:ok, work_package_contexts} <- work_package_work_package_contexts(repo, work_packages) do
-      {:ok,
-       Map.filter(work_package_contexts, fn
-         {_work_package_id, %{work_package: %WorkPackage{} = work_package}} ->
-           phase_work_package_matches_filters?(work_package, filters)
-
-         _context ->
-           false
-       end)}
     end
   end
 
