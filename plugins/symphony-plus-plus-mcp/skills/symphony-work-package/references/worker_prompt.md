@@ -51,15 +51,14 @@ During coding:
 4. Use the worker-scoped MCP comment tools `add_comment`, `list_comments`, and
    `resolve_comment` when package-scoped implementation comments should stay
    visible in the cockpit.
-5. Use comments for ordinary parent-agent coordination. If execution is
-   blocked, call `report_blocker(summary, idempotency_key, blocker_id?)` and
-   resolve only that same worker-owned blocker with
-   `resolve_blocker(blocker_id, resolution, summary, idempotency_key)`.
-   Architect-owned human blockers and guidance remain architect/operator work.
+5. Send execution problems to the supervising parent through ordinary
+   collaboration or the final worker message. Use comments only when the
+   package note should remain in S++. Workers do not create or resolve human
+   blockers.
 6. Do not create local planning files as the WorkPackage source of truth.
 7. Do not use broad Linear/GitHub state as permission authority.
 
-Human-facing bodies, notes, findings, progress details, blockers, and guidance
+Human-facing bodies, notes, findings, progress details, and guidance
 context are Markdown. Keep titles, ids, statuses, branch names, and PR metadata
 plain.
 
@@ -85,11 +84,9 @@ Before ready:
    Use bounded `CONTINUE` only while the package contract is unchanged; return
    findings, contract ambiguity, `REPLAN`, or `RESLICE` to the architect.
 6. Call `mark_ready()` after provider-backed branch/PR state, required
-   review, blockers, and investigation findings are settled. Do not add
+   review, human blockers, and investigation findings are settled. Do not add
    task-plan or progress calls only to restate work proved
-   elsewhere. Resolve worker-owned blockers with `resolve_blocker`;
-   architect-owned human blockers still require the architect or trusted
-   local operator.
+   elsewhere. Human blockers require the architect or trusted local operator.
 
 Final output:
 - PR URL and final head SHA.

@@ -21,9 +21,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     "append_progress",
     "attach_branch",
     "attach_pr",
-    "sync_pr",
-    "report_blocker",
-    "resolve_blocker"
+    "sync_pr"
   ]
 
   @type repo :: module()

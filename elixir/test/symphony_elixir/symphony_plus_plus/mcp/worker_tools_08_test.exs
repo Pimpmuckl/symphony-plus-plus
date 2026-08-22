@@ -53,23 +53,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools08Test do
     assert {:ok, status_assignment} = AccessGrantService.claim(repo, status_minted.work_key.secret, claimed_by: "worker-1")
     assert {:ok, _revoked_status} = AccessGrantService.revoke(repo, status_minted.grant.id)
 
-    status_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "revoked-status",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "report_blocker",
-            "arguments" => %{"summary" => "Should not block", "idempotency_key" => "revoked-blocker"}
-          }
-        },
-        repo: repo,
-        session: MCPHarness.session(status_assignment, proof_hash: status_minted.grant.secret_hash)
-      )
-
-    assert get_in(status_response, ["error", "data", "reason"]) == "revoked"
-
     ready_response =
       MCPHarness.request(
         %{"jsonrpc" => "2.0", "id" => "revoked-ready", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},

@@ -57,8 +57,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "report_blocker",
-    "resolve_blocker",
     "abandon",
     "add_comment",
     "list_comments",
