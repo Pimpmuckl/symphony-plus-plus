@@ -6,10 +6,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.WorkKey
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Target
   alias SymphonyElixir.SymphonyPlusPlus.Comments.Service, as: CommentService
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
@@ -19,18 +15,15 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   alias SymphonyElixir.SymphonyPlusPlus.OperatorAudit
   alias SymphonyElixir.SymphonyPlusPlus.OperatorDashboardOpener
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixirWeb.Endpoint
   alias SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions
   alias SymphonyElixirWeb.SymppDashboardApi.Runtime
-  alias SymphonyElixirWeb.SymppDashboardApi.ScopeProjection
 
   alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
 
-  @type auth_context :: {:grant, AccessGrant.t()}
   @dangerous_local_operator_actions [:dangerous_override, :dangerous_rekey, :dangerous_delete]
 
   @spec local_operator_browser?(Conn.t()) :: boolean()
@@ -154,68 +147,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp normalize_origin_port("http", nil), do: 80
   defp normalize_origin_port("https", nil), do: 443
   defp normalize_origin_port(_scheme, port), do: port
-
-  @spec board(Conn.t(), map()) :: Conn.t()
-  def board(conn, _params) do
-    send_repo_response(conn, fn repo, secret ->
-      with {:ok, auth_context} <- auth_context(conn, repo, secret),
-           {:ok, payload} <- board_payload(repo, auth_context) do
-        json(conn, payload)
-      end
-    end)
-  end
-
-  @spec work_requests(Conn.t(), map()) :: Conn.t()
-  def work_requests(conn, _params) do
-    send_repo_response(conn, fn repo, secret ->
-      with {:ok, {:grant, %AccessGrant{} = grant} = auth_context} <- auth_context(conn, repo, secret),
-           :ok <- require_work_request_board(repo, auth_context),
-           {:ok, payload} <- Dashboard.work_requests_for_grant(repo, grant) do
-        json(conn, payload)
-      end
-    end)
-  end
-
-  @spec work_request_detail(Conn.t(), map()) :: Conn.t()
-  def work_request_detail(conn, %{"work_request_id" => work_request_id}) do
-    send_repo_response(conn, fn repo, secret ->
-      with {:ok, {:grant, %AccessGrant{} = grant} = auth_context} <- auth_context(conn, repo, secret),
-           :ok <- require_work_request_board(repo, auth_context),
-           {:ok, payload} <- Dashboard.work_request_detail_for_grant(repo, work_request_id, grant) do
-        json(conn, payload)
-      end
-    end)
-  end
-
-  @spec detail(Conn.t(), map()) :: Conn.t()
-  def detail(conn, %{"work_package_id" => work_package_id}) do
-    send_package_response(conn, work_package_id, &Dashboard.detail/2)
-  end
-
-  @spec timeline(Conn.t(), map()) :: Conn.t()
-  def timeline(conn, %{"work_package_id" => work_package_id}) do
-    send_package_response(conn, work_package_id, &Dashboard.timeline/2)
-  end
-
-  @spec artifacts(Conn.t(), map()) :: Conn.t()
-  def artifacts(conn, %{"work_package_id" => work_package_id}) do
-    send_package_response(conn, work_package_id, &Dashboard.artifacts/2)
-  end
-
-  @spec blockers(Conn.t(), map()) :: Conn.t()
-  def blockers(conn, %{"work_package_id" => work_package_id}) do
-    send_package_response(conn, work_package_id, &Dashboard.blockers/2)
-  end
-
-  @spec grants(Conn.t(), map()) :: Conn.t()
-  def grants(conn, %{"work_package_id" => work_package_id}) do
-    send_package_response(conn, work_package_id, &Dashboard.grants/2)
-  end
-
-  @spec agent_runs(Conn.t(), map()) :: Conn.t()
-  def agent_runs(conn, %{"work_package_id" => work_package_id}) do
-    send_package_response(conn, work_package_id, &Dashboard.agent_runs/2)
-  end
 
   @spec operator_dashboard(Conn.t(), map()) :: Conn.t()
   def operator_dashboard(conn, %{"surface" => surface}) when surface in ["archived", "solo"] do
@@ -626,27 +557,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     )
   end
 
-  defp send_package_response(conn, work_package_id, fetch_fun) do
-    send_repo_response(conn, fn repo, secret ->
-      with {:ok, auth_context} <- auth_context(conn, repo, secret),
-           :ok <- require_work_package(repo, auth_context, work_package_id),
-           {:ok, payload} <- fetch_fun.(repo, work_package_id) do
-        json(conn, ScopeProjection.scoped_package_payload(auth_context, payload))
-      end
-    end)
-  end
-
-  defp send_repo_response(conn, fun) when is_function(fun, 2) do
-    case bearer_secret(conn) do
-      nil -> {:error, :unauthorized}
-      secret -> send_authenticated_repo_response(secret, fun)
-    end
-    |> case do
-      {:error, reason} -> error_response(conn, reason)
-      %Conn{} = conn -> conn
-    end
-  end
-
   defp send_local_operator_response(conn, action, %Target{} = target, tool_name, fun)
        when is_atom(action) and is_atom(tool_name) and is_function(fun, 1) do
     if local_operator_browser?(conn) do
@@ -774,219 +684,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp script_name_prefix(%Conn{script_name: []}), do: ""
   defp script_name_prefix(%Conn{script_name: script_name}), do: "/" <> Enum.join(script_name, "/")
-
-  defp send_authenticated_repo_response(secret, fun) do
-    if WorkKey.secret_shape?(secret) and Runtime.dashboard_storage_present?() do
-      send_after_repo_auth(secret, fun)
-    else
-      {:error, :unauthorized}
-    end
-  end
-
-  defp send_after_repo_auth(secret, fun) do
-    with {:ok, {:grant, %AccessGrant{}}} <- authenticate_with_existing_repo(secret) do
-      Runtime.with_dashboard_repo(fn repo -> fun.(repo, secret) end)
-    end
-  end
-
-  defp authenticate_with_existing_repo(secret) do
-    authenticate_existing_repo(fn repo -> grant_auth_context(repo, secret) end)
-  end
-
-  defp authenticate_existing_repo(auth_fun) when is_function(auth_fun, 1) do
-    case Runtime.with_dashboard_repo(auth_fun, migrate?: false) do
-      {:error, {:storage_failed, message}} when is_binary(message) ->
-        handle_existing_auth_storage_error(auth_fun, message)
-
-      result ->
-        result
-    end
-  end
-
-  defp handle_existing_auth_storage_error(auth_fun, message) do
-    cond do
-      Runtime.missing_schema_message?(message) ->
-        {:error, :unauthorized}
-
-      Runtime.missing_access_grant_migration_column_message?(message) ->
-        Runtime.with_dashboard_repo(auth_fun, migrate?: true)
-
-      true ->
-        {:error, {:storage_failed, message}}
-    end
-  end
-
-  defp auth_context(_conn, repo, secret) do
-    grant_auth_context(repo, secret)
-  end
-
-  defp grant_auth_context(repo, secret) do
-    Runtime.normalize_storage_errors(fn ->
-      with secret_hash <- WorkKey.secret_hash(secret),
-           {:ok, %AccessGrant{} = grant} <- AccessGrantRepository.find_by_secret_hash(repo, secret_hash),
-           true <- Plug.Crypto.secure_compare(secret_hash, grant.secret_hash),
-           :ok <- live_grant?(grant),
-           :ok <- require_dashboard_package_authority(repo, grant) do
-        {:ok, {:grant, grant}}
-      else
-        false -> {:error, :unauthorized}
-        {:error, reason} -> secret_auth_error(reason)
-      end
-    end)
-  end
-
-  @doc false
-  @spec secret_auth_error(term()) :: {:error, term()}
-  def secret_auth_error(reason) when reason in [:invalid_secret, :not_found, :work_package_terminal], do: {:error, :unauthorized}
-  def secret_auth_error(reason), do: {:error, reason}
-
-  defp bearer_secret(conn) do
-    conn
-    |> get_req_header("authorization")
-    |> List.first()
-    |> case do
-      header when is_binary(header) -> bearer_secret_from_header(header)
-      nil -> nil
-    end
-    |> case do
-      "" -> nil
-      secret -> secret
-    end
-  end
-
-  defp bearer_secret_from_header(header) do
-    case String.split(header, " ", parts: 2) do
-      [scheme, secret] when is_binary(secret) ->
-        if String.downcase(scheme) == "bearer", do: String.trim(secret), else: nil
-
-      _invalid ->
-        nil
-    end
-  end
-
-  defp live_grant?(%AccessGrant{revoked_at: %DateTime{}}), do: {:error, :unauthorized}
-  defp live_grant?(%AccessGrant{claimed_at: nil}), do: {:error, :unauthorized}
-  defp live_grant?(%AccessGrant{claimed_by: nil}), do: {:error, :unauthorized}
-  defp live_grant?(%AccessGrant{expires_at: nil}), do: :ok
-
-  defp live_grant?(%AccessGrant{expires_at: %DateTime{} = expires_at}) do
-    if DateTime.compare(expires_at, DateTime.utc_now(:microsecond)) == :gt do
-      :ok
-    else
-      {:error, :unauthorized}
-    end
-  end
-
-  defp require_dashboard_package_authority(_repo, %AccessGrant{phase_id: phase_id})
-       when not is_binary(phase_id) and not is_nil(phase_id) do
-    :ok
-  end
-
-  defp require_dashboard_package_authority(repo, %AccessGrant{} = grant) do
-    AccessGrantService.require_live_package_authority(repo, grant)
-  end
-
-  defp board_payload(repo, {:grant, %AccessGrant{} = grant} = auth_context) do
-    with :ok <- require_phase_board(repo, auth_context),
-         {:ok, phase_id} <- phase_scope(repo, grant) do
-      Dashboard.phase_board_for_grant(repo, phase_id, grant)
-    end
-  end
-
-  defp require_phase_board(repo, {:grant, %AccessGrant{capabilities: capabilities} = grant}) do
-    with :ok <- require_capability(capabilities, "read:phase"),
-         {:ok, phase_id} <- phase_scope(repo, grant),
-         :ok <- require_phase_board_anchor(repo, grant, phase_id),
-         {:ok, _filters} <- Dashboard.phase_board_filters_for_grant(grant) do
-      :ok
-    end
-  end
-
-  defp require_work_request_board(repo, {:grant, %AccessGrant{} = grant} = auth_context) do
-    with :ok <- require_phase_board(repo, auth_context),
-         {:ok, _filters} <- Dashboard.work_request_filters_for_grant(repo, grant) do
-      :ok
-    end
-  end
-
-  defp require_work_package(repo, {:grant, %AccessGrant{} = grant}, work_package_id) do
-    cond do
-      has_capability?(grant.capabilities, "read:phase") ->
-        require_phase_work_package(repo, grant, work_package_id)
-
-      grant.grant_role == "worker" and grant.work_package_id == work_package_id ->
-        require_existing_work_package(repo, work_package_id)
-
-      has_capability?(grant.capabilities, "read:package") and grant.work_package_id == work_package_id ->
-        require_existing_work_package(repo, work_package_id)
-
-      true ->
-        {:error, :forbidden}
-    end
-  end
-
-  defp require_existing_work_package(repo, work_package_id) do
-    case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, _work_package} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp require_phase_work_package(repo, %AccessGrant{} = grant, work_package_id) do
-    with {:ok, phase_id} <- phase_scope(repo, grant),
-         :ok <- require_architect_phase_anchor(repo, grant, phase_id),
-         {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
-      if work_package.phase_id == phase_id do
-        Dashboard.require_phase_board_work_package_scope(work_package, grant)
-      else
-        {:error, :forbidden}
-      end
-    end
-  end
-
-  defp require_architect_phase_anchor(repo, %AccessGrant{work_package_id: work_package_id} = grant, phase_id)
-       when is_binary(work_package_id) do
-    case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, work_package} -> Dashboard.require_phase_board_anchor_scope(work_package, grant, phase_id)
-      {:error, reason} -> forbidden_or_storage_error(reason)
-    end
-  end
-
-  defp require_architect_phase_anchor(_repo, %AccessGrant{}, _phase_id), do: {:error, :forbidden}
-
-  defp require_phase_board_anchor(repo, %AccessGrant{work_package_id: work_package_id} = grant, phase_id)
-       when is_binary(work_package_id) do
-    case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, work_package} -> Dashboard.require_phase_board_anchor_scope(work_package, grant, phase_id)
-      {:error, reason} -> forbidden_or_storage_error(reason)
-    end
-  end
-
-  defp require_phase_board_anchor(_repo, %AccessGrant{}, _phase_id), do: {:error, :forbidden}
-
-  defp phase_scope(_repo, %AccessGrant{phase_id: phase_id}) when is_binary(phase_id) do
-    if phase_id == "", do: {:error, :forbidden}, else: {:ok, phase_id}
-  end
-
-  defp phase_scope(repo, %AccessGrant{phase_id: nil, work_package_id: work_package_id}) when is_binary(work_package_id) do
-    case WorkPackageRepository.get(repo, work_package_id) do
-      {:ok, %{phase_id: phase_id}} when is_binary(phase_id) and phase_id != "" -> {:ok, phase_id}
-      {:ok, _work_package} -> {:error, :forbidden}
-      {:error, reason} -> forbidden_or_storage_error(reason)
-    end
-  end
-
-  defp phase_scope(_repo, %AccessGrant{}), do: {:error, :forbidden}
-
-  defp forbidden_or_storage_error(:database_busy), do: {:error, :database_busy}
-  defp forbidden_or_storage_error({:storage_failed, _reason} = reason), do: {:error, reason}
-  defp forbidden_or_storage_error(_reason), do: {:error, :forbidden}
-
-  defp require_capability(capabilities, capability) when is_list(capabilities) do
-    if capability in capabilities, do: :ok, else: {:error, :forbidden}
-  end
-
-  defp has_capability?(capabilities, capability), do: ScopeProjection.has_capability?(capabilities, capability)
 
   defp error_response(conn, :not_found), do: error_response(conn, 404, "not_found", "Work package not found")
   defp error_response(conn, :unauthorized), do: error_response(conn, 401, "unauthorized", "Unauthorized")
