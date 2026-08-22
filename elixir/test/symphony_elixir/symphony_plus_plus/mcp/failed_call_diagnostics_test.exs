@@ -190,7 +190,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     assert solo_event["recovery"] == Map.take(recovery, ["fresh_mcp_session_required", "next_action", "tool"])
     refute diagnostic_event_line(solo_log) =~ "private-solo-session"
     refute Map.has_key?(solo_event["recovery"], "fallback")
-
   end
 
   test "batch failures emit once per tool item including notifications", %{repo: repo} do
