@@ -167,20 +167,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue do
   end
 
   defp reconcile_entry(repo, %Entry{} = entry, opts, now) do
-    cleanup_opts = Keyword.put_new(opts, :force, true)
-
     result =
       case Repository.get(repo, entry.work_package_id) do
         {:ok, %WorkPackage{worktree_path: path} = work_package} when path == entry.worktree_path ->
           if cleanup_deferred?(repo, work_package),
             do: {:error, :active_runtime},
-            else: WorktreeLifecycle.cleanup(repo, work_package.id, cleanup_opts)
+            else: WorktreeLifecycle.cleanup(repo, work_package.id, opts)
 
         {:ok, %WorkPackage{}} ->
-          WorktreeLifecycle.cleanup_obligation(repo, entry, cleanup_opts)
+          WorktreeLifecycle.cleanup_obligation(repo, entry, opts)
 
         {:error, :not_found} ->
-          WorktreeLifecycle.cleanup_obligation(repo, entry, cleanup_opts)
+          WorktreeLifecycle.cleanup_obligation(repo, entry, opts)
 
         {:error, reason} ->
           {:error, reason}
