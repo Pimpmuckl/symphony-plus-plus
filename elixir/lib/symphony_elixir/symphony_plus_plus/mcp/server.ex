@@ -857,7 +857,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     with :ok <- require_tool_arguments_object(params, name),
          :ok <- require_architect_tool_binding(server, name),
          :ok <- prepare_mcp_repository_for_tool(server.config.repo, name) do
-      if name in @delivery_policy_tools do
+      if name in @delivery_policy_tools or name == "read_guidance_request" do
         {:ok, Map.get(params, "arguments", %{})}
       else
         architect_tool_arguments_for_binding(server, params, name)
@@ -901,16 +901,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp require_architect_tool_binding(%__MODULE__{session: nil}, name) do
     {:error, -32_001, "Unauthorized", %{"resource" => name, "reason" => "claim_required", "action" => @local_architect_assignment_claim_tool}}
-  end
-
-  defp require_architect_tool_binding(
-         %__MODULE__{session: %Session{assignment: %{grant_role: "architect"} = assignment}},
-         "read_guidance_request"
-       ) do
-    case require_architect_capability(assignment, "read:guidance_request") do
-      :ok -> :ok
-      {:error, reason} -> architect_error(reason, "read_guidance_request")
-    end
   end
 
   defp require_architect_tool_binding(%__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}}, _name), do: :ok

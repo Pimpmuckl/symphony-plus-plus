@@ -5,6 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
+      architect_tool_arguments: 2,
       optional_argument: 3,
       optional_object_argument: 2,
       optional_string_argument: 2,
@@ -157,13 +158,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
 
   def call("read_guidance_request", %Config{} = config, session, arguments) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
+         {:ok, arguments} <- read_guidance_request_arguments(session, arguments),
          {:ok, guidance_request_id} <- required_argument(arguments, "guidance_request_id") do
       read_guidance_request_for_session(config.repo, session, guidance_request_id, arguments)
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "read_guidance_request", "reason" => reason}}
-      {:error, reason} -> worker_error(reason, "read_guidance_request")
+      {:error, code, message, data} -> {:error, code, message, data}
+      {:error, reason} -> read_guidance_request_error(session, reason)
     end
   end
+
+  defp read_guidance_request_arguments(
+         %Session{assignment: %{grant_role: "architect", capabilities: capabilities}},
+         arguments
+       ) do
+    if "read:guidance_request" in List.wrap(capabilities) do
+      architect_tool_arguments(%{"arguments" => arguments}, "read_guidance_request")
+    else
+      {:error, :insufficient_capability}
+    end
+  end
+
+  defp read_guidance_request_arguments(%Session{}, arguments), do: {:ok, arguments}
+
+  defp read_guidance_request_error(%Session{assignment: %{grant_role: "architect"}}, reason) do
+    architect_error(reason, "read_guidance_request")
+  end
+
+  defp read_guidance_request_error(_session, reason), do: worker_error(reason, "read_guidance_request")
 
   defp optional_guidance_request_status(arguments) do
     case Map.fetch(arguments, "status") do
