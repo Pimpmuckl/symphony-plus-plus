@@ -128,20 +128,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue do
   defp enqueue(_repo, %WorkPackage{worktree_path: nil}, _opts), do: :ok
 
   defp enqueue(repo, %WorkPackage{} = work_package, opts) do
-    with {:ok, attrs} <- WorktreeLifecycle.cleanup_obligation(work_package, opts) do
-      now = DateTime.utc_now(:microsecond)
+    case WorktreeLifecycle.cleanup_obligation(work_package, opts) do
+      {:ok, attrs} ->
+        now = DateTime.utc_now(:microsecond)
 
-      repo.insert_all(
-        Entry,
-        [Map.merge(attrs, %{attempts: 0, inserted_at: now, updated_at: now})],
-        on_conflict: :nothing,
-        conflict_target: [:worktree_path]
-      )
+        repo.insert_all(
+          Entry,
+          [Map.merge(attrs, %{attempts: 0, inserted_at: now, updated_at: now})],
+          on_conflict: :nothing,
+          conflict_target: [:worktree_path]
+        )
 
-      wake(Keyword.get(opts, :reconciler, __MODULE__))
-    else
-      {:error, :unsafe_worktree_path} -> :ok
-      {:error, reason} -> {:error, reason}
+        wake(Keyword.get(opts, :reconciler, __MODULE__))
+
+      {:error, :unsafe_worktree_path} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
   rescue
     error in Exqlite.Error -> {:error, error}
