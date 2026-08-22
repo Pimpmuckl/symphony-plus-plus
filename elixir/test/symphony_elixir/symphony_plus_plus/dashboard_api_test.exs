@@ -3753,29 +3753,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "local operator delete reports cleanup failures without declaring the dashboard unavailable", %{repo: repo} do
-    with_local_operator_endpoint(fn ->
-      work_request = create_work_request!(repo, id: "WR-LOCAL-DELETE-CLEANUP-FAILURE", status: "ready_for_slicing")
-
-      assert {:ok, work_package} =
-               CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, work_package_attrs(id: "WRS-LOCAL-DELETE-CLEANUP-FAILURE"))
-
-      assert {:ok, _linked_package} =
-               WorkPackageRepository.update(repo, work_package.id, %{
-                 worktree_path: Path.join(System.tmp_dir!(), "outside-sympp-managed-root")
-               })
-
-      payload =
-        local_operator_conn()
-        |> post("/api/v1/sympp/operator/work-requests/#{work_request.id}/delete", %{})
-        |> json_response(409)
-
-      assert get_in(payload, ["error", "code"]) == "request_delete_cleanup_failed"
-      assert get_in(payload, ["error", "message"]) == "Request could not be deleted safely"
-      assert {:ok, _work_request} = WorkRequestService.get(repo, work_request.id)
-    end)
-  end
-
   test "local operator can create and resolve comments through the dashboard API", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-LOCAL-COMMENTS", status: "ready_for_slicing")

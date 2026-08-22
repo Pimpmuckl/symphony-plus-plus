@@ -20,6 +20,7 @@ defmodule SymphonyElixir.Application do
   use Application
 
   alias SymphonyElixir.SymphonyPlusPlus.Repo
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
 
   @impl true
   def start(_type, _args) do
@@ -59,6 +60,7 @@ defmodule SymphonyElixir.Application do
     if artifact_runtime?() do
       [
         {Repo, Repo.child_options()},
+        {WorktreeCleanupQueue, repo: Repo},
         SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore,
         SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases,
         {SymphonyElixir.HttpServer, host: "127.0.0.1"}

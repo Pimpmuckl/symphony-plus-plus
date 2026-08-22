@@ -16,6 +16,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
@@ -90,13 +91,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutPausedLea
                repo.get!(ClaimLease, claim_lease.id)
 
       assert File.dir?(prepared.worktree_path)
+      assert :ok = WorktreeCleanupQueue.reconcile(repo, codex_home: codex_home)
       assert {:ok, replay} = WorkRequestService.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
       assert replay.id == delivery.id
       refute File.exists?(prepared.worktree_path)
       assert repo.get!(WorkPackage, linked_package.id).worktree_path == nil
 
       assert {:ok, _archived} = WorkRequestService.archive(repo, work_request.id)
-      Process.sleep(100)
       refute File.exists?(prepared.worktree_path)
     after
       restore_env("CODEX_HOME", previous_codex_home)

@@ -1,16 +1,14 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   @moduledoc false
 
-  require Logger
-
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Repository, as: ClaimLeaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.RuntimeCleanup
@@ -119,15 +117,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   @doc false
   @spec cleanup_after_commit(Repository.repo(), WorkPackage.t(), WorkPackageDelivery.t(), map()) :: :ok
-  def cleanup_after_commit(repo, %WorkPackage{} = work_package, %WorkPackageDelivery{} = delivery, closeout_context)
-      when is_atom(repo) and is_map(closeout_context) do
-    best_effort_cleanup_linked_worktree(repo, work_package, delivery, closeout_context)
-  rescue
-    error ->
-      Logger.warning("Worktree cleanup failed after delivery commit for #{work_package.id}: #{Exception.message(error)}")
-
-      :ok
-  end
+  def cleanup_after_commit(_repo, %WorkPackage{}, %WorkPackageDelivery{}, _closeout_context),
+    do: WorktreeCleanupQueue.wake()
 
   defp rollback_record_result({:ok, result}, _repo), do: result
   defp rollback_record_result({:error, reason}, repo), do: repo.rollback(reason)
@@ -588,62 +579,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
 
   defp progress_history_statuses(%{status: status}) when is_binary(status), do: [status]
   defp progress_history_statuses(_event), do: []
-
-  defp best_effort_cleanup_linked_worktree(
-         _repo,
-         %WorkPackage{},
-         %WorkPackageDelivery{},
-         %{defer_worktree_cleanup?: true}
-       ),
-       do: :ok
-
-  defp best_effort_cleanup_linked_worktree(_repo, %WorkPackage{id: work_package_id}, %WorkPackageDelivery{}, _closeout_context)
-       when not is_binary(work_package_id), do: :ok
-
-  defp best_effort_cleanup_linked_worktree(_repo, %WorkPackage{id: ""}, %WorkPackageDelivery{}, _closeout_context), do: :ok
-
-  defp best_effort_cleanup_linked_worktree(
-         repo,
-         %WorkPackage{id: work_package_id},
-         %WorkPackageDelivery{} = delivery,
-         _closeout_context
-       ) do
-    case WorkPackageService.cleanup_worktree(repo, work_package_id) do
-      {:ok, _cleanup} ->
-        :ok
-
-      {:error, _first_reason} ->
-        case WorkPackageService.cleanup_worktree(repo, work_package_id) do
-          {:ok, _cleanup} -> :ok
-          {:error, reason} -> audit_worktree_cleanup_failure(repo, work_package_id, delivery, reason)
-        end
-    end
-  end
-
-  defp audit_worktree_cleanup_failure(repo, work_package_id, %WorkPackageDelivery{} = delivery, reason) do
-    PlanningRepository.append_progress_event(repo, %{
-      work_package_id: work_package_id,
-      status: "worktree_cleanup_failed",
-      summary: "Worktree cleanup failed: #{inspect(closeout_worktree_cleanup_error(reason))}",
-      idempotency_key: "#{closeout_idempotency_key(delivery)}:worktree_cleanup",
-      payload: %{
-        type: "work_request_delivery_worktree_cleanup",
-        source_tool: "record_work_package_delivery",
-        delivery_id: delivery.id,
-        outcome: delivery.outcome,
-        reason: inspect(closeout_worktree_cleanup_error(reason))
-      }
-    })
-
-    :ok
-  end
-
-  defp closeout_worktree_cleanup_error(:database_busy), do: :database_busy
-  defp closeout_worktree_cleanup_error(:not_found), do: :not_found
-  defp closeout_worktree_cleanup_error({:constraint_failed, _constraint} = reason), do: reason
-  defp closeout_worktree_cleanup_error({:storage_failed, _message} = reason), do: reason
-  defp closeout_worktree_cleanup_error(%Ecto.Changeset{} = reason), do: reason
-  defp closeout_worktree_cleanup_error(reason), do: reason
 
   defp empty_closeout_context do
     closeout_context(WorkPackageActivity.empty_context(), [], [], allow_active_blockers?: false)
