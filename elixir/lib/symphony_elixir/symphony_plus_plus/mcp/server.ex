@@ -93,6 +93,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @architect_tools ToolCatalog.architect_tools()
   @architect_work_request_tools ArchitectWorkRequestTools.tools()
   @architect_product_tree_tools ArchitectProductTreeTools.tools()
+  @delivery_policy_tools ToolCatalog.delivery_policy_tools()
   @version_resource "sympp://health/version"
   @assignment_resource "sympp://assignment/current"
   @enforce_keys [:config]
@@ -856,7 +857,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     with :ok <- require_tool_arguments_object(params, name),
          :ok <- require_architect_tool_binding(server, name),
          :ok <- prepare_mcp_repository_for_tool(server.config.repo, name) do
-      architect_tool_arguments(params, name)
+      if name in @delivery_policy_tools do
+        {:ok, Map.get(params, "arguments", %{})}
+      else
+        architect_tool_arguments(params, name)
+      end
     end
   end
 

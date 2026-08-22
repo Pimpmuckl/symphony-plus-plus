@@ -39,6 +39,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     ErrorDetails,
     ProgressEvents,
     Session,
+    ToolArguments,
     ToolCatalog,
     ToolResult,
     WorkPackageWorkerRevoke,
@@ -76,7 +77,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   @spec call(String.t(), Config.t(), Session.t() | nil, map()) :: mcp_tool_result()
   def call("reconcile_work_request", %Config{} = config, session, arguments) do
     with {:ok, apply?} <- optional_boolean(arguments, "apply", false),
-         {:ok, live_session} <- Auth.require_session(session, config.repo),
+         {:ok, live_session} <- architect_session(config.repo, session, reconcile_work_request_capability(apply?)),
+         {:ok, arguments} <- validate_arguments(arguments, "reconcile_work_request"),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
          {:ok, recorded_by} <- optional_string_argument(arguments, "recorded_by", session_claimed_by(live_session)),
          {:ok, work_request, filters, scope} <-
@@ -123,7 +125,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   def call("record_work_package_delivery", %Config{} = config, session, arguments) do
-    with {:ok, live_session} <- Auth.require_session(session, config.repo),
+    with {:ok, live_session} <- architect_session(config.repo, session, "write:work_request"),
+         {:ok, arguments} <- validate_arguments(arguments, "record_work_package_delivery"),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, outcome} <- required_work_package_delivery_outcome(arguments),
@@ -182,7 +185,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   def call("accept_review_rework", %Config{} = config, session, arguments) do
-    with {:ok, live_session} <- Auth.require_session(session, config.repo),
+    with {:ok, live_session} <- architect_session(config.repo, session, "write:work_request"),
+         {:ok, arguments} <- validate_arguments(arguments, "accept_review_rework"),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
@@ -222,7 +226,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   def call("cleanup_work_request_work_package_runtime", %Config{} = config, session, arguments) do
-    with {:ok, live_session} <- Auth.require_session(session, config.repo),
+    with {:ok, live_session} <- architect_session(config.repo, session, "write:work_request"),
+         {:ok, arguments} <- validate_arguments(arguments, "cleanup_work_request_work_package_runtime"),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, outcome} <- required_runtime_cleanup_delivery_outcome(arguments),
@@ -274,7 +279,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   end
 
   def call("revoke_work_package_worker_key", %Config{} = config, session, arguments) do
-    with {:ok, live_session} <- Auth.require_session(session, config.repo),
+    with {:ok, live_session} <- architect_session(config.repo, session, "write:work_request"),
+         {:ok, arguments} <- validate_arguments(arguments, "revoke_work_package_worker_key"),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, grant_id} <- required_argument(arguments, "grant_id"),
@@ -670,6 +676,30 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp reconcile_work_request_action(true), do: :delivery_reconcile_apply
   defp reconcile_work_request_action(false), do: :delivery_reconcile_dry_run
 
+  defp validate_arguments(arguments, tool) do
+    case ToolArguments.architect_tool_arguments(%{"arguments" => arguments}, tool) do
+      {:ok, arguments} -> {:ok, arguments}
+      {:error, _code, _message, %{"reason" => reason}} -> {:tool_error, reason}
+    end
+  end
+
+  defp architect_session(repo, session, capability) do
+    with {:ok, session} <- Auth.require_session(session, repo),
+         :ok <- require_architect_assignment(session.assignment),
+         true <- capability in List.wrap(session.assignment.capabilities) do
+      {:ok, session}
+    else
+      false -> {:error, :insufficient_capability}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp require_architect_assignment(%{grant_role: "architect"}), do: :ok
+  defp require_architect_assignment(_assignment), do: {:error, :architect_grant_required}
+
+  defp reconcile_work_request_capability(true), do: "write:work_request"
+  defp reconcile_work_request_capability(false), do: "read:work_request"
+
   defp reconcile_work_request_mode(true), do: :apply
   defp reconcile_work_request_mode(false), do: :dry_run
 
@@ -726,13 +756,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp require_work_package_delivery_scope(
          repo,
          %WorkRequest{} = work_request,
-         %WorkPackage{},
+         %WorkPackage{} = work_package,
          attrs,
          filters
        ) do
     primary_scope? = WorkRequestScope.primary_work_request_scope?(repo, work_request, filters)
 
-    require_successor_work_package_scope(repo, work_request, attrs, primary_scope?, filters)
+    with :ok <-
+           WorkRequestScope.require_scoped_delivery_work_package_visibility(
+             work_package,
+             work_request,
+             work_package,
+             primary_scope?,
+             filters
+           ) do
+      require_successor_work_package_scope(repo, work_request, attrs, primary_scope?, filters)
+    end
   end
 
   defp require_successor_work_package_scope(repo, %WorkRequest{} = work_request, attrs, primary_scope?, filters) do
