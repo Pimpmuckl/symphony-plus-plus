@@ -223,9 +223,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
       |> tools_for_server()
       |> Map.new(&{&1["name"], &1})
 
+    full_tools =
+      test_mcp_config(repo)
+      |> Server.new(initialized: true, session: session)
+      |> tools_for_server()
+      |> Map.new(&{&1["name"], &1})
+
     refute Map.has_key?(tools, "attach_pr")
     assert get_in(tools, ["sync_pr", "inputSchema", "required"]) == ["work_package_id"]
     assert Map.keys(get_in(tools, ["sync_pr", "inputSchema", "properties"])) |> Enum.sort() == ["work_package_id", "work_request_id"]
+    assert full_tools["sync_pr"] == tools["sync_pr"]
 
     forged =
       mcp_tool(repo, session, "sync_pr", %{
@@ -266,6 +273,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
              "repo" => work_request.repo,
              "base_branch" => work_request.base_branch
            }
+
+    assert {:ok, persisted_package} = WorkPackageRepository.get(repo, package.id)
+    assert persisted_package.status == "merged"
   end
 
   test "architect WorkRequest work-package dispatch tool creates safe worker handoff", %{repo: repo} do
