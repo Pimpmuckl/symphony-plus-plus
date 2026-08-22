@@ -119,6 +119,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     repo_scope_opts = WorkRequestScope.work_request_repo_scope_opts(config)
 
     with {:ok, session} <- Auth.require_session(session, config.repo),
+         :ok <- authorize_list_work_requests_role(session, repo_scope_opts),
          {:ok, status} <- optional_work_request_status(arguments),
          {:ok, pagination} <- list_pagination(arguments),
          {:ok, filters, scope} <-
@@ -500,6 +501,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
       {:error, :not_found} -> not_found_error("cleanup_work_package_worktree")
       {:error, reason} -> architect_error(reason, "cleanup_work_package_worktree")
     end
+  end
+
+  defp authorize_list_work_requests_role(%Session{assignment: %{grant_role: "architect"}}, _repo_scope_opts), do: :ok
+
+  defp authorize_list_work_requests_role(%Session{} = session, repo_scope_opts) do
+    WorkRequestScope.authorize_work_request_list_policy(
+      session,
+      %{"repo" => "role-boundary", "base_branch" => nil},
+      "list_work_requests",
+      repo_scope_opts
+    )
   end
 
   defp authorize_local_trusted_work_request_read_tool_call(opts, tool) do
