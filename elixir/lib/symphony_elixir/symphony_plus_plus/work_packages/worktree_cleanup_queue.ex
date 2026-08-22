@@ -139,6 +139,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue do
       )
 
       wake(Keyword.get(opts, :reconciler, __MODULE__))
+    else
+      {:error, :unsafe_worktree_path} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   rescue
     error in Exqlite.Error -> {:error, error}
