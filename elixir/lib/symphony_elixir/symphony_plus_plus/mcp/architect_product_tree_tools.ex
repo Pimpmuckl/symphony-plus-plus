@@ -118,7 +118,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          {:ok, decision} <- required_argument(arguments, "decision"),
          {:ok, rationale} <- required_argument(arguments, "rationale"),
          {:ok, scope_impact} <- required_argument(arguments, "scope_impact"),
-         {:ok, created_by} <- required_argument(arguments, "created_by"),
+         {:ok, created_by} <- optional_string_argument(arguments, "created_by", session_claimed_by(session)),
          {:ok, source_id} <- optional_string_argument(arguments, "source_id"),
          {:ok, _work_request, filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :decision_record, "record_decision"),

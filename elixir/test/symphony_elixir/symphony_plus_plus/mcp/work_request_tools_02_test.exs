@@ -874,6 +874,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
     assert is_binary(get_in(combined_payload, ["decision_log_entry", "id"]))
     assert get_in(combined_payload, ["decision_log_entry", "source_id"]) == combined_question_id
 
+    default_decision_response =
+      mcp_tool(repo, session, "record_decision", %{
+        "work_request_id" => work_request.id,
+        "source_type" => "architect",
+        "source_id" => "comment-default",
+        "decision" => "Use the claimed architect as provenance by default.",
+        "rationale" => "The live claim already identifies the actor.",
+        "scope_impact" => "No scope change."
+      })
+
+    assert get_in(default_decision_response, ["result", "structuredContent", "decision_log_entry", "created_by"]) == "architect-1"
+
     decision_response =
       mcp_tool(repo, session, "record_decision", %{
         "work_request_id" => work_request.id,
@@ -882,19 +894,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
         "decision" => "Keep this WorkRequest backend-only with token raw_secret_value excluded.",
         "rationale" => "Dashboard work is out of scope.",
         "scope_impact" => "No dashboard changes.",
-        "created_by" => "architect-1"
+        "created_by" => "architect-override"
       })
 
     decision_payload = get_in(decision_response, ["result", "structuredContent"])
     assert is_binary(get_in(decision_payload, ["decision_log_entry", "id"]))
     assert get_in(decision_payload, ["decision_log_entry", "source_id"]) == "comment-1"
+    assert get_in(decision_payload, ["decision_log_entry", "created_by"]) == "architect-override"
     assert decision_payload["status"] == %{"work_request_status" => "clarifying"}
     refute inspect(decision_response) =~ "raw_secret_value"
 
     assert {:ok, questions} = WorkRequestRepository.list_questions(repo, work_request.id)
     assert Enum.map(questions, & &1.status) == ["answered", "closed", "answered"]
     assert {:ok, decisions} = WorkRequestRepository.list_decisions(repo, work_request.id)
-    assert Enum.map(decisions, & &1.source_id) == [combined_question_id, "comment-1"]
+    assert Enum.map(decisions, & &1.source_id) == [combined_question_id, "comment-default", "comment-1"]
   end
 
   test "ask_question rejects malformed decision prompts without echoing nested input", %{repo: repo} do

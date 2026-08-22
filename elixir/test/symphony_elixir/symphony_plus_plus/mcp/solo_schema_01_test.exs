@@ -920,8 +920,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              "source_type",
              "decision",
              "rationale",
-             "scope_impact",
-             "created_by"
+             "scope_impact"
            ]
 
     assert get_in(tools_by_name, ["record_decision", "inputSchema", "properties", "source_id", "type"]) == "string"
