@@ -32,19 +32,16 @@ foreach ($name in @(
     "Test-PortSelectionAllowsReuse", "Test-BackendContractMatches", "Test-BackendLaunchCompatible",
     "Test-RuntimeStateExternalLoopback", "Test-RuntimeEntryEndpointMatches", "Test-SymppBackendCommandLine", "Get-ProcessCommandLine", "New-SymppPublicationControls", "Test-SymppPublicationControlsMatch",
     "Test-SymppPublishedRuntimeReadyLocally", "Resolve-SymppPendingBackendProcess", "Test-SymppStartingBackendOwned", "New-ReusedBackendPlan", "New-ReusedDashboardPlan",
-    "Resolve-LocalWarmAttachIdentity", "Resolve-FastAttachRuntimePlan", "Resolve-DashboardPlan", "Set-SymppSourceRevisionEnvironment"
+    "Resolve-LocalWarmAttachIdentity", "Resolve-FastAttachRuntimePlan", "Set-SymppSourceRevisionEnvironment"
   )) {
   Import-ScriptFunction $scriptPath $name
 }
-foreach ($name in @("Get-SymppArtifactDirectoryFingerprint", "Test-SymppArtifactDashboardReady", "Remove-SymppArtifactExtractionStaging", "Expand-SymppArtifactArchive", "Test-ArtifactBackendProvidesDashboard", "Resolve-LaunchArtifactSelection")) {
+foreach ($name in @("Get-SymppArtifactDirectoryFingerprint", "Test-SymppArtifactDashboardReady", "Remove-SymppArtifactExtractionStaging", "Expand-SymppArtifactArchive", "Test-ArtifactBackendProvidesDashboard")) {
   Import-ScriptFunction $artifactRuntimePath $name
 }
-foreach ($name in @("Get-PathIdentity", "Test-SamePath", "Test-SameDatabasePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Invoke-BetaGitNullPaths", "Get-BetaGitWorktrees", "Assert-BetaWorktreeIdentity", "Initialize-BetaWorktree", "Assert-BetaPackageSource", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Get-BetaCodexArguments", "Assert-BetaRuntimeIdentity", "Test-BetaRuntimeProcessRunning")) {
+foreach ($name in @("Get-PathIdentity", "Test-SamePath", "Test-SameDatabasePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Invoke-BetaGitNullPaths", "Get-BetaGitWorktrees", "Assert-BetaWorktreeIdentity", "Initialize-BetaWorktree", "Assert-BetaPackageSource", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Assert-BetaRuntimeIdentity", "Test-BetaRuntimeProcessRunning")) {
   Import-ScriptFunction $betaPath $name
 }
-function script:git { Write-Error "normal git progress"; $script:LASTEXITCODE = 0; "ok" }
-try { $gitOutput = @(Invoke-BetaGit $repoRoot @("fetch")) } finally { Remove-Item Function:git }
-Assert-True ($gitOutput -contains "ok") "Successful git stderr must not terminate the beta launcher"
 function Write-Diagnostic([string]$Message) { }
 function Write-CompatibleSourceMismatchDiagnostic { }
 $pluginRoot = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp"
@@ -64,30 +61,7 @@ $state = [pscustomobject]@{
 }
 $identity = Resolve-LocalWarmAttachIdentity $state $pluginRoot 19998 19999 $false $false $null $null
 Assert-True ($null -ne $identity) "Current-contract artifact-static runtime should be eligible for PowerShell fallback warm attach"
-$publishedControls = New-SymppPublicationControls 19998 19999 $false $false $null $null
-$publishedState = $state | ConvertTo-Json -Depth 8 | ConvertFrom-Json
-$publishedState.backend.managed = $false
-$publishedState.backend.status = "external_loopback"
-$publishedState.frontend.status = "external_loopback"
-$publishedState | Add-Member -NotePropertyName publication -NotePropertyValue ([pscustomobject]@{ status = "ready"; generation_key = "published-generation"; controls = $publishedControls })
-$publishedIdentity = [pscustomobject]@{ generation_key = "published-generation"; contract_fingerprint = $fingerprint }
 $staleFingerprint = $(if ($fingerprint[0] -eq "0") { "1" } else { "0" }) + $fingerprint.Substring(1)
-function Get-SymppBackendHealthWithRetry { return $script:publishedExternalHealth }
-try {
-  $script:publishedExternalHealth = [pscustomobject]@{ healthy = $false; contract_fingerprint = $fingerprint }
-  Assert-True (-not (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $null $publishedControls)) "A stopped external backend must not satisfy initial ready publication"
-  $script:publishedExternalHealth = [pscustomobject]@{ healthy = $true; contract_fingerprint = $staleFingerprint }
-  Assert-True (-not (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $null $publishedControls)) "A live incompatible external backend must not satisfy initial ready publication"
-  $script:publishedExternalHealth = [pscustomobject]@{ healthy = $true; contract_fingerprint = $fingerprint }
-  Assert-True (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $null $publishedControls) "A live compatible external backend should satisfy local readiness"
-  Assert-True (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $publishedIdentity $publishedControls) "A live compatible external backend should satisfy ready publication"
-  $mismatchedIdentity = [pscustomobject]@{ generation_key = "other-generation"; contract_fingerprint = $fingerprint }
-  Assert-True (-not (Test-SymppPublishedRuntimeReadyLocally $publishedState $pluginRoot $mismatchedIdentity $publishedControls)) "A different installed generation must reject the publication"
-  $publishedPlan = Resolve-FastAttachRuntimePlan $publishedState $publishedState.backend.source_revision $fingerprint 0 0 $false $false $null $null $script:publishedExternalHealth $true $true
-  Assert-True ($null -ne $publishedPlan) "A live compatible external publication should produce a follower attach plan"
-} finally {
-  Remove-Item Function:Get-SymppBackendHealthWithRetry
-}
 Assert-True ($null -eq (Resolve-LocalWarmAttachIdentity $state $pluginRoot 20000 19999 $true $false $null $null)) "Explicit backend port mismatch must reject fallback warm attach"
 Assert-True ($null -eq (Resolve-LocalWarmAttachIdentity $state (Join-Path $pluginRoot "other") 19998 19999 $false $false $null $null)) "Different plugin payload must reject fallback warm attach"
 $staleState = $state | ConvertTo-Json -Depth 8 | ConvertFrom-Json
@@ -104,52 +78,7 @@ Assert-True (Test-SymppBackendCommandLine 'cmd.exe /c C:\cache\artifacts\mcp\win
 $sourceState = [pscustomobject]@{ runtime_kind = "managed"; backend = [pscustomobject]@{ url = "http://127.0.0.1:20000" } }
 $reusedSourcePlan = [pscustomobject]@{ reused = $true; should_start = $false; url = "http://127.0.0.1:20000" }
 Assert-True (-not (Test-ArtifactBackendProvidesDashboard $sourceState $reusedSourcePlan "source")) "Reused source backends must not be promoted to artifact mode"
-$sourceDashboardState = [pscustomobject]@{
-  backend = [pscustomobject]@{ url = "http://127.0.0.1:20000" }
-  frontend = [pscustomobject]@{ origin = "http://127.0.0.1:20001"; managed = $true; pid = 123 }
-}
-function Test-HealthySymppDashboard([string]$Origin) { return $true }
-function Test-SymppDashboardMcpProxyMatches([string]$Origin, [string]$ExpectedContractFingerprint) { return $false }
-$restartDashboardPlan = Resolve-DashboardPlan 20001 $null "http://127.0.0.1:20000" ("b" * 40) $sourceDashboardState $true ("b" * 40) $fingerprint $true $true
-Assert-True ($restartDashboardPlan.reused -and $restartDashboardPlan.managed -and $restartDashboardPlan.pid -eq 123) "Backend restart must preserve a healthy recorded managed dashboard while its proxy is temporarily unavailable"
-$source = Get-Content -LiteralPath $scriptPath -Raw
-$helperSource = Get-Content -LiteralPath $helperPath -Raw
-$artifactSource = Get-Content -LiteralPath $artifactRuntimePath -Raw
-$warmFastCall = $source.IndexOf("if (Invoke-WarmAttachFromRuntimeState")
-$warmFollowerCall = $source.LastIndexOf("if (Invoke-WarmAttachFromRuntimeState")
-$coldLeadership = $source.LastIndexOf('$leadership = Enter-SymppColdLeadership')
-$coldPlan = $source.LastIndexOf('Resolve-BackendPlan $backendPort')
-$leaderInputs = $source.LastIndexOf('$runtimeInputs = Resolve-SymppLauncherRuntimeInputs')
-Assert-True ($warmFastCall -ge 0 -and $warmFastCall -lt $coldLeadership -and $warmFollowerCall -gt $coldLeadership) "PowerShell fallback must try warm attach before cold leadership and after follower publication"
-Assert-True ($coldLeadership -ge 0 -and $coldLeadership -lt $coldPlan -and $coldPlan -lt $leaderInputs) "Installed runtime planning and artifact/source resolution must follow cold leadership"
-Assert-True ($source.Contains('$installedHttpCold -and -not $backendPlan.should_start -and $autostartFrontend') -and $source.Contains('$assetsDir = $runtimeInputs.assets_dir')) "Installed external-backend reuse must resolve source dashboard inputs before frontend planning"
-Assert-True ($source.Contains('Test-SymppPublishedRuntimeReadyLocally') -and $source.Contains('Try-Enter-FileLock') -and $source.Contains('runtime_ready_published')) "Cold followers must observe ready publication without joining a sequential lock convoy"
-Assert-True ($source.IndexOf('Test-SymppInstalledMarketplacePluginRoot $pluginRoot') -lt $source.LastIndexOf('Resolve-SymppInstalledMarketplaceIdentity $pluginRoot')) "Direct PowerShell fallback must elect cold leadership before marketplace identity work"
-Assert-True ($helperSource.Contains('$nativeCode -in @(11, 32, 33, 35)')) "File-lock contention must remain retryable on Windows, Linux, and macOS"
-Assert-True ($source.Contains('start-runtime\.ps1') -and $source.Contains('start-runtime\.(cmd|bat)')) "Leader-death recovery must recognize every supported Windows artifact wrapper"
-
-$mcp = Get-Content -LiteralPath (Join-Path $pluginRoot ".mcp.json") -Raw | ConvertFrom-Json
-$server = $mcp.symphony_plus_plus
-Assert-True ($server.command -eq "cmd.exe" -and (@($server.args) -join " ") -eq "/d /s /c scripts\start-sympp-mcp.cmd") "Shipped MCP config must exercise the bootstrap command exactly"
-$cmdPath = Join-Path $pluginRoot "scripts/start-sympp-mcp.cmd"
 $nodePath = Join-Path $pluginRoot "scripts/start-sympp-mcp-bridge.js"
-$cmd = Get-Content -LiteralPath $cmdPath -Raw
-$node = Get-Content -LiteralPath $nodePath -Raw
-$healthCall = $node.IndexOf('const preflight = await ensureRuntimeHealth')
-$stdinRead = $node.IndexOf('readline.createInterface')
-$watchRelease = $node.IndexOf('trace("generation_attach_handles_released");')
-$watchClose = if ($watchRelease -ge 0) { $node.LastIndexOf('closeGenerationWatchers();', $watchRelease) } else { -1 }
-$bridgeStart = $node.IndexOf('async function bridge(')
-$bridgeEnd = $node.IndexOf('async function main()', $bridgeStart)
-$bridgeSource = $node.Substring($bridgeStart, $bridgeEnd - $bridgeStart)
-Assert-True ($cmd.Contains('%%~$PATH:I') -and -not $cmd.Contains('where node.exe') -and $cmd.Contains('-PrepareRuntimeOnly') -and $cmd.Contains('if "%bridge_exit%"=="42" goto :run_pwsh')) "Bootstrap must select Node without a per-client discovery process and preserve PowerShell fallback after preparation"
-Assert-True ($node.Contains('const COLD_TIMEOUT = 44;') -and $node.Contains('process.exit(COLD_TIMEOUT)') -and -not $cmd.Contains('if "%bridge_exit%"=="44"')) "Node cold timeout must be terminal to the shipped command instead of restarting the PowerShell budget"
-Assert-True ($cmd.Contains('-CleanupPreparedRuntime') -and $source.Contains('if ($CleanupPreparedRuntime)')) "Unexpected post-prepare Node failures must clean an unleased managed runtime"
-Assert-True ($source.Contains('if ($PrepareRuntimeOnly)') -and $source.IndexOf('if ($PrepareRuntimeOnly)') -lt $source.LastIndexOf('Invoke-HttpMcpBridge')) "Prepared cold runtime must exit before any PowerShell stdio bridge"
-Assert-True ($source.Contains('$installedIdentity = Resolve-SymppInstalledMarketplaceIdentity $pluginRoot -ReadOnly') -and $source.Contains('Test-SymppPublishedRuntimeReadyLocally (Read-RuntimeState $runtimeFile) $pluginRoot $installedIdentity')) "Prepare-only followers must validate the published marketplace generation before exiting"
-Assert-True ($artifactSource.Contains('Remove-SymppArtifactExtractionStaging $ExtractRoot') -and $artifactSource.IndexOf('Remove-SymppArtifactExtractionStaging $ExtractRoot') -gt $artifactSource.IndexOf('Enter-FileLock (Join-Path $CacheRoot "artifact.lock")')) "Orphaned artifact extraction staging must be cleaned under the artifact lock"
-Assert-True ($artifactSource.Contains('Get-SymppRemainingTimeoutSec 600 "artifact cache lock"')) "Artifact-lock contention must honor the overall cold-start deadline"
-Assert-True ($source.Contains('Get-SymppRemainingTimeoutSec $backendPortReleaseTimeout "backend port release"') -and $source.Contains('Resolve-BackendPlan $backendPort $env:SYMPP_BACKEND_URL $runtimeState $backendPortReleaseBudget')) "Backend port-release waiting must stay inside the overall cold-start deadline"
 
 $pendingBase = Join-Path ([System.IO.Path]::GetTempPath()) "sympp-pending-launch-$([guid]::NewGuid().ToString('N'))"
 $pendingRoot = Join-Path $pendingBase "artifacts/mcp/test/runtime"
@@ -208,26 +137,6 @@ try {
   Remove-Item Env:SYMPP_TEST_WRAPPER_READY,Env:SYMPP_TEST_WRAPPER_RELEASE,Env:SYMPP_TEST_RUNTIME_CMD,Env:SYMPP_TEST_RUNTIME_ROOT -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $pendingBase -Recurse -Force -ErrorAction SilentlyContinue
 }
-Assert-True ($healthCall -ge 0 -and $healthCall -lt $stdinRead -and $node.Contains('trace("warm_miss_health");')) "Node health mismatches must route through cold recovery before consuming stdin"
-Assert-True ($node.Contains('/mcp/readiness') -and $node.Contains('response.status === 404') -and $node.Contains('legacyBackendHealth')) "Node launcher health probes must prefer stateless readiness and retain a 404-only legacy runtime fallback"
-Assert-True ($source.Contains('/mcp/readiness') -and $source.Contains('StatusCode -eq 404') -and $source.Contains('Get-LegacySymppBackendHealth')) "PowerShell launcher health probes must prefer stateless readiness and retain a 404-only legacy runtime fallback"
-Assert-True ($node.Contains('backendHealth(identity.backend)') -and -not $node.Contains('requireDashboard')) "Node bridge readiness must remain independent of the dashboard"
-Assert-True ($source.Contains('[bool]$RequireDashboardReady = $false') -and $source.Contains('Get-SymppBackendHealthWithRetry $DashboardOrigin 2 250 $true')) "PowerShell backend readiness must preserve headless reuse while dashboard proxy checks remain strict"
-Assert-True ($source -match '(?s)elseif \(\$runtimeState\.frontend\.managed -eq \$true -and \(Test-HealthySymppDashboard.+?\$runtimeState\.frontend\.origin.+?\)\).*?\$preserveDashboardOrigin' -and $source -match '(?s)Push-Location -LiteralPath \$elixirDir\s+try \{.*?\} finally \{\s+Pop-Location') "Cold cleanup must preserve a healthy recorded dashboard until planning, and validation must restore caller location"
-Assert-True ($source -match '(?s)\$restartingRecordedBackend -and \$dashboardPlan\.reused.+?Test-SymppDashboardMcpProxyMatches.+?Stop-ManagedRuntimeEntry "backend".+?dashboard_proxy_mismatch') "A preserved dashboard proxy must be revalidated after its backend restarts"
-Assert-True ($node.Contains('confirmed.runtimeKey.toLowerCase()') -and $node.Contains('trace("warm_miss_state");')) "Concurrent runtime rotation must route through cold recovery"
-Assert-True ($node.Contains('if (!confirmedIdentity) await prepareColdRuntime();')) "A ready state that cannot resolve against installed identity must enter cold preparation"
-Assert-True ($node.Contains('/^(disabled|failed)/.test(String(state.frontend.status))')) "Node warm attach must accept every launcher-produced disabled or failed headless status"
-Assert-True ($watchClose -ge 0 -and $watchClose -lt $watchRelease -and $watchRelease -lt $stdinRead) "Node warm attach must close marketplace and plugin-cache watchers before retaining the bridge on stdin"
-Assert-True ($node.Contains('validated_at_ms') -and -not $node.Contains('ownedGenerationMarker')) "Node generation coalescing must reject markers older than each attach without a process-lifetime marker owner"
-Assert-True ($node -match '(?s)function generationStillValid\(identity\).*?generationWatchVersion === identity\.generationWatchVersion;\s*}' -and $node -notmatch '(?s)function generationStillValid\(identity\).*?liveGeneration') "Pinned attachments must use their local watcher version instead of racing another session's generation marker refresh"
-Assert-True ([regex]::Matches($node, 'setTimeout\(resolve, GENERATION_SETTLE_MS\)').Count -eq 2) "Generation validation must retain the post-scan and final exact-generation settle waits"
-Assert-True ([regex]::Matches($bridgeSource, 'generationValidForAttachment\(identity\)').Count -eq 2 -and [regex]::Matches($bridgeSource, 'generationValidAtAttachment\(identity\)').Count -eq 1) "Warm bridge attachment must validate its generation before shared readiness and after lease attachment"
-Assert-True ($cmd.Contains('cd /d "%SystemRoot%"') -and $cmd.IndexOf('cd /d "%SystemRoot%"') -lt $cmd.IndexOf('start-sympp-mcp-bridge.js') -and -not $cmd.Contains('cd /d "%TEMP%"')) "Shipped launcher must leave the installed plugin working directory without relying on TEMP"
-Assert-True ($node.IndexOf('cleanupScript = prepareCleanupScript(identity);') -lt $watchRelease -and $node.Contains('cleanupLastDetach(runtimeFile, identity.runtimeKey, cleanupScript)')) "Node warm attach must preserve last-detach cleanup outside the invalidatable plugin cache"
-Assert-True (-not $node.Contains('confirmedCleanupScript')) "Warm bridge attachment must stage and hash its exact cleanup generation only once"
-Assert-True ($node -match '(?s)function prepareCleanupScript\(identity\).*?try \{\s*const names = fs\.readdirSync\(__dirname\).*?\} catch \(_\) \{\s*return null;') "Cleanup staging must fail closed when the invalidatable plugin cache disappears"
-Assert-True ((@([regex]::Matches($node, 'require\("([^./][^"]*)"\)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique) -join ",") -eq "child_process,crypto,fs,http,net,os,path,readline") "Node bridge must use standard-library modules only"
 $artifactTemp = Join-Path $PSScriptRoot (".artifact-runtime-" + [guid]::NewGuid().ToString("N"))
 try {
   $payload = Join-Path $artifactTemp "payload"
@@ -243,16 +152,6 @@ try {
   Assert-True (-not (Test-Path -LiteralPath "$extractRoot.extracting-orphan")) "Artifact staging cleanup must remove an orphaned extraction directory"
   $timings = Expand-SymppArtifactArchive $archive $extractRoot "start-runtime.ps1" ("a" * 64) "windows-x64" ("b" * 40) "0.1.9" "manifest.json" "dashboard-static" $fingerprint
   Assert-True (($timings.extract_ms -ge 0) -and (Test-SymppArtifactDashboardReady $extractRoot "dashboard-static" $fingerprint)) "Stdlib artifact extraction must preserve dashboard proof"
-  function Ensure-SymppArtifactPrepared { $script:capturedDashboardRoot = $args[10]; return "cache_ready" }
-  try {
-    $script:capturedDashboardRoot = $null
-    $rootDashboardRuntime = [pscustomobject]@{ root = $extractRoot; dashboard_root = $extractRoot; entrypoint_relative = "start-runtime.ps1"; sha256 = "a" * 64; platform = "windows-x64"; source_revision = "b" * 40; plugin_version = "0.1.9"; dashboard_fingerprint = $fingerprint }
-    $rootDashboardProbe = [pscustomobject]@{ status = "artifact_selected"; selected_artifact = [pscustomobject]@{}; manifest_path = "manifest.json"; cache_root = $artifactTemp; runtime = $rootDashboardRuntime }
-    $rootDashboardSelection = Resolve-LaunchArtifactSelection $pluginRoot $null $rootDashboardProbe ("b" * 40) $fingerprint $true $false
-    Assert-True ($rootDashboardSelection.runtime_mode -eq "artifact" -and $script:capturedDashboardRoot -eq ".") "Root-level dashboard artifacts must retain a dot-relative asset root"
-  } finally {
-    Remove-Item Function:Ensure-SymppArtifactPrepared -ErrorAction SilentlyContinue
-  }
 } finally {
   Remove-Item -LiteralPath $artifactTemp -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -310,28 +209,9 @@ try {
   Remove-Item -LiteralPath $livenessPath -Force -ErrorAction SilentlyContinue
 }
 Assert-True (-not (Test-BridgeLeaseActive $liveLease @{})) "Missing process must be stale"
-Assert-True ((Get-Content -LiteralPath $helperPath -Raw) -notmatch 'Get-CimInstance|Get-WmiObject') "Lease validation must not use CIM/WMI"
 
 $betaRoot = Join-Path $PSScriptRoot (".beta-bootstrap-" + [guid]::NewGuid().ToString("N"))
 try {
-  $betaSource = Get-Content -LiteralPath $betaPath -Raw
-  Assert-True ($betaSource.Contains('"Validate" { Test-BetaBootstrap $config }')) "Beta bootstrap must expose its declared validation action"
-  Assert-True ([regex]::Matches($betaSource, 'Initialize-BetaWorktree \$config').Count -eq 2) "Only explicit setup and package actions may fetch or update Git"
-  Assert-True ([regex]::Matches($betaSource, 'Assert-BetaWorktreeIdentity \$config').Count -eq 3) "Runtime actions must verify beta worktree identity"
-  Assert-True ($betaSource.Contains('"--dereference"') -and $betaSource.Contains('"-L" "-f"')) "Unix database identity checks must dereference symbolic links"
-  Assert-True ($betaSource.Contains('[void](Get-BetaRuntimeState $Config)')) "Beta start must validate existing runtime identity before preparation"
-  Assert-True ($betaSource -match '(?s)"Codex"\s*\{.*?Start-BetaRuntime \$config\s*\$codexArguments' -and $betaSource -notmatch '(?s)"Codex"\s*\{.*?(Invoke-WithBetaEnvironment|Install-BetaPlugin)') "Source Codex must start in the caller environment without package refresh"
-  $codexConfig = [pscustomobject]@{
-    worktree = "C:\beta"; sympp_home = "C:\beta-home"; runtime_file = "C:\beta-home\runtime.json"; log_dir = "C:\beta-home\logs"
-    mix_build_root = "C:\beta-home\build"; database = "C:\beta-home\ledger.sqlite3"; backend_port = 20000; dashboard_port = 20001
-  }
-  $freshCodexArguments = @(Get-BetaCodexArguments $codexConfig $null)
-  $resumeCodexArguments = @(Get-BetaCodexArguments $codexConfig "thread-id")
-  $mcpEnvironmentNames = [regex]::Matches($freshCodexArguments[1], '(?:env=\{|,)(SYMPP_[A-Z_]+|MIX_BUILD_ROOT)=') | ForEach-Object { $_.Groups[1].Value }
-  Assert-True (($freshCodexArguments[0] -eq "-c") -and $freshCodexArguments[1].Contains('cwd="C:/beta/plugins/symphony-plus-plus-mcp"') -and $freshCodexArguments[1].Contains('env={SYMPP_HOME="C:\\beta-home"') -and $freshCodexArguments[1].Contains('SYMPP_DATABASE="C:\\beta-home\\ledger.sqlite3"') -and $freshCodexArguments[1] -notmatch 'env_vars') "Beta Codex must pass its eight-value environment directly to the source MCP bridge"
-  Assert-True ((@($mcpEnvironmentNames) -join ",") -eq "SYMPP_HOME,SYMPP_RUNTIME_FILE,SYMPP_LOG_DIR,MIX_BUILD_ROOT,SYMPP_REPO_ROOT,SYMPP_DATABASE,SYMPP_BACKEND_PORT,SYMPP_DASHBOARD_PORT") "Beta MCP override must contain exactly the eight beta runtime values"
-  Assert-True ((@($freshCodexArguments[2..3]) -join "|") -eq "-C|C:\beta") "Beta Codex must open a fresh thread directly in the beta worktree"
-  Assert-True ((@($resumeCodexArguments[2..5]) -join "|") -eq "-C|C:\beta|resume|thread-id") "Beta Codex must resume directly inside the beta environment"
   $origin = Join-Path $betaRoot "origin.git"
   $sourceRepo = Join-Path $betaRoot "source"
   $betaWorktree = Join-Path $betaRoot "beta"

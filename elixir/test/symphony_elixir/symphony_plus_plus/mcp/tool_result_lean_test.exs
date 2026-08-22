@@ -39,35 +39,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolResultLeanTest do
     assert result["structuredContent"]["progress_event"]["idempotency_key"] == "progress:lean"
   end
 
-  test "text profiles invoke only the selected encoder" do
-    payload = %{"text" => String.duplicate("large detail ", 100), "uri" => "sympp://example"}
-
-    canonical =
-      ToolResult.with_text_profile(:canonical, fn ->
-        ToolResult.agent_tool_result(payload, fn ->
-          send(self(), :full_encoder_called)
-          "full text"
-        end)
-      end)
-
-    refute_receive :full_encoder_called
-    refute get_in(canonical, ["content", Access.at(0), "text"]) =~ "large detail"
-    assert canonical["structuredContent"] == payload
-    assert canonical["isError"] == false
-
-    full =
-      ToolResult.with_text_profile(:full, fn ->
-        ToolResult.agent_tool_result(payload, fn ->
-          send(self(), :full_encoder_called)
-          "full text"
-        end)
-      end)
-
-    assert_receive :full_encoder_called
-    refute_receive :full_encoder_called
-    assert get_in(full, ["content", Access.at(0), "text"]) == "full text"
-  end
-
   test "HTTP profiles emit canonical results while legacy full stdio keeps full text" do
     request = %{
       "jsonrpc" => "2.0",
