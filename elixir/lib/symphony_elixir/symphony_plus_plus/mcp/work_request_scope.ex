@@ -275,15 +275,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
     with {:ok, filters, scope} <-
            scoped_work_request_filters(repo, session, handoff_phase_scope?: not repo_scope_read_action?(action)),
          policy_session = read_scoped_work_request_session(repo, session, scope, action),
+         {:ok, repo_scopes} <- WorkRequestRepository.list_repo_scopes(repo, work_request_id),
          :ok <-
            authorize_scoped_work_request_policy(
              policy_session,
              action,
              work_request_id,
              scope,
+             repo_scopes,
              tool,
              repo_scope_opts
            ),
+         repo_scope_opts = Keyword.put(repo_scope_opts, :repo_scopes_by_work_request_id, %{work_request_id => repo_scopes}),
          {:ok, work_request} <-
            scoped_work_request(
              repo,
@@ -295,11 +298,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
     end
   end
 
-  defp authorize_scoped_work_request_policy(%Session{} = session, action, work_request_id, scope, tool, opts) do
+  defp authorize_scoped_work_request_policy(%Session{} = session, action, work_request_id, scope, repo_scopes, tool, opts) do
     target =
       Target.work_request(work_request_id,
         repo: Map.fetch!(scope, "repo"),
         base_branch: Map.fetch!(scope, "base_branch"),
+        repo_scopes: [
+          %{repo: Map.fetch!(scope, "repo"), base_branch: Map.fetch!(scope, "base_branch")}
+          | Enum.map(repo_scopes, &%{repo: &1.repo, base_branch: &1.base_branch})
+        ],
         phase_id: Map.get(scope, "phase_id"),
         metadata: work_request_repo_scope_metadata(opts)
       )

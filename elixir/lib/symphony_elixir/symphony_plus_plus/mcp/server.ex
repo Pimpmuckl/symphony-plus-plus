@@ -905,7 +905,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp require_architect_tool_binding(%__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}}, _name), do: :ok
 
-  defp require_architect_tool_binding(%__MODULE__{session: %Session{}}, name) when name in @delivery_policy_tools do
+  defp require_architect_tool_binding(%__MODULE__{session: %Session{}}, name)
+       when name in @delivery_policy_tools or name == "update_work_package" do
     architect_error(:architect_grant_required, name)
   end
 
