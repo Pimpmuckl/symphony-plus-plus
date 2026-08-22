@@ -2,7 +2,7 @@ import type { ArchitectHandoffPayload, ContextComment, CopyArchitectHandoff, Cre
 import type { NewRequestForm } from "@/components/dashboard/new-request-dialog";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, createLatestTaskQueue, dashboardBootstrapFromRuntimeConfig, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, enqueueLatestTask, ensureDashboardRuntimeConfig, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, removeDashboardWorkRequest } from "./runtime";
+import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, createLatestTaskQueue, dashboardBootstrapFromRuntimeConfig, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, enqueueLatestTask, ensureDashboardRuntimeConfig, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, patchDashboardWorkRequest, readDashboardApiResponse, removeDashboardWorkRequest } from "./runtime";
 import { DashboardShell } from "./dashboard-shell";
 import { DashboardDebugTools } from "./dashboard-debug-tools";
 import { SoloSessions } from "./solo-sessions";
@@ -141,7 +141,7 @@ function useDashboardController() {
       if (isCurrentBootstrap(bootstrap, loadSequence, loadSequenceRef.current, loadMutationVersion, mutationVersionRef.current)) {
         setDashboard(mergeDashboardPayload(dashboardRef.current, bootstrap)); clearConnectionFailure(failureVersion); setSurfaceRefreshVersion((version) => version + 1); return;
       }
-      const response = await operatorFetch(operatorApiUrl(dashboardRefreshPath()), { headers: jsonHeaders() });
+      const response = await fetch(operatorApiUrl(dashboardRefreshPath()), { headers: jsonHeaders() });
       if (loadSequence !== loadSequenceRef.current) return;
       const loaded = await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current, failureVersion);
       if (loaded) setSurfaceRefreshVersion((version) => version + 1);
@@ -169,7 +169,7 @@ function useDashboardController() {
     const loadSequence = deferredLoadSequenceRef.current + 1;
     deferredLoadSequenceRef.current = loadSequence;
     try {
-      const response = await operatorFetch(operatorApiUrl("/dashboard/deferred"), { headers: jsonHeaders() });
+      const response = await fetch(operatorApiUrl("/dashboard/deferred"), { headers: jsonHeaders() });
       const payload = await readDashboardApiResponse(response, "Dashboard details unavailable");
       if (loadSequence !== deferredLoadSequenceRef.current || loadMutationVersion !== mutationVersionRef.current || dashboardRef.current !== baseDashboard) return;
       const nextDashboard = mergeDashboardPayload(dashboardRef.current, payload as DashboardPayload);
@@ -204,7 +204,7 @@ function useDashboardController() {
   useBestEffortGithubSync(Boolean(dashboard && !dashboard.deferred?.dashboard_sections), refreshAfterMutation);
   const mutateWorkRequest = useCallback(
     async (workRequestId: string, action: "archive" | "delete" | "state", body: Record<string, unknown>, fallbackMessage: string, options: { archive?: boolean; remove?: boolean } = {}) => {
-      const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/${action}`), {
+      const response = await fetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/${action}`), {
         method: "POST",
         headers: mutationHeaders(),
         body: JSON.stringify(body),
@@ -221,7 +221,7 @@ function useDashboardController() {
     [clearConnectionFailure, loadDashboard, setDashboard, setSelectedAttention, setSelectedCardDetail],
   );
   const submitGuidanceAnswer = useCallback(async (item: GuidanceItem, submission: GuidanceAnswerSubmission) => {
-    const response = await operatorFetch(guidanceAnswerUrl(item), {
+    const response = await fetch(guidanceAnswerUrl(item), {
       method: "POST",
       headers: mutationHeaders(),
       body: JSON.stringify(submission),
@@ -231,7 +231,7 @@ function useDashboardController() {
     setSelectedAttention(null);
   }, [refreshAfterMutation, setSelectedAttention]);
   const createWorkRequest = useCallback(async (form: NewRequestForm) => {
-    const response = await operatorFetch(operatorApiUrl("/work-requests"), {
+    const response = await fetch(operatorApiUrl("/work-requests"), {
       method: "POST",
       headers: mutationHeaders(),
       body: JSON.stringify(form),
@@ -247,7 +247,7 @@ function useDashboardController() {
   }, [refreshAfterMutation]);
 
   const submitComment = useCallback<SubmitContextComment>(async (target, body) => {
-    const response = await operatorFetch(operatorApiUrl("/comments"), {
+    const response = await fetch(operatorApiUrl("/comments"), {
       method: "POST",
       headers: mutationHeaders(),
       body: JSON.stringify({
@@ -267,7 +267,7 @@ function useDashboardController() {
   }, [refreshAfterMutation]);
 
   const resolveComment = useCallback<ResolveContextComment>(async (commentId, resolutionNote) => {
-    const response = await operatorFetch(operatorApiUrl(`/comments/${encodeURIComponent(commentId)}/resolve`), {
+    const response = await fetch(operatorApiUrl(`/comments/${encodeURIComponent(commentId)}/resolve`), {
       method: "POST",
       headers: mutationHeaders(),
       body: JSON.stringify({
@@ -289,7 +289,7 @@ function useDashboardController() {
     let refreshPayload: DashboardMutationPayload | undefined;
 
     if (!handoff) {
-      const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/architect-handoff`), {
+      const response = await fetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/architect-handoff`), {
         method: "POST",
         headers: mutationHeaders(),
         body: JSON.stringify({}),
@@ -329,7 +329,7 @@ function useDashboardController() {
   const deleteWorkRequest = useCallback<WorkRequestMutation>((workRequestId) => mutateWorkRequest(workRequestId, "delete", {}, "WorkRequest was not deleted", { remove: true }), [mutateWorkRequest]);
 
   const restoreWorkRequest = useCallback<WorkRequestMutation>(async (workRequestId) => {
-    const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/restore`), {
+    const response = await fetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/restore`), {
       method: "POST",
       headers: mutationHeaders(),
       body: JSON.stringify({}),
@@ -342,7 +342,7 @@ function useDashboardController() {
   const changeWorkRequestState = useCallback<WorkRequestStateMutation>((workRequestId, nextState) => mutateWorkRequest(workRequestId, "state", { state: nextState }, "WorkRequest state was not changed"), [mutateWorkRequest]);
 
   const changeWorkPackageState = useCallback<WorkPackageStateMutation>(async (workPackageId, action, options) => {
-    const response = await operatorFetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/state`), {
+    const response = await fetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/state`), {
       method: "POST",
       headers: mutationHeaders(),
       body: JSON.stringify({ status: action, no_pr_evidence: options?.noPrEvidence }),
@@ -354,7 +354,7 @@ function useDashboardController() {
   }, [refreshAfterMutation, setSelectedAttention, setSelectedCardDetail]);
 
   const archiveWorkPackage = useCallback<WorkPackageArchiveMutation>(async (workPackageId) => {
-    const response = await operatorFetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/archive`), {
+    const response = await fetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/archive`), {
       method: "POST",
       headers: mutationHeaders(),
       body: JSON.stringify({}),
@@ -366,7 +366,7 @@ function useDashboardController() {
   }, [refreshAfterMutation, setSelectedAttention, setSelectedCardDetail]);
 
   const clearWorkPackageBlocker = useCallback<WorkPackageBlockerClearMutation>(async (workPackageId, blockerId) => {
-    const response = await operatorFetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/blockers/${encodeURIComponent(blockerId)}/clear`), {
+    const response = await fetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/blockers/${encodeURIComponent(blockerId)}/clear`), {
       method: "POST",
       headers: mutationHeaders(),
       body: JSON.stringify({}),

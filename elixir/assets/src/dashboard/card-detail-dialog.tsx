@@ -3,7 +3,7 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import type * as React from "react";
 import { dashboardPrefersReducedMotion } from "@/components/dashboard/motion-utils";
 import { useEffect, useReducer, useState } from "react";
-import { CARD_DETAIL_HEIGHT_MS, CARD_DETAIL_LOADING_HOLD_MS, CARD_DETAIL_WIDTH_MS, CardDetailSelection, CardDetailStage, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, ensureDashboardRuntimeConfig, jsonHeaders, operatorApiUrl, operatorFetch, readDashboardApiResponse } from "./runtime";
+import { CARD_DETAIL_HEIGHT_MS, CARD_DETAIL_LOADING_HOLD_MS, CARD_DETAIL_WIDTH_MS, CardDetailSelection, CardDetailStage, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, ensureDashboardRuntimeConfig, jsonHeaders, operatorApiUrl, readDashboardApiResponse } from "./runtime";
 import { CardDetailLoadingContent } from "./card-detail-loading";
 import { BlockerDetailContent, PackageDetailContent, SliceDetailContent } from "./package-detail";
 import { RequestDetailContent } from "./request-detail";
@@ -80,7 +80,7 @@ function cardDetailDialogReducer(state: CardDetailDialogState, action: CardDetai
 
 async function loadOperatorPayload<T>(path: string, signal: AbortSignal, fallbackMessage: string): Promise<T> {
   await ensureDashboardRuntimeConfig();
-  const response = await operatorFetch(operatorApiUrl(path), {
+  const response = await fetch(operatorApiUrl(path), {
     headers: jsonHeaders(),
     signal,
   });

@@ -1,7 +1,7 @@
 import type { DashboardMutationPayload } from "@/types/dashboard";
 import { useEffect, useMemo } from "react";
 
-import { mutationHeaders, operatorApiUrl, operatorFetch, readDashboardApiResponse } from "./runtime";
+import { mutationHeaders, operatorApiUrl, readDashboardApiResponse } from "./runtime";
 
 const BEST_EFFORT_GITHUB_SYNC_COOLDOWN_MS = 5 * 60_000;
 
@@ -15,7 +15,7 @@ export function useBestEffortGithubSync(
     void sync.ready(
       ready
         ? async () => {
-            const response = await operatorFetch(operatorApiUrl("/github/sync-prs"), {
+            const response = await fetch(operatorApiUrl("/github/sync-prs"), {
               method: "POST",
               headers: mutationHeaders(),
               body: JSON.stringify({ mode: "auto" }),

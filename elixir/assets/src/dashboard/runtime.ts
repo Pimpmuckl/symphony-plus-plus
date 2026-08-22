@@ -230,10 +230,6 @@ export function jsonHeaders({ content = false }: { content?: boolean } = {}) {
   return headers;
 }
 
-export function operatorFetch(input: RequestInfo | URL, init: RequestInit = {}) {
-  return fetch(input, init);
-}
-
 export async function readDashboardApiResponse(response: Response, fallbackMessage: string): Promise<DashboardApiResponse> {
   const payload = await readDashboardJson(response);
 
@@ -415,7 +411,7 @@ export async function ensureDashboardRuntimeConfig() {
   }
 
   if (!dashboardRuntimeConfigPromise) {
-    const configPromise: Promise<DashboardRuntimeConfig | undefined> = operatorFetch(operatorConfigUrl(), { headers: jsonHeaders() })
+    const configPromise: Promise<DashboardRuntimeConfig | undefined> = fetch(operatorConfigUrl(), { headers: jsonHeaders() })
       .then(async (response) => {
         const payload = await readDashboardApiResponse(response, "Dashboard runtime config unavailable");
         dashboardRuntimeConfig = payload as DashboardRuntimeConfig;

@@ -6,7 +6,6 @@ import {
   jsonHeaders,
   mergeDashboardPayload,
   operatorApiUrl,
-  operatorFetch,
   readDashboardApiResponse,
 } from "./runtime";
 
@@ -39,7 +38,7 @@ export function useDashboardSurfaceLoading({
     setLoading((state) => ({ ...state, [surface]: true }));
 
     try {
-      const response = await operatorFetch(operatorApiUrl(`/dashboard?surface=${surface}`), { headers: jsonHeaders() });
+      const response = await fetch(operatorApiUrl(`/dashboard?surface=${surface}`), { headers: jsonHeaders() });
       const payload = (await readDashboardApiResponse(response, `Dashboard ${surface} data unavailable`)) as DashboardPayload;
       if (requestVersions.current[surface] !== requestVersion) return;
       setDashboard(mergeDashboardPayload(dashboardRef.current, payload));
