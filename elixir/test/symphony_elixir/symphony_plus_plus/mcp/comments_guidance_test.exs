@@ -285,14 +285,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
              "work_request_id"
            ]
 
-    assert get_in(tools_by_name, ["add_work_request_comment", "inputSchema", "required"]) == ["work_request_id", "body", "created_by"]
+    assert get_in(tools_by_name, ["add_work_request_comment", "inputSchema", "required"]) == ["work_request_id", "body"]
 
     assert get_in(tools_by_name, ["record_work_request_operator_decision", "inputSchema", "required"]) == [
              "work_request_id",
              "decision",
              "rationale",
-             "scope_impact",
-             "created_by"
+             "scope_impact"
            ]
 
     {comment_response, note_server} =
@@ -657,6 +656,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
   test "local operator WorkRequest note tools reject invalid local payload fields", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-MCP-LOCAL-OPERATOR-PAYLOAD-DENIED")
     local_server = local_mcp_server(local_mcp_config(repo), "local-operator-invalid-payload-state")
+
+    for {name, arguments} <- [
+          {"add_work_request_comment", %{"work_request_id" => work_request.id, "body" => "safe note"}},
+          {"record_work_request_operator_decision",
+           %{
+             "work_request_id" => work_request.id,
+             "decision" => "safe decision",
+             "rationale" => "safe rationale",
+             "scope_impact" => "safe scope"
+           }}
+        ] do
+      response =
+        Server.handle(
+          %{
+            "jsonrpc" => "2.0",
+            "id" => "local-operator-missing-creator-#{name}",
+            "method" => "tools/call",
+            "params" => %{"name" => name, "arguments" => arguments}
+          },
+          local_server
+        )
+
+      assert get_in(response, ["error", "code"]) == -32_602
+      assert get_in(response, ["error", "data", "reason"]) == "missing_created_by"
+    end
 
     invalid_creator_response =
       Server.handle(
