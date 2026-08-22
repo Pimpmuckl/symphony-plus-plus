@@ -157,7 +157,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedCommentToolsTest do
     work_request = create_work_request!(repo, id: "WR-MCP-LOCAL-OPERATOR-BOUND")
 
     assert {:ok, package} =
-             WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-LOCAL-OPERATOR-BOUND", kind: "mcp"))
+             WorkPackageRepository.create(
+               repo,
+               WorkPackageFactory.attrs(id: "SYMPP-LOCAL-OPERATOR-BOUND", kind: "mcp", status: "active")
+             )
 
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, worker_assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
@@ -194,6 +197,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedCommentToolsTest do
 
     stale_bound_list_response =
       worker_server
+      |> Map.put(:state_key, "local-operator-worker-stale-state")
       |> Map.put(:session_refresh_required, true)
       |> list_package_comments(package.id, other_package.id, "local-operator-stale-bound-list-foreign")
 
@@ -207,7 +211,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedCommentToolsTest do
           "method" => "tools/call",
           "params" => %{
             "name" => "add_work_request_comment",
-            "arguments" => %{"work_request_id" => work_request.id, "body" => "safe note", "created_by" => "operator"}
+            "arguments" => %{"work_request_id" => work_request.id, "body" => "safe note"}
           }
         },
         worker_server
@@ -215,6 +219,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedCommentToolsTest do
 
     assert get_in(response, ["result", "structuredContent", "comment", "target_id"]) == work_request.id
     assert get_in(response, ["result", "structuredContent", "comment", "source_type"]) == "operator"
+    assert get_in(response, ["result", "structuredContent", "comment", "author_name"]) == "worker-1"
 
     decision_response =
       Server.handle(
@@ -228,8 +233,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedCommentToolsTest do
               "work_request_id" => work_request.id,
               "decision" => "Bound local sessions may still add operator notes.",
               "rationale" => "The explicit local daemon state is the trust boundary.",
-              "scope_impact" => "No worker assignment scope is widened.",
-              "created_by" => "operator"
+              "scope_impact" => "No worker assignment scope is widened."
             }
           }
         },
@@ -237,6 +241,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalTrustedCommentToolsTest do
       )
 
     assert get_in(decision_response, ["result", "structuredContent", "decision_log_entry", "source_type"]) == "operator"
+    assert get_in(decision_response, ["result", "structuredContent", "decision_log_entry", "created_by"]) == "worker-1"
 
     create_response =
       Server.handle(

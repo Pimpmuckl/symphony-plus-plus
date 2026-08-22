@@ -52,10 +52,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           markdown_string_schema("Non-secret Markdown comment body. Redacted before storage and response.")
           |> Map.put("maxLength", Comment.max_body_length()),
         "created_by" =>
-          described_string_schema("Local operator or agent provenance for audit display.")
+          described_string_schema("Optional provenance override. Required without a live claim; otherwise defaults to the claimed actor.")
           |> Map.put("maxLength", @local_operator_provenance_max_length)
       },
-      ["work_request_id", "body", "created_by"]
+      ["work_request_id", "body"]
     )
   end
 
@@ -73,13 +73,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
           markdown_string_schema("Non-secret Markdown note on scope or delivery impact.")
           |> Map.put("maxLength", Comment.max_body_length()),
         "created_by" =>
-          described_string_schema("Local operator or agent provenance for audit display.")
+          described_string_schema("Optional provenance override. Required without a live claim; otherwise defaults to the claimed actor.")
           |> Map.put("maxLength", @local_operator_provenance_max_length),
         "source_id" =>
           described_string_schema("Optional local source id, such as a PR review or operator note id.")
           |> Map.put("maxLength", @local_operator_provenance_max_length)
       },
-      ["work_request_id", "decision", "rationale", "scope_impact", "created_by"]
+      ["work_request_id", "decision", "rationale", "scope_impact"]
     )
   end
 
@@ -466,7 +466,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "created_by" => string_schema(),
         "source_id" => string_schema()
       },
-      ["work_request_id", "source_type", "decision", "rationale", "scope_impact", "created_by"]
+      ["work_request_id", "source_type", "decision", "rationale", "scope_impact"]
     )
   end
 

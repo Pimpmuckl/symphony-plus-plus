@@ -1082,10 +1082,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp local_operator_tool("add_work_request_comment", arguments, %__MODULE__{config: config}) do
+  defp local_operator_tool("add_work_request_comment", arguments, %__MODULE__{config: config} = server) do
     with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, body} <- required_argument(arguments, "body"),
-         {:ok, created_by} <- required_argument(arguments, "created_by"),
+         {:ok, created_by} <- local_operator_created_by(arguments, server),
          {:ok, work_request} <- WorkRequestService.get(config.repo, work_request_id),
          {:ok, comment} <-
            CommentService.create(config.repo, %{
@@ -1112,12 +1112,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     {:ok, ToolResult.tool_result(LocalTrustedTools.failed_call_summary())}
   end
 
-  defp local_operator_tool("record_work_request_operator_decision", arguments, %__MODULE__{config: config}) do
+  defp local_operator_tool("record_work_request_operator_decision", arguments, %__MODULE__{config: config} = server) do
     with {:ok, work_request_id} <- required_argument(arguments, "work_request_id"),
          {:ok, decision} <- required_argument(arguments, "decision"),
          {:ok, rationale} <- required_argument(arguments, "rationale"),
          {:ok, scope_impact} <- required_argument(arguments, "scope_impact"),
-         {:ok, created_by} <- required_argument(arguments, "created_by"),
+         {:ok, created_by} <- local_operator_created_by(arguments, server),
          {:ok, source_id} <- optional_string_argument(arguments, "source_id"),
          {:ok, work_request} <- WorkRequestService.get(config.repo, work_request_id),
          {:ok, decision_record} <-
@@ -1159,6 +1159,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp local_operator_note_provenance(created_by, source_id \\ nil) do
     %{"source_type" => "operator", "created_by" => Redactor.redact_text(created_by)}
     |> optional_put("source_id", Redactor.redact_text(source_id))
+  end
+
+  defp local_operator_created_by(arguments, %__MODULE__{} = server) do
+    with {:ok, live_session} <- SessionBindingTools.tool_surface_session(server) do
+      case live_session do
+        %Session{} -> optional_string_argument(arguments, "created_by", session_claimed_by(live_session))
+        nil -> required_argument(arguments, "created_by")
+      end
+    end
   end
 
   defp local_trusted_list_comments_tool(arguments, %__MODULE__{config: config}) do
@@ -1282,6 +1291,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp worker_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
   defp local_operator_error(:database_busy, tool), do: service_error(:database_busy, tool)
+  defp local_operator_error({:service_unavailable, _reason} = reason, tool), do: service_error(reason, tool)
   defp local_operator_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp local_operator_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp local_operator_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
