@@ -790,7 +790,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
       successor_work_package_id ->
         with {:ok, successor_work_package} <- WorkPackageRepository.get(repo, successor_work_package_id),
              {:ok, successor_slice} <-
-               scoped_work_request_work_package_work_package(repo, work_request.id, successor_work_package_id) do
+               WorkRequestService.get_work_package(repo, work_request.id, successor_work_package_id) do
           WorkRequestScope.require_scoped_delivery_work_package_visibility(
             successor_work_package,
             work_request,
@@ -803,10 +803,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
           {:error, reason} -> {:error, reason}
         end
     end
-  end
-
-  defp scoped_work_request_work_package_work_package(repo, work_request_id, work_package_id) do
-    WorkRequestService.get_work_package(repo, work_request_id, work_package_id)
   end
 
   defp accept_review_rework_in_transaction(
