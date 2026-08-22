@@ -349,7 +349,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments do
   end
 
   defp normalize_implied_status(name, arguments) do
-    expected_status = %{"report_blocker" => "blocked", "resolve_blocker" => "resolved"}[name]
+    expected_status = %{"resolve_blocker" => "resolved"}[name]
 
     case {expected_status, Map.fetch(arguments, "status")} do
       {nil, _status} ->

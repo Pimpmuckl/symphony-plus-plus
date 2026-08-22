@@ -17,8 +17,8 @@ PR-sized assignment.
    - Assigned WorkPackage: use
      `symphony-plus-plus-mcp:symphony-work-package` and claim by WorkPackage
      id.
-     If that MCP adapter is unavailable, report a blocker; do not fall back to
-     Solo.
+     If that MCP adapter is unavailable, tell the supervising parent and stop;
+     do not fall back to Solo.
    - No WorkPackage: use
      `symphony-plus-plus:symphony-solo-session`.
      Each worker uses its own session.
@@ -45,7 +45,7 @@ PR-sized assignment.
 ## Review
 
 - Run focused validation first, then broader assigned validation.
-- If CI/checks exist, make sure they are green or report the exact blocker. If
+- If CI/checks exist, make sure they are green or return the exact failure. If
   no CI exists, say so.
 - After material changes, rerun the same required review profile; do not step
   down to a lower review level.

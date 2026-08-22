@@ -1,5 +1,5 @@
 {
-  "mcp_contract_fingerprint": "f710bce2db02c5d7c3930f6930f8c6e39d41e4397a26e80016381aee51ac6ce5",
+  "mcp_contract_fingerprint": "05361156555949f1d9019966048ccc6c441b382cc5ac6094495acc344e36dc52",
   "tool_sets": {
     "architect_tools": [
       "list_work_requests",
@@ -39,7 +39,6 @@
       "add_comment",
       "list_comments",
       "resolve_comment",
-      "resolve_blocker",
       "read_guidance_request"
     ],
     "trusted_local_http_extra_tools": [
@@ -76,8 +75,6 @@
       "update_task_plan",
       "append_finding",
       "append_progress",
-      "report_blocker",
-      "resolve_blocker",
       "abandon",
       "add_comment",
       "list_comments",

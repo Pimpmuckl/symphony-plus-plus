@@ -371,19 +371,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.CommentsGuidanceTest do
       )
 
     assert get_in(dispatch_response, ["error", "data", "reason"]) == "claim_required"
-
-    status_response =
-      Server.handle(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "local-operator-status-denied",
-          "method" => "tools/call",
-          "params" => %{"name" => "report_blocker", "arguments" => %{}}
-        },
-        note_server
-      )
-
-    assert get_in(status_response, ["error", "data", "reason"]) == "claim_required"
   end
 
   test "unclaimed WorkRequest reads require trusted local HTTP with explicit state", %{repo: repo} do

@@ -26,9 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
     :progress_append,
     :finding_append,
     :review_evidence_append,
-    :blocker_report,
-    :blocker_resolve,
-    :blocker_unblock,
     :comment_add,
     :comment_list,
     :comment_resolve,
@@ -62,9 +59,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
     :progress_append,
     :finding_append,
     :review_evidence_append,
-    :blocker_report,
     :blocker_resolve,
-    :blocker_unblock,
     :comment_add,
     :comment_list,
     :comment_resolve,
@@ -154,6 +149,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
 
   defp architect_scope_types(action) when action in @read_actions, do: [:work_request, :work_package, :repo, :phase]
   defp architect_scope_types(:external_comment_add), do: [:work_request, :repo, :phase]
+  defp architect_scope_types(:blocker_resolve), do: [:work_request, :work_package]
   defp architect_scope_types(action) when action in @work_package_actions, do: [:work_request, :work_package]
   defp architect_scope_types(action) when action in @worker_package_actions, do: [:work_request, :work_package]
   defp architect_scope_types(_action), do: [:work_request]

@@ -271,18 +271,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
       |> get_in(["result", "tools"])
       |> Map.new(&{&1["name"], &1})
 
-    for tool <- ["report_blocker", "resolve_blocker"] do
-      assert Map.has_key?(tools_by_name, tool)
-
-      denied_response =
-        Server.handle(
-          %{"jsonrpc" => "2.0", "id" => tool, "method" => "tools/call", "params" => %{"name" => tool, "arguments" => %{}}},
-          unbound_server
-        )
-
-      assert get_in(denied_response, ["error", "code"]) == -32_001
-    end
-
     refute Map.has_key?(tools_by_name, "create_guidance_request")
 
     assert get_in(tools_by_name, ["get_current_assignment", "inputSchema", "required"]) == []
@@ -313,15 +301,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     refute Map.has_key?(get_in(tools_by_name, ["update_task_plan", "inputSchema", "properties", "nodes", "items"]), "anyOf")
 
     refute Map.has_key?(tools_by_name, "set_status")
-    assert get_in(tools_by_name, ["report_blocker", "inputSchema", "required"]) == ["summary", "idempotency_key"]
-
-    assert get_in(tools_by_name, ["resolve_blocker", "inputSchema", "required"]) == [
-             "blocker_id",
-             "resolution",
-             "summary",
-             "idempotency_key"
-           ]
-
     assert get_in(tools_by_name, ["abandon", "inputSchema", "required"]) == ["reason"]
     assert get_in(tools_by_name, ["mark_ready", "inputSchema", "properties"]) == %{}
     assert get_in(tools_by_name, ["add_comment", "inputSchema", "required"]) == ["target_kind", "target_id", "body"]
