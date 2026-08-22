@@ -10,7 +10,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
   @default_worker_capabilities ["worker:claim", "worker:lifecycle.transition"]
   @default_architect_capabilities ["read:phase"]
   @pre_dispatch_work_package_statuses ["planned", "skipped"]
-  @terminal_work_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
+  @terminal_work_package_statuses ["merged", "closed", "abandoned"]
   @non_claimable_work_package_statuses @pre_dispatch_work_package_statuses ++ @terminal_work_package_statuses
   @claim_database_busy_retries 5
   @claim_database_busy_retry_delay_ms 5

@@ -32,9 +32,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
   @guidance_ineligible_statuses [
     "created",
     "ready_for_merge",
-    "ready_for_architect_merge",
-    "merging_into_phase",
-    "merged_into_phase",
     "merged",
     "closed",
     "abandoned"
@@ -273,7 +270,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
       create_guidance_request(repo, worker_session, %{
         "summary" => "Need WorkRequest architect guidance",
         "question" => "Should this no-code dispatch be abandoned?",
-        "context" => "The package is linked through a WorkRequest WorkPackage, not a phase child.",
+        "context" => "The package is linked through a WorkRequest WorkPackage.",
         "idempotency_key" => "wr-linked-guidance"
       })
 

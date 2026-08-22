@@ -23,9 +23,7 @@ const CARD_TONES: Record<string, StateCardTone> = {
   in_progress: "implementing",
   merge_ready: "merge",
   merged: "finished",
-  merged_into_phase: "finished",
   merging: "merge",
-  merging_into_phase: "merge",
   needs_attention: "queued",
   needs_closeout: "merge",
   planned: "muted",
@@ -33,7 +31,6 @@ const CARD_TONES: Record<string, StateCardTone> = {
   clarifying: "guidance",
   human_info_needed: "guidance",
   ready_for_clarification: "guidance",
-  ready_for_architect_merge: "merge",
   ready_for_merge: "merge",
   ready_for_slicing: "ready",
   ready_for_worker: "ready",
@@ -64,13 +61,10 @@ const BADGE_TONES: Record<string, BadgeTone> = {
   in_progress: "info",
   merge_ready: "ready",
   merged: "success",
-  merged_into_phase: "success",
   merging: "ready",
-  merging_into_phase: "ready",
   needs_attention: "danger",
   needs_closeout: "warning",
   planning: "info",
-  ready_for_architect_merge: "ready",
   ready_for_merge: "ready",
   ready_for_clarification: "guidance",
   ready_for_slicing: "ready",
@@ -98,13 +92,10 @@ const BOARD_LANES: Record<string, BoardLane> = {
   in_progress: "implementing",
   merge_ready: "implementing",
   merged: "finished",
-  merged_into_phase: "finished",
   merging: "implementing",
-  merging_into_phase: "implementing",
   needs_attention: "implementing",
   needs_closeout: "implementing",
   planning: "implementing",
-  ready_for_architect_merge: "implementing",
   ready_for_merge: "implementing",
   ready_for_worker: "implementing",
   ready_to_finish: "implementing",
@@ -121,7 +112,6 @@ const RUNNING_STATUSES = new Set([
   "implementing",
   "in_progress",
   "merging",
-  "merging_into_phase",
   "planning",
   "reviewing",
 ]);
@@ -140,14 +130,11 @@ const REQUEST_LANES: Record<string, RequestLane> = {
   in_progress: "slices",
   merge_ready: "slices",
   merged: "finished",
-  merged_into_phase: "finished",
   merging: "slices",
-  merging_into_phase: "slices",
   needs_attention: "slices",
   needs_closeout: "slices",
   planned: "slices",
   planning: "slices",
-  ready_for_architect_merge: "slices",
   ready_for_merge: "slices",
   ready_for_slicing: "slices",
   ready_for_worker: "slices",
@@ -247,7 +234,7 @@ function operationalBadgeRule(key: string, tone?: string | null, fallbackStatus?
   if (key === "merge_ready") return tone === "warning" ? "warning" : "ready";
   if (key === "ready_to_finish") return tone === "warning" ? "warning" : "ready";
   if (key === "blocked") return "danger";
-  if (["merged", "merged_into_phase", "closed", "completed"].includes(key) || tone === "success") return "success";
+  if (["merged", "closed", "completed"].includes(key) || tone === "success") return "success";
   if (["abandoned", "skipped"].includes(key)) return "secondary";
   if (tone === "warning") return "warning";
   if (tone === "info") return "info";

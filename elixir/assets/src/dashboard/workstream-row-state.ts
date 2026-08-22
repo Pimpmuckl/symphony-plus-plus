@@ -273,10 +273,8 @@ const ACTIVE_WORK_STATUSES = new Set([
   "in_progress",
   "merge_ready",
   "merging",
-  "merging_into_phase",
   "planning",
   "needs_closeout",
-  "ready_for_architect_merge",
   "ready_for_merge",
   "reviewing",
 ]);

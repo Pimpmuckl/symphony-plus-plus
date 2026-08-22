@@ -197,48 +197,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.TrackerAdapterTest do
     assert {:error, {:unsupported_symphony_plus_plus_tracker_states, [""]}} = Config.validate!()
   end
 
-  test "Symphony++ tracker config permits live phase-child states in active filters", %{repo: repo} do
-    write_workflow_file!(Workflow.workflow_file_path(),
-      tracker_kind: "Symphony_pp",
-      tracker_api_token: nil,
-      tracker_project_slug: nil,
-      tracker_assignee: "agent-1",
-      tracker_active_states: ["ready_for_architect_merge", "merging_into_phase"],
-      tracker_terminal_states: ["merged"]
-    )
-
-    assert :ok = Config.validate!()
-
-    assert {:ok, phase_ready} =
-             Repository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-PHASE-READY",
-                 kind: "phase_child",
-                 status: "ready_for_architect_merge"
-               )
-             )
-
-    assert {:ok, phase_merging} =
-             Repository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-PHASE-MERGING",
-                 kind: "phase_child",
-                 status: "merging_into_phase"
-               )
-             )
-
-    assert {:ok, ready_grant} = AccessGrantService.mint_worker_grant(repo, phase_ready.id)
-    assert {:ok, merging_grant} = AccessGrantService.mint_worker_grant(repo, phase_merging.id)
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, ready_grant.work_key.secret, claimed_by: "agent-1")
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, merging_grant.work_key.secret, claimed_by: "agent-1")
-
-    assert {:ok, issues} = Tracker.fetch_candidate_issues()
-    assert Enum.map(issues, & &1.id) |> Enum.sort() == ["SYMPP-PHASE-MERGING", "SYMPP-PHASE-READY"]
-    assert Enum.all?(issues, &(not &1.assigned_to_worker))
-  end
-
   test "Symphony++ tracker config rejects active states outside the tracker surface" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "Symphony_pp",
@@ -1081,32 +1039,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.TrackerAdapterTest do
     assert {:ok, _created} =
              Repository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-DEFAULT-CREATED", kind: "adapter", status: "created"))
 
-    assert {:ok, phase_child} =
-             Repository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-DEFAULT-PHASE",
-                 kind: "phase_child",
-                 status: "ready_for_architect_merge"
-               )
-             )
-
-    assert {:ok, phase_grant} = AccessGrantService.mint_worker_grant(repo, phase_child.id)
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, phase_grant.work_key.secret, claimed_by: "agent-1")
-
     assert {:ok, issues} = Tracker.fetch_candidate_issues()
     issue_by_id = Map.new(issues, &{&1.id, &1})
-    assert Map.keys(issue_by_id) |> Enum.sort() == [phase_child.id, ready.id]
+    assert Map.keys(issue_by_id) == [ready.id]
 
     issue = Map.fetch!(issue_by_id, ready.id)
-    phase_issue = Map.fetch!(issue_by_id, phase_child.id)
 
     assert "ready_for_worker" in Config.settings!().tracker.active_states
-    assert "ready_for_architect_merge" in Config.settings!().tracker.active_states
     refute "created" in Config.settings!().tracker.active_states
     assert "merged" in Config.settings!().tracker.terminal_states
     refute "blocked" in Config.settings!().tracker.terminal_states
-    refute phase_issue.assigned_to_worker
 
     assert {:ok, [terminal_issue]} = Tracker.fetch_issues_by_states(Config.settings!().tracker.terminal_states)
     assert terminal_issue.id == "SYMPP-DEFAULT-MERGED"
@@ -1989,33 +1931,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.TrackerAdapterTest do
     assert {:error, :invalid_transition} = Tracker.update_issue_state(work_package.id, "merged")
     assert {:ok, fetched} = Repository.get(repo, work_package.id)
     assert fetched.status == "ready_for_worker"
-
-    assert {:ok, phase_child} =
-             Repository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-PHASE-STATE",
-                 kind: "phase_child",
-                 parent_id: "phase-1",
-                 status: "ready_for_architect_merge"
-               )
-             )
-
-    assert {:ok, minted_phase_child} = AccessGrantService.mint_worker_grant(repo, phase_child.id)
-    assert {:ok, _assignment} = AccessGrantService.claim(repo, minted_phase_child.work_key.secret, claimed_by: "worker-1")
-
-    assert {:error, :worker_cannot_advance_phase_state} =
-             Tracker.update_issue_state(phase_child.id, "merging_into_phase")
-
-    assert {:ok, duplicate_worker_phase_child_grant} = AccessGrantService.mint_worker_grant(repo, phase_child.id)
-
-    assert {:ok, _assignment} =
-             AccessGrantService.claim(repo, duplicate_worker_phase_child_grant.work_key.secret, claimed_by: "worker-1")
-
-    assert {:ok, _architect_assignment} = claim_architect_grant(repo, phase_child.id, "worker-1")
-    assert :ok = Tracker.update_issue_state(phase_child.id, "merging_into_phase")
-    assert {:ok, phase_child_updated} = Repository.get(repo, phase_child.id)
-    assert phase_child_updated.status == "merging_into_phase"
 
     assert {:ok, alias_package} =
              Repository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-ALIAS-STATE", kind: "adapter", status: "created"))

@@ -209,8 +209,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Payloads do
     %{"id" => work_package.id, "kind" => work_package.kind, "status" => work_package.status}
   end
 
-  @spec child_work_package_payload(WorkPackage.t()) :: map()
-  def child_work_package_payload(%WorkPackage{} = work_package) do
+  @spec work_package_contract_payload(WorkPackage.t()) :: map()
+  def work_package_contract_payload(%WorkPackage{} = work_package) do
     work_package
     |> work_package_payload()
     |> Map.merge(%{

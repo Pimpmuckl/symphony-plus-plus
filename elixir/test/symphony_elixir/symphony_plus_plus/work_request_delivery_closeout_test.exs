@@ -861,39 +861,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
              repo.get!(ClaimLease, claim_lease.id)
   end
 
-  test "phase-child PR merged closeout must use merge_child_into_phase", %{repo: repo} do
-    {work_request, work_package, linked_package} =
-      linked_slice!(repo,
-        kind: "phase_child",
-        status: "ready_for_architect_merge"
-      )
-
-    attrs =
-      delivery_attrs(%{
-        outcome: "pr_merged",
-        idempotency_key: "delivery-phase-child",
-        pr_url: "https://github.com/nextide/symphony-plus-plus/pull/456",
-        pr_number: 456,
-        pr_repository: "nextide/symphony-plus-plus",
-        pr_merged_at: ~U[2026-05-24 13:00:00.000000Z],
-        merge_commit_sha: "def456"
-      })
-
-    assert {:error, :phase_child_pr_merged_requires_merge_child_into_phase} =
-             Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-    assert repo.get!(WorkPackage, linked_package.id).status == "ready_for_architect_merge"
-
-    assert {:ok, _merged_into_phase} = WorkPackageRepository.update_status(repo, linked_package.id, "ready_for_architect_merge", "merged_into_phase")
-    assert {:ok, delivery} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-
-    assert delivery.outcome == "pr_merged"
-    assert repo.get!(WorkPackage, linked_package.id).status == "merged_into_phase"
-    assert [event] = repo.all(ProgressEvent)
-    assert event.status == "merged_into_phase"
-  end
-
   test "linked PR merged closeout requires merge commit evidence and rolls back", %{repo: repo} do
     {work_request, work_package, linked_package} = linked_slice!(repo, status: "ready_for_merge")
 
@@ -1198,25 +1165,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
 
   defp create_work_package!(repo, work_request, overrides) do
     attrs = work_package_attrs(overrides)
-
-    if attrs.kind == "phase_child" do
-      insert_phase_child_fixture!(repo, work_request, attrs)
-    else
-      assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, attrs)
-      work_package
-    end
-  end
-
-  defp insert_phase_child_fixture!(repo, work_request, attrs) do
-    attrs =
-      Map.merge(attrs, %{
-        work_request_id: work_request.id,
-        repo: work_request.repo,
-        sequence: 1,
-        status: "planned"
-      })
-
-    repo.insert!(struct!(WorkPackage, attrs))
+    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, attrs)
+    work_package
   end
 
   defp work_request_attrs(overrides) do
@@ -1246,7 +1196,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
       acceptance_criteria: ["Delivery closeout is transactional."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/work_request_delivery_closeout_test.exs"],
       review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
-      stop_conditions: ["Do not bypass phase-child merge semantics."]
+      stop_conditions: ["Do not bypass delivery semantics."]
     }
 
     Enum.into(overrides, defaults)

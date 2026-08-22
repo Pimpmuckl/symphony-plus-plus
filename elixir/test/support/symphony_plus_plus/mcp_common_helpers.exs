@@ -9,7 +9,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
   alias SymphonyElixir.MCPHarness
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Repo
@@ -153,26 +152,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers do
     refute String.starts_with?(String.trim_leading(text), "{")
     assert {:error, _reason} = Jason.decode(text)
     text
-  end
-
-  def append_child_merge_progress_event(repo, %Session{} = session, child_id, merge_artifact) do
-    payload = child_merge_payload(child_id, merge_artifact)
-
-    PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, child_id, %{
-      "summary" => Map.get(merge_artifact, "summary") || "Child merged into phase",
-      "status" => "merged_into_phase",
-      "idempotency_key" => metadata_idempotency_key(payload),
-      "payload" => payload
-    })
-  end
-
-  def child_merge_payload(child_id, merge_artifact) do
-    %{
-      "type" => "phase_child_merge",
-      "source_tool" => "merge_child_into_phase",
-      "work_package_id" => child_id,
-      "merge_artifact" => merge_artifact
-    }
   end
 
   def metadata_idempotency_key(payload) do

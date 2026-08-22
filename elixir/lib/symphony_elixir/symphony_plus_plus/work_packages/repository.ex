@@ -12,9 +12,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
-  @terminal_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
+  @terminal_statuses ["skipped", "merged", "closed", "abandoned"]
   @delivery_closeout_terminal_statuses ["merged", "closed", "abandoned"]
-  @phase_child_kind "phase_child"
 
   import Ecto.Query, only: [from: 2]
 
@@ -28,7 +27,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
           | :invalid_status
           | :stale_status
           | :work_package_mismatch
-          | :phase_child_pr_merged_requires_merge_child_into_phase
           | {:constraint_failed, String.t()}
           | {:migration_failed, term()}
           | {:storage_failed, String.t()}
@@ -281,19 +279,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   end
 
   defp validate_delivery_closeout_package(%WorkPackage{} = work_package, %WorkRequest{} = work_request, next_status) do
-    with :ok <- validate_phase_child_delivery_closeout(work_package, next_status),
-         :ok <- validate_delivery_package_compatibility(work_package, work_request) do
+    with :ok <- validate_delivery_package_compatibility(work_package, work_request) do
       validate_delivery_terminal_status_compatibility(work_package, next_status)
     end
   end
-
-  defp validate_phase_child_delivery_closeout(%WorkPackage{kind: @phase_child_kind, status: "merged_into_phase"}, "merged"), do: :ok
-
-  defp validate_phase_child_delivery_closeout(%WorkPackage{kind: @phase_child_kind}, "merged") do
-    {:error, :phase_child_pr_merged_requires_merge_child_into_phase}
-  end
-
-  defp validate_phase_child_delivery_closeout(%WorkPackage{}, _next_status), do: :ok
 
   defp validate_delivery_package_compatibility(%WorkPackage{} = work_package, %WorkRequest{} = work_request) do
     if work_package.work_request_id == work_request.id do
@@ -303,18 +292,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp validate_delivery_terminal_status_compatibility(%WorkPackage{kind: @phase_child_kind, status: "merged_into_phase"}, "merged"), do: :ok
-
   defp validate_delivery_terminal_status_compatibility(%WorkPackage{status: status}, next_status)
        when status in @terminal_statuses and status != next_status do
     {:error, :stale_status}
   end
 
   defp validate_delivery_terminal_status_compatibility(%WorkPackage{}, _next_status), do: :ok
-
-  defp update_delivery_closeout_status(_repo, %WorkPackage{kind: @phase_child_kind, status: "merged_into_phase"} = work_package, _work_request, "merged") do
-    {:ok, %{work_package: work_package, previous_status: work_package.status, next_status: work_package.status, changed?: false}}
-  end
 
   defp update_delivery_closeout_status(repo, %WorkPackage{} = work_package, %WorkRequest{} = work_request, next_status) do
     now = DateTime.utc_now(:microsecond)

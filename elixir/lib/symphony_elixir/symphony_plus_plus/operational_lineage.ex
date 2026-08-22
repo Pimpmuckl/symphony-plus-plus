@@ -24,7 +24,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperationalLineage do
   @source_tool "record_operational_lineage"
   @relationships ["superseded_by", "recut_as", "oracle_for"]
   @successor_relationships ["superseded_by", "recut_as"]
-  @closed_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
+  @closed_statuses ["merged", "closed", "abandoned"]
   @lineage_unavailable_attention %{
     key: "lineage_unavailable",
     label: "Lineage Unavailable",

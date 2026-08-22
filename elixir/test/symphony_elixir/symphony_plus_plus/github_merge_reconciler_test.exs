@@ -19,7 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
 
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
-  alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -289,29 +288,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GitHubMergeReconcilerTest do
 
     assert {:ok, events} = PlanningRepository.list_progress_events(repo, package.id)
     refute Enum.any?(events, &match?(%ProgressEvent{status: "github_pr_merged"}, &1))
-  end
-
-  test "phase child merge-ready package is not polled by v1 auto reconciliation", %{repo: repo} do
-    assert {:ok, _phase} = PhaseRepository.create(repo, %{id: "phase-1", title: "Phase 1"})
-
-    assert {:ok, package} =
-             create_package(repo,
-               id: "SYMPP-GH-PHASE-CHILD",
-               kind: "phase_child",
-               status: "ready_for_architect_merge",
-               parent_id: "phase-parent",
-               phase_id: "phase-1"
-             )
-
-    append_pr_evidence(repo, package, 4, "head-a")
-
-    assert {:ok, result} = MergeReconciler.reconcile(repo, client: FakeGitHubClient)
-
-    assert result.total_count == 0
-    assert result.merged_count == 0
-    assert result.results == []
-    assert {:ok, updated} = WorkPackageRepository.get(repo, package.id)
-    assert updated.status == "ready_for_architect_merge"
   end
 
   test "periodic default sync prefers gh CLI and does not require token env", %{repo: repo} do

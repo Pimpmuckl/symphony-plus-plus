@@ -317,7 +317,7 @@ export function PackageDetailContent({
   const currentCommentStats = targetCommentStats(summary || pkg, detailPayload?.comments || [], packageComments);
   const canMarkMerged = !isFinishedBoardStatus(operational?.key || pkg.status);
   const isLinkedPackage = linkedWorkPackageIds.has(pkg.id);
-  const canArchiveUnlinked = !isLinkedPackage && ["merged", "merged_into_phase", "closed"].includes(pkg.status || "");
+  const canArchiveUnlinked = !isLinkedPackage && ["merged", "closed"].includes(pkg.status || "");
   const canCloseWithEvidence = Boolean(isLinkedPackage && canMarkMerged && readyWithoutMerge(pkg, operational));
   const stateActions: Array<{ value: WorkPackageStateAction; label: string }> = isLinkedPackage
     ? linkedPackageStateActions(pkg, operational, canMarkMerged, canCloseWithEvidence)
@@ -474,5 +474,5 @@ function readyWithoutMerge(pkg: WorkPackageCard, operational: WorkPackageCard["o
   const key = operational?.key || "";
   if (key === "ready_to_finish") return operational?.tone !== "warning";
   if (key === "merge_ready") return false;
-  return ["ready_for_merge", "ready_for_architect_merge"].includes(operational?.raw_status || pkg.status || "") && (operational?.merge_required ?? pkg.merge_required) === false;
+  return (operational?.raw_status || pkg.status || "") === "ready_for_merge" && (operational?.merge_required ?? pkg.merge_required) === false;
 }

@@ -17,7 +17,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @completion_blocking_statuses ["human_info_needed"]
-  @inactive_work_package_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
+  @inactive_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
   @work_package_delivery_replay_fields [
     :work_request_id,
     :work_package_id,
@@ -981,7 +981,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
               FROM sympp_work_packages AS sibling
               WHERE sibling.work_request_id = ?
                 AND sibling.id != ?
-                AND sibling.status NOT IN ('skipped', 'merged', 'merged_into_phase', 'closed', 'abandoned')
+                AND sibling.status NOT IN ('skipped', 'merged', 'closed', 'abandoned')
             )
             """,
             work_package.work_request_id,
@@ -1209,7 +1209,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   end
 
   defp maybe_invalidate_readiness(attrs, %WorkPackage{status: status})
-       when status in ["reviewing", "ci_waiting", "ready_for_merge", "ready_for_architect_merge"] do
+       when status in ["reviewing", "ci_waiting", "ready_for_merge"] do
     Map.put(attrs, "status", "implementing")
   end
 

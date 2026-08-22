@@ -24,9 +24,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     "skill",
     "hooks"
   ]
-  @phase_child_kind "phase_child"
   @anchor_kinds ["delegation"]
-  @kinds @executable_kinds ++ [@phase_child_kind] ++ @anchor_kinds
+  @kinds @executable_kinds ++ @anchor_kinds
   @ready_status "ready_for_merge"
 
   @statuses [
@@ -41,9 +40,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage do
     "reviewing",
     "ci_waiting",
     @ready_status,
-    "ready_for_architect_merge",
-    "merging_into_phase",
-    "merged_into_phase",
     "merged",
     "closed",
     "blocked",

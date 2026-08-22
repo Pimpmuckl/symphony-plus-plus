@@ -13,7 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   @active_run_statuses AgentRun.active_statuses()
-  @terminal_work_package_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
+  @terminal_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
 
   @type repo :: module()
   @type error ::

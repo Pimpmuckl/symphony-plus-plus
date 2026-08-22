@@ -6,23 +6,17 @@ Code.require_file("mcp_handoff_helpers.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
   @moduledoc false
 
-  import Ecto.Query, only: [from: 2]
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   @architect_phase_id "phase-mcp-architect-test"
-  @child_worker_grant_provenance "child_worker_delegation"
   @handoff_store_process_key :sympp_mcp_test_handoff_store_dir
 
   @architect_phase_id "phase-mcp-architect-test"
-  @child_worker_grant_provenance "child_worker_delegation"
   @handoff_store_process_key :sympp_mcp_test_handoff_store_dir
   @architect_tool_names [
-    "create_child_work_package",
-    "mint_child_worker_key",
-    "revoke_child_worker_key",
     "list_work_requests",
     "read_work_request",
     "read_plan",
@@ -32,6 +26,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "resolve_blocker",
     "read_delivery_board",
     "reconcile_work_request",
+    "accept_review_rework",
     "cleanup_work_request_work_package_runtime",
     "record_work_package_delivery",
     "revoke_work_package_worker_key",
@@ -55,11 +50,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "dispatch_work_package",
     "prepare_work_package_worktree",
     "cleanup_work_package_worktree",
-    "read_child_status",
-    "approve_scope_expansion",
-    "read_phase_board",
-    "approve_child_ready_state",
-    "merge_child_into_phase"
+    "approve_scope_expansion"
   ]
   @worker_tool_names [
     "get_current_assignment",
@@ -86,7 +77,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
   @codex_forbidden_top_level_schema_keys ["oneOf", "anyOf", "allOf", "enum", "not"]
 
   def architect_phase_id, do: @architect_phase_id
-  def child_worker_grant_provenance, do: @child_worker_grant_provenance
   def handoff_store_process_key, do: @handoff_store_process_key
   def architect_tool_names, do: @architect_tool_names
   def worker_tool_names, do: @worker_tool_names
@@ -235,158 +225,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     def insert(changeset), do: Repo.insert(changeset)
   end
 
-  defmodule MintReadyRaceRepo do
-    import Ecto.Query, only: [from: 2]
-
-    alias SymphonyElixir.SymphonyPlusPlus.Repo
-    alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-
-    @race_key :sympp_mint_child_ready_race_id
-
-    def arm(child_id, attrs \\ %{status: "claimed"}), do: Process.put(@race_key, {child_id, attrs})
-    def disarm, do: Process.delete(@race_key)
-
-    def transaction(fun) do
-      Repo.transaction(fn ->
-        case Process.get(@race_key) do
-          {child_id, attrs} when is_binary(child_id) and is_map(attrs) ->
-            Process.delete(@race_key)
-            updates = Map.to_list(attrs) ++ [updated_at: DateTime.utc_now(:microsecond)]
-
-            Repo.update_all(
-              from(work_package in WorkPackage, where: work_package.id == ^child_id),
-              set: updates
-            )
-
-          _child_id ->
-            :ok
-        end
-
-        fun.()
-      end)
-    end
-
-    def get(schema, id), do: Repo.get(schema, id)
-    def insert(changeset), do: Repo.insert(changeset)
-    def all(query), do: Repo.all(query)
-    def one(query), do: Repo.one(query)
-    def update(changeset), do: Repo.update(changeset)
-    def update_all(query, updates), do: Repo.update_all(query, updates)
-    def rollback(value), do: Repo.rollback(value)
-  end
-
-  defmodule MintChildScopeRaceRepo do
-    import Ecto.Query, only: [from: 2]
-
-    alias SymphonyElixir.SymphonyPlusPlus.Repo
-    alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-
-    @race_key :sympp_mint_child_scope_race
-
-    def arm(child_id, attrs), do: Process.put(@race_key, {child_id, attrs, 0})
-    def disarm, do: Process.delete(@race_key)
-
-    def transaction(fun), do: Repo.transaction(fun)
-
-    def get(schema, id), do: Repo.get(schema, id)
-    def insert(changeset), do: Repo.insert(changeset)
-    def all(query), do: Repo.all(query)
-    def one(query), do: Repo.one(query)
-    def update(changeset), do: Repo.update(changeset)
-
-    def update_all(query, updates) do
-      case Process.get(@race_key) do
-        {child_id, attrs, 2} when is_binary(child_id) and is_map(attrs) ->
-          Process.put(@race_key, {child_id, attrs, 3})
-          drift_updates = Map.to_list(attrs) ++ [updated_at: DateTime.utc_now(:microsecond)]
-          Repo.update_all(from(work_package in WorkPackage, where: work_package.id == ^child_id), set: drift_updates)
-
-        {child_id, attrs, count} when is_integer(count) ->
-          Process.put(@race_key, {child_id, attrs, count + 1})
-
-        _race ->
-          :ok
-      end
-
-      Repo.update_all(query, updates)
-    end
-
-    def rollback(value), do: Repo.rollback(value)
-  end
-
-  defmodule CreateChildAnchorRaceRepo do
-    import Ecto.Query, only: [from: 2]
-
-    alias SymphonyElixir.SymphonyPlusPlus.Repo
-    alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-
-    @race_key :sympp_create_child_anchor_race
-
-    def arm(anchor_id, attrs), do: Process.put(@race_key, {anchor_id, attrs})
-    def disarm, do: Process.delete(@race_key)
-
-    def transaction(fun) do
-      Repo.transaction(fn ->
-        case Process.get(@race_key) do
-          {anchor_id, attrs} when is_binary(anchor_id) and is_map(attrs) ->
-            Process.delete(@race_key)
-            updates = Map.to_list(attrs) ++ [updated_at: DateTime.utc_now(:microsecond)]
-            Repo.update_all(from(work_package in WorkPackage, where: work_package.id == ^anchor_id), set: updates)
-
-          _race ->
-            :ok
-        end
-
-        fun.()
-      end)
-    end
-
-    def get(schema, id), do: Repo.get(schema, id)
-    def insert(changeset), do: Repo.insert(changeset)
-    def all(query), do: Repo.all(query)
-    def one(query), do: Repo.one(query)
-    def query(sql, params, opts), do: Repo.query(sql, params, opts)
-    def update_all(query, updates), do: Repo.update_all(query, updates)
-    def rollback(value), do: Repo.rollback(value)
-  end
-
-  defmodule MintParentGrantRaceRepo do
-    import Ecto.Query, only: [from: 2]
-
-    alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-    alias SymphonyElixir.SymphonyPlusPlus.Repo
-
-    @race_key :sympp_mint_parent_grant_race
-
-    def arm(grant_id, attrs), do: Process.put(@race_key, {grant_id, attrs})
-    def disarm, do: Process.delete(@race_key)
-    def database_path, do: Repo.database_path()
-
-    def transaction(fun) do
-      Repo.transaction(fn ->
-        case Process.get(@race_key) do
-          {grant_id, attrs} when is_binary(grant_id) and is_map(attrs) ->
-            Process.delete(@race_key)
-            updates = Map.to_list(attrs) ++ [updated_at: DateTime.utc_now(:microsecond)]
-            Repo.update_all(from(grant in AccessGrant, where: grant.id == ^grant_id), set: updates)
-
-          _race ->
-            :ok
-        end
-
-        fun.()
-      end)
-    end
-
-    def get(schema, id), do: Repo.get(schema, id)
-    def insert(changeset), do: Repo.insert(changeset)
-    def all(query), do: Repo.all(query)
-    def one(query), do: Repo.one(query)
-    def query(sql, params, opts), do: Repo.query(sql, params, opts)
-    def update_all(query, updates), do: Repo.update_all(query, updates)
-    def rollback(value), do: Repo.rollback(value)
-  end
-
   defmacro __using__(_opts) do
     quote do
       use ExUnit.Case, async: false
@@ -442,7 +280,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
       alias SymphonyElixir.WorkPackageFactory
 
       @architect_phase_id SymphonyElixir.SymphonyPlusPlus.MCPCase.architect_phase_id()
-      @child_worker_grant_provenance SymphonyElixir.SymphonyPlusPlus.MCPCase.child_worker_grant_provenance()
       @handoff_store_process_key SymphonyElixir.SymphonyPlusPlus.MCPCase.handoff_store_process_key()
       @architect_tool_names SymphonyElixir.SymphonyPlusPlus.MCPCase.architect_tool_names()
       @worker_tool_names SymphonyElixir.SymphonyPlusPlus.MCPCase.worker_tool_names()
@@ -454,7 +291,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
 
       alias SymphonyElixir.SymphonyPlusPlus.MCPCase.{
         BusyPrSyncRepo,
-        CreateChildAnchorRaceRepo,
         DefaultRemoteDbnameHealthRepo,
         DefaultRemoteHealthRepo,
         DefaultRemoteIpv6HealthRepo,
@@ -462,9 +298,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
         FailingHealthRepo,
         LocalClaimAuditFailureRepo,
         LocalClaimInsertRaceRepo,
-        MintChildScopeRaceRepo,
-        MintParentGrantRaceRepo,
-        MintReadyRaceRepo,
         UnexpectedAuthRepo
       }
 

@@ -9,7 +9,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, ProgressEvents, Session, ToolResult, WorktreeScope}
-  alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -61,7 +60,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
            :ok <- lock_work_package(repo, Session.work_package_id(session)),
            {:ok, blocker_closeout} <- apply_blocker_closeout.(repo, session, blocker_closeout_plan),
            {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
-           {:ok, readiness_warnings} <- readiness_gates(repo, state),
+           {:ok, readiness_warnings} <- readiness_gates(state),
            ready_status = StateMachine.terminal_readiness_status(state.work_package),
            :ok <- StateMachine.validate_ready_transition(state.work_package, ready_status, actor(session)),
            {:ok, work_package} <-
@@ -69,16 +68,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
         {:ok, {work_package, blocker_closeout, readiness_warnings}}
       end
     end)
-  end
-
-  @spec child_ready_approval_gates(repo(), map()) ::
-          :ok | {:error, {:readiness_failed, [String.t()], [map()]}} | {:error, term()}
-  def child_ready_approval_gates(repo, state) do
-    with {:ok, reasons} <- readiness_failure_reasons(repo, state) do
-      missing = missing_readiness_gates(reasons)
-
-      if missing == [], do: :ok, else: {:error, {:readiness_failed, missing, reasons}}
-    end
   end
 
   @spec maybe_put_readiness_warnings(map(), [term()]) :: map()
@@ -468,8 +457,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     "current:" <> digest
   end
 
-  defp readiness_gates(repo, state) do
-    with {:ok, reasons} <- readiness_failure_reasons(repo, state) do
+  defp readiness_gates(state) do
+    with {:ok, reasons} <- readiness_failure_reasons(state) do
       missing = missing_readiness_gates(reasons)
 
       if missing == [], do: {:ok, []}, else: {:error, {:readiness_failed, missing, reasons, []}}
@@ -482,11 +471,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     |> Enum.uniq()
   end
 
-  defp readiness_failure_reasons(repo, state) do
-    with {:ok, phase_child_reasons} <- phase_child_readiness_failure_reasons(repo, state.work_package) do
-      {:ok, base_readiness_failure_reasons(state) ++ phase_child_reasons}
-    end
-  end
+  defp readiness_failure_reasons(state), do: {:ok, base_readiness_failure_reasons(state)}
 
   defp base_readiness_failure_reasons(state) do
     [
@@ -508,58 +493,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {false, _gate} -> []
     end)
   end
-
-  defp phase_child_readiness_failure_reasons(repo, %WorkPackage{kind: "phase_child"} = child) do
-    with {:ok, phase} <- readiness_phase(repo, child),
-         {:ok, parent} <- readiness_phase_parent(repo, child) do
-      reasons =
-        []
-        |> maybe_add_readiness_reason(phase.status != "active", "phase_active")
-        |> maybe_add_readiness_reason(not readiness_phase_child_scope_ok?(child, parent), "phase_child_scope")
-
-      {:ok, Enum.reverse(reasons)}
-    end
-  end
-
-  defp phase_child_readiness_failure_reasons(_repo, %WorkPackage{}), do: {:ok, []}
-
-  defp readiness_phase(repo, %WorkPackage{phase_id: phase_id}) when is_binary(phase_id) do
-    if filled_string?(phase_id) do
-      case PhaseRepository.get(repo, phase_id) do
-        {:ok, phase} -> {:ok, phase}
-        {:error, :not_found} -> {:ok, %{status: nil}}
-        {:error, reason} -> {:error, reason}
-      end
-    else
-      {:ok, %{status: nil}}
-    end
-  end
-
-  defp readiness_phase(_repo, %WorkPackage{}), do: {:ok, %{status: nil}}
-
-  defp readiness_phase_parent(repo, %WorkPackage{parent_id: parent_id}) when is_binary(parent_id) do
-    if filled_string?(parent_id) do
-      case WorkPackageRepository.get(repo, parent_id) do
-        {:ok, parent} -> {:ok, parent}
-        {:error, :not_found} -> {:ok, nil}
-        {:error, reason} -> {:error, reason}
-      end
-    else
-      {:ok, nil}
-    end
-  end
-
-  defp readiness_phase_parent(_repo, %WorkPackage{}), do: {:ok, nil}
-
-  defp readiness_phase_child_scope_ok?(%WorkPackage{} = child, %WorkPackage{} = parent) do
-    child.parent_id == parent.id and child.phase_id == parent.phase_id and child.repo == parent.repo and child.base_branch == parent.base_branch and
-      require_phase_child_file_scope(child, parent) == :ok
-  end
-
-  defp readiness_phase_child_scope_ok?(%WorkPackage{}, _parent), do: false
-
-  defp maybe_add_readiness_reason(reasons, true, gate), do: [readiness_failure_reason(gate) | reasons]
-  defp maybe_add_readiness_reason(reasons, false, _gate), do: reasons
 
   defp readiness_failure_reason(gate) do
     %{
@@ -588,8 +521,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   defp readiness_failure_message("review_current_head"), do: "Required review cannot be completed until the current exact head is attached."
   defp readiness_failure_message("review_complete"), do: "Required review is not completed for the current exact head and requirement."
   defp readiness_failure_message("findings_documented"), do: "Investigation findings are missing."
-  defp readiness_failure_message("phase_active"), do: "Phase must be active before phase child readiness."
-  defp readiness_failure_message("phase_child_scope"), do: "Phase child must remain inside its parent phase repo, base branch, and file scope."
   defp readiness_failure_message(_gate), do: "Readiness gate is not satisfied."
 
   defp merge_metadata_missing?(state, "pr") do
@@ -1028,7 +959,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp put_remaining_readiness_gates(repo, %Session{} = session, %{"structuredContent" => payload}) do
     with {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
-         {:ok, reasons} <- readiness_failure_reasons(repo, state) do
+         {:ok, reasons} <- readiness_failure_reasons(state) do
       result = payload |> Map.put("remaining_readiness_gates", missing_readiness_gates(reasons)) |> ToolResult.agent_tool_result()
       {:ok, result}
     end
@@ -1065,241 +996,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {1, _rows} -> :ok
       {0, _rows} -> {:error, :not_found}
     end
-  end
-
-  defp require_phase_child_file_scope(%WorkPackage{} = child, %WorkPackage{} = anchor) do
-    with {:ok, anchor_globs} <- normalize_child_scope_globs(anchor.allowed_file_globs || []),
-         {:ok, child_globs} <- normalize_child_scope_globs(child.allowed_file_globs || []),
-         :ok <- require_child_file_scope_present(child_globs),
-         :ok <- reject_overbroad_child_globs(child_globs) do
-      require_child_globs_within_anchor(child_globs, anchor_globs)
-    end
-  end
-
-  defp require_child_file_scope_present([]), do: {:tool_error, "missing_allowed_file_globs"}
-  defp require_child_file_scope_present(_globs), do: :ok
-
-  defp reject_overbroad_child_globs(globs) do
-    if Enum.any?(globs, &ScopeGuard.overbroad_glob?/1) do
-      {:tool_error, "overbroad_allowed_file_globs"}
-    else
-      :ok
-    end
-  end
-
-  defp require_child_globs_within_anchor(_child_globs, []), do: :ok
-
-  defp require_child_globs_within_anchor(child_globs, anchor_globs) do
-    if Enum.all?(child_globs, &glob_within_any_anchor?(&1, anchor_globs)) do
-      :ok
-    else
-      {:tool_error, "child_scope_outside_phase"}
-    end
-  end
-
-  defp glob_within_any_anchor?(child_glob, anchor_globs), do: Enum.any?(anchor_globs, &glob_within_anchor?(child_glob, &1))
-
-  defp glob_within_anchor?(child_glob, anchor_glob) do
-    with {:ok, child_segments} <- child_glob_segments(child_glob),
-         {:ok, anchor_segments} <- child_glob_segments(anchor_glob) do
-      glob_segments_within?(child_segments, anchor_segments)
-    else
-      {:tool_error, _reason} -> false
-    end
-  end
-
-  defp child_glob_segments(glob) do
-    glob = normalize_child_glob(glob)
-
-    cond do
-      glob == "" -> {:tool_error, "missing_allowed_file_globs"}
-      traversal_glob?(glob) -> {:tool_error, "path_traversal_allowed_file_globs"}
-      encoded_separator_glob?(glob) -> {:tool_error, "invalid_allowed_file_globs"}
-      true -> {:ok, String.split(glob, "/", trim: true)}
-    end
-  end
-
-  defp glob_segments_within?([], []), do: true
-  defp glob_segments_within?([], _anchor_segments), do: false
-  defp glob_segments_within?(_child_segments, []), do: false
-  defp glob_segments_within?(child_segments, ["**"]), do: not Enum.any?(child_segments, &traversal_segment?/1)
-  defp glob_segments_within?(["**" | child_tail], ["**" | anchor_tail]), do: glob_segments_within?(child_tail, ["**" | anchor_tail])
-
-  defp glob_segments_within?([_child_head | child_tail] = child_segments, ["**" | anchor_tail]) do
-    glob_segments_within?(child_segments, anchor_tail) or glob_segments_within?(child_tail, ["**" | anchor_tail])
-  end
-
-  defp glob_segments_within?(["**" | _child_tail], [_anchor_head | _anchor_tail]), do: false
-
-  defp glob_segments_within?([child_head | child_tail], [anchor_head | anchor_tail]) do
-    segment_within_anchor?(child_head, anchor_head) and glob_segments_within?(child_tail, anchor_tail)
-  end
-
-  defp segment_within_anchor?(child_segment, anchor_segment) do
-    cond do
-      child_segment == anchor_segment -> true
-      anchor_segment == "*" -> child_segment != "**"
-      child_segment == "**" -> false
-      literal_glob?(child_segment) -> ScopeGuard.glob_match?(anchor_segment, child_segment)
-      simple_star_segment_subset?(child_segment, anchor_segment) -> true
-      true -> false
-    end
-  end
-
-  defp literal_glob?(glob), do: not String.contains?(glob, ["*", "?", "["])
-
-  defp simple_star_segment_subset?(child_segment, anchor_segment) do
-    with {:ok, {anchor_prefix, anchor_suffix}} <- simple_star_bounds(anchor_segment),
-         {child_prefix, child_suffix} <- segment_literal_bounds(child_segment) do
-      String.starts_with?(child_prefix, anchor_prefix) and String.ends_with?(child_suffix, anchor_suffix)
-    else
-      :error -> false
-    end
-  end
-
-  defp simple_star_bounds(segment) do
-    cond do
-      String.contains?(segment, ["?", "["]) -> :error
-      segment |> String.graphemes() |> Enum.count(&(&1 == "*")) != 1 -> :error
-      true -> {:ok, segment |> String.split("*", parts: 2) |> List.to_tuple()}
-    end
-  end
-
-  defp segment_literal_bounds(segment) do
-    tokens = segment_tokens(String.graphemes(segment), [])
-
-    prefix =
-      tokens
-      |> Enum.take_while(&match?({:literal, _char}, &1))
-      |> literal_token_string()
-
-    suffix =
-      tokens
-      |> Enum.reverse()
-      |> Enum.take_while(&match?({:literal, _char}, &1))
-      |> Enum.reverse()
-      |> literal_token_string()
-
-    {prefix, suffix}
-  end
-
-  defp segment_tokens([], acc), do: Enum.reverse(acc)
-  defp segment_tokens(["*" | rest], acc), do: segment_tokens(rest, [:wildcard | acc])
-  defp segment_tokens(["?" | rest], acc), do: segment_tokens(rest, [:wildcard | acc])
-
-  defp segment_tokens(["[" | rest], acc) do
-    case drop_character_class(rest, false) do
-      {:ok, rest} -> segment_tokens(rest, [:wildcard | acc])
-      :error -> segment_tokens(rest, [{:literal, "["} | acc])
-    end
-  end
-
-  defp segment_tokens([char | rest], acc), do: segment_tokens(rest, [{:literal, char} | acc])
-  defp drop_character_class([], _has_content?), do: :error
-  defp drop_character_class(["]" | _rest], false), do: :error
-  defp drop_character_class(["]" | rest], true), do: {:ok, rest}
-  defp drop_character_class([_char | rest], _has_content?), do: drop_character_class(rest, true)
-  defp literal_token_string(tokens), do: Enum.map_join(tokens, "", fn {:literal, char} -> char end)
-
-  defp normalize_child_scope_globs(globs) when is_list(globs) do
-    normalized_globs =
-      globs
-      |> Enum.filter(&is_binary/1)
-      |> Enum.map(&normalize_child_glob/1)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.uniq()
-
-    cond do
-      Enum.any?(normalized_globs, &traversal_glob?/1) -> {:tool_error, "path_traversal_allowed_file_globs"}
-      Enum.any?(normalized_globs, &encoded_separator_glob?/1) -> {:tool_error, "invalid_allowed_file_globs"}
-      true -> {:ok, normalized_globs}
-    end
-  end
-
-  defp normalize_child_scope_globs(_globs), do: {:ok, []}
-
-  defp normalize_child_glob(value) when is_binary(value) do
-    value
-    |> String.trim()
-    |> String.replace("\\", "/")
-    |> String.replace(~r/\A\.\//, "")
-  end
-
-  defp normalize_child_glob(_value), do: ""
-
-  defp traversal_glob?(glob) when is_binary(glob) do
-    glob
-    |> String.split("/", trim: true)
-    |> Enum.any?(&traversal_segment?/1)
-  end
-
-  defp traversal_glob?(_glob), do: false
-
-  defp encoded_separator_glob?(glob) when is_binary(glob) do
-    glob
-    |> String.split("/", trim: true)
-    |> Enum.any?(&encoded_separator_segment?/1)
-  end
-
-  defp encoded_separator_glob?(_glob), do: false
-
-  defp encoded_separator_segment?(segment) when is_binary(segment) do
-    segment
-    |> String.trim()
-    |> String.downcase()
-    |> encoded_separator_segment?(0)
-  end
-
-  defp encoded_separator_segment?(_segment), do: false
-
-  defp encoded_separator_segment?(segment, depth) do
-    cond do
-      String.contains?(segment, ["/", "\\"]) ->
-        true
-
-      depth >= 3 ->
-        false
-
-      true ->
-        decoded_segment = URI.decode(segment)
-        decoded_segment != segment and encoded_separator_segment?(decoded_segment, depth + 1)
-    end
-  rescue
-    ArgumentError -> false
-  end
-
-  defp traversal_segment?(segment) when is_binary(segment) do
-    segment
-    |> String.trim()
-    |> String.downcase()
-    |> traversal_segment?(0)
-  end
-
-  defp traversal_segment?(_segment), do: false
-
-  defp traversal_segment?(segment, depth) do
-    cond do
-      segment in [".", ".."] ->
-        true
-
-      segment |> path_separator_segments() |> Enum.any?(&(&1 in [".", ".."])) ->
-        true
-
-      depth >= 3 ->
-        false
-
-      true ->
-        decoded_segment = segment |> URI.decode() |> String.replace("\\", "/")
-        decoded_segment != segment and traversal_segment?(decoded_segment, depth + 1)
-    end
-  rescue
-    ArgumentError -> false
-  end
-
-  defp path_separator_segments(segment) do
-    segment
-    |> String.replace("\\", "/")
-    |> String.split("/", trim: true)
   end
 
   defp required_argument(arguments, key) do

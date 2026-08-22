@@ -468,7 +468,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  repo,
                  WorkPackageFactory.attrs(
                    id: "SYMPP-DASH-PHASE-REPO-BARE",
-                   kind: "phase_child",
+                   kind: "delegation",
                    phase_id: phase.id,
                    status: "planning",
                    repo: "symphony-plus-plus",
@@ -481,7 +481,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  repo,
                  WorkPackageFactory.attrs(
                    id: "SYMPP-DASH-PHASE-REPO-OWNER",
-                   kind: "phase_child",
+                   kind: "delegation",
                    phase_id: phase.id,
                    status: "blocked",
                    repo: "Pimpmuckl/symphony-plus-plus",

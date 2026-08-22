@@ -157,32 +157,6 @@ describe("package detail state actions", () => {
     ]);
   });
 
-  it("keeps merge actions for architect-merge packages that do not require a human PR", () => {
-    expect(
-      linkedPackageStateActions(
-        { id: "pkg-architect-merge", status: "ready_for_architect_merge", merge_required: true, pr_required: false },
-        { key: "merge_ready", raw_status: "ready_for_architect_merge", merge_required: true, pr_required: false },
-        true,
-        true,
-      ),
-    ).toEqual([
-      { value: "merged", label: "Mark Merged" },
-    ]);
-  });
-
-  it("keeps merge actions for architect-merge fallback cards without operational state", () => {
-    expect(
-      linkedPackageStateActions(
-        { id: "pkg-architect-merge-fallback", status: "ready_for_architect_merge", merge_required: true, pr_required: false },
-        null,
-        true,
-        true,
-      ),
-    ).toEqual([
-      { value: "merged", label: "Mark Merged" },
-    ]);
-  });
-
   it("does not expose closeout for non-merge packages before terminal readiness", () => {
     expect(
       linkedPackageStateActions(

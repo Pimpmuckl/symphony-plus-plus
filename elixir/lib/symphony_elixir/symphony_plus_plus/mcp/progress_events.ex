@@ -232,11 +232,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
 
   def reject_ready_evidence_mutation(_repo, %Session{}, _tool), do: :ok
 
-  defp reject_ready_work_package(%WorkPackage{kind: "phase_child", status: status}) when status in ["merging_into_phase", "merged_into_phase"] do
-    {:tool_error, "child_under_architect_control"}
-  end
-
-  defp reject_ready_work_package(%WorkPackage{status: status}) when status in ["ready_for_merge", "ready_for_architect_merge"] do
+  defp reject_ready_work_package(%WorkPackage{status: "ready_for_merge"}) do
     {:tool_error, "already_ready"}
   end
 

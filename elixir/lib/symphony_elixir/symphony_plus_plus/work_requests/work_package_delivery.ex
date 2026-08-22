@@ -138,7 +138,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery do
 
   @spec terminal_status_matches_outcome?(String.t() | nil, String.t() | nil) :: boolean()
   def terminal_status_matches_outcome?("merged", "pr_merged"), do: true
-  def terminal_status_matches_outcome?("merged_into_phase", "pr_merged"), do: true
   def terminal_status_matches_outcome?("closed", "completed_no_pr"), do: true
   def terminal_status_matches_outcome?("closed", "superseded"), do: true
   def terminal_status_matches_outcome?("abandoned", "abandoned"), do: true

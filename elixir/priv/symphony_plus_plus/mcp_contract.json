@@ -1,6 +1,6 @@
 {
   "version": 7,
-  "mcp_contract_fingerprint": "9d99df688ed3053320411be13784485d99a190ad7ae889573308afc4392c649a",
+  "mcp_contract_fingerprint": "dfe2efc9ffd0333c156bc1b42ff14c41bfde4ae6822417bc00d911059195a8bf",
   "tool_sets": {
     "unbound_tools": [
       "sympp.health",
@@ -52,9 +52,6 @@
       "mark_ready"
     ],
     "architect_tools": [
-      "create_child_work_package",
-      "mint_child_worker_key",
-      "revoke_child_worker_key",
       "list_work_requests",
       "read_work_request",
       "read_plan",
@@ -88,11 +85,7 @@
       "dispatch_work_package",
       "prepare_work_package_worktree",
       "cleanup_work_package_worktree",
-      "read_child_status",
-      "approve_scope_expansion",
-      "read_phase_board",
-      "approve_child_ready_state",
-      "merge_child_into_phase"
+      "approve_scope_expansion"
     ],
     "shared_worker_architect_tools": [
       "add_comment",

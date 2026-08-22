@@ -20,9 +20,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.LocalOperatorActions do
 
   @local_operator_worker "local-operator-worker"
   @local_operator_actor "local-operator"
-  @local_operator_nonmergeable_terminal_package_statuses ["merged_into_phase", "closed", "abandoned"]
-  @local_operator_noncloseable_terminal_package_statuses ["merged", "merged_into_phase", "abandoned"]
-  @local_operator_hideable_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
+  @local_operator_nonmergeable_terminal_package_statuses ["closed", "abandoned"]
+  @local_operator_noncloseable_terminal_package_statuses ["merged", "abandoned"]
+  @local_operator_hideable_package_statuses ["merged", "closed", "abandoned"]
 
   @spec local_operator_work_request_state(map()) :: {:ok, String.t()} | {:error, atom()}
   def local_operator_work_request_state(params) do

@@ -47,7 +47,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     LocalAssignmentClaims,
     LocalTrustedTools,
     Payloads,
-    PhaseChildTools,
     ProgressEvents,
     Repository,
     Response,
@@ -1234,19 +1233,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     ArchitectProductTreeTools.call(name, config, session, arguments)
   end
 
-  defp architect_tool(name, arguments, %__MODULE__{config: config, session: session})
-       when name in [
-              "read_child_status",
-              "create_child_work_package",
-              "mint_child_worker_key",
-              "revoke_child_worker_key",
-              "read_phase_board",
-              "approve_child_ready_state",
-              "merge_child_into_phase"
-            ] do
-    PhaseChildTools.call(name, config, session, arguments)
-  end
-
   defp architect_tool("approve_scope_expansion", arguments, %__MODULE__{config: config, session: session}) do
     with {:ok, session} <- approve_scope_expansion_session(config.repo, session),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
@@ -1676,11 +1662,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp reject_ready_work_package(%WorkPackage{kind: "phase_child", status: status}) when status in ["merging_into_phase", "merged_into_phase"] do
-    {:tool_error, "child_under_architect_control"}
-  end
-
-  defp reject_ready_work_package(%WorkPackage{status: status}) when status in ["ready_for_merge", "ready_for_architect_merge"],
+  defp reject_ready_work_package(%WorkPackage{status: "ready_for_merge"}),
     do: {:tool_error, "already_ready"}
 
   defp reject_ready_work_package(%WorkPackage{}), do: :ok

@@ -96,16 +96,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     assert {:ok, %{status: "ready_for_slicing"}} = Repository.get(repo, work_request.id)
   end
 
-  test "rejects phase-child packages from WorkRequest slicing", %{repo: repo} do
-    work_request = create_work_request!(repo)
-
-    assert {:error, :invalid_work_package} =
-             Repository.slice_work_request(repo, work_request.id, [package_attrs(kind: "phase_child")])
-
-    assert {:ok, []} = Repository.list_work_packages(repo, work_request.id)
-    assert {:ok, %{status: "ready_for_slicing"}} = Repository.get(repo, work_request.id)
-  end
-
   test "requires a nonempty batch and no open clarification questions", %{repo: repo} do
     work_request = create_work_request!(repo)
 
@@ -118,7 +108,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     work_request = create_work_request!(repo, status: "clarifying")
 
     assert {:error, :invalid_work_package} =
-             Repository.slice_work_request(repo, work_request.id, [package_attrs(kind: "phase_child")])
+             Repository.slice_work_request(repo, work_request.id, [package_attrs(kind: "not_a_kind")])
 
     assert {:ok, %{status: "clarifying"}} = Repository.get(repo, work_request.id)
 
@@ -173,7 +163,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     package = slice_one!(repo, work_request.id)
 
     assert {:error, :invalid_work_package} =
-             Repository.update_work_package(repo, work_request.id, package.id, 1, %{kind: "phase_child"})
+             Repository.update_work_package(repo, work_request.id, package.id, 1, %{kind: "not_a_kind"})
 
     assert {:error, :work_package_delivery_scope_out_of_scope} =
              Repository.update_work_package(repo, work_request.id, package.id, 1, %{base_branch: "release"})
@@ -239,7 +229,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
   end
 
   test "does not count terminal sibling packages as active", %{repo: repo} do
-    for terminal_status <- ["merged", "merged_into_phase", "closed", "abandoned"] do
+    for terminal_status <- ["merged", "closed", "abandoned"] do
       work_request = create_work_request!(repo)
 
       assert {:ok, %{work_packages: [terminal, planned]}} =

@@ -6,7 +6,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
 
   @worker_capability "worker:lifecycle.transition"
   @architect_capability "architect:lifecycle.transition"
-  @phase_child_kind "phase_child"
   @ready_status "ready_for_merge"
 
   @worker_package_transitions %{
@@ -25,32 +24,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
     "merged" => []
   }
 
-  @phase_child_transitions %{
-    "created" => ["ready_for_worker", "blocked", "abandoned"],
-    "ready_for_worker" => ["active", "blocked", "abandoned"],
-    "active" => ["ready_for_architect_merge", "blocked", "abandoned"],
-    "claimed" => ["planning", "blocked", "abandoned"],
-    "planning" => ["implementing", "blocked", "abandoned"],
-    "implementing" => ["reviewing", "blocked", "abandoned"],
-    "reviewing" => ["ci_waiting", "implementing", "blocked", "abandoned"],
-    "ci_waiting" => ["ready_for_architect_merge", "reviewing", "blocked", "abandoned"],
-    "ready_for_architect_merge" => ["merging_into_phase", "closed"],
-    "merging_into_phase" => ["merged_into_phase", "blocked"],
-    "merged_into_phase" => [],
-    "blocked" => ["active", "planning", "implementing", "abandoned"],
-    "abandoned" => [],
-    "closed" => []
-  }
-
-  @architect_only_statuses ["merging_into_phase", "merged_into_phase", "merged", "closed"]
-
   @type actor :: %{optional(atom() | String.t()) => term()}
   @type error ::
           :invalid_transition
           | :unknown_lifecycle_status
           | :unsupported_kind
           | :worker_cannot_mark_merged
-          | :worker_cannot_advance_phase_state
           | :actor_scope_mismatch
           | :missing_lifecycle_capability
           | :unknown_policy_template
@@ -74,11 +53,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
   end
 
   @spec terminal_readiness_status(WorkPackage.t()) :: String.t()
-  def terminal_readiness_status(%WorkPackage{kind: @phase_child_kind}), do: "ready_for_architect_merge"
   def terminal_readiness_status(%WorkPackage{}), do: @ready_status
 
   @spec supported_kind?(term()) :: boolean()
-  def supported_kind?(@phase_child_kind), do: true
   def supported_kind?(kind), do: kind in WorkPackage.executable_kinds()
 
   @spec dispatchable_kinds() :: [String.t()]
@@ -130,18 +107,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
 
   defp policy_key(%WorkPackage{kind: kind}), do: kind
 
-  defp validate_actor(%WorkPackage{}, next_status, actor) when next_status in ["merged", "merged_into_phase"] do
+  defp validate_actor(%WorkPackage{}, "merged", actor) do
     case role(actor) do
       "worker" -> {:error, :worker_cannot_mark_merged}
-      "architect" -> require_capability(actor, @architect_capability)
-      _role -> {:error, :missing_lifecycle_capability}
-    end
-  end
-
-  defp validate_actor(%WorkPackage{kind: @phase_child_kind}, next_status, actor)
-       when next_status in @architect_only_statuses do
-    case role(actor) do
-      "worker" -> {:error, :worker_cannot_advance_phase_state}
       "architect" -> require_capability(actor, @architect_capability)
       _role -> {:error, :missing_lifecycle_capability}
     end
@@ -173,7 +141,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
 
   defp lifecycle_kind?(kind), do: supported_kind?(kind)
 
-  defp transitions(%WorkPackage{kind: @phase_child_kind}), do: @phase_child_transitions
   defp transitions(%WorkPackage{}), do: @worker_package_transitions
 
   defp require_capability(actor, capability) do

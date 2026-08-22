@@ -190,36 +190,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     assert solo_event["recovery"] == Map.take(recovery, ["fresh_mcp_session_required", "next_action", "tool"])
     refute diagnostic_event_line(solo_log) =~ "private-solo-session"
     refute Map.has_key?(solo_event["recovery"], "fallback")
-
-    secret = "Bearer C:/private/branch/wp_identifier_secret"
-
-    request = %{
-      "jsonrpc" => "2.0",
-      "id" => secret,
-      "method" => "tools/call",
-      "params" => %{
-        "name" => "create_child_work_package",
-        "arguments" => %{"package" => %{"goal" => secret, "path" => secret}}
-      }
-    }
-
-    {response, log} =
-      capture_response(fn ->
-        assert {:ok, result} =
-                 HTTPTransport.handle(config, request,
-                   client_key: client_key,
-                   state_key: initialized.state_key
-                 )
-
-        result.response
-      end)
-
-    assert response["error"]["code"] == -32_001
-    assert response["error"]["data"]["reason"] == "architect_grant_required"
-    assert log =~ ~s("tool_name":"create_child_work_package")
-    assert log =~ ~s("failure_reason":"architect_grant_required")
-    assert log =~ ~s("argument_keys":["package"])
-    refute diagnostic_event_line(log) =~ secret
   end
 
   test "batch failures emit once per tool item including notifications", %{repo: repo} do

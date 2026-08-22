@@ -38,7 +38,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   @work_request_authoring_states ["ready_for_slicing", "sliced"]
   @work_package_authoring_states ["planned"]
-  @work_package_terminal_states ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
+  @work_package_terminal_states ["skipped", "merged", "closed", "abandoned"]
 
   @tools [
     "ask_question",

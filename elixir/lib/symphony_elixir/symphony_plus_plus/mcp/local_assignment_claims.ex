@@ -184,7 +184,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   defp require_optional_local_worktree_scope(%WorkPackage{} = work_package, claim_worktree_path), do: require_local_worktree_scope(work_package, claim_worktree_path)
 
   defp require_live_local_work_package(%WorkPackage{status: status})
-       when status in ["merged", "merged_into_phase", "closed", "abandoned"] do
+       when status in ["merged", "closed", "abandoned"] do
     {:error, :work_package_terminal}
   end
 
@@ -319,9 +319,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
               "implementing",
               "reviewing",
               "ci_waiting",
-              "ready_for_merge",
-              "ready_for_architect_merge",
-              "merging_into_phase"
+              "ready_for_merge"
             ],
        do: {:ok, work_package}
 

@@ -6,14 +6,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.HandoffHelpers do
 
   import ExUnit.Assertions
   import SymphonyElixir.SymphonyPlusPlus.MCPCase.CommonHelpers
-  import SymphonyElixir.SymphonyPlusPlus.MCPCase.SessionHelpers
   alias Ecto.Adapters.SQL
-  alias SymphonyElixir.MCPHarness
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.Server
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   @handoff_store_process_key :sympp_mcp_test_handoff_store_dir
 
   def windows? do
@@ -105,81 +99,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase.HandoffHelpers do
   def restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
   def restore_app_env(key, value), do: Application.put_env(:symphony_elixir, key, value)
 
-  def claim_phase_child_worker(repo, architect_session, child_id) do
-    mint_response =
-      mcp_tool(repo, architect_session, "mint_child_worker_key", %{
-        "work_package_id" => child_id,
-        "template" => %{"claimed_by" => "worker-1"}
-      })
-
-    claim_child_worker_from_mint_response(repo, mint_response, "worker-1")
-  end
-
-  def claim_child_worker_from_mint_response(repo, mint_response, claimed_by) do
-    worker_grant = get_in(mint_response, ["result", "structuredContent", "worker_grant"])
-    bootstrap = Map.fetch!(worker_grant, "worker_bootstrap")
-    claim = Map.fetch!(bootstrap, "claim")
-    assert claim["tool"] == "claim_local_assignment"
-    arguments = get_in(bootstrap, ["claim", "arguments"])
-    assert arguments["claimed_by"] == claimed_by
-    assert arguments["work_package_id"] == worker_grant["work_package_id"]
-    refute Map.has_key?(arguments, "caller_id")
-
-    {claim_response, claimed_server} =
-      Server.handle_state(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "claim-child-worker-from-bootstrap",
-          "method" => "tools/call",
-          "params" => %{"name" => claim["tool"], "arguments" => arguments}
-        },
-        local_mcp_server(local_mcp_config(repo), "child-worker-bootstrap-#{worker_grant["id"]}-#{System.unique_integer([:positive])}")
-      )
-
-    assert get_in(claim_response, ["result", "structuredContent", "assignment", "grant_id"]) == worker_grant["id"]
-    claimed_server.session
-  end
-
   def json_payload(payload) do
     payload
     |> Jason.encode!()
     |> Jason.decode!()
-  end
-
-  def renew_phase_architect_session(repo, anchor, capabilities, claimed_by \\ "architect-1") do
-    assert {:ok, minted} =
-             AccessGrantService.mint_architect_grant(repo, anchor.phase_id,
-               work_package_id: anchor.id,
-               capabilities: capabilities
-             )
-
-    assert {:ok, architect_assignment} =
-             AccessGrantRepository.claim(repo, minted.work_key.secret, %{claimed_by: claimed_by}, DateTime.utc_now(:microsecond))
-
-    MCPHarness.session(architect_assignment, proof_hash: minted.grant.secret_hash)
-  end
-
-  def assert_child_worker_active(repo, worker_session) do
-    assert {:ok, package} = WorkPackageRepository.get(repo, worker_session.assignment.work_package_id)
-    assert package.status == "active"
-  end
-
-  def attach_phase_child_ready_evidence(repo, worker_session, child_id, head_sha) do
-    attach_tool(repo, worker_session, "attach_branch", %{"branch" => "agent/#{child_id}/worker", "head_sha" => head_sha})
-    attach_tool(repo, worker_session, "attach_pr", %{"url" => "https://github.com/nextide/symphony-plus-plus/pull/7003", "head_sha" => head_sha})
-  end
-
-  def create_child_work_package(repo, session, child_id) do
-    response =
-      mcp_tool(repo, session, "create_child_work_package", %{
-        "package" => %{
-          "id" => child_id,
-          "title" => "Implement #{child_id}",
-          "acceptance_criteria" => ["Complete #{child_id}"]
-        }
-      })
-
-    assert get_in(response, ["result", "structuredContent", "work_package", "id"]) == child_id
-    child_id
   end
 end

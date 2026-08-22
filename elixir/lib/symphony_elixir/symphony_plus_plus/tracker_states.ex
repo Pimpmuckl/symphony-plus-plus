@@ -10,13 +10,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.TrackerStates do
     "reviewing",
     "ci_waiting"
   ]
-  @active_states @worker_dispatchable_states ++
-                   [
-                     "ready_for_merge",
-                     "ready_for_architect_merge",
-                     "merging_into_phase"
-                   ]
-  @terminal_states ["merged", "merged_into_phase", "closed", "abandoned"]
+  @active_states @worker_dispatchable_states ++ ["ready_for_merge"]
+  @terminal_states ["merged", "closed", "abandoned"]
   @tracker_kinds ["Symphony_pp", "symphony_pp", "symphony++"]
   @canonical_tracker_kind "Symphony_pp"
   @tracker_kind_aliases %{

@@ -43,15 +43,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
   import Ecto.Query, only: [from: 2]
 
-  @ready_statuses ["ready_for_merge", "ready_for_architect_merge"]
-  @dropped_child_statuses ["abandoned"]
-  @non_open_child_statuses ["merged_into_phase", "closed", "abandoned"]
+  @ready_statuses ["ready_for_merge"]
   @work_package_context_chunk_size 500
   @operator_finished_work_package_limit 80
   @finished_work_package_candidate_multiplier 3
   @finished_work_package_min_candidate_limit 40
   @finished_progress_lookup_chunk_size 500
-  @finished_package_statuses ["merged", "merged_into_phase", "closed", "abandoned"]
+  @finished_package_statuses ["merged", "closed", "abandoned"]
   @operator_work_package_signal_keys [
     :active_agent_run,
     :active_blocker_count,
@@ -787,27 +785,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
          phase: phase(phase),
          groups: groups,
          statuses: group_statuses(groups),
-         total_count: length(cards),
-         summary: phase_progress_summary(summary_work_packages)
+         total_count: length(cards)
        }}
     end
-  end
-
-  defp phase_progress_summary(work_packages) do
-    phase_children = Enum.filter(work_packages, &phase_child_package?/1)
-    progress_children = Enum.reject(phase_children, &(&1.status in @dropped_child_statuses))
-
-    %{
-      child_count: length(progress_children),
-      merged_child_count: Enum.count(progress_children, &(&1.status == "merged_into_phase")),
-      ready_child_count: Enum.count(progress_children, &(&1.status == "ready_for_architect_merge")),
-      merging_child_count: Enum.count(progress_children, &(&1.status == "merging_into_phase")),
-      open_child_count: Enum.count(progress_children, &(&1.status not in @non_open_child_statuses))
-    }
-  end
-
-  defp phase_child_package?(%WorkPackage{} = work_package) do
-    work_package.kind == "phase_child" and filled_string?(work_package.parent_id)
   end
 
   defp filter_phase_work_packages(work_packages, filters) do

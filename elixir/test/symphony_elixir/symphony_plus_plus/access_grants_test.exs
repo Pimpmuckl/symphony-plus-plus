@@ -241,7 +241,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, work_package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(kind: "phase_child", phase_id: phase.id)
+               WorkPackageFactory.attrs(kind: "delegation", phase_id: phase.id)
              )
 
     insert_work_request!(repo, "wr-outside-repo", "other/repo", work_package.base_branch)
@@ -260,7 +260,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, work_package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(kind: "phase_child", phase_id: phase.id)
+               WorkPackageFactory.attrs(kind: "delegation", phase_id: phase.id)
              )
 
     insert_work_request!(repo, "wr-unattached-scope", work_package.repo, work_package.base_branch)
@@ -279,13 +279,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, work_package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(kind: "phase_child", phase_id: phase.id)
+               WorkPackageFactory.attrs(kind: "delegation", phase_id: phase.id)
              )
 
     assert {:ok, other_package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-OTHER-SCOPE", kind: "phase_child", phase_id: phase.id)
+               WorkPackageFactory.attrs(id: "SYMPP-OTHER-SCOPE", kind: "delegation", phase_id: phase.id)
              )
 
     insert_work_request!(repo, "wr-work-package-scope", work_package.repo, work_package.base_branch)
@@ -313,7 +313,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, work_package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(kind: "phase_child", phase_id: phase.id)
+               WorkPackageFactory.attrs(kind: "delegation", phase_id: phase.id)
              )
 
     insert_work_request!(repo, "wr-cross-repo-slice-scope", "other/repo", work_package.base_branch)
@@ -338,7 +338,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, work_package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(kind: "phase_child", phase_id: phase.id)
+               WorkPackageFactory.attrs(kind: "delegation", phase_id: phase.id)
              )
 
     invalid_scopes = [
@@ -370,7 +370,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, work_package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(kind: "phase_child", phase_id: phase.id)
+               WorkPackageFactory.attrs(kind: "delegation", phase_id: phase.id)
              )
 
     insert_work_request!(repo, "wr-resolved-scope", work_package.repo, work_package.base_branch)
@@ -395,7 +395,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-WORK-PACKAGE-OTHER",
-                 kind: "phase_child",
+                 kind: "delegation",
                  phase_id: phase.id,
                  repo: work_package.repo,
                  base_branch: work_package.base_branch
@@ -435,7 +435,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, work_package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(kind: "phase_child", phase_id: phase.id)
+               WorkPackageFactory.attrs(kind: "delegation", phase_id: phase.id)
              )
 
     insert_work_request!(repo, "wr-requested-work-package", work_package.repo, work_package.base_branch)
@@ -464,7 +464,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
              WorkPackageRepository.create(
                repo,
                WorkPackageFactory.attrs(
-                 kind: "phase_child",
+                 kind: "delegation",
                  phase_id: phase.id,
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "main"
@@ -514,7 +514,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, minted} =
              Service.mint_architect_grant(repo, phase.id,
                work_package_id: work_package.id,
-               capabilities: ["read:phase", "create:child_work_package"]
+               capabilities: ["read:phase"]
              )
 
     far_future = ~U[2027-04-30 10:00:00Z]
@@ -913,15 +913,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
 
     for capability <- [
           "read:phase",
-          "read:child_progress",
-          "read:child_findings",
           "read:work_request",
           "write:work_request",
           "dispatch:work_request",
-          "mint:child_worker_key",
-          "approve:child_ready_state",
-          "write:phase_plan",
-          "update:child_work_package"
+          "write:phase_plan"
         ] do
       assert {:error, %Ecto.Changeset{} = changeset} =
                Service.mint_worker_grant(repo, work_package.id, capabilities: ["worker:claim", capability])
@@ -936,7 +931,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, work_package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(kind: "phase_child", phase_id: phase.id)
+               WorkPackageFactory.attrs(kind: "delegation", phase_id: phase.id)
              )
 
     work_key = WorkKey.generate()
@@ -1034,7 +1029,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, other_child} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-GRANT-OTHER", kind: "phase_child", phase_id: other_phase.id)
+               WorkPackageFactory.attrs(id: "SYMPP-GRANT-OTHER", kind: "delegation", phase_id: other_phase.id)
              )
 
     work_key = WorkKey.generate()
@@ -1057,7 +1052,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, work_package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-GRANT-MISSING-PHASE", kind: "phase_child")
+               WorkPackageFactory.attrs(id: "SYMPP-GRANT-MISSING-PHASE", kind: "delegation")
              )
 
     work_key = WorkKey.generate()
@@ -1076,7 +1071,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert "does not exist" in errors_on(changeset).phase_id
   end
 
-  test "architect phase grants freeze anchor scope without read phase", %{repo: repo} do
+  test "architect work request grants freeze anchor scope without read phase", %{repo: repo} do
     assert {:ok, phase} = PhaseRepository.create(repo, %{id: "phase-grant-delegation", title: "Delegation phase"})
 
     assert {:ok, work_package} =
@@ -1094,7 +1089,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert {:ok, %{grant: grant}} =
              Service.mint_architect_grant(repo, phase.id,
                work_package_id: work_package.id,
-               capabilities: ["create:child_work_package", "mint:child_worker_key"]
+               capabilities: ["write:work_request"]
              )
 
     assert grant.phase_id == phase.id
@@ -1102,7 +1097,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
     assert grant.scope_base_branch == work_package.base_branch
   end
 
-  test "architect phase grants without read phase require a valid anchor", %{repo: repo} do
+  test "architect work request grants without read phase require a valid anchor", %{repo: repo} do
     assert {:ok, phase} = PhaseRepository.create(repo, %{id: "phase-grant-delegation-anchor", title: "Delegation anchor"})
     work_key = WorkKey.generate()
 
@@ -1112,7 +1107,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
                display_key: work_key.display_key,
                secret_hash: WorkKey.secret_hash(work_key.secret),
                grant_role: "architect",
-               capabilities: ["create:child_work_package", "mint:child_worker_key"],
+               capabilities: ["write:work_request"],
                expires_at: DateTime.add(DateTime.utc_now(:microsecond), 60, :second)
              })
 
@@ -1195,7 +1190,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
           work_key.display_key,
           WorkKey.secret_hash(work_key.secret),
           "architect",
-          Jason.encode!(["create:child_work_package"]),
+          Jason.encode!(["write:work_request"]),
           expires_at,
           nil,
           nil,
@@ -1547,7 +1542,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrantsTest do
       """,
       [
         attrs[:id],
-        "phase_child",
+        "delegation",
         "Legacy scope package",
         attrs[:repo],
         attrs[:base_branch],
