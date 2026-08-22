@@ -811,7 +811,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
     case repo.get(WorkRequest, work_package.work_request_id) do
       %WorkRequest{} = work_request ->
         with :ok <- WorkRequestScope.require_work_package_repo_scope(work_package, work_request, work_package),
-             :ok <- WorkRequestScope.require_work_package_delivery_base_scope(work_package, work_package),
              :ok <- WorkRequestScope.require_work_request_scope(repo, work_request, filters) do
           WorkRequestScope.require_delivery_work_package_filter_scope(repo, work_package, work_request, filters)
         end

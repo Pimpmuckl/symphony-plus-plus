@@ -622,10 +622,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
     if work_package.work_request_id == work_request.id, do: :ok, else: {:error, :forbidden}
   end
 
-  @spec require_work_package_delivery_base_scope(term(), term()) :: :ok | {:error, term()}
-  def require_work_package_delivery_base_scope(%WorkPackage{base_branch: base_branch}, %WorkPackage{base_branch: base_branch}), do: :ok
-  def require_work_package_delivery_base_scope(%WorkPackage{}, %WorkPackage{}), do: {:error, :forbidden}
-
   defp require_delivery_work_package_scope(%WorkPackage{} = work_package, %WorkRequest{} = work_request) do
     if work_package.work_request_id == work_request.id, do: :ok, else: {:error, :forbidden}
   end
