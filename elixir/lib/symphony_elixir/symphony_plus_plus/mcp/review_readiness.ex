@@ -60,7 +60,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
            :ok <- lock_work_package(repo, Session.work_package_id(session)),
            {:ok, blocker_closeout} <- apply_blocker_closeout.(repo, session, blocker_closeout_plan),
            {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
-           {:ok, readiness_warnings} <- readiness_gates(repo, state),
+           {:ok, readiness_warnings} <- readiness_gates(state),
            ready_status = StateMachine.terminal_readiness_status(state.work_package),
            :ok <- StateMachine.validate_ready_transition(state.work_package, ready_status, actor(session)),
            {:ok, work_package} <-
@@ -457,8 +457,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     "current:" <> digest
   end
 
-  defp readiness_gates(repo, state) do
-    with {:ok, reasons} <- readiness_failure_reasons(repo, state) do
+  defp readiness_gates(state) do
+    with {:ok, reasons} <- readiness_failure_reasons(state) do
       missing = missing_readiness_gates(reasons)
 
       if missing == [], do: {:ok, []}, else: {:error, {:readiness_failed, missing, reasons, []}}
@@ -471,7 +471,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
     |> Enum.uniq()
   end
 
-  defp readiness_failure_reasons(_repo, state), do: {:ok, base_readiness_failure_reasons(state)}
+  defp readiness_failure_reasons(state), do: {:ok, base_readiness_failure_reasons(state)}
 
   defp base_readiness_failure_reasons(state) do
     [
@@ -959,7 +959,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
 
   defp put_remaining_readiness_gates(repo, %Session{} = session, %{"structuredContent" => payload}) do
     with {:ok, state} <- PlanningRepository.get_state(repo, Session.work_package_id(session)),
-         {:ok, reasons} <- readiness_failure_reasons(repo, state) do
+         {:ok, reasons} <- readiness_failure_reasons(state) do
       result = payload |> Map.put("remaining_readiness_gates", missing_readiness_gates(reasons)) |> ToolResult.agent_tool_result()
       {:ok, result}
     end
