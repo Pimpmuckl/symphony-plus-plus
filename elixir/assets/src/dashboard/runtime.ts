@@ -234,7 +234,7 @@ export async function readDashboardApiResponse(response: Response, fallbackMessa
   const payload = await readDashboardJson(response);
 
   if (!response.ok) {
-    throw dashboardResponseError(response, payload, fallbackMessage);
+    throw new Error(dashboardErrorMessage(payload) || fallbackMessage);
   }
 
   return payload;
@@ -255,14 +255,6 @@ function dashboardErrorMessage(payload: DashboardApiResponse) {
 
   const code = typeof payload.error.code === "string" ? payload.error.code : "";
   return code ? code.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) : null;
-}
-
-function dashboardResponseError(response: Response, payload: DashboardApiResponse, fallbackMessage: string) {
-  return new Error(dashboardResponseErrorMessage(response, payload, fallbackMessage));
-}
-
-function dashboardResponseErrorMessage(response: Response, payload: DashboardApiResponse, fallbackMessage: string) {
-  return dashboardErrorMessage(payload) || fallbackMessage;
 }
 
 export function dashboardCaughtMessage(caught: unknown, fallbackMessage: string) {
