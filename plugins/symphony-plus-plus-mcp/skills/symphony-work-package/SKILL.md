@@ -36,7 +36,7 @@ cross-slice target, successor relation, audit closeout, or concurrency guard.
 5. Replay the same local claim after reconnects. The server heartbeats the
    current lease, reclaims stale leases with audit evidence, and rejects paused
    leases or another active owner. Reconnect does not rewrite lifecycle state.
-   Stop and report those blockers instead of minting your own replacement.
+   Tell the supervising parent and stop instead of minting your own replacement.
 6. Call `get_current_assignment()` and treat that WorkPackage as authoritative.
 7. Read `sympp://work-packages/{id}/acceptance.md` with the other MCP-backed
    package resources.
@@ -71,17 +71,14 @@ Keep S++ current as the work changes:
 - `add_comment(body)`, `list_comments()`, and
   `resolve_comment(comment_id, resolution_note?)` for scoped package notes.
   Pass `target_kind` and `target_id` only for another authorized target.
-- `report_blocker(summary, idempotency_key, blocker_id?)` when this worker is
-  blocked. Resolve only that same worker-owned blocker with
-  `resolve_blocker(blocker_id, resolution, summary, idempotency_key)`.
 - `abandon(reason)` only when this worker must terminally abandon an active or
   blocked assignment.
   Active blocker facts remain preserved in the closeout audit trail.
-- Use comments for ordinary parent-agent coordination. Worker blocker tools
-  record execution blockers; they do not create or resolve architect-owned
-  human blockers or guidance.
+- Use ordinary collaboration or the final worker message for execution
+  problems. Use comments only when the package note should remain in S++.
+  Workers do not create or resolve human blockers.
 
-Human-facing bodies, comments, blocker notes, findings, progress details, and
+Human-facing bodies, comments, findings, progress details, and
 guidance context are Markdown. Keep titles, ids, statuses, branch names, and
 other compact labels plain.
 
@@ -129,8 +126,7 @@ Before `mark_ready()`:
 - Do not add task-plan or progress calls only to restate facts already proved
   elsewhere.
 - No active blocker remains.
-  Resolve worker-owned blockers with `resolve_blocker`. Architect-owned human
-  blockers still require the architect or trusted local operator.
+  Human blockers require the architect or trusted local operator.
 
 Return ready or terminal packages to the architect named by `next_owner`; the
 worker does not need or receive architect tools for that handoff.

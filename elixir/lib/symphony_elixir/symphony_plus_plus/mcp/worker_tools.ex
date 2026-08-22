@@ -1,8 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   @moduledoc false
 
-  import Ecto.Query, only: [from: 2]
-
   import SymphonyElixir.SymphonyPlusPlus.MCP.ToolArguments,
     only: [
       optional_argument: 3,
@@ -20,7 +18,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.ActorResolver
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.{DryClient, MergeReconciler}
   alias SymphonyElixir.SymphonyPlusPlus.Lifecycle.Service, as: LifecycleService
 
@@ -39,7 +36,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     WorktreeScope
   }
 
-  alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
@@ -53,8 +49,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     "update_task_plan",
     "append_finding",
     "append_progress",
-    "report_blocker",
-    "resolve_blocker",
     "abandon",
     "attach_branch",
     "attach_pr",
@@ -97,58 +91,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   def call("append_progress", %Config{} = config, session, arguments) do
     append_scoped_progress(config.repo, session, arguments, "append_progress", %{})
-  end
-
-  def call("report_blocker", %Config{} = config, session, arguments) do
-    with {:ok, session} <- scoped_session(config.repo, session, arguments),
-         :ok <- authorize_current_package_policy(config.repo, session, :blocker_report, :blocker),
-         {:ok, summary} <- required_argument(arguments, "summary"),
-         {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
-         {:ok, blocker_id} <- optional_string_argument(arguments, "blocker_id"),
-         {:ok, caller_payload} <- optional_payload(arguments),
-         {:ok, result} <-
-           report_blocker_transaction(
-             config.repo,
-             session,
-             arguments,
-             summary,
-             idempotency_key,
-             blocker_id,
-             caller_payload
-           ) do
-      {:ok, result}
-    else
-      {:tool_error, reason} -> invalid_params_error("report_blocker", reason)
-      {:error, _code, _message, _data} = error -> error
-      {:error, reason} -> worker_error(reason, "report_blocker")
-    end
-  end
-
-  def call("resolve_blocker", %Config{} = config, session, arguments) do
-    with {:ok, session} <- scoped_session(config.repo, session, arguments),
-         :ok <- authorize_current_package_policy(config.repo, session, :blocker_resolve, :blocker),
-         {:ok, blocker_id} <- required_argument(arguments, "blocker_id"),
-         {:ok, resolution} <- required_argument(arguments, "resolution"),
-         {:ok, summary} <- required_argument(arguments, "summary"),
-         {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
-         {:ok, caller_payload} <- optional_payload(arguments),
-         {:ok, result} <-
-           resolve_blocker_transaction(
-             config.repo,
-             session,
-             arguments,
-             blocker_id,
-             resolution,
-             summary,
-             idempotency_key,
-             caller_payload
-           ) do
-      {:ok, result}
-    else
-      {:tool_error, reason} -> invalid_params_error("resolve_blocker", reason)
-      {:error, _code, _message, _data} = error -> error
-      {:error, reason} -> worker_error(reason, "resolve_blocker")
-    end
   end
 
   def call("abandon", %Config{} = config, session, arguments) do
@@ -421,163 +363,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     end
   end
 
-  defp report_blocker_transaction(repo, %Session{} = session, arguments, summary, idempotency_key, blocker_id, caller_payload) do
-    idempotency_key = ProgressEvents.scoped_idempotency_key("report_blocker", String.trim(idempotency_key), session)
-    blocker_id = blocker_id || generated_blocker_id(session, idempotency_key)
-
-    attrs = %{
-      "summary" => summary,
-      "body" => optional_argument(arguments, "body", nil),
-      "status" => "blocked",
-      "idempotency_key" => idempotency_key,
-      "payload" =>
-        Map.merge(caller_payload, %{
-          "type" => "blocker",
-          "source_tool" => "report_blocker",
-          "blocker_id" => blocker_id,
-          "active" => true
-        })
-    }
-
-    repo
-    |> run_worker_transaction(fn ->
-      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
-           :ok <- lock_work_package(repo, Session.work_package_id(session)),
-           :ok <- ProgressEvents.reject_ready_evidence_mutation(repo, session, "report_blocker") do
-        append_or_replay_blocker_report(repo, session, attrs, idempotency_key)
-      end
-    end)
-    |> put_reported_blocker_id(blocker_id)
-  end
-
-  defp put_reported_blocker_id({:ok, %{"structuredContent" => payload}}, blocker_id) when is_map(payload) do
-    {:ok, ToolResult.agent_tool_result(Map.put(payload, "blocker_id", blocker_id))}
-  end
-
-  defp put_reported_blocker_id(result, _blocker_id), do: result
-
-  defp append_or_replay_blocker_report(repo, %Session{} = session, attrs, idempotency_key) do
-    case ProgressEvents.existing(repo, session, idempotency_key) do
-      {:ok, %ProgressEvent{} = event} ->
-        ProgressEvents.replay_existing(repo, session, event, attrs, "report_blocker")
-
-      {:error, :not_found} ->
-        with {:ok, %WorkPackage{status: status} = work_package} when status in ["active", "blocked"] <-
-               WorkPackageRepository.get(repo, Session.work_package_id(session)),
-             {:ok, result} <- ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, "report_blocker"),
-             {:ok, _blocked} <- maybe_block_worker_package(repo, session, work_package) do
-          {:ok, result}
-        else
-          {:ok, %WorkPackage{}} -> {:tool_error, "work_package_not_active"}
-          error -> error
-        end
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp maybe_block_worker_package(_repo, _session, %WorkPackage{status: "blocked"} = work_package), do: {:ok, work_package}
-  defp maybe_block_worker_package(repo, %Session{} = session, %WorkPackage{} = work_package), do: LifecycleService.transition(repo, work_package, "blocked", actor(session))
-
-  defp resolve_blocker_transaction(
-         repo,
-         %Session{} = session,
-         arguments,
-         blocker_id,
-         resolution,
-         summary,
-         idempotency_key,
-         caller_payload
-       ) do
-    idempotency_key = ProgressEvents.scoped_idempotency_key("resolve_blocker", String.trim(idempotency_key), session)
-
-    attrs = %{
-      "summary" => summary,
-      "body" => optional_argument(arguments, "body", nil),
-      "status" => "resolved",
-      "idempotency_key" => idempotency_key,
-      "payload" =>
-        Map.merge(caller_payload, %{
-          "type" => "blocker",
-          "source_tool" => "resolve_blocker",
-          "blocker_id" => blocker_id,
-          "resolution" => resolution,
-          "active" => false
-        })
-    }
-
-    run_worker_transaction(repo, fn ->
-      with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
-           :ok <- lock_work_package(repo, Session.work_package_id(session)) do
-        append_or_replay_blocker_resolution(repo, session, blocker_id, attrs, idempotency_key)
-      end
-    end)
-  end
-
-  defp append_or_replay_blocker_resolution(repo, %Session{} = session, blocker_id, attrs, idempotency_key) do
-    case ProgressEvents.existing(repo, session, idempotency_key) do
-      {:ok, %ProgressEvent{} = event} ->
-        ProgressEvents.replay_existing(repo, session, event, attrs, "resolve_blocker")
-
-      {:error, :not_found} ->
-        resolve_new_worker_blocker(repo, session, blocker_id, attrs, idempotency_key)
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
-  defp resolve_new_worker_blocker(repo, %Session{} = session, blocker_id, attrs, idempotency_key) do
-    with {:ok, %WorkPackage{} = work_package} <- WorkPackageRepository.get(repo, Session.work_package_id(session)),
-         {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package.id),
-         {:ok, blocker_state} <-
-           worker_blocker_state(
-             progress_events,
-             blocker_id,
-             session.assignment.grant_id
-           ) do
-      resolve_worker_blocker(
-        blocker_state,
-        repo,
-        session,
-        work_package,
-        progress_events,
-        blocker_id,
-        attrs,
-        idempotency_key
-      )
-    end
-  end
-
-  defp resolve_worker_blocker(:active, repo, session, %WorkPackage{status: "blocked"} = work_package, _progress_events, _blocker_id, attrs, idempotency_key) do
-    with :ok <- ProgressEvents.reject_ready_evidence_mutation(repo, session, "resolve_blocker"),
-         {:ok, result} <- ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, "resolve_blocker"),
-         {:ok, _work_package} <- WorkPackageRepository.reactivate_if_unblocked(repo, work_package.id) do
-      {:ok, result}
-    end
-  end
-
-  defp resolve_worker_blocker(:active, repo, session, %WorkPackage{}, _progress_events, _blocker_id, _attrs, _idempotency_key) do
-    case ProgressEvents.reject_ready_evidence_mutation(repo, session, "resolve_blocker") do
-      :ok -> {:tool_error, "work_package_not_blocked"}
-      error -> error
-    end
-  end
-
-  defp resolve_worker_blocker(:already_resolved, _repo, _session, %WorkPackage{}, _progress_events, blocker_id, _attrs, _idempotency_key) do
-    {:ok, ToolResult.agent_tool_result(%{"already_resolved" => true, "blocker_id" => blocker_id})}
-  end
-
-  defp worker_blocker_state(progress_events, blocker_id, grant_id) do
-    case Enum.find(BlockerProjection.blockers(progress_events), &(&1.id == blocker_id)) do
-      %{active: true, actor: %{access_grant_id: ^grant_id}} -> {:ok, :active}
-      %{active: true} -> {:tool_error, "blocker_owned_by_another_actor"}
-      %{} -> {:ok, :already_resolved}
-      nil -> {:tool_error, "blocker_not_found"}
-    end
-  end
-
   defp abandon_transaction(repo, %Session{} = session, reason) do
     run_worker_transaction(repo, fn ->
       with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
@@ -632,20 +417,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
       error ->
         error
-    end
-  end
-
-  defp generated_blocker_id(%Session{} = session, idempotency_key) do
-    material = [session.assignment.work_package_id, session.assignment.grant_id, idempotency_key] |> Enum.join(":")
-    "blocker_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
-  end
-
-  defp lock_work_package(repo, work_package_id) do
-    query = from(work_package in WorkPackage, where: work_package.id == ^work_package_id)
-
-    case repo.update_all(query, set: [id: work_package_id]) do
-      {1, _rows} -> :ok
-      {0, _rows} -> {:error, :not_found}
     end
   end
 

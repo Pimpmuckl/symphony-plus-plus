@@ -189,35 +189,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(session_scoped_properties(%{"guidance_request_id" => string_schema()}), ["guidance_request_id"])
   end
 
-  def worker_tool_input_schema("report_blocker") do
-    schema(
-      session_scoped_properties(%{
-        "blocker_id" => described_string_schema("Optional stable blocker id. A deterministic id is generated when omitted."),
-        "summary" => string_schema(),
-        "body" => markdown_nullable_string_schema("Optional human-facing Markdown body."),
-        "status" => string_enum_schema(["blocked"]),
-        "idempotency_key" => string_schema(),
-        "payload" => object_schema()
-      }),
-      ["summary", "idempotency_key"]
-    )
-  end
-
-  def worker_tool_input_schema("resolve_blocker") do
-    schema(
-      session_scoped_properties(%{
-        "blocker_id" => string_schema(),
-        "resolution" => string_schema(),
-        "summary" => string_schema(),
-        "body" => markdown_nullable_string_schema("Optional human-facing Markdown body."),
-        "status" => string_enum_schema(["resolved"]),
-        "idempotency_key" => string_schema(),
-        "payload" => object_schema()
-      }),
-      ["blocker_id", "resolution", "summary", "idempotency_key"]
-    )
-  end
-
   def worker_tool_input_schema("abandon"),
     do: schema(%{"reason" => markdown_string_schema("Why this work package is being abandoned.")}, ["reason"])
 

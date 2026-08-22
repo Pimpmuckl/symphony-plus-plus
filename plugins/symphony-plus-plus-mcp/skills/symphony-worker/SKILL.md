@@ -17,8 +17,8 @@ PR-sized assignment.
    - Assigned WorkPackage: use
      `symphony-plus-plus-mcp:symphony-work-package` and claim by WorkPackage
      id.
-     If that MCP adapter is unavailable, report a blocker; do not fall back to
-     Solo.
+     If that MCP adapter is unavailable, tell the supervising parent and stop;
+     do not fall back to Solo.
    - No WorkPackage: use
      `symphony-plus-plus-mcp:symphony-solo-session`.
      Each worker uses its own session.
@@ -62,7 +62,7 @@ seeking architect-only tools.
   when the assignment context supplies them. Add the parent title and goal only
   as product intent; they never expand worker authority. Do not require a brief
   for briefless or non-Symphony++ use.
-- If CI/checks exist, make sure they are green or report the exact blocker. If
+- If CI/checks exist, make sure they are green or return the exact failure. If
   no CI exists, say so.
 - After material changes, rerun any declared review for the new exact head.
 - Record material findings, progress, or validation context when it helps the

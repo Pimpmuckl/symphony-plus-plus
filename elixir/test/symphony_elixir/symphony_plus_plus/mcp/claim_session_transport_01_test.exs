@@ -558,78 +558,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
 
     assert get_in(assignment_response, ["result", "structuredContent", "assignment", "claimed_by"]) == "local-worker-1"
 
-    report_response =
-      Server.handle(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "report-blocker",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "report_blocker",
-            "arguments" => %{
-              "summary" => "Waiting on scoped evidence",
-              "idempotency_key" => "worker-blocker"
-            }
-          }
-        },
-        claimed_server
-      )
-
-    assert get_in(report_response, ["result", "structuredContent", "progress_event", "id"])
-    blocker_id = get_in(report_response, ["result", "structuredContent", "blocker_id"])
-    assert is_binary(blocker_id)
-
-    assert {:ok, blocked_package} = WorkPackageRepository.get(repo, package.id)
-    assert blocked_package.status == "blocked"
-
-    resolve_response =
-      Server.handle(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "resolve-blocker",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "resolve_blocker",
-            "arguments" => %{
-              "blocker_id" => blocker_id,
-              "resolution" => "Evidence arrived",
-              "summary" => "Scoped evidence received",
-              "idempotency_key" => "worker-blocker-resolved"
-            }
-          }
-        },
-        claimed_server
-      )
-
-    assert get_in(resolve_response, ["result", "structuredContent", "progress_event", "id"])
-    assert {:ok, unblocked_package} = WorkPackageRepository.get(repo, package.id)
-    assert unblocked_package.status == "active"
-
-    assert {:ok, blocker_events} = PlanningRepository.list_progress_events(repo, package.id)
-    assert Enum.any?(blocker_events, &(&1.payload["blocker_id"] == blocker_id and &1.payload["active"] == true))
-    assert Enum.any?(blocker_events, &(&1.payload["blocker_id"] == blocker_id and &1.payload["active"] == false))
-
-    abandon_blocker_response =
-      Server.handle(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "report-abandon-blocker",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "report_blocker",
-            "arguments" => %{
-              "blocker_id" => "abandon-blocker",
-              "summary" => "Work cannot continue",
-              "idempotency_key" => "abandon-blocker"
-            }
-          }
-        },
-        claimed_server
-      )
-
-    assert get_in(abandon_blocker_response, ["result", "structuredContent", "progress_event", "id"])
-    assert repo.get!(WorkPackage, package.id).status == "blocked"
-
     abandon_response =
       Server.handle(
         %{
@@ -644,15 +572,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
     assert get_in(abandon_response, ["result", "structuredContent", "work_package", "status"]) == "abandoned"
     assert {:ok, abandoned_package} = WorkPackageRepository.get(repo, package.id)
     assert abandoned_package.status == "abandoned"
-
-    assert {:ok, abandoned_events} = PlanningRepository.list_progress_events(repo, package.id)
-    assert Enum.any?(abandoned_events, &(&1.payload["blocker_id"] == "abandon-blocker" and &1.payload["active"] == true))
-
-    assert Enum.any?(abandoned_events, fn event ->
-             event.payload["type"] == "blocker_closeout_decision" and
-               event.payload["blocker_id"] == "abandon-blocker" and
-               event.payload["decision"] == "still_active"
-           end)
   end
 
   test "one of 100 simultaneous owners atomically claims and activates the package", %{repo: repo} do
