@@ -20,6 +20,7 @@ const contract = "c".repeat(64);
 let server;
 let bridge;
 const deliveryRequests = new Map();
+const deliverySessions = new Map();
 
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -48,6 +49,9 @@ async function main() {
         const requests = deliveryRequests.get(key) || [];
         requests.push(body);
         deliveryRequests.set(key, requests);
+        const sessions = deliverySessions.get(key) || [];
+        sessions.push(request.headers["mcp-session-id"]);
+        deliverySessions.set(key, sessions);
         if (key === "replay-success" && requests.length === 1) {
           response.writeHead(200, { "Content-Type": "application/json", "Mcp-Session-Id": "test-session" });
           return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "Server error", data: { reason: "ledger_unavailable" } } }));
@@ -56,6 +60,10 @@ async function main() {
           const reason = requests.length === 1 ? "first_transient" : "second_transient";
           response.writeHead(requests.length === 1 ? 500 : 503, { "Content-Type": "application/json", "Mcp-Session-Id": "test-session" });
           return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "Server error", data: { reason } } }));
+        }
+        if (key === "session-recovery" && requests.length < 3) {
+          response.writeHead(requests.length === 1 ? 404 : 500, { "Content-Type": "application/json", "Mcp-Session-Id": requests.length === 1 ? "expired-session" : "recovered-session" });
+          return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "Server error", data: { reason: "session_recovery" } } }));
         }
       }
       const payload = message.method === "initialize"
@@ -125,6 +133,11 @@ async function main() {
   bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "record_work_package_delivery", arguments: { idempotency_key: "replay-failure" } } })}\n`);
   assert.equal(JSON.parse((await responsePromise).error.data.detail).error.data.reason, "second_transient");
   assert.equal(deliveryRequests.get("replay-failure").length, 2);
+
+  responsePromise = readResponse(5);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "record_work_package_delivery", arguments: { idempotency_key: "session-recovery" } } })}\n`);
+  assert.equal((await responsePromise).result.content[0].text, "forwarded");
+  assert.deepEqual(deliverySessions.get("session-recovery"), ["test-session", "test-session", "recovered-session"]);
 }
 
 function readResponse(id) {

@@ -695,6 +695,8 @@ async function bridge(identity, state, runtimeFile) {
           }
         }
         if (replayableDeliveryFailure(parsed, response)) {
+          const preReplaySession = response.headers["mcp-session-id"];
+          if (preReplaySession) sessionId = String(preReplaySession);
           response = await mcpPost(mcpUrl, line, sessionId, protocol, timeoutMs);
           const replaySession = response.headers["mcp-session-id"];
           if (replaySession) sessionId = String(replaySession);
