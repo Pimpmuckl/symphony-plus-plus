@@ -381,7 +381,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                work_package_id: ci_waiting.id,
                summary: "Review started",
                status: "review_started",
-               payload: %{type: "review_progress", source_tool: "submit_review_package"},
+               payload: %{type: "review_progress", source_tool: "review_suite"},
                created_at: ~U[2026-05-05 00:00:00Z]
              })
 
@@ -983,8 +983,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     stale_events = semantic_events ++ [bare_reattach]
 
     refute MetadataProjection.current_pr_state_present?(stale_events, "head-a")
-    assert MetadataProjection.metadata(stale_events, [], "SYMPP-SEQUENCELESS", nil).pr["source_tool"] == "attach_pr"
-    refute Map.has_key?(MetadataProjection.metadata(stale_events, [], "SYMPP-SEQUENCELESS", nil).pr, "check_summary")
+    assert MetadataProjection.metadata(stale_events).pr["source_tool"] == "attach_pr"
+    refute Map.has_key?(MetadataProjection.metadata(stale_events).pr, "check_summary")
 
     fresh_sync =
       progress_event("sync-state", nil, DateTime.add(timestamp, 4, :second), %{
@@ -1002,7 +1002,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     fresh_events = stale_events ++ [fresh_sync]
 
     assert MetadataProjection.current_pr_state_present?(fresh_events, "head-a")
-    assert MetadataProjection.metadata(fresh_events, [], "SYMPP-SEQUENCELESS", nil).pr["source_tool"] == "sync_pr"
+    assert MetadataProjection.metadata(fresh_events).pr["source_tool"] == "sync_pr"
   end
 
   test "card summaries use total counts and full progress metadata", %{repo: repo} do
@@ -1254,7 +1254,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       parse_signal = Enum.find(fixture_deferred_payload.work_packages, &(&1.id == "WP-FANOUT-PARSE"))
       assert parse_signal.runtime.completed_count == 1
       assert is_map(parse_signal.metadata.pr)
-      assert is_map(parse_signal.metadata.review_package)
       assert is_binary(parse_signal.latest_progress_at)
 
       blocker_signal = Enum.find(fixture_deferred_payload.work_packages, &(&1.id == "WP-RECOVERY-SUCCESSOR"))
@@ -1276,7 +1275,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       fanout_packages = Map.new(fanout.work_packages, &{&1.id, &1})
       assert fanout_packages["WP-FANOUT-PARSE"].work_package.worker_signal.status == "active"
       assert fanout_packages["WP-FANOUT-SOURCE"].work_package.pr_signal.status == "merged"
-      assert fanout_packages["WP-FANOUT-INDEX"].work_package.review_signal.status == "passed"
+      assert fanout_packages["WP-FANOUT-INDEX"].work_package.review_signal.status == "pending"
       assert fanout_packages["WP-FANOUT-JOIN"].work_package.dependency_signal.required == 2
       assert fanout_packages["WP-FANOUT-JOIN"].operational_state.key == "dependency_blocked"
       assert fanout_packages["WP-FANOUT-PLAYTEST"].operational_state.key == "ready_for_worker"
@@ -1349,7 +1348,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       recovery_packages = Map.new(recovery.work_packages, &{&1.id, &1})
       assert recovery_packages["WP-RECOVERY-OLD"].successor.work_package_id == "WP-RECOVERY-SUCCESSOR"
       assert recovery_packages["WP-RECOVERY-SKIPPED"].raw_status == "skipped"
-      assert recovery_packages["WP-RECOVERY-SUCCESSOR"].work_package.review_signal.status == "failed"
+      assert recovery_packages["WP-RECOVERY-SUCCESSOR"].work_package.review_signal.status == "pending"
       assert Enum.count(recovery.work_packages, &(get_in(&1, [:work_package, :blocker_state, :active?]) == true)) == 1
       assert Repo.all(ClaimLease) |> length() == 6
 
@@ -4198,25 +4197,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                severity: "medium",
                access_grant_id: grant.id,
                created_at: DateTime.add(timestamp, 5, :second)
-             })
-
-    assert {:ok, _review_event} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: work_package.id,
-               summary: "Review submitted #{WorkKey.generate().secret}",
-               status: "review_package_submitted",
-               payload: %{
-                 type: "review_package",
-                 source_tool: "submit_review_package",
-                 artifacts: ["review-log.txt"],
-                 head_sha: "abc123",
-                 url: "https://example.test/review?sig=raw-secret-value",
-                 urls: ["https://example.test/one?sig=raw-secret-value"],
-                 note: "Bearer raw-secret-value",
-                 raw_secret: "raw-secret-value",
-                 secret_hash: grant.secret_hash
-               },
-               created_at: DateTime.add(timestamp, 6, :second)
              })
 
     assert {:ok, _artifact} =

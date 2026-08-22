@@ -37,9 +37,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "read_guidance_request",
     "attach_branch",
     "attach_pr",
-    "sync_pr",
-    "submit_review_package",
-    "complete_review"
+    "sync_pr"
   ]
   @worker_tools [
     "get_current_assignment",
@@ -58,8 +56,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "attach_branch",
     "attach_pr",
     "sync_pr",
-    "submit_review_package",
-    "complete_review",
     "mark_ready"
   ]
   @shared_worker_architect_tools ["add_comment", "list_comments", "resolve_comment", "resolve_blocker", "read_guidance_request"]
@@ -73,7 +69,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "resolve_blocker",
     "read_delivery_board",
     "reconcile_work_request",
-    "accept_review_rework",
     "cleanup_work_request_work_package_runtime",
     "record_work_package_delivery",
     "revoke_work_package_worker_key",
@@ -139,7 +134,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
                                 [
                                   "read_delivery_board",
                                   "reconcile_work_request",
-                                  "accept_review_rework",
                                   "cleanup_work_request_work_package_runtime",
                                   "record_work_package_delivery",
                                   "revoke_work_package_worker_key",
@@ -147,7 +141,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
                                 ]
   @delivery_policy_tools [
     "reconcile_work_request",
-    "accept_review_rework",
     "cleanup_work_request_work_package_runtime",
     "record_work_package_delivery",
     "revoke_work_package_worker_key"

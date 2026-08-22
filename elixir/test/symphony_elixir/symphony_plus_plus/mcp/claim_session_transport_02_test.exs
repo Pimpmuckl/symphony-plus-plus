@@ -839,7 +839,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
     refute inspect(response) =~ minted.work_key.secret
   end
 
-  test "final sync tools remain idempotent after claim_local_assignment reconnect", %{repo: repo} do
+  test "PR sync remains idempotent after claim_local_assignment reconnect", %{repo: repo} do
     package = create_local_claim_package!(repo, "SYMPP-LOCAL-FINAL-SYNC", status: "ci_waiting")
     assert {:ok, _minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     arguments = local_assignment_claim_args(package)
@@ -879,15 +879,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
 
     sync_response = attach_tool(repo, claimed_server.session, "sync_pr", sync_args)
 
-    review_args = %{
-      "summary" => "Ready after local reconnect",
-      "tests" => ["mix test test/symphony_elixir/symphony_plus_plus/mcp"],
-      "artifacts" => ["review-log.txt"],
-      "head_sha" => head_sha
-    }
-
-    review_response = attach_tool(repo, claimed_server.session, "submit_review_package", review_args)
-
     {_reconnect_response, reconnected_server} =
       Server.handle_state(
         %{
@@ -906,26 +897,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport02Test do
         session: reconnected_server.session
       )
 
-    review_replay_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "review-replay",
-          "method" => "tools/call",
-          "params" => %{"name" => "submit_review_package", "arguments" => review_args}
-        },
-        repo: repo,
-        session: reconnected_server.session
-      )
-
     assert get_in(sync_replay_response, ["result", "structuredContent", "progress_event", "id"]) ==
              get_in(sync_response, ["result", "structuredContent", "progress_event", "id"])
 
-    assert get_in(review_replay_response, ["result", "structuredContent", "progress_event", "id"]) ==
-             get_in(review_response, ["result", "structuredContent", "progress_event", "id"])
-
     assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, package.id)
     assert Enum.count(progress_events, &(&1.status == "pr_synced")) == 1
-    assert Enum.count(progress_events, &(&1.status == "review_package_submitted")) == 1
   end
 end

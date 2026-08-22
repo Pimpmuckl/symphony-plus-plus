@@ -173,14 +173,6 @@ Workers own implementation, tests, any declared review, GitHub review when
 required, CI/static gates when present, and PR readiness. Do not take over
 their review loop; send important findings back to the worker.
 
-For an ordinary `ready_for_merge` package, call `accept_review_rework` only
-after you accept a verified typed changes-required finding for its current
-attached PR and exact head. Supply a nonempty finding, provider identity,
-opaque reference, and stable idempotency key. Comments, provider wording,
-severity labels, and worker prose do not authorize rework. The operation
-preserves the package contract and runtime authority while returning it to
-`active` once for that accepted evidence.
-
 ## Guidance
 
 - Answer package guidance when recorded intent already decides it.

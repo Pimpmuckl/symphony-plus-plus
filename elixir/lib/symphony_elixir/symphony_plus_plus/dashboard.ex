@@ -61,7 +61,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     :runtime,
     :updated_at
   ]
-  @operator_work_package_metadata_keys [:pr, :review_package, :review_progress, :review_suite_result]
+  @operator_work_package_metadata_keys [:pr, :review_progress, :review_suite_result]
 
   @type repo :: module()
   @type dashboard_error :: :not_found | :forbidden | :database_busy | {:storage_failed, String.t()} | term()
@@ -429,13 +429,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
            guidance_requests: Enum.map(guidance_requests, &guidance_request/1),
            grants: Enum.map(grants, &grant/1),
            agent_runs: Enum.map(agent_runs, &agent_run/1),
-           metadata:
-             OperationalProjection.metadata(
-               state.progress_events,
-               state.artifacts,
-               state.work_package.id,
-               state.work_package.review_requirement
-             ),
+           metadata: MetadataProjection.metadata(state.progress_events),
            alert_indicators: OperationalProjection.alert_indicators(repo, state, summary.runtime)
          }}
       end
@@ -496,7 +490,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
     lineage = context.lineage
     blockers = OperationalProjection.blockers(progress_events)
     runtime = OperationalProjection.runtime_summary(agent_runs)
-    metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id, work_package.review_requirement)
+    metadata = MetadataProjection.metadata(progress_events)
 
     readiness_context =
       OperationalProjection.readiness_context(repo, work_package, plan_nodes, progress_events, artifacts, findings)
@@ -1446,7 +1440,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
 
       blockers = OperationalProjection.blockers(progress_events)
       runtime = OperationalProjection.runtime_summary(agent_runs)
-      metadata = OperationalProjection.metadata(progress_events, artifacts, work_package.id, work_package.review_requirement)
+      metadata = MetadataProjection.metadata(progress_events)
 
       readiness_context =
         OperationalProjection.readiness_context(
@@ -1455,8 +1449,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard do
           plan_nodes,
           progress_events,
           artifacts,
-          findings,
-          work_package.review_requirement
+          findings
         )
 
       lineage = Map.get(lineages_by_id, work_package.id, OperationalProjection.empty_lineage(work_package.id))

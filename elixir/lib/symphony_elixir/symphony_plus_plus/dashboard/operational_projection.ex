@@ -165,35 +165,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
           [term()]
         ) :: map()
   def readiness_context(repo, %WorkPackage{} = work_package, plan_nodes, progress_events, artifacts, findings) do
-    readiness_context(
-      repo,
-      work_package,
-      plan_nodes,
-      progress_events,
-      artifacts,
-      findings,
-      work_package.review_requirement
-    )
-  end
-
-  @spec readiness_context(
-          repo(),
-          WorkPackage.t(),
-          [PlanNode.t()],
-          [ProgressEvent.t()],
-          [term()],
-          [term()],
-          term()
-        ) :: map()
-  def readiness_context(
-        repo,
-        %WorkPackage{} = work_package,
-        plan_nodes,
-        progress_events,
-        artifacts,
-        findings,
-        review_requirement
-      ) do
     %{
       repo: repo,
       work_package: work_package,
@@ -201,7 +172,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       progress_events: chronological_progress_events(progress_events),
       artifacts: artifacts,
       findings: findings,
-      review_requirement: review_requirement,
       artifact_count: length(artifacts),
       finding_count: length(findings)
     }
@@ -212,11 +182,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     context
     |> readiness_failure_reasons()
     |> missing_readiness_gates()
-  end
-
-  @spec metadata([ProgressEvent.t()], [term()], String.t(), map() | nil) :: map()
-  def metadata(progress_events, artifacts, work_package_id, review_requirement) do
-    MetadataProjection.metadata(progress_events, artifacts, work_package_id, review_requirement)
   end
 
   @spec package_lineage(repo(), String.t()) :: map()
@@ -299,22 +264,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     end
   end
 
-  defp delivery_operational_state(%WorkPackage{status: status} = work_package, metadata, missing_readiness, activity) do
-    validation_operational_state(work_package, metadata, missing_readiness) ||
+  defp delivery_operational_state(%WorkPackage{status: status} = work_package, _metadata, missing_readiness, activity) do
+    validation_operational_state(work_package, missing_readiness) ||
       pickup_operational_state(status, activity)
   end
 
-  defp validation_operational_state(%WorkPackage{status: status} = work_package, metadata, missing_readiness) do
-    cond do
-      status in @ready_statuses ->
-        ready_operational_state(work_package, missing_readiness)
-
-      review_activity?(metadata) ->
-        operational_state("reviewing", "Reviewing", "info", "Durable review evidence indicates review is active.", status)
-
-      true ->
-        nil
-    end
+  defp validation_operational_state(%WorkPackage{status: status} = work_package, missing_readiness) do
+    if status in @ready_statuses, do: ready_operational_state(work_package, missing_readiness)
   end
 
   defp ready_operational_state(%WorkPackage{status: status} = work_package, missing_readiness) do
@@ -671,11 +627,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   end
 
   defp metadata_activity?(metadata) do
-    Enum.any?([:branch, :pr, :review_package, :review_completion], &present_metadata_value?(safe_map_get(metadata, &1)))
-  end
-
-  defp review_activity?(metadata) do
-    Enum.any?([:review_package, :review_completion], &present_metadata_value?(safe_map_get(metadata, &1)))
+    Enum.any?([:branch, :pr], &present_metadata_value?(safe_map_get(metadata, &1)))
   end
 
   defp present_metadata_value?(nil), do: false
@@ -798,14 +750,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
     |> Enum.uniq()
   end
 
-  defp readiness_failure_reasons(%{work_package: %WorkPackage{}} = context) do
+  @spec readiness_failure_reasons(map()) :: [map()]
+  def readiness_failure_reasons(%{work_package: %WorkPackage{}} = context) do
     [
       {active_blocker?(context.progress_events), "no_active_blockers"},
       {merge_metadata_missing?(context, "branch"), "branch_attached"},
       {merge_metadata_missing?(context, "pr"), "pr_attached"},
       {current_pr_state_missing?(context), "current_pr_state"},
-      {review_current_head_missing?(context), "review_current_head"},
-      {review_completion_missing?(context), "review_complete"},
       {investigation_findings_missing?(context), "findings_documented"}
     ]
     |> Enum.flat_map(fn
@@ -826,8 +777,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   defp readiness_failure_message("branch_attached"), do: "Current branch metadata is missing."
   defp readiness_failure_message("pr_attached"), do: "Current PR metadata is missing."
   defp readiness_failure_message("current_pr_state"), do: "Current synced PR state is missing."
-  defp readiness_failure_message("review_current_head"), do: "Required review is waiting for an attached exact head."
-  defp readiness_failure_message("review_complete"), do: "Required review is not completed for the current exact head and requirement."
   defp readiness_failure_message("findings_documented"), do: "Investigation findings are missing."
   defp readiness_failure_message(_gate), do: "Readiness gate is not satisfied."
 
@@ -851,30 +800,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
       required_gate?(context.work_package, "current_pr_state") and
       not current_pr_state_present?(context.progress_events, latest_current_head_sha(context.progress_events))
   end
-
-  defp review_current_head_missing?(context) do
-    not is_nil(review_requirement(context)) and is_nil(latest_current_head_sha(context.progress_events))
-  end
-
-  defp review_completion_missing?(context) do
-    case {review_requirement(context), latest_current_head_sha(context.progress_events)} do
-      {nil, _head_sha} ->
-        false
-
-      {_requirement, nil} ->
-        true
-
-      {requirement, head_sha} ->
-        not MetadataProjection.review_completion_present?(
-          context.progress_events,
-          context.work_package.id,
-          head_sha,
-          requirement
-        )
-    end
-  end
-
-  defp review_requirement(context), do: Map.get(context, :review_requirement, context.work_package.review_requirement)
 
   defp investigation_findings_missing?(context), do: context.work_package.kind == "investigation" and context.findings == []
 

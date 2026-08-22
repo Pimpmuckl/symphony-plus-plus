@@ -384,12 +384,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
              %{"type" => "string", "pattern" => "^[1-9][0-9]*$"}
            ]
 
-    assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "required"]) == ["summary"]
-    assert get_in(tools_by_name, ["complete_review", "inputSchema", "required"]) == []
-    assert get_in(tools_by_name, ["complete_review", "inputSchema", "properties", "reference", "type"]) == ["string", "null"]
-    refute Map.has_key?(get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties"]), "reviews")
-    assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "head_sha", "type"]) == "string"
-
     refute Map.has_key?(tools_by_name, "claim_work_key")
     refute Map.has_key?(tools_by_name, "claim_private_handoff")
   end

@@ -110,28 +110,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools08Test do
     assert get_in(progress_response, ["error", "code"]) == -32_001
     assert get_in(progress_response, ["error", "data", "reason"]) == "expired"
 
-    review_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "expired-review",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "submit_review_package",
-            "arguments" => %{
-              "summary" => "Should not write",
-              "tests" => ["mix test"],
-              "artifacts" => ["review-log.txt"]
-            }
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(review_response, ["error", "code"]) == -32_001
-    assert get_in(review_response, ["error", "data", "reason"]) == "expired"
-
     assert {:ok, events} = PlanningRepository.list_progress_events(repo, work_package.id)
     assert events == []
   end
