@@ -10,11 +10,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Auth do
 
   @type denial :: :unauthorized | :forbidden | {:service_unavailable, term()} | {:unauthorized, term()}
 
-  @spec require_session(Session.t() | nil) :: {:ok, Session.t()} | {:error, denial()}
-  def require_session(%Session{} = session), do: {:ok, session}
-  def require_session(nil), do: {:error, :unauthorized}
-  def require_session(_session), do: {:error, {:unauthorized, :invalid_session}}
-
   @spec require_session(Session.t() | nil, module()) :: {:ok, Session.t()} | {:error, denial()}
   def require_session(%Session{} = session, repo) when is_atom(repo) do
     grant_id = session.assignment.grant_id

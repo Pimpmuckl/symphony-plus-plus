@@ -13,6 +13,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Target
   alias SymphonyElixir.SymphonyPlusPlus.BaseBranch
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.Auth
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Config
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Session
   alias SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope
@@ -34,10 +35,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
   @spec scoped_work_request_filters(repo(), term(), keyword()) :: term()
   def scoped_work_request_filters(repo, %Session{} = session, opts \\ []) do
-    with {:ok, grant} <- require_live_architect_grant(repo, session),
-         {:ok, filters} <- work_request_filters_for_architect_grant(repo, session, grant),
+    with {:ok, grant} <- architect_grant(repo, session),
+         {:ok, handoff_phase?} <- ArchitectHandoff.handoff_phase_grant?(repo, grant),
+         {:ok, filters} <- work_request_filters_for_architect_grant(repo, session, grant, handoff_phase?),
          {:ok, scope} <- work_request_scope_payload(filters),
-         {:ok, scope} <- maybe_put_handoff_phase_scope(repo, scope, grant, opts) do
+         {:ok, scope} <- maybe_put_handoff_phase_scope(scope, grant, handoff_phase?, opts) do
       {:ok, work_request_filters_from_scope(scope), scope}
     else
       {:error, :forbidden} -> {:error, :phase_scope_not_available}
@@ -45,13 +47,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
     end
   end
 
-  defp work_request_filters_for_architect_grant(repo, %Session{} = session, %AccessGrant{} = grant) do
+  defp work_request_filters_for_architect_grant(repo, %Session{} = session, %AccessGrant{} = grant, handoff_phase?) do
     case frozen_work_request_filters_for_architect_grant(repo, session, grant) do
       {:ok, filters} ->
         {:ok, filters}
 
       {:error, reason} = error when reason in [:forbidden, :phase_scope_not_available] ->
-        if missing_frozen_work_request_scope?(grant) do
+        if handoff_phase? and missing_frozen_work_request_scope?(grant) do
           legacy_handoff_work_request_filters(repo, session, grant)
         else
           error
@@ -69,8 +71,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   end
 
   defp legacy_handoff_work_request_filters(repo, %Session{} = session, %AccessGrant{} = grant) do
-    with {:ok, true} <- ArchitectHandoff.handoff_phase_grant?(repo, grant),
-         {:ok, anchor} <- architect_anchor_work_package(repo, session),
+    with {:ok, anchor} <- architect_anchor_work_package(repo, session),
          true <- grant.work_package_id == anchor.id,
          true <- grant.phase_id == anchor.phase_id,
          {:ok, work_request} <- legacy_handoff_work_request(repo, grant, anchor),
@@ -79,7 +80,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
       {:ok, repo: repo_name, base_branch: base_branch}
     else
       false -> {:error, :phase_scope_not_available}
-      {:ok, false} -> {:error, :phase_scope_not_available}
       {:error, :not_found} -> {:error, :phase_scope_not_available}
       {:error, reason} -> {:error, reason}
     end
@@ -189,21 +189,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
     %{"repo" => repo, "base_branch" => base_branch}
   end
 
-  defp maybe_put_handoff_phase_scope(repo, scope, %AccessGrant{} = grant) do
-    case ArchitectHandoff.handoff_phase_grant?(repo, grant) do
-      {:ok, true} -> {:ok, Map.put(scope, "phase_id", grant.phase_id)}
-      {:ok, false} -> {:ok, scope}
-      {:error, reason} -> {:error, reason}
-    end
+  defp maybe_put_handoff_phase_scope(scope, %AccessGrant{} = grant, true, opts) do
+    if Keyword.get(opts, :handoff_phase_scope?, true), do: {:ok, Map.put(scope, "phase_id", grant.phase_id)}, else: {:ok, scope}
   end
 
-  defp maybe_put_handoff_phase_scope(repo, scope, %AccessGrant{} = grant, opts) do
-    if Keyword.get(opts, :handoff_phase_scope?, true) do
-      maybe_put_handoff_phase_scope(repo, scope, grant)
-    else
-      {:ok, scope}
-    end
-  end
+  defp maybe_put_handoff_phase_scope(scope, %AccessGrant{}, false, _opts), do: {:ok, scope}
 
   @spec work_request_list_filters(filters(), String.t() | nil) :: filters()
   def work_request_list_filters(filters, nil), do: filters
@@ -270,13 +260,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
     end
   end
 
-  @spec maybe_require_guidance_work_request_filter_scope(repo(), term(), String.t() | nil) :: authorization_result()
-  def maybe_require_guidance_work_request_filter_scope(_repo, %Session{}, nil), do: :ok
-
-  def maybe_require_guidance_work_request_filter_scope(repo, %Session{} = session, work_request_id) when is_binary(work_request_id) do
-    authorize_work_request_tool_policy_preauthorization(repo, session, "read_work_request")
-  end
-
   @spec authorized_work_request_scope(repo(), term(), term(), atom(), String.t(), keyword()) :: term()
   def authorized_work_request_scope(repo, %Session{} = session, work_request_id, action, tool, opts \\ []) do
     if architect_session?(session) do
@@ -291,19 +274,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
     with {:ok, filters, scope} <-
            scoped_work_request_filters(repo, session, handoff_phase_scope?: not repo_scope_read_action?(action)),
+         policy_session = read_scoped_work_request_session(repo, session, scope, action),
+         :ok <-
+           authorize_scoped_work_request_policy(
+             policy_session,
+             action,
+             work_request_id,
+             scope,
+             tool,
+             repo_scope_opts
+           ),
          {:ok, work_request} <-
            scoped_work_request(
              repo,
              work_request_id,
              filters,
              Keyword.put(repo_scope_opts, :repo_scopes?, repo_scope_read_action?(action))
-           ),
-         policy_session = read_scoped_work_request_session(repo, session, scope, action),
-         :ok <-
-           authorize_work_request_policy(repo, policy_session, action, work_request, tool, repo_scope_opts)
-           |> mask_architect_scope_denial() do
+           ) do
       {:ok, work_request, filters, scope}
     end
+  end
+
+  defp authorize_scoped_work_request_policy(%Session{} = session, action, work_request_id, scope, tool, opts) do
+    target =
+      Target.work_request(work_request_id,
+        repo: Map.fetch!(scope, "repo"),
+        base_branch: Map.fetch!(scope, "base_branch"),
+        phase_id: Map.get(scope, "phase_id"),
+        metadata: work_request_repo_scope_metadata(opts)
+      )
+
+    authorize_policy(session, action, target, tool)
+    |> mask_architect_scope_denial()
   end
 
   defp authorized_actor_work_request_scope(repo, %Session{} = session, work_request_id, action, tool) do
@@ -332,13 +334,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
   defp authorized_architect_work_package_scope(repo, %Session{} = session, work_request_id, work_package_id, action, tool) do
     with {:ok, filters, scope} <- scoped_work_request_filters(repo, session),
+         :ok <- authorize_scoped_work_package_policy(session, action, work_request_id, work_package_id, scope, tool),
          {:ok, work_request} <- scoped_work_request(repo, work_request_id, filters),
-         {:ok, work_package} <- scoped_work_request_work_package(repo, work_request_id, work_package_id),
-         :ok <-
-           authorize_work_package_policy(session, action, work_request, work_package, tool)
-           |> mask_architect_scope_denial() do
+         {:ok, work_package} <- scoped_work_request_work_package(repo, work_request_id, work_package_id) do
       {:ok, work_request, work_package, filters, scope}
     end
+  end
+
+  defp authorize_scoped_work_package_policy(%Session{} = session, action, work_request_id, work_package_id, scope, tool) do
+    target =
+      Target.work_package(work_package_id, work_request_id,
+        repo: Map.fetch!(scope, "repo"),
+        base_branch: Map.fetch!(scope, "base_branch"),
+        phase_id: Map.get(scope, "phase_id")
+      )
+
+    authorize_policy(session, action, target, tool)
+    |> mask_architect_scope_denial()
   end
 
   defp authorized_actor_work_package_scope(repo, %Session{} = session, work_request_id, work_package_id, action, tool) do
@@ -365,41 +377,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
     end
   end
 
-  @spec authorize_work_request_tool_policy_preauthorization(repo(), term(), String.t()) :: authorization_result()
-  def authorize_work_request_tool_policy_preauthorization(repo, %Session{} = session, tool) do
-    target = Target.repo("policy-preauthorization", nil)
-
-    case authorize_policy(session, work_request_policy_action(tool), target, tool) do
-      :ok ->
-        :ok
-
-      {:error, {:authorization_policy_denied, _code, _message, %{"reason_code" => "scope_mismatch"}}} ->
-        with {:ok, _filters, _scope} <- scoped_work_request_filters(repo, session), do: :ok
-
-      {:error, _reason} = error ->
-        error
-    end
-  end
-
-  defp work_request_policy_action("list_work_requests"), do: :work_request_read
-  defp work_request_policy_action("read_work_request"), do: :work_request_read
-  defp work_request_policy_action("read_plan"), do: :work_request_read
-  defp work_request_policy_action("read_delivery_board"), do: :delivery_board_read
-  defp work_request_policy_action("set_work_request_status"), do: :work_request_update
-  defp work_request_policy_action("ask_question"), do: :question_create
-  defp work_request_policy_action("answer_question"), do: :question_answer
-  defp work_request_policy_action("answer_question_and_record_decision"), do: :question_answer
-  defp work_request_policy_action("close_question"), do: :question_close
-  defp work_request_policy_action("record_decision"), do: :decision_record
-  defp work_request_policy_action("slice_work_request"), do: :work_package_create
-  defp work_request_policy_action("update_work_package"), do: :work_package_update
-
-  defp work_request_policy_action(tool) when tool in ["upsert_group", "delete_group", "upsert_dependency", "delete_dependency"],
-    do: :work_request_update
-
-  defp work_request_policy_action("skip_work_package"), do: :work_package_skip
-  defp work_request_policy_action("dispatch_work_package"), do: :work_package_dispatch
-
   defp repo_scope_read_action?(action), do: action in [:work_request_read, :delivery_board_read]
 
   @spec read_scoped_work_request_session(repo(), term(), scope_payload(), atom()) :: term()
@@ -415,7 +392,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   def read_scoped_work_request_session(_repo, %Session{} = session, _scope, _action), do: session
 
   defp handoff_work_request_read_scope?(repo, %Session{} = session) do
-    with {:ok, grant} <- require_live_architect_grant(repo, session),
+    with {:ok, grant} <- architect_grant(repo, session),
          {:ok, true} <- ArchitectHandoff.handoff_phase_grant?(repo, grant) do
       true
     else
@@ -529,12 +506,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
   def scoped_work_request_work_package(repo, work_request_id, work_package_id) do
     WorkRequestService.get_work_package(repo, work_request_id, work_package_id)
   end
-
-  @spec work_package_work_package_id(repo(), term(), term()) :: term()
-  def work_package_work_package_id(_repo, %WorkRequest{id: work_request_id}, %WorkPackage{id: work_package_id, work_request_id: work_request_id}),
-    do: {:ok, work_package_id}
-
-  def work_package_work_package_id(_repo, %WorkRequest{}, %WorkPackage{}), do: {:error, :not_found}
 
   @spec scoped_delivery_board(repo(), term(), [term()], filters(), keyword()) :: term()
   def scoped_delivery_board(repo, %WorkRequest{} = work_request, work_packages, filters, opts \\ []) when is_list(work_packages) do
@@ -740,21 +711,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
   @spec require_live_architect_grant(repo(), term()) :: term()
   def require_live_architect_grant(repo, %Session{} = session) do
-    case AccessGrantRepository.get(repo, session.assignment.grant_id) do
-      {:ok, %AccessGrant{} = grant} ->
-        assignment = assignment_with_live_grant_capabilities(session.assignment, grant)
-
-        with :ok <- require_session_grant_match(assignment, grant),
-             :ok <- require_live_grant(grant, DateTime.utc_now(:microsecond)),
-             :ok <- require_architect_assignment(assignment) do
-          {:ok, grant}
-        end
-
-      {:error, :not_found} ->
-        {:error, :phase_scope_not_available}
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, live_session} <- Auth.require_session(session, repo) do
+      architect_grant(repo, live_session)
     end
   end
 
@@ -778,7 +736,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
 
   @spec require_architect_phase_anchor(repo(), term(), String.t()) :: :ok | {:error, term()}
   def require_architect_phase_anchor(repo, %Session{} = session, phase_id) when is_atom(repo) and is_binary(phase_id) do
-    with {:ok, grant} <- require_live_architect_grant(repo, session),
+    with {:ok, grant} <- architect_grant(repo, session),
          {:ok, anchor} <- architect_anchor_work_package(repo, session) do
       require_architect_anchor_scope(anchor, grant, phase_id)
     else
@@ -868,41 +826,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
     end
   end
 
-  defp assignment_with_live_grant_capabilities(assignment, %AccessGrant{} = grant) do
-    %{assignment | capabilities: grant.capabilities || []}
-  end
-
-  defp require_session_grant_match(assignment, %AccessGrant{} = grant) do
-    with {:ok, assignment_capabilities} <- comparable_capabilities(assignment.capabilities),
-         {:ok, grant_capabilities} <- comparable_capabilities(grant.capabilities),
-         true <- assignment.grant_id == grant.id,
-         true <- assignment.work_package_id == grant.work_package_id,
-         true <- assignment.phase_id == grant.phase_id,
-         true <- assignment.display_key == grant.display_key,
-         true <- assignment.grant_role == grant.grant_role,
-         true <- assignment_capabilities == grant_capabilities,
-         true <- assignment.claimed_at == grant.claimed_at,
-         true <- assignment.claimed_by == grant.claimed_by do
-      :ok
-    else
-      _mismatch -> {:error, :phase_scope_not_available}
+  @spec architect_grant(repo(), term()) :: {:ok, AccessGrant.t()} | {:error, term()}
+  def architect_grant(repo, %Session{assignment: %{grant_role: "architect", grant_id: grant_id}}) do
+    case AccessGrantRepository.get(repo, grant_id) do
+      {:ok, %AccessGrant{} = grant} -> {:ok, grant}
+      {:error, :not_found} -> {:error, :phase_scope_not_available}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp comparable_capabilities(capabilities) when is_list(capabilities), do: {:ok, capabilities}
-  defp comparable_capabilities(nil), do: {:ok, []}
-
-  defp require_live_grant(%AccessGrant{revoked_at: %DateTime{}}, _now), do: {:error, :assignment_revoked}
-
-  defp require_live_grant(%AccessGrant{expires_at: %DateTime{} = expires_at}, %DateTime{} = now) do
-    if DateTime.compare(expires_at, now) == :gt do
-      :ok
-    else
-      {:error, :expired}
-    end
-  end
-
-  defp require_live_grant(%AccessGrant{expires_at: nil}, %DateTime{}), do: :ok
+  def architect_grant(_repo, %Session{}), do: {:error, :architect_grant_required}
 
   defp architect_session_anchor_phase_scope(repo, %Session{} = session) when is_atom(repo) do
     case Session.work_package_id(session) do
@@ -941,9 +874,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestScope do
       {:error, :phase_scope_not_available}
     end
   end
-
-  defp require_architect_assignment(%{grant_role: "architect"}), do: :ok
-  defp require_architect_assignment(_assignment), do: {:error, :architect_grant_required}
 
   defp filled_string?(value), do: is_binary(value) and String.trim(value) != ""
 end

@@ -19,8 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
       optional_payload: 1
     ]
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.ActorResolver
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
@@ -43,7 +41,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
 
   @typep mcp_tool_result :: {:ok, map()} | {:error, integer(), String.t(), map()}
 
@@ -88,7 +85,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
          {:ok, requested_work_request_id} <- optional_string_argument(arguments, "work_request_id"),
          {:ok, work_request_id} <-
            guidance_work_request_id_argument(requested_work_request_id, session, work_package_id),
-         :ok <- WorkRequestScope.maybe_require_guidance_work_request_filter_scope(config.repo, session, requested_work_request_id),
          {:ok, filters, scope} <- WorkRequestScope.scoped_guidance_request_filters(config.repo, session),
          {:ok, filters} <- guidance_request_list_filters(config.repo, filters, status, work_package_id, work_request_id),
          {:ok, guidance_requests} <- GuidanceRequestService.list_visible_to_architect(config.repo, filters) do
@@ -110,7 +106,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
   end
 
   def call("answer_guidance_request", %Config{} = config, session, arguments) do
-    with {:ok, session} <- architect_session(config.repo, session, "write:guidance_request"),
+    with {:ok, session} <- architect_session(config.repo, session),
          {:ok, guidance_request_id} <- required_argument(arguments, "guidance_request_id"),
          {:ok, answer} <- required_argument(arguments, "answer"),
          {:ok, answered_by} <- optional_string_argument(arguments, "answered_by", session_claimed_by(session)),
@@ -137,7 +133,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
   end
 
   def call("escalate_guidance_request", %Config{} = config, session, arguments) do
-    with {:ok, session} <- architect_session(config.repo, session, "write:guidance_request"),
+    with {:ok, session} <- architect_session(config.repo, session),
          {:ok, guidance_request_id} <- required_argument(arguments, "guidance_request_id"),
          {:ok, reason} <- required_argument(arguments, "reason"),
          {:ok, recommended_language} <- required_argument(arguments, "recommended_language"),
@@ -239,8 +235,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
   end
 
   defp read_guidance_request_for_session(repo, %Session{assignment: %{grant_role: "architect"}} = session, guidance_request_id, arguments) do
-    with {:ok, session} <- architect_session(repo, session, "read:guidance_request"),
-         {:ok, work_package_id} <- optional_string_argument(arguments, "work_package_id"),
+    with {:ok, work_package_id} <- optional_string_argument(arguments, "work_package_id"),
          {:ok, filters, scope} <- WorkRequestScope.scoped_guidance_request_filters(repo, session),
          {:ok, guidance_request} <- GuidanceRequestService.get_visible_to_architect(repo, guidance_request_id, filters),
          :ok <- authorize_guidance_request_for_session(repo, session, :guidance_request_read, guidance_request),
@@ -328,15 +323,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
 
   defp guidance_request_blocker_id(guidance_request_id), do: "guidance_request:#{guidance_request_id}"
 
-  defp scoped_session(repo, session, arguments) when is_map(arguments) do
-    case Auth.require_session(session, repo) do
-      {:ok, session} ->
-        with :ok <- require_worker_assignment(session.assignment) do
-          require_argument_scope(session, Map.get(arguments, "work_package_id"))
-        end
-
-      {:error, reason} ->
-        {:error, reason}
+  defp scoped_session(_repo, session, arguments) when is_map(arguments) do
+    with :ok <- require_worker_assignment(session.assignment) do
+      require_argument_scope(session, Map.get(arguments, "work_package_id"))
     end
   end
 
@@ -351,41 +340,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
   end
 
   defp architect_session(repo, session, capability) when is_binary(capability) do
-    with {:ok, session} <- Auth.require_session(session, repo),
-         :ok <- require_architect_assignment(session.assignment),
-         :ok <- require_architect_capabilities(repo, session.assignment, [capability]) do
+    with {:ok, session} <- architect_session(repo, session),
+         true <- capability in List.wrap(session.assignment.capabilities) do
       {:ok, session}
+    else
+      false -> {:error, :insufficient_capability}
     end
   end
 
-  defp require_architect_capabilities(repo, assignment, capabilities) do
-    with {:ok, effective_assignment} <- effective_architect_assignment(repo, assignment) do
-      require_architect_capabilities(effective_assignment, capabilities)
-    end
-  end
-
-  defp require_architect_capabilities(assignment, capabilities) do
-    Enum.reduce_while(capabilities, :ok, fn capability, :ok ->
-      case require_architect_capability(assignment, capability) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
-  defp require_architect_capability(%{capabilities: capabilities}, capability) when is_list(capabilities) do
-    if capability in capabilities, do: :ok, else: {:error, :insufficient_capability}
-  end
-
-  defp require_architect_capability(_assignment, _capability), do: {:error, :insufficient_capability}
-
-  defp effective_architect_assignment(repo, %{grant_role: "architect", grant_id: grant_id} = assignment) do
-    with {:ok, %AccessGrant{} = grant} <- AccessGrantRepository.get(repo, grant_id) do
-      case ArchitectHandoff.handoff_phase_grant?(repo, grant) do
-        {:ok, true} -> {:ok, %{assignment | capabilities: ArchitectHandoff.effective_capabilities(grant.capabilities)}}
-        {:ok, false} -> {:ok, %{assignment | capabilities: grant.capabilities || []}}
-        {:error, reason} -> {:error, reason}
-      end
+  defp architect_session(repo, session) do
+    with {:ok, session} <- Auth.require_session(session, repo),
+         :ok <- require_architect_assignment(session.assignment) do
+      {:ok, session}
     end
   end
 

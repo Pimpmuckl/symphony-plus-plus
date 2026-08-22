@@ -75,10 +75,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
         claimed_by: "worker-1"
       })
 
-    assert Auth.require_session(session) == {:ok, session}
-    assert Auth.require_session(nil) == {:error, :unauthorized}
-    assert Auth.require_session(:bad) == {:error, {:unauthorized, :invalid_session}}
-
     assert Auth.require_work_package(session, "SYMPP-OTHER", UnexpectedAuthRepo) ==
              {:error, {:service_unavailable, {:unexpected_grant_lookup_result, :tuple}}}
   end

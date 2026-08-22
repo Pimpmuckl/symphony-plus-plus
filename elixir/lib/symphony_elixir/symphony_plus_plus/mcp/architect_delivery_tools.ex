@@ -77,7 +77,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   def call("reconcile_work_request", %Config{} = config, session, arguments) do
     with {:ok, apply?} <- optional_boolean(arguments, "apply", false),
          {:ok, live_session} <- Auth.require_session(session, config.repo),
-         :ok <- require_delivery_reconcile_capability(live_session, apply?),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
          {:ok, recorded_by} <- optional_string_argument(arguments, "recorded_by", session_claimed_by(live_session)),
          {:ok, work_request, filters, scope} <-
@@ -125,7 +124,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   def call("record_work_package_delivery", %Config{} = config, session, arguments) do
     with {:ok, live_session} <- Auth.require_session(session, config.repo),
-         :ok <- require_delivery_write_capability(live_session),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, outcome} <- required_work_package_delivery_outcome(arguments),
@@ -185,7 +183,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   def call("accept_review_rework", %Config{} = config, session, arguments) do
     with {:ok, live_session} <- Auth.require_session(session, config.repo),
-         :ok <- require_delivery_write_capability(live_session),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
@@ -226,7 +223,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   def call("cleanup_work_request_work_package_runtime", %Config{} = config, session, arguments) do
     with {:ok, live_session} <- Auth.require_session(session, config.repo),
-         :ok <- require_delivery_write_capability(live_session),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, outcome} <- required_runtime_cleanup_delivery_outcome(arguments),
@@ -244,8 +240,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
            ),
          :ok <-
            require_work_package_delivery_scope(config.repo, work_request, work_package, delivery_evidence, filters),
-         {:ok, work_package_id} <-
-           WorkRequestScope.work_package_work_package_id(config.repo, work_request, work_package),
          {:ok, cleanup} <-
            run_architect_transaction(config.repo, fn ->
              cleanup_work_request_work_package_runtime_in_transaction(
@@ -281,7 +275,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   def call("revoke_work_package_worker_key", %Config{} = config, session, arguments) do
     with {:ok, live_session} <- Auth.require_session(session, config.repo),
-         :ok <- require_delivery_write_capability(live_session),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, grant_id} <- required_argument(arguments, "grant_id"),
@@ -295,8 +288,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
              :work_package_repair_state,
              "revoke_work_package_worker_key"
            ),
-         {:ok, work_package_id} <-
-           WorkRequestScope.work_package_work_package_id(config.repo, work_request, work_package),
          {:ok, payload} <-
            run_architect_transaction(config.repo, fn ->
              revoke_work_package_worker_key_in_transaction(
@@ -679,35 +670,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp reconcile_work_request_action(true), do: :delivery_reconcile_apply
   defp reconcile_work_request_action(false), do: :delivery_reconcile_dry_run
 
-  defp require_delivery_reconcile_capability(%Session{} = session, apply?) do
-    if WorkRequestScope.architect_session?(session) do
-      require_architect_capability(session.assignment, reconcile_work_request_capability(apply?))
-    else
-      :ok
-    end
-  end
-
-  defp require_delivery_write_capability(%Session{} = session) do
-    if WorkRequestScope.architect_session?(session) do
-      require_architect_capability(session.assignment, "write:work_request")
-    else
-      :ok
-    end
-  end
-
-  defp require_architect_capability(%{capabilities: capabilities}, capability) when is_list(capabilities) do
-    if capability in capabilities do
-      :ok
-    else
-      {:error, :insufficient_capability}
-    end
-  end
-
-  defp require_architect_capability(_assignment, _capability), do: {:error, :insufficient_capability}
-
-  defp reconcile_work_request_capability(true), do: "write:work_request"
-  defp reconcile_work_request_capability(false), do: "read:work_request"
-
   defp reconcile_work_request_mode(true), do: :apply
   defp reconcile_work_request_mode(false), do: :dry_run
 
@@ -764,44 +726,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp require_work_package_delivery_scope(
          repo,
          %WorkRequest{} = work_request,
-         %WorkPackage{} = work_package,
+         %WorkPackage{},
          attrs,
          filters
        ) do
     primary_scope? = WorkRequestScope.primary_work_request_scope?(repo, work_request, filters)
 
-    with :ok <- require_linked_delivery_work_package_scope(repo, work_request, work_package, primary_scope?, filters),
-         :ok <- require_successor_work_package_scope(repo, work_request, attrs) do
-      require_successor_work_package_scope(repo, work_request, attrs, primary_scope?, filters)
-    end
-  end
-
-  defp require_linked_delivery_work_package_scope(
-         _repo,
-         %WorkRequest{},
-         %WorkPackage{id: work_package_id},
-         _primary_scope?,
-         _filters
-       )
-       when work_package_id in [nil, ""],
-       do: :ok
-
-  defp require_linked_delivery_work_package_scope(
-         repo,
-         %WorkRequest{} = work_request,
-         %WorkPackage{id: work_package_id},
-         primary_scope?,
-         filters
-       ) do
-    with {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
-      WorkRequestScope.require_scoped_delivery_work_package_visibility(
-        work_package,
-        work_request,
-        work_package,
-        primary_scope?,
-        filters
-      )
-    end
+    require_successor_work_package_scope(repo, work_request, attrs, primary_scope?, filters)
   end
 
   defp require_successor_work_package_scope(repo, %WorkRequest{} = work_request, attrs, primary_scope?, filters) do
@@ -824,32 +755,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
           {:error, :not_found} -> {:tool_error, "successor_work_package_out_of_scope"}
           {:error, reason} -> {:error, reason}
         end
-    end
-  end
-
-  defp require_successor_work_package_scope(_repo, %WorkRequest{}, %{"outcome" => outcome})
-       when outcome != "superseded",
-       do: :ok
-
-  defp require_successor_work_package_scope(repo, %WorkRequest{} = work_request, attrs) do
-    case Map.get(attrs, "successor_work_package_id") do
-      nil ->
-        {:tool_error, "missing_successor_work_package_id"}
-
-      successor_work_package_id ->
-        case WorkRequestScope.scoped_work_request_work_package(repo, work_request.id, successor_work_package_id) do
-          {:ok, successor_slice} -> require_successor_work_package_matches_slice(successor_slice, attrs)
-          {:error, :not_found} -> {:tool_error, "successor_work_package_out_of_scope"}
-          {:error, reason} -> {:error, reason}
-        end
-    end
-  end
-
-  defp require_successor_work_package_matches_slice(%WorkPackage{} = successor_slice, attrs) do
-    case Map.get(attrs, "successor_work_package_id") do
-      nil -> :ok
-      successor_work_package_id when successor_work_package_id == successor_slice.id -> :ok
-      _successor_work_package_id -> {:tool_error, "successor_work_package_slice_mismatch"}
     end
   end
 
