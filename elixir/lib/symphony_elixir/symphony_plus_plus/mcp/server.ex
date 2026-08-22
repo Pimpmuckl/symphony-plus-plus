@@ -889,7 +889,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     {:error, -32_001, "Unauthorized", %{"resource" => name, "reason" => "claim_required", "action" => @local_assignment_claim_tool}}
   end
 
-  defp require_worker_tool_binding(%__MODULE__{session: %Session{}}, _name), do: :ok
+  defp require_worker_tool_binding(%__MODULE__{session: %Session{assignment: %{grant_role: "worker"}}}, _name), do: :ok
+
+  defp require_worker_tool_binding(%__MODULE__{session: %Session{}}, name) do
+    worker_error(:worker_grant_required, name)
+  end
 
   defp require_architect_tool_binding(%__MODULE__{session: nil} = server, name) when name in @local_trusted_work_request_read_tools do
     authorize_local_operator_tool_call(server, name)
@@ -897,6 +901,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp require_architect_tool_binding(%__MODULE__{session: nil}, name) do
     {:error, -32_001, "Unauthorized", %{"resource" => name, "reason" => "claim_required", "action" => @local_architect_assignment_claim_tool}}
+  end
+
+  defp require_architect_tool_binding(
+         %__MODULE__{session: %Session{assignment: %{grant_role: "architect"} = assignment}},
+         "read_guidance_request"
+       ) do
+    case require_architect_capability(assignment, "read:guidance_request") do
+      :ok -> :ok
+      {:error, reason} -> architect_error(reason, "read_guidance_request")
+    end
   end
 
   defp require_architect_tool_binding(%__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}}, _name), do: :ok
