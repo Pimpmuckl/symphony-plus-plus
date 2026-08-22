@@ -185,20 +185,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   @spec clear_terminal_attention(repo(), WorkPackage.t()) :: :ok | {:error, error()}
   def clear_terminal_attention(repo, %WorkPackage{id: work_package_id})
       when is_atom(repo) and is_binary(work_package_id) do
-    now = DateTime.utc_now(:microsecond)
-
-    repo.update_all(
+    repo.delete_all(
       from(request in GuidanceRequest,
         where: request.work_package_id == ^work_package_id,
         where: request.status in ["open", "human_info_needed"]
-      ),
-      set: [
-        status: "answered",
-        answer: "Cleared because the owning work reached a terminal state.",
-        answered_by: "terminal-cleanup",
-        answered_at: now,
-        updated_at: now
-      ]
+      )
     )
 
     resolve_active_blockers(repo, work_package_id)

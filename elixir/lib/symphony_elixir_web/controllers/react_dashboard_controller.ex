@@ -69,7 +69,6 @@ defmodule SymphonyElixirWeb.ReactDashboardController do
         "basePath" => script_name_prefix(conn),
         "logoUrl" => prefixed_path(conn, "/splusplus-logo.png")
       }
-      |> Map.put("csrfToken", Plug.CSRFProtection.get_csrf_token())
 
     script = ~s(<script>window.SYMPP_DASHBOARD_CONFIG = #{Jason.encode!(config)};</script>)
 

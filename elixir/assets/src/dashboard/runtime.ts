@@ -7,7 +7,6 @@ declare global {
     SYMPP_DASHBOARD_CONFIG?: {
       apiBase?: string;
       basePath?: string;
-      csrfToken?: string;
       logoUrl?: string;
     };
   }
@@ -42,7 +41,6 @@ export const MAX_UPDATE_MOTION_ENTRIES = 120;
 export type DashboardRuntimeConfig = {
   apiBase?: string;
   basePath?: string;
-  csrfToken?: string;
   dashboard?: unknown;
   logoUrl?: string;
 };
@@ -53,21 +51,9 @@ export type DashboardResponseSelector = (payload: DashboardApiResponse) => Dashb
 
 export type LatestTaskQueue<T> = { active: Promise<void> | null; pending: T | null };
 
-class DashboardApiError extends Error {
-  readonly refreshRuntimeConfig: boolean;
-
-  constructor(message: string, refreshRuntimeConfig = false) {
-    super(message);
-    this.name = "DashboardApiError";
-    this.refreshRuntimeConfig = refreshRuntimeConfig;
-  }
-}
-
 export let dashboardRuntimeConfig: DashboardRuntimeConfig | undefined = typeof window === "undefined" ? undefined : window.SYMPP_DASHBOARD_CONFIG;
 
 let dashboardRuntimeConfigPromise: Promise<DashboardRuntimeConfig | undefined> | null = null;
-
-let dashboardRuntimeConfigGeneration = 0;
 
 export const DASHBOARD_LOGO_URL = dashboardRuntimeConfig?.logoUrl || "/splusplus-logo.png";
 
@@ -234,29 +220,21 @@ function operatorConfigUrl() {
   return operatorApiUrl("/config");
 }
 
-export function jsonHeaders({ csrf = false, content = false }: { csrf?: boolean; content?: boolean } = {}) {
+export function jsonHeaders({ content = false }: { content?: boolean } = {}) {
   const headers: Record<string, string> = { accept: "application/json" };
 
   if (content) {
     headers["content-type"] = "application/json";
   }
 
-  if (csrf && dashboardRuntimeConfig?.csrfToken) {
-    headers["x-csrf-token"] = dashboardRuntimeConfig.csrfToken;
-  }
-
   return headers;
-}
-
-export function operatorFetch(input: RequestInfo | URL, init: RequestInit = {}) {
-  return fetch(input, { ...init, credentials: "include" });
 }
 
 export async function readDashboardApiResponse(response: Response, fallbackMessage: string): Promise<DashboardApiResponse> {
   const payload = await readDashboardJson(response);
 
   if (!response.ok) {
-    throw dashboardResponseError(response, payload, fallbackMessage);
+    throw new Error(dashboardErrorMessage(payload) || fallbackMessage);
   }
 
   return payload;
@@ -279,32 +257,8 @@ function dashboardErrorMessage(payload: DashboardApiResponse) {
   return code ? code.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) : null;
 }
 
-function dashboardResponseError(response: Response, payload: DashboardApiResponse, fallbackMessage: string) {
-  return new DashboardApiError(
-    dashboardResponseErrorMessage(response, payload, fallbackMessage),
-    shouldRefreshRuntimeConfig(response, payload),
-  );
-}
-
-function dashboardResponseErrorMessage(response: Response, payload: DashboardApiResponse, fallbackMessage: string) {
-  return dashboardErrorMessage(payload) || fallbackMessage;
-}
-
-function shouldRefreshRuntimeConfig(response: Response, payload: DashboardApiResponse) {
-  if (response.status === 401) return true;
-  if (response.status === 403 && !isRecord(payload)) return true;
-
-  if (!isRecord(payload) || !isRecord(payload.error)) return false;
-  const code = typeof payload.error.code === "string" ? payload.error.code : "";
-  return code === "unauthorized" || code === "forbidden" || code.toLowerCase().includes("csrf");
-}
-
 export function dashboardCaughtMessage(caught: unknown, fallbackMessage: string) {
   return caught instanceof Error ? caught.message : fallbackMessage;
-}
-
-function shouldRetryWithFreshRuntimeConfig(caught: unknown) {
-  return caught instanceof DashboardApiError && caught.refreshRuntimeConfig;
 }
 
 export function dashboardFromEnvelope(payload: DashboardApiResponse) {
@@ -443,52 +397,16 @@ function upsertWorkRequestCard(cards: WorkRequestCard[], card: WorkRequestCard) 
   return cards.some((current) => current.id === card.id) ? cards.map((current) => (current.id === card.id ? { ...current, ...card } : current)) : [card, ...cards];
 }
 
-function invalidateDashboardRuntimeConfig() {
-  dashboardRuntimeConfigGeneration += 1;
-  dashboardRuntimeConfigPromise = null;
-  const currentConfig = dashboardRuntimeConfig ?? (typeof window === "undefined" ? undefined : window.SYMPP_DASHBOARD_CONFIG);
-  dashboardRuntimeConfig = currentConfig ? { ...currentConfig, csrfToken: undefined } : undefined;
-
-  if (typeof window !== "undefined" && window.SYMPP_DASHBOARD_CONFIG) {
-    window.SYMPP_DASHBOARD_CONFIG = { ...window.SYMPP_DASHBOARD_CONFIG, csrfToken: undefined };
-  }
-}
-
-export async function refreshDashboardRuntimeConfig() {
-  invalidateDashboardRuntimeConfig();
-  return ensureDashboardRuntimeConfig();
-}
-
-export async function withRuntimeConfigRetry<T>(operation: () => Promise<T>): Promise<T> {
-  try {
-    return await operation();
-  } catch (caught) {
-    if (!shouldRetryWithFreshRuntimeConfig(caught)) {
-      throw caught;
-    }
-
-    await refreshDashboardRuntimeConfig();
-    return operation();
-  }
-}
-
 export async function ensureDashboardRuntimeConfig() {
-  if (dashboardRuntimeConfig?.csrfToken) {
+  if (dashboardRuntimeConfig) {
     return dashboardRuntimeConfig;
   }
 
   if (!dashboardRuntimeConfigPromise) {
-    const loadGeneration = dashboardRuntimeConfigGeneration;
-    const configPromise: Promise<DashboardRuntimeConfig | undefined> = operatorFetch(operatorConfigUrl(), { headers: jsonHeaders() })
+    const configPromise: Promise<DashboardRuntimeConfig | undefined> = fetch(operatorConfigUrl(), { headers: jsonHeaders() })
       .then(async (response) => {
         const payload = await readDashboardApiResponse(response, "Dashboard runtime config unavailable");
-        const nextConfig = payload as DashboardRuntimeConfig;
-
-        if (dashboardRuntimeConfigPromise !== configPromise || loadGeneration !== dashboardRuntimeConfigGeneration) {
-          return dashboardRuntimeConfig ?? { ...nextConfig, csrfToken: undefined };
-        }
-
-        dashboardRuntimeConfig = nextConfig;
+        dashboardRuntimeConfig = payload as DashboardRuntimeConfig;
         return dashboardRuntimeConfig;
       })
       .finally(() => {
@@ -503,9 +421,8 @@ export async function ensureDashboardRuntimeConfig() {
   return dashboardRuntimeConfigPromise;
 }
 
-export async function mutationHeaders() {
-  await ensureDashboardRuntimeConfig();
-  return jsonHeaders({ csrf: true, content: true });
+export function mutationHeaders() {
+  return jsonHeaders({ content: true });
 }
 
 export async function copyTextToClipboard(value: string) {

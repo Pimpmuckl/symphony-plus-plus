@@ -20,6 +20,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackageDeliveriesTest d
 
     def exists?(_query), do: true
     def all(_query), do: []
+    def delete_all(_query), do: {0, nil}
     def update_all(_query, _updates), do: {0, nil}
 
     def get(WorkPackage, "WRS-RACE") do

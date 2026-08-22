@@ -890,7 +890,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
 
   defp work_package_contract_patch_schema do
     schema(work_package_contract_properties(), [])
-    |> Map.put("minProperties", 1)
   end
 
   defp work_package_contract_properties do

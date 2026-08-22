@@ -218,26 +218,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end
   end
 
-  @spec prepare_for_work_packages(repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error()}
-  def prepare_for_work_packages(repo, id) when is_atom(repo) and is_binary(id) do
-    case get(repo, id) do
-      {:ok, %WorkRequest{status: status} = work_request} when status in ["ready_for_slicing", "sliced"] ->
-        case ensure_no_open_questions(repo, work_request.id) do
-          :ok -> {:ok, work_request}
-          {:error, reason} -> {:error, reason}
-        end
-
-      {:ok, %WorkRequest{status: status} = work_request} when status in ["ready_for_clarification", "clarifying", "human_info_needed"] ->
-        advance_ready_for_slicing(repo, work_request)
-
-      {:ok, %WorkRequest{}} ->
-        {:error, :invalid_status}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
-
   @spec ask_question(repo(), String.t(), map()) :: {:ok, ClarificationQuestion.t()} | {:error, error()}
   def ask_question(repo, work_request_id, attrs)
       when is_atom(repo) and is_binary(work_request_id) and is_map(attrs) do
@@ -301,7 +281,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   def slice_work_request(repo, work_request_id, package_attrs)
       when is_atom(repo) and is_binary(work_request_id) and is_list(package_attrs) do
     repo.transaction(fn ->
-      with :ok <- prepare_for_work_packages_in_transaction(repo, work_request_id),
+      with :ok <- advance_to_ready_for_slicing_in_transaction(repo, work_request_id),
            {:ok, %WorkRequest{} = work_request} <- get(repo, work_request_id),
            :ok <- require_slicing_status(work_request.status),
            :ok <- require_package_batch(package_attrs),
@@ -497,19 +477,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     error in Exqlite.Error -> normalize_exqlite_error(error)
   end
 
-  defp advance_ready_for_slicing(repo, %WorkRequest{} = work_request) do
-    repo.transaction(fn ->
-      case advance_ready_for_slicing_in_transaction(repo, work_request) do
-        :ok -> repo.get!(WorkRequest, work_request.id)
-        {:error, reason} -> repo.rollback(reason)
-      end
-    end)
-    |> normalize_transaction_result()
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
-  defp prepare_for_work_packages_in_transaction(repo, work_request_id) do
+  defp advance_to_ready_for_slicing_in_transaction(repo, work_request_id) do
     case get(repo, work_request_id) do
       {:ok, %WorkRequest{status: status} = work_request} when status in ["ready_for_slicing", "sliced"] ->
         ensure_no_open_questions(repo, work_request.id)
@@ -638,8 +606,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end
   end
 
-  defp status_update_query(id, "human_info_needed", "ready_for_slicing"),
-    do: ready_for_slicing_update_query(id, "human_info_needed")
+  defp status_update_query(id, current_status, "ready_for_slicing")
+       when current_status in ["ready_for_clarification", "clarifying", "human_info_needed"],
+       do: ready_for_slicing_update_query(id, current_status)
 
   defp status_update_query(id, current_status, _next_status) do
     from(work_request in WorkRequest,
@@ -647,7 +616,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     )
   end
 
-  defp status_update_error(repo, id, "human_info_needed", "ready_for_slicing") do
+  defp status_update_error(repo, id, current_status, "ready_for_slicing")
+       when current_status in ["ready_for_clarification", "clarifying", "human_info_needed"] do
     case ensure_no_open_questions(repo, id) do
       :ok -> stale_status_error(repo, id)
       {:error, _reason} = error -> error
@@ -668,19 +638,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
 
   defp insert_sequence_transaction(repo, attrs, next_sequence, changeset_fun, opts) do
     repo.transaction(fn ->
-      case maybe_prepare_for_work_packages(repo, attrs, opts) do
-        :ok ->
-          attrs = Map.put(attrs, "sequence", next_sequence.(repo, Map.fetch!(attrs, "work_request_id")))
+      attrs = Map.put(attrs, "sequence", next_sequence.(repo, Map.fetch!(attrs, "work_request_id")))
 
-          attrs
-          |> changeset_fun.()
-          |> repo.insert()
-          |> normalize_insert_result()
-          |> return_inserted_record_or_rollback(repo, attrs, opts)
-
-        {:error, reason} ->
-          repo.rollback(reason)
-      end
+      attrs
+      |> changeset_fun.()
+      |> repo.insert()
+      |> normalize_insert_result()
+      |> return_inserted_record_or_rollback(repo, attrs, opts)
     end)
     |> normalize_transaction_result()
   rescue
@@ -749,16 +713,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   end
 
   defp maybe_clear_completion_state(_repo, _attrs, _opts), do: :ok
-
-  defp maybe_prepare_for_work_packages(repo, %{"work_request_id" => work_request_id}, opts) do
-    if Keyword.get(opts, :prepare_for_work_packages?, false) do
-      prepare_for_work_packages_in_transaction(repo, work_request_id)
-    else
-      :ok
-    end
-  end
-
-  defp maybe_prepare_for_work_packages(_repo, _attrs, _opts), do: :ok
 
   defp retry_delay_ms(attempts_left, total_attempts) do
     used_attempts = max(total_attempts - attempts_left, 0)

@@ -17,7 +17,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
-  alias SymphonyElixirWeb.SymppDashboardApiController
 
   @endpoint SymphonyElixirWeb.Endpoint
 
@@ -177,8 +176,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardWorkRequestDetailsBatchTest d
     |> Map.put(:host, "localhost")
     |> Map.put(:remote_ip, {127, 0, 0, 1})
     |> put_req_header("origin", "http://localhost")
-    |> Plug.Test.init_test_session(%{})
-    |> SymppDashboardApiController.put_local_operator_session()
   end
 
   defp local_operator_dashboard_payload do

@@ -5,7 +5,7 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{ClientLeases, Config, FailedCall, Health, HTTPStateStore, HTTPTransport}
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixirWeb.Endpoint
-  alias SymphonyElixirWeb.SymppBoardLive
+  alias SymphonyElixirWeb.SymppDashboardApi.Runtime
 
   @client_key "__sympp_mcp_local_http_client__"
   @session_header "mcp-session-id"
@@ -173,12 +173,9 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
   end
 
   defp handle_with_live_repo(payload, client_key, state_key, local_daemon_trusted?) do
-    case SymppBoardLive.with_dashboard_repo(
-           fn repo ->
-             HTTPTransport.handle(mcp_config(repo, local_daemon_trusted?), payload, client_key: client_key, state_key: state_key)
-           end,
-           initialize_missing?: true
-         ) do
+    case Runtime.with_dashboard_repo(fn repo ->
+           HTTPTransport.handle(mcp_config(repo, local_daemon_trusted?), payload, client_key: client_key, state_key: state_key)
+         end) do
       {:ok, result} -> result
       {:error, _reason} -> {:error, :ledger_unavailable, payload}
     end

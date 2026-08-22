@@ -31,6 +31,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     alias SymphonyElixir.SymphonyPlusPlus.Repo
 
     def all(query), do: Repo.all(query)
+    def delete_all(query), do: Repo.delete_all(query)
     def get(schema, id), do: Repo.get(schema, id)
     def rollback(reason), do: Repo.rollback(reason)
     def transaction(fun), do: Repo.transaction(fun)
@@ -50,6 +51,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestsTest do
     def disarm, do: Process.delete(@race_key)
 
     def all(query), do: Repo.all(query)
+    def delete_all(query), do: Repo.delete_all(query)
     def get(schema, id), do: Repo.get(schema, id)
     def rollback(reason), do: Repo.rollback(reason)
     def transaction(fun), do: Repo.transaction(fun)

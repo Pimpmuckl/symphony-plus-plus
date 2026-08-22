@@ -211,6 +211,24 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
                context: "Terminal cleanup regression"
              })
 
+    assert {:ok, answered_guidance} =
+             GuidanceRequestRepository.create(repo, %{
+               work_package_id: package.id,
+               requester_grant_id: actor.grant_id,
+               requested_by: "architect-1",
+               idempotency_key: "terminal-guidance-answered",
+               summary: "Preserve a decision",
+               question: "Which path was selected?",
+               context: "Answered decision history"
+             })
+
+    assert {:ok, answered_guidance} =
+             GuidanceRequestRepository.answer(repo, answered_guidance.id, %{
+               answer: "Use the reviewed path.",
+               answered_by: "operator",
+               answered_at: DateTime.utc_now(:microsecond)
+             })
+
     append_active_blocker!(repo, package.id, "terminal-blocker")
     append_active_blocker!(repo, sibling.id, "nonterminal-blocker")
 
@@ -245,7 +263,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
              })
 
     assert {:ok, terminal} = Service.transition(repo, package.id, "merged", actor)
-    assert repo.get!(GuidanceRequest, guidance.id).status == "answered"
+    assert repo.get(GuidanceRequest, guidance.id) == nil
+    assert repo.get!(GuidanceRequest, answered_guidance.id).status == "answered"
 
     terminal_blocker_state = WorkPackageActivity.context(repo, package.id).blocker_state
     assert terminal_blocker_state.active?

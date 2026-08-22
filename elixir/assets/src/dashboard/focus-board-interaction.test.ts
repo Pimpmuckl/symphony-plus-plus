@@ -35,7 +35,7 @@ describe("focus board interactions", () => {
 
     await page.route("**/api/v1/sympp/operator/config*", async (route) => {
       await configReady;
-      await route.fulfill({ json: { apiBase: "/api/v1/sympp/operator", operatorMode: false, dashboard: priorityDashboard } });
+      await route.fulfill({ json: { apiBase: "/api/v1/sympp/operator", dashboard: priorityDashboard } });
     });
     await page.route("**/api/v1/sympp/operator/dashboard", (route) => {
       priorityRequests += 1;

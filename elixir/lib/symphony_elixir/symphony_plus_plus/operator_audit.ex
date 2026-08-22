@@ -5,7 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorAudit do
 
   import Ecto.Changeset
 
-  alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
+  alias SymphonyElixir.SymphonyPlusPlus.Authorization.Target
   alias SymphonyElixir.SymphonyPlusPlus.Id
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
 
@@ -48,15 +48,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorAudit do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @spec append(module(), Decision.t(), map(), map()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
-  def append(repo, %Decision{} = decision, request_metadata, tool_metadata)
-      when is_atom(repo) and is_map(request_metadata) and is_map(tool_metadata) do
-    repo.insert(changeset(decision, request_metadata, tool_metadata))
+  @spec append(module(), atom(), Target.t(), map(), map()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
+  def append(repo, action, %Target{} = target, request_metadata, tool_metadata)
+      when is_atom(repo) and is_atom(action) and is_map(request_metadata) and is_map(tool_metadata) do
+    repo.insert(changeset(action, target, request_metadata, tool_metadata))
   end
 
-  defp changeset(%Decision{} = decision, request_metadata, tool_metadata) do
+  defp changeset(action, target, request_metadata, tool_metadata) do
     attrs =
-      decision
+      action
+      |> attrs(target)
       |> attrs(request_metadata, tool_metadata)
       |> redact_attrs()
 
@@ -91,28 +92,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorAudit do
     ])
   end
 
-  defp attrs(%Decision{} = decision, request_metadata, tool_metadata) do
+  defp attrs(action, %Target{} = target) do
     %{
       "id" => stable_id(),
-      "actor_id" => decision.actor.id || "unknown",
-      "actor_role" => Atom.to_string(decision.actor.role),
-      "actor_source" => source(decision.actor.source),
-      "action" => Atom.to_string(decision.action),
-      "target_type" => Atom.to_string(decision.target.type),
-      "target_id" => decision.target.id,
-      "target_work_request_id" => decision.target.work_request_id,
-      "target_work_package_id" => decision.target.work_package_id,
-      "decision" => if(decision.allowed?, do: "allowed", else: "denied"),
-      "reason" => decision.reason_code,
-      "request_metadata" => request_metadata,
-      "tool_metadata" => tool_metadata,
-      "created_at" => DateTime.utc_now(:microsecond)
+      "actor_id" => "local-operator",
+      "actor_role" => "human_operator",
+      "actor_source" => "local_operator",
+      "action" => Atom.to_string(action),
+      "target_type" => Atom.to_string(target.type),
+      "target_id" => target.id,
+      "target_work_request_id" => target.work_request_id,
+      "target_work_package_id" => target.work_package_id,
+      "decision" => "not_applicable",
+      "reason" => "trusted_local_human"
     }
   end
 
-  defp source(nil), do: nil
-  defp source(source) when is_atom(source), do: Atom.to_string(source)
-  defp source(source), do: to_string(source)
+  defp attrs(attrs, request_metadata, tool_metadata) do
+    Map.merge(attrs, %{
+      "request_metadata" => request_metadata,
+      "tool_metadata" => tool_metadata,
+      "created_at" => DateTime.utc_now(:microsecond)
+    })
+  end
 
   defp redact_attrs(attrs) do
     attrs

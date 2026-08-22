@@ -968,7 +968,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
              "patch"
            ]
 
-    assert get_in(tools_by_name, ["update_work_package", "inputSchema", "properties", "patch", "minProperties"]) == 1
+    assert get_in(tools_by_name, ["update_work_package", "inputSchema", "properties", "patch", "type"]) == "object"
 
     assert get_in(tools_by_name, ["skip_work_package", "inputSchema", "required"]) == [
              "work_request_id",
