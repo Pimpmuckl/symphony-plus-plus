@@ -6,37 +6,10 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.Runtime do
   alias SymphonyElixir.SymphonyPlusPlus.TrackerAdapter
   alias SymphonyElixirWeb.Endpoint
 
-  @access_grant_lazy_migration_columns ["phase_id", "scope_repo", "scope_base_branch", "provenance"]
-
   @spec dashboard_ledger_database(module()) :: term()
   def dashboard_ledger_database(repo) do
     Repo.operator_database_path(repo)
   end
-
-  @spec dashboard_storage_present?() :: boolean()
-  def dashboard_storage_present? do
-    case configured_repo() do
-      Repo -> configured_repo_storage_present?()
-      nil -> configured_repo_storage_present?()
-      configured_repo -> custom_repo_storage_present?(configured_repo)
-    end
-  end
-
-  defp configured_repo_storage_present? do
-    configured_repo_storage_present?(Repo.database_path_if_present(), Process.whereis(Repo))
-  end
-
-  defp configured_repo_storage_present?(nil, pid) when is_pid(pid), do: local_repo_storage_present?(pid)
-  defp configured_repo_storage_present?(nil, nil), do: false
-
-  defp configured_repo_storage_present?(path, pid) when is_pid(pid) do
-    local_repo_storage_present?(pid) or repo_matches_database?(pid, path) or
-      :global.whereis_name(Repo.process_key(path)) != :undefined or persistent_database_present?(path)
-  end
-
-  defp configured_repo_storage_present?(path, nil), do: persistent_database_present?(path)
-
-  defp local_repo_storage_present?(pid), do: not explicit_database_configured?() and repo_persistent_storage_present?(pid)
 
   defp explicit_database_configured? do
     Application.get_env(:symphony_elixir, :sympp_repo_database) != nil or configured_repo_database_configured?()
@@ -53,78 +26,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.Runtime do
   defp configured_database_value?(nil), do: false
   defp configured_database_value?(_database_path), do: true
 
-  defp custom_repo_storage_present?(repo) do
-    if ecto_repo?(repo) do
-      custom_ecto_repo_storage_present?(repo)
-    else
-      true
-    end
-  end
-
-  defp custom_ecto_repo_storage_present?(repo) do
-    database_path = custom_repo_database_path(repo)
-
-    case Process.whereis(repo) do
-      pid when is_pid(pid) ->
-        persistent_database_present?(database_path) and custom_repo_matches_database?(repo, database_path)
-
-      nil ->
-        persistent_database_present?(database_path)
-    end
-  end
-
-  defp persistent_database_present?(database_path) do
-    cond do
-      Repo.memory_database?(database_path) -> false
-      is_binary(database_path) -> filesystem_database_present?(database_path)
-      true -> false
-    end
-  end
-
-  defp filesystem_database_present?(database_path) do
-    case filesystem_database_path(database_path) do
-      path when is_binary(path) -> String.trim(path) != "" and File.exists?(path)
-      _path -> false
-    end
-  end
-
-  defp repo_persistent_storage_present?(pid) when is_pid(pid) do
-    original_repo = Repo.put_dynamic_repo(pid)
-
-    try do
-      case Repo.query("PRAGMA database_list", []) do
-        {:ok, %{rows: rows}} ->
-          Enum.any?(rows, fn
-            [_seq, "main", path] when is_binary(path) and path != "" -> File.exists?(path)
-            _row -> false
-          end)
-
-        {:error, _reason} ->
-          false
-      end
-    rescue
-      _error in Exqlite.Error -> false
-    after
-      Repo.put_dynamic_repo(original_repo)
-    end
-  end
-
-  defp filesystem_database_path("file:" <> _rest = database_path) do
-    case Repo.sqlite_file_uri_path(database_path) do
-      path when is_binary(path) and path != "" -> Path.expand(path)
-      _path -> nil
-    end
-  end
-
-  defp filesystem_database_path(database_path), do: Path.expand(database_path)
-
-  @spec normalize_storage_errors((-> term())) :: term()
-  def normalize_storage_errors(fun) when is_function(fun, 0) do
-    fun.()
-  rescue
-    error in Exqlite.Error -> normalize_exqlite_error(error)
-  end
-
   defp normalize_exqlite_error(error) do
     message = Exception.message(error)
 
@@ -137,21 +38,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApi.Runtime do
 
   defp busy_message?(message) do
     String.contains?(message, "busy") or String.contains?(message, "locked")
-  end
-
-  @spec missing_schema_message?(String.t()) :: boolean()
-  def missing_schema_message?(message) do
-    message
-    |> String.downcase()
-    |> String.contains?("no such table")
-  end
-
-  @spec missing_access_grant_migration_column_message?(String.t()) :: boolean()
-  def missing_access_grant_migration_column_message?(message) do
-    message = String.downcase(message)
-
-    String.contains?(message, "no such column") and
-      Enum.any?(@access_grant_lazy_migration_columns, &String.contains?(message, &1))
   end
 
   @spec with_dashboard_repo((module() -> term()), keyword()) :: term()

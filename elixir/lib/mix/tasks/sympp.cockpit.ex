@@ -346,7 +346,6 @@ defmodule Mix.Tasks.Sympp.Cockpit do
 
   defp ensure_runtime_started do
     with {:ok, _started} <- Application.ensure_all_started(:phoenix),
-         {:ok, _started} <- Application.ensure_all_started(:phoenix_live_view),
          {:ok, _started} <- Application.ensure_all_started(:bandit),
          {:ok, _started} <- Application.ensure_all_started(:ecto_sql),
          {:ok, _started} <- ensure_pubsub_started(),
