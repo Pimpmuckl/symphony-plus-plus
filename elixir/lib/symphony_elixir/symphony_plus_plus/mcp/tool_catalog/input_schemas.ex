@@ -234,30 +234,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     schema(metadata_properties(sync_pr_metadata_properties()), [])
   end
 
-  def worker_tool_input_schema("submit_review_package") do
-    schema(
-      metadata_properties(%{
-        "summary" => string_schema(),
-        "tests" => string_array_schema(),
-        "artifacts" => string_array_schema(),
-        "head_sha" => string_schema()
-      }),
-      ["summary"]
-    )
-  end
-
-  def worker_tool_input_schema("complete_review") do
-    schema(
-      session_scoped_properties(%{
-        "reference" =>
-          nullable_string_schema()
-          |> Map.put("description", "Optional opaque provider or human review reference."),
-        "note" => markdown_nullable_string_schema("Optional human-facing completion note.")
-      }),
-      []
-    )
-  end
-
   @spec unbound_worker_tool_input_schema(tool_name()) :: input_schema()
   def unbound_worker_tool_input_schema("update_task_plan"), do: worker_tool_input_schema("update_task_plan")
 
@@ -350,27 +326,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "evidence" => work_package_delivery_evidence_schema()
       },
       ["work_package_id", "outcome", "idempotency_key", "evidence"]
-    )
-  end
-
-  def architect_tool_input_schema("accept_review_rework") do
-    schema(
-      %{
-        "work_request_id" => current_work_request_id_schema(),
-        "work_package_id" => described_string_schema("Ordinary ready-for-merge WorkPackage with the accepted finding."),
-        "idempotency_key" => described_string_schema("Opaque stable key for this accepted finding."),
-        "evidence" =>
-          schema(
-            %{
-              "provider" => described_string_schema("Provider or review system that produced the typed finding."),
-              "reference" => described_string_schema("Opaque provider reference for the immutable evidence."),
-              "head_sha" => described_string_schema("Exact current head of the attached PR."),
-              "finding" => markdown_string_schema("Verified nonempty changes-required finding in Markdown.")
-            },
-            ["provider", "reference", "head_sha", "finding"]
-          )
-      },
-      ["work_package_id", "idempotency_key", "evidence"]
     )
   end
 

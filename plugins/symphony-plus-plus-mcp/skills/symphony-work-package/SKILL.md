@@ -1,6 +1,6 @@
 ---
 name: symphony-work-package
-description: Use when assigned a Symphony++ WorkPackage; claims the ledger-backed local assignment by WorkPackage id and keeps scoped planning, progress, branch/PR metadata, review evidence, and readiness synchronized through the Symphony++ MCP server.
+description: Use when assigned a Symphony++ WorkPackage; claims the ledger-backed local assignment by WorkPackage id and keeps scoped planning, progress, branch/PR metadata, and readiness synchronized through the Symphony++ MCP server.
 ---
 
 # Symphony++ Work Package
@@ -104,15 +104,9 @@ S++ explicitly gives scoped context.
   to repair missing attachment identity. Put manual canonical state only in
   the schema-validated `recovery` import; never infer freshness from an
   unavailable provider or an unknown state.
-- `submit_review_package(summary, tests?, artifacts?)` may record useful
-  validation context. It is not readiness proof. When used for PR-backed or
-  review-required work, it must use the attached exact head.
 - If `review.md` declares a review requirement, use that provider and its
-  optional arguments. Classify its provider-neutral structured result first.
-  Call `complete_review(reference?, note?)` only after accepting a terminal
-  review result for the attached exact head. The reference is an opaque
-  provider or human review id; Symphony++ does not interpret provider-specific
-  results.
+  optional arguments. Review results stay with that provider and the worker
+  handoff; Symphony++ does not require a duplicate completion record.
 - When that provider is Review Suite, derive one concise Markdown brief from
   the already-scoped WorkPackage resources. Treat the available WorkPackage
   title, engineering scope, allowed file scope, and acceptance criteria as the
@@ -122,28 +116,22 @@ S++ explicitly gives scoped context.
   Do not persist a duplicate goal or add a Review Suite-specific API.
 - A worker may commit `CONTINUE` only while the frozen WorkPackage contract is
   unchanged. Return findings, contract ambiguity, `REPLAN`, or `RESLICE` to
-  the architect without calling `complete_review`. Do not create a replacement
-  cycle or package.
+  the architect. Do not create a replacement cycle or package.
 - If `review.md` says no review is required, do not invent one.
 
 ## Ready
 
 Before `mark_ready()`:
 
-- Provider-backed branch, PR, current-head state, blockers,
-  investigation findings, and any required review completion are current.
-- Do not add task-plan, review-package, or progress calls only to restate facts
-  already proved elsewhere.
+- Provider-backed branch, PR, current-head state, blockers, and investigation
+  findings are current.
+- Any external/provider review required by `review.md` is settled.
+- Do not add task-plan or progress calls only to restate facts already proved
+  elsewhere.
 - No active blocker remains.
   Resolve worker-owned blockers with `resolve_blocker`. Architect-owned human
   blockers still require the architect or trusted local operator.
 
-After `mark_ready()` succeeds, evidence is frozen except idempotent replay of
-already-recorded writes. If an architect accepts a verified review finding and
-returns the package to `active`, advance to a different exact head, run
-`sync_pr` for fresh provider state, and complete the required review. Evidence
-for the old head remains immutable but cannot
-satisfy readiness again.
 Return ready or terminal packages to the architect named by `next_owner`; the
 worker does not need or receive architect tools for that handoff.
 

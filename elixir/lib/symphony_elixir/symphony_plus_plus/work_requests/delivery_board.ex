@@ -20,8 +20,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   @runtime_merge_required_kinds ["hotfix", "adapter", "mcp", "skill", "hooks"]
   @delivery_lookup_chunk_size 400
   @context_lookup_chunk_size 400
-  @review_package_artifact_limit 20
-  @review_package_string_limit 240
+  @bounded_string_limit 240
 
   @delivery_states %{
     "pr_merged" => {"delivered", "Delivered", "success", "Recorded delivery outcome says the linked PR merged."},
@@ -498,7 +497,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       %WorkPackage{} = work_package ->
         events = Map.get(context.progress_events, work_package_id, [])
         activity = Map.get(context.activity_contexts, work_package_id, WorkPackageActivity.empty_context())
-        metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events, work_package)
+        metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events)
 
         %{
           id: work_package.id,
@@ -548,7 +547,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
       %WorkPackage{} = work_package ->
         events = Map.get(context.progress_events, work_package_id, [])
         activity = Map.get(context.activity_contexts, work_package_id, WorkPackageActivity.empty_context())
-        metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events, work_package)
+        metadata = Map.get(context.metadata_contexts, work_package_id) || metadata_from_progress_events(events)
 
         %{
           id: work_package.id,
@@ -563,7 +562,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
           pr_required: pr_required?(work_package),
           branch: branch_summary(map_value(metadata, "branch")),
           pr: pr_summary(legacy_pr_metadata(metadata), delivery),
-          review: review_summary(metadata),
           worker_signal: Map.get(activity, :worker_signal),
           pr_signal: Signals.pr(metadata, delivery),
           review_signal: Signals.review(work_package, metadata, Map.get(context.review_observations, work_package.id)),
@@ -577,35 +575,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
     end
   end
 
-  defp metadata_from_progress_events(events, %WorkPackage{} = work_package) do
+  defp metadata_from_progress_events(events) do
     branch = latest_payload(events, "branch", "attach_branch")
-    current = MetadataProjection.metadata(events, [], work_package.id, work_package.review_requirement)
+    current = MetadataProjection.metadata(events)
 
     %{
       branch: branch,
       pr: map_value(current, "pr"),
-      legacy_pr: latest_pr_payload(events),
-      review_package: current_review_package(events, branch, current),
-      review_completion: map_value(current, "review_completion")
+      legacy_pr: latest_pr_payload(events)
     }
-  end
-
-  defp current_review_package(events, branch, current) do
-    if filled_string?(map_value(branch, "head_sha")) do
-      map_value(current, "review_package")
-    else
-      latest_payload(events, "review_package", "submit_review_package")
-    end
   end
 
   defp legacy_pr_metadata(metadata), do: map_value(metadata, "legacy_pr") || map_value(metadata, "pr")
-
-  defp review_summary(metadata) do
-    %{
-      package: review_package_summary(map_value(metadata, "review_package")),
-      completion: review_completion_summary(map_value(metadata, "review_completion"))
-    }
-  end
 
   defp branch_summary(nil), do: nil
   defp branch_summary(payload) when not is_map(payload), do: nil
@@ -660,38 +641,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   end
 
   defp merge_state_summary(_merge_state, _delivery), do: nil
-
-  defp review_completion_summary(nil), do: nil
-  defp review_completion_summary(payload) when not is_map(payload), do: nil
-
-  defp review_completion_summary(%{} = payload) do
-    %{
-      type: bounded_string(map_value(payload, "type")),
-      source_tool: bounded_string(map_value(payload, "source_tool")),
-      work_package_id: bounded_string(map_value(payload, "work_package_id")),
-      head_sha: bounded_string(map_value(payload, "head_sha")),
-      review_type: payload |> map_value("review") |> map_value("type") |> bounded_string(),
-      reference: bounded_string(map_value(payload, "reference")),
-      note: bounded_string(map_value(payload, "note"))
-    }
-    |> reject_nil_values()
-    |> non_empty_map()
-  end
-
-  defp review_package_summary(nil), do: nil
-  defp review_package_summary(payload) when not is_map(payload), do: nil
-
-  defp review_package_summary(%{} = payload) do
-    %{
-      type: bounded_string(map_value(payload, "type")),
-      source_tool: bounded_string(map_value(payload, "source_tool")),
-      head_sha: bounded_string(map_value(payload, "head_sha")),
-      artifacts: bounded_string_list(map_value(payload, "artifacts"), @review_package_artifact_limit),
-      acceptance_criteria_met: boolean_value(map_value(payload, "acceptance_criteria_met")),
-      tests_passed: boolean_value(map_value(payload, "tests_passed"))
-    }
-    |> reject_nil_values()
-  end
 
   defp successor_context(nil, _slices_by_scope, _context), do: nil
 
@@ -962,7 +911,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
 
   defp status_label(_value), do: "Unknown"
 
-  defp bounded_string(value, limit \\ @review_package_string_limit)
+  defp bounded_string(value, limit \\ @bounded_string_limit)
 
   defp bounded_string(value, limit) when is_binary(value) and is_integer(limit) do
     value
@@ -974,22 +923,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard do
   end
 
   defp bounded_string(_value, _limit), do: nil
-
-  defp bounded_string_list(values, limit) when is_list(values) and is_integer(limit) do
-    values
-    |> Enum.flat_map(fn value ->
-      case bounded_string(value) do
-        nil -> []
-        string -> [string]
-      end
-    end)
-    |> Enum.take(limit)
-  end
-
-  defp bounded_string_list(_values, _limit), do: nil
-
-  defp boolean_value(value) when is_boolean(value), do: value
-  defp boolean_value(_value), do: nil
 
   defp boolean_or_bounded_string(value) when is_boolean(value), do: value
   defp boolean_or_bounded_string(value), do: bounded_string(value)

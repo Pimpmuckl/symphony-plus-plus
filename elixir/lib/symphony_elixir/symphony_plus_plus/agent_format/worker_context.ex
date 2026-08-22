@@ -2,7 +2,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.AgentFormat.Toon
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
@@ -184,50 +183,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AgentFormat.WorkerContext do
     }
   end
 
-  defp review_payload(%State{work_package: work_package, progress_events: progress_events}) do
-    %{
-      "requirement" => Redactor.redact_output(work_package.review_requirement),
-      "completion" => review_completion_payload(work_package, progress_events)
-    }
-  end
-
-  defp review_completion_payload(%WorkPackage{review_requirement: nil}, _progress_events), do: nil
-
-  defp review_completion_payload(%WorkPackage{} = work_package, progress_events) do
-    current_head = latest_current_head(progress_events)
-
-    event =
-      if is_binary(current_head) do
-        MetadataProjection.latest_review_completion_event(
-          progress_events,
-          work_package.id,
-          current_head,
-          work_package.review_requirement
-        )
-      end
-
-    case event do
-      %ProgressEvent{} = event ->
-        payload = event.payload || %{}
-
-        %{
-          "head_sha" => current_head,
-          "reference" => Redactor.redact_text(Map.get(payload, "reference")),
-          "note" => Redactor.redact_text(Map.get(payload, "note")),
-          "actor_id" => Redactor.redact_text(event.actor_id),
-          "completed_at" => timestamp(event.created_at)
-        }
-
-      nil ->
-        nil
-    end
-  end
-
-  defp latest_current_head(progress_events) do
-    Enum.find_value(Enum.reverse(progress_events), fn %ProgressEvent{payload: payload} ->
-      if is_map(payload) and Map.get(payload, "type") == "branch" and Map.get(payload, "source_tool") == "attach_branch",
-        do: Map.get(payload, "head_sha")
-    end)
+  defp review_payload(%State{work_package: work_package}) do
+    %{"requirement" => Redactor.redact_output(work_package.review_requirement)}
   end
 
   defp plan_node_payload(%PlanNode{} = plan_node) do

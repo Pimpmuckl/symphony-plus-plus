@@ -247,7 +247,6 @@ function packageAnimationEntity(pkg: WorkPackageCard): UpdateAnimationEntity {
       pkg.finding_count,
       pkg.plan,
       pkg.metadata?.pr,
-      pkg.metadata?.review_package,
       pkg.metadata?.review_suite_result,
       pkg.active_agent_run,
       pkg.runtime,

@@ -62,9 +62,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     attach_branch(repo, session, "agent/SYMPP-P8-001/hotfix", head_sha)
     attach_pr(repo, session, "https://github.com/nextide/symphony-plus-plus/pull/8001", head_sha)
     sync_fake_github(repo, session, 8001, head_sha, ["elixir/lib/symphony_elixir/cache.ex"])
-    submit_validation_package(repo, session, head_sha)
-    complete_review(repo, session, "maintainer-review-8001")
-
     response = mcp_tool(repo, session, "mark_ready", %{})
 
     assert get_in(response, ["result", "structuredContent", "ready"]) == true
@@ -75,7 +72,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     assert persisted.status == "ready_for_merge"
   end
 
-  test "fake GitHub and generic review gates drive a CI-friendly MCP package to ready", %{repo: repo} do
+  test "fake GitHub provider state drives a CI-friendly MCP package to ready", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
@@ -96,9 +93,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     attach_branch(repo, session, "agent/SYMPP-P8-001/gates", head_sha)
     attach_pr(repo, session, "https://github.com/nextide/symphony-plus-plus/pull/8002", head_sha)
     sync_fake_github(repo, session, 8002, head_sha, ["elixir/lib/symphony_elixir/symphony_plus_plus/readiness.ex"])
-    submit_validation_package(repo, session, head_sha)
-    complete_review(repo, session, "automated-review-8002")
-
     response = mcp_tool(repo, session, "mark_ready", %{})
 
     assert get_in(response, ["result", "structuredContent", "ready"]) == true
@@ -106,7 +100,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
 
     assert {:ok, artifacts} = PlanningRepository.list_artifacts(repo, package.id)
     assert Enum.any?(artifacts, &(&1.kind == "github_pr" and &1.path == "github-pr.json"))
-    assert Enum.any?(artifacts, &(&1.kind == "review" and &1.path == "validation/p8-001-local.json"))
   end
 
   test "worker receives only parent goal and direct dependencies while broad reads stay denied", %{repo: repo} do
@@ -348,19 +341,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
         "merge_state" => %{"status" => "clean", "merged" => false}
       }
     })
-  end
-
-  defp submit_validation_package(repo, session, head_sha) do
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Deterministic local validation evidence for P8 integration harness.",
-      "tests" => ["mix sympp.integration"],
-      "artifacts" => ["validation/p8-001-local.json"],
-      "head_sha" => head_sha
-    })
-  end
-
-  defp complete_review(repo, session, reference) do
-    attach_tool(repo, session, "complete_review", %{"reference" => reference})
   end
 
   defp read_resource(repo, session, uri) do

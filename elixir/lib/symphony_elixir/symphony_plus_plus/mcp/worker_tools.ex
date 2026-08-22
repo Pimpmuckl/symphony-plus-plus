@@ -59,8 +59,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     "attach_branch",
     "attach_pr",
     "sync_pr",
-    "submit_review_package",
-    "complete_review",
     "mark_ready"
   ]
   @finding_replay_retry_attempts 50
@@ -199,50 +197,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     end
   end
 
-  def call("submit_review_package", %Config{} = config, session, arguments) do
-    with {:ok, session} <- scoped_session(config.repo, session, arguments),
-         :ok <- authorize_current_package_policy(config.repo, session, :review_evidence_append, :review_evidence),
-         {:ok, result} <- ReviewReadiness.submit_review_package(config.repo, session, arguments, config) do
-      {:ok, result}
-    else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "submit_review_package", "reason" => reason}}
-      {:error, _code, _message, _data} = error -> error
-      {:error, reason} -> worker_error(reason, "submit_review_package")
-    end
-  end
-
-  def call("complete_review", %Config{} = config, session, arguments) do
-    with {:ok, session} <- scoped_session(config.repo, session, arguments),
-         :ok <- authorize_current_package_policy(config.repo, session, :review_evidence_append, :review_evidence),
-         {:ok, result} <- ReviewReadiness.complete_review(config.repo, session, arguments) do
-      {:ok, result}
-    else
-      {:tool_error, reason} -> invalid_params_error("complete_review", reason)
-      {:error, _code, _message, _data} = error -> error
-      {:error, reason} -> worker_error(reason, "complete_review")
-    end
-  end
-
   def call("mark_ready", %Config{} = config, session, _arguments) do
     with {:ok, session} <- Auth.require_session(session, config.repo),
          :ok <- require_worker_assignment(session.assignment),
          {:ok, blocker_closeout_plan} <- ArchitectDeliveryTools.prepare_scoped_blocker_closeout(config.repo, session, [Session.work_package_id(session)], %{}, "mark_ready"),
-         {:ok, {work_package, _blocker_closeout, warnings}} <-
+         {:ok, {work_package, _blocker_closeout}} <-
            ReviewReadiness.mark_ready(config.repo, session, blocker_closeout_plan, &ArchitectDeliveryTools.apply_prepared_blocker_closeout/3) do
       {:ok,
        ToolResult.tool_result(
          %{"work_package" => work_package_payload(work_package), "ready" => true}
          |> put_architect_next_step()
-         |> ReviewReadiness.maybe_put_readiness_warnings(warnings)
        )}
     else
       {:tool_error, reason} ->
         invalid_params_error("mark_ready", reason)
-
-      {:error, {:readiness_failed, missing, reasons, warnings}} ->
-        {:error, -32_602, "Invalid params",
-         %{"tool" => "mark_ready", "reason" => "readiness_failed", "missing" => missing, "reasons" => reasons}
-         |> ReviewReadiness.maybe_put_readiness_warnings(warnings)}
 
       {:error, {:readiness_failed, missing, reasons}} ->
         {:error, -32_602, "Invalid params", %{"tool" => "mark_ready", "reason" => "readiness_failed", "missing" => missing, "reasons" => reasons}}

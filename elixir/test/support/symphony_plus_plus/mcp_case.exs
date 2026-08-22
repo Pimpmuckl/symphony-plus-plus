@@ -26,7 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "resolve_blocker",
     "read_delivery_board",
     "reconcile_work_request",
-    "accept_review_rework",
     "cleanup_work_request_work_package_runtime",
     "record_work_package_delivery",
     "revoke_work_package_worker_key",
@@ -68,8 +67,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "attach_branch",
     "attach_pr",
     "sync_pr",
-    "submit_review_package",
-    "complete_review",
     "mark_ready"
   ]
   @codex_forbidden_top_level_schema_keys ["oneOf", "anyOf", "allOf", "enum", "not"]

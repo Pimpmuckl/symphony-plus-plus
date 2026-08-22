@@ -188,16 +188,6 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
         assert ready.artifact_count == 1
         assert ready.finding_count == 1
         assert ready.latest_progress_at
-
-        review = Enum.find(cards, &(&1.id == "SYMPP-DEMO-WP-REVIEW"))
-
-        assert get_in(review.metadata, [:review_package, "summary"]) ==
-                 "Synthetic demo review package."
-
-        assert get_in(review.metadata, [:review_package, "head_sha"]) ==
-                 "2222222222222222222222222222222222222222"
-
-        assert get_in(review.metadata, [:review_package, "acceptance_criteria_met"]) == true
       end)
     after
       File.rm(database_path)

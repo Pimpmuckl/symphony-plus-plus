@@ -65,20 +65,15 @@ seeking architect-only tools.
 - If CI/checks exist, make sure they are green or report the exact blocker. If
   no CI exists, say so.
 - After material changes, rerun any declared review for the new exact head.
-- If an architect accepts review rework after readiness, keep the old evidence
-  as history and advance to a different exact head. Refresh the attached PR
-  with `sync_pr` and complete the required review before calling `mark_ready`
-  again.
 - Record material findings, progress, or validation context when it helps the
   handoff. Do not add task-plan, review-package, or progress calls only to
   restate work already proved elsewhere.
 - Policy-approved no-PR work may become ready without a branch head. PR-backed
-  or review-required work still needs current exact-head evidence.
-- Classify Review Suite's ordinary structured result before recording review
-  completion. Call `complete_review` only for an accepted terminal result on
-  the exact head. A worker may select bounded `CONTINUE` only while the
-  WorkPackage contract is unchanged. Return findings, contract ambiguity,
-  `REPLAN`, or `RESLICE` to the architect without calling `complete_review`.
+  work still needs current exact-head evidence.
+- Classify Review Suite's ordinary structured result before handoff. A worker
+  may select bounded `CONTINUE` only while the WorkPackage contract is
+  unchanged. Return findings, contract ambiguity, `REPLAN`, or `RESLICE` to
+  the architect.
 
 ## Delivery
 

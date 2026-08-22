@@ -5,35 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
   alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequest
   alias SymphonyElixir.SymphonyPlusPlus.OperationalLineage
   alias SymphonyElixir.SymphonyPlusPlus.Planning.ProgressEvent
-  alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-
-  @spec latest_review_completion_event([ProgressEvent.t()], String.t(), String.t(), map()) :: ProgressEvent.t() | nil
-  def latest_review_completion_event(progress_events, work_package_id, head_sha, requirement) do
-    progress_events
-    |> chronological_progress_events()
-    |> Enum.filter(&review_completion_event?(&1, work_package_id, head_sha, requirement))
-    |> List.last()
-  end
-
-  @spec review_completion_present?([ProgressEvent.t()], String.t(), String.t(), map()) :: boolean()
-  def review_completion_present?(progress_events, work_package_id, head_sha, requirement) do
-    not is_nil(latest_review_completion_event(progress_events, work_package_id, head_sha, requirement))
-  end
-
-  defp review_completion_event?(%ProgressEvent{idempotency_key: idempotency_key, payload: payload}, work_package_id, head_sha, requirement) do
-    is_map(payload) and Map.get(payload, "type") == "review_completion" and
-      Map.get(payload, "source_tool") == "complete_review" and Map.get(payload, "work_package_id") == work_package_id and
-      Map.get(payload, "head_sha") == head_sha and review_identity_matches?(payload, requirement) and
-      is_binary(idempotency_key) and String.starts_with?(idempotency_key, "complete_review:#{work_package_id}:")
-  end
-
-  defp review_identity_matches?(payload, requirement) do
-    case Map.get(payload, "review_fingerprint") do
-      fingerprint when is_binary(fingerprint) -> fingerprint == ReviewRequirement.fingerprint(requirement)
-      _fingerprint -> Map.get(payload, "review") == requirement
-    end
-  end
 
   @spec filled_string?(term()) :: boolean()
   def filled_string?(value), do: is_binary(value) and String.trim(value) != ""
@@ -178,17 +150,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
   def normalized_status(status) when is_binary(status), do: status |> String.trim() |> String.downcase()
   def normalized_status(_status), do: ""
 
-  @spec metadata([ProgressEvent.t()], [term()], String.t(), map() | nil) :: map()
-  def metadata(progress_events, _artifacts, work_package_id, review_requirement) do
+  @spec metadata([ProgressEvent.t()]) :: map()
+  def metadata(progress_events) do
     branch = latest_payload(progress_events, "branch", "attach_branch")
     head_filter = metadata_head_filter(progress_events, branch)
     pr = latest_pr_payload(progress_events, head_filter)
 
     %{
       branch: branch,
-      pr: pr_metadata(pr, head_filter),
-      review_package: latest_current_payload(progress_events, "review_package", "submit_review_package", head_filter),
-      review_completion: review_completion_payload(progress_events, work_package_id, head_filter, review_requirement)
+      pr: pr_metadata(pr, head_filter)
     }
   end
 
@@ -218,16 +188,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
       {work_package.id, OperationalLineage.unavailable_lineage(work_package.id, reason)}
     end)
   end
-
-  defp review_completion_payload(progress_events, work_package_id, {:head, head_sha}, requirement)
-       when is_map(requirement) do
-    case latest_review_completion_event(progress_events, work_package_id, head_sha, requirement) do
-      %ProgressEvent{payload: payload} -> Sanitizer.redacted_json(payload)
-      nil -> nil
-    end
-  end
-
-  defp review_completion_payload(_progress_events, _work_package_id, _head_filter, _requirement), do: nil
 
   defp pr_metadata(nil, _head_filter), do: nil
 
@@ -329,27 +289,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
       %ProgressEvent{payload: payload} -> Sanitizer.redacted_json(payload || %{})
       nil -> nil
     end
-  end
-
-  defp latest_current_payload(progress_events, "review_package", "submit_review_package", :none) do
-    progress_events
-    |> chronological_progress_events()
-    |> Enum.reverse()
-    |> Enum.find(fn
-      %ProgressEvent{payload: payload} = event when is_map(payload) ->
-        payload_type?(event, "review_package", "submit_review_package") and is_nil(payload_head_sha(payload))
-
-      %ProgressEvent{} ->
-        false
-    end)
-    |> case do
-      %ProgressEvent{payload: payload} -> Sanitizer.redacted_json(payload || %{})
-      nil -> nil
-    end
-  end
-
-  defp latest_current_payload(progress_events, type, source_tool, head_filter) do
-    latest_payload(progress_events, type, source_tool, head_filter)
   end
 
   defp latest_payload(progress_events, type, source_tool) do
@@ -467,9 +406,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection do
   end
 
   defp payload_head_matches?(_payload, :any), do: true
-  defp payload_head_matches?(_payload, :none), do: false
   defp payload_head_matches?(payload, {:head, head_sha}) when is_map(payload), do: head_sha_matches?(Map.get(payload, "head_sha"), head_sha)
-  defp payload_head_matches?(_payload, {:head, _head_sha}), do: false
 
   defp head_sha_matches?(left, right), do: PullRequest.head_sha_matches?(left, right)
 

@@ -322,46 +322,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     assert slice.attention_reason_codes == []
   end
 
-  test "review package payloads project as bounded summaries", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-BOARD-REVIEW-PACKAGE")
-
-    {_work_package, linked_package} =
-      linked_slice!(repo, work_request,
-        id: "WRS-BOARD-REVIEW-PACKAGE",
-        work_package_id: "WP-BOARD-REVIEW-PACKAGE",
-        status: "reviewing"
-      )
-
-    assert {:ok, _review_package} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: linked_package.id,
-               summary: "Review package submitted",
-               status: "review_package_submitted",
-               payload: %{
-                 type: "review_package",
-                 source_tool: "submit_review_package",
-                 head_sha: "review-head",
-                 artifacts: ["review.txt", "", "notes.md"],
-                 acceptance_criteria_met: false,
-                 tests_passed: false,
-                 private_context: String.duplicate("secret-", 80),
-                 reviews: [
-                   %{lane: "normal", verdict: "green", private_notes: "do not expose"},
-                   %{lane: "github", status: "passed", transcript: String.duplicate("log-", 80)}
-                 ]
-               }
-             })
-
-    assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
-    assert package = slice.work_package.review.package
-    assert package.artifacts == ["review.txt", "notes.md"]
-    assert package.head_sha == "review-head"
-    assert package.acceptance_criteria_met == false
-    assert package.tests_passed == false
-    refute Map.has_key?(package, :reviews)
-    refute Map.has_key?(package, :private_context)
-  end
-
   test "progress metadata projects as allowlisted summaries", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-PROGRESS-SUMMARIES")
 
@@ -402,40 +362,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                }
              })
 
-    assert {:ok, _review_package} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: linked_package.id,
-               summary: "Validation package submitted",
-               status: "review_package_submitted",
-               payload: %{
-                 type: "review_package",
-                 source_tool: "submit_review_package",
-                 head_sha: "branch-head",
-                 artifacts: ["validation.txt"],
-                 acceptance_criteria_met: true,
-                 tests_passed: true,
-                 transcript: "do not expose"
-               }
-             })
-
-    assert {:ok, _review_completion} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: linked_package.id,
-               summary: "Review finished",
-               status: "review_completed",
-               idempotency_key: "complete_review:#{linked_package.id}:branch-head:human",
-               payload: %{
-                 type: "review_completion",
-                 source_tool: "complete_review",
-                 work_package_id: linked_package.id,
-                 head_sha: "branch-head",
-                 review: %{"type" => "human"},
-                 reference: "approval-906",
-                 note: "Approved",
-                 logs: "do not expose"
-               }
-             })
-
     assert {:ok, %{work_packages: [slice]}} = DeliveryBoard.project(repo, work_request.id)
 
     assert slice.work_package.branch == %{
@@ -447,43 +373,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
 
     assert slice.work_package.pr.url == "https://github.com/nextide/symphony-plus-plus/pull/906"
     assert slice.work_package.pr.merge_state == %{merged: false}
-    assert slice.work_package.review.package.tests_passed == true
-    assert slice.work_package.review.completion.review_type == "human"
-    assert slice.work_package.review.completion.reference == "approval-906"
-
     refute Map.has_key?(slice.work_package.branch, :raw_context)
     refute Map.has_key?(slice.work_package.pr, :raw_context)
     refute Map.has_key?(slice.work_package.pr.merge_state, :raw_payload)
-    refute Map.has_key?(slice.work_package.review.package, :transcript)
-    refute Map.has_key?(slice.work_package.review.completion, :logs)
-
-    changed_package =
-      linked_package
-      |> Ecto.Changeset.change(review_requirement: %{"type" => "automated"})
-      |> repo.update!()
-
-    assert {:ok, %{work_packages: [changed_slice]}} = DeliveryBoard.project(repo, work_request.id)
-    assert changed_slice.work_package.review.completion == nil
-
-    changed_package
-    |> Ecto.Changeset.change(review_requirement: %{"type" => "human"})
-    |> repo.update!()
-
-    assert {:ok, _new_head} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: linked_package.id,
-               summary: "Branch advanced",
-               status: "branch_attached",
-               payload: %{
-                 type: "branch",
-                 source_tool: "attach_branch",
-                 branch: "feat/delivery-board",
-                 head_sha: "new-head"
-               }
-             })
-
-    assert {:ok, %{work_packages: [advanced_slice]}} = DeliveryBoard.project(repo, work_request.id)
-    assert advanced_slice.work_package.review.completion == nil
   end
 
   test "preloaded dashboard metadata is used before progress fallback", %{repo: repo} do
@@ -504,15 +396,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
         "url" => "https://github.com/nextide/symphony-plus-plus/pull/907",
         "current_head_sha" => "dashboard-head",
         "check_summary" => %{"token" => "drop"}
-      },
-      review_completion: %{
-        "type" => "review_completion",
-        "source_tool" => "complete_review",
-        "work_package_id" => linked_package.id,
-        "head_sha" => "dashboard-head",
-        "review" => %{"type" => "human"},
-        "reference" => "approval-907",
-        "transcript" => "drop"
       }
     }
 
@@ -529,10 +412,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     assert slice.work_package.branch.branch == "feat/from-dashboard"
     assert slice.work_package.pr.url == "https://github.com/nextide/symphony-plus-plus/pull/907"
     assert slice.work_package.pr.current_head_sha == "dashboard-head"
-    assert slice.work_package.review.completion.reference == "approval-907"
     refute Map.has_key?(slice.work_package.branch, :raw_context)
     refute Map.has_key?(slice.work_package.pr, :check_summary)
-    refute Map.has_key?(slice.work_package.review.completion, :transcript)
   end
 
   test "cold projection reads progress history once and replays blockers in order", %{repo: repo} do
@@ -778,7 +659,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
     assert String.length(slice.delivery.no_pr_evidence) == 240
   end
 
-  test "projects provider-neutral worker, PR, review, and authoritative dependency signals", %{repo: repo} do
+  test "projects worker, PR, configured review, and authoritative dependency signals", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-BOARD-GRAPH-SIGNALS")
     last_activity = DateTime.utc_now(:microsecond)
     active_since = DateTime.add(last_activity, -60, :second)
@@ -869,22 +750,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
                created_at: ~U[2026-07-18 08:04:00.000000Z]
              })
 
-    assert {:ok, _review} =
-             PlanningRepository.append_progress_event(repo, %{
-               work_package_id: join.id,
-               summary: "Review running",
-               status: "review_package_submitted",
-               payload: %{
-                 type: "review_package",
-                 source_tool: "submit_review_package",
-                 head_sha: "0123456789abcdef0123456789abcdef01234567",
-                 status: "running",
-                 evidence_id: "review-join-42",
-                 artifacts: ["review.txt"]
-               },
-               created_at: ~U[2026-07-18 08:05:00.000000Z]
-             })
-
     for {prerequisite, index} <- Enum.with_index([satisfied, active, blocked, waiting], 1) do
       assert {:ok, _edge} =
                ProductTreeRepository.create_dependency_edge(repo, %{
@@ -919,7 +784,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryBoardTest do
 
     assert packages[join.id].pr_signal.checks == %{status: "failing", current: 1, total: 3}
 
-    assert %{type: "review-suite", status: "in_progress", current: 1, total: 2, step: "analysis", evidence_id: "review-join-42"} =
+    assert %{type: "review-suite", status: "pending", current: 1, total: 2, step: "analysis"} =
              packages[join.id].review_signal
 
     secret_requirement = put_in(join.review_requirement, ["args", "api_key"], "fixture-secret")

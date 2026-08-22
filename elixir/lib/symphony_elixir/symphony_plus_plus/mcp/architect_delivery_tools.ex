@@ -28,9 +28,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.MCPError
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard.BlockerProjection
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.DashboardPubSub
-  alias SymphonyElixir.SymphonyPlusPlus.GitHub.PullRequestProgress
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Auth,
@@ -185,47 +183,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     end
   end
 
-  def call("accept_review_rework", %Config{} = config, session, arguments) do
-    with {:ok, live_session} <- architect_session(config.repo, session, "write:work_request"),
-         {:ok, arguments} <- validate_arguments(arguments, "accept_review_rework"),
-         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(arguments, live_session),
-         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
-         {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
-         {:ok, evidence} <- accepted_review_rework_evidence(arguments),
-         {:ok, work_request, work_package, filters, scope} <-
-           WorkRequestScope.authorized_work_package_scope(
-             config.repo,
-             live_session,
-             work_request_id,
-             work_package_id,
-             :work_package_repair_state,
-             "accept_review_rework"
-           ),
-         {:ok, result} <-
-           run_architect_transaction(config.repo, fn ->
-             accept_review_rework_in_transaction(
-               config.repo,
-               live_session,
-               work_request,
-               work_package,
-               filters,
-               evidence,
-               "accept_review_rework:#{work_package_id}:#{String.trim(idempotency_key)}"
-             )
-           end) do
-      {:ok,
-       ToolResult.tool_result(%{
-         "work_package" => work_package_payload(result.work_package),
-         "accepted_review_rework" => ProgressEvents.payload(result.event),
-         "scope" => scope
-       })}
-    else
-      {:tool_error, reason} -> invalid_params_error("accept_review_rework", reason)
-      {:error, :not_found} -> not_found_error("accept_review_rework")
-      {:error, reason} -> architect_error(reason, "accept_review_rework")
-    end
-  end
-
   def call("cleanup_work_request_work_package_runtime", %Config{} = config, session, arguments) do
     with {:ok, live_session} <- architect_session(config.repo, session, "write:work_request"),
          {:ok, arguments} <- validate_arguments(arguments, "cleanup_work_request_work_package_runtime"),
@@ -366,25 +323,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
       else
         {:tool_error, {:invalid_enum, "outcome", WorkPackageDelivery.outcomes()}}
       end
-    end
-  end
-
-  defp accepted_review_rework_evidence(arguments) do
-    with {:ok, evidence} <- required_object(arguments, "evidence"),
-         {:ok, provider} <- required_argument(evidence, "provider"),
-         {:ok, reference} <- required_argument(evidence, "reference"),
-         {:ok, head_sha} <- required_argument(evidence, "head_sha"),
-         {:ok, finding} <- required_argument(evidence, "finding") do
-      normalized = %{
-        "provider" => provider |> String.trim() |> Redactor.redact_text(),
-        "reference" => reference |> String.trim() |> Redactor.redact_text(),
-        "head_sha" => head_sha |> String.trim() |> String.downcase(),
-        "finding" => finding |> String.trim() |> Redactor.redact_text()
-      }
-
-      if Enum.all?(Map.values(normalized), &filled_string?/1),
-        do: {:ok, normalized},
-        else: {:tool_error, "empty_accepted_review_rework_evidence"}
     end
   end
 
@@ -804,126 +742,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
         end
     end
   end
-
-  defp accept_review_rework_in_transaction(
-         repo,
-         %Session{} = session,
-         %WorkRequest{} = work_request,
-         %WorkPackage{} = scoped_work_package,
-         filters,
-         evidence,
-         idempotency_key
-       ) do
-    primary_scope? = WorkRequestScope.primary_work_request_scope?(repo, work_request, filters)
-
-    with :ok <- lock_access_grant(repo, session.assignment.grant_id),
-         {:ok, _architect_grant} <- WorkRequestScope.require_live_architect_grant(repo, session),
-         :ok <- lock_work_package(repo, Session.work_package_id(session)),
-         :ok <- lock_work_package(repo, scoped_work_package.id),
-         {:ok, work_package} <- WorkPackageRepository.get(repo, scoped_work_package.id),
-         :ok <-
-           WorkRequestScope.require_scoped_delivery_work_package_visibility(
-             work_package,
-             work_request,
-             work_package,
-             primary_scope?,
-             filters
-           ),
-         {:ok, progress_events} <- PlanningRepository.list_progress_events(repo, work_package.id) do
-      case Enum.find(progress_events, &(&1.idempotency_key == idempotency_key)) do
-        %ProgressEvent{} = event ->
-          replay_accepted_review_rework(work_package, event, work_request.id, evidence)
-
-        nil ->
-          append_accepted_review_rework(
-            repo,
-            session,
-            work_request,
-            work_package,
-            progress_events,
-            evidence,
-            idempotency_key
-          )
-      end
-    end
-  end
-
-  defp append_accepted_review_rework(
-         repo,
-         session,
-         work_request,
-         work_package,
-         progress_events,
-         evidence,
-         idempotency_key
-       ) do
-    with :ok <- require_accepted_review_rework_status(work_package),
-         {:ok, head_sha, pr} <- current_accepted_review_rework_pr(work_package, progress_events, evidence),
-         payload =
-           evidence
-           |> Map.put("type", "accepted_review_rework")
-           |> Map.put("source_tool", "accept_review_rework")
-           |> Map.put("work_request_id", work_request.id)
-           |> Map.put("work_package_id", work_package.id)
-           |> Map.put("head_sha", head_sha)
-           |> Map.put("pr", pr),
-         {:ok, reopened} <- WorkPackageRepository.update_status(repo, work_package.id, "ready_for_merge", "active"),
-         {:ok, event} <-
-           PlanningRepository.append_audit_progress_event_for_work_package(repo, session.assignment, work_package.id, %{
-             "summary" => "Accepted verified review finding for rework",
-             "status" => "accepted_review_rework",
-             "idempotency_key" => idempotency_key,
-             "payload" => payload
-           }) do
-      {:ok, %{work_package: reopened, event: event}}
-    end
-  end
-
-  defp replay_accepted_review_rework(work_package, %ProgressEvent{payload: payload} = event, work_request_id, evidence) do
-    expected =
-      evidence
-      |> Map.take(["provider", "reference", "head_sha", "finding"])
-      |> Map.put("type", "accepted_review_rework")
-      |> Map.put("source_tool", "accept_review_rework")
-      |> Map.put("work_request_id", work_request_id)
-      |> Map.put("work_package_id", work_package.id)
-
-    if is_map(payload) and Map.take(payload, Map.keys(expected)) == expected,
-      do: {:ok, %{work_package: work_package, event: event}},
-      else: {:tool_error, "idempotency_conflict"}
-  end
-
-  defp require_accepted_review_rework_status(%WorkPackage{status: "ready_for_merge"}), do: :ok
-  defp require_accepted_review_rework_status(%WorkPackage{}), do: {:tool_error, "work_package_not_ready_for_rework"}
-
-  defp current_accepted_review_rework_pr(work_package, progress_events, evidence) do
-    current_head_sha = MetadataProjection.latest_current_head_sha(progress_events)
-    pr = MetadataProjection.metadata(progress_events, [], work_package.id, work_package.review_requirement).pr
-
-    cond do
-      not filled_string?(current_head_sha) ->
-        {:tool_error, "missing_current_head_sha"}
-
-      not exact_head_sha?(evidence["head_sha"], current_head_sha) ->
-        {:tool_error, "stale_rework_head"}
-
-      not is_map(pr) or not exact_head_sha?(pr["head_sha"], current_head_sha) ->
-        {:tool_error, "missing_current_attached_pr"}
-
-      PullRequestProgress.merged?(%{"merge_state" => pr["merge_state"]}) ->
-        {:tool_error, "current_attached_pr_already_merged"}
-
-      true ->
-        identity = Map.take(pr, ["url", "repository", "number"]) |> Map.put("head_sha", current_head_sha)
-        {:ok, String.downcase(current_head_sha), identity}
-    end
-  end
-
-  defp exact_head_sha?(left, right) when is_binary(left) and is_binary(right) do
-    String.downcase(String.trim(left)) == String.downcase(String.trim(right))
-  end
-
-  defp exact_head_sha?(_left, _right), do: false
 
   defp cleanup_worktree_runtime_in_transaction(repo, %Session{} = session, work_package_id) do
     with :ok <- lock_access_grant(repo, session.assignment.grant_id),

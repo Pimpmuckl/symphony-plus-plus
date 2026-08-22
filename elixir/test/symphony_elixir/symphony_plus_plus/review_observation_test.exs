@@ -110,7 +110,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservationTest do
     assert ReviewObservation.observe([package], test_opts(runner)) == %{}
   end
 
-  test "delivery signal overlays live progress but completed evidence stays authoritative", %{test: test} do
+  test "delivery signal uses live provider progress", %{test: test} do
     %{package: package} = fixture(test)
 
     observation = %{
@@ -130,18 +130,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservationTest do
              evidence_id: "rvw_live",
              reviewed_head: "live-head"
            } == Signals.review(package, %{}, observation)
-
-    completion = %{
-      "status" => "passed",
-      "reference" => "rvw_complete",
-      "head_sha" => "complete-head"
-    }
-
-    signal = Signals.review(package, %{"review_completion" => completion}, observation)
-    assert signal.status == "passed"
-    assert signal.evidence_id == "rvw_complete"
-    assert signal.reviewed_head == "complete-head"
-    refute Map.has_key?(signal, :current)
   end
 
   test "concurrent refreshes share one provider invocation", %{test: test} do
