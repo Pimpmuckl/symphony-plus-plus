@@ -106,7 +106,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
   end
 
   def call("answer_guidance_request", %Config{} = config, session, arguments) do
-    with {:ok, session} <- architect_session(config.repo, session),
+    with {:ok, session} <- architect_session(config.repo, session, "write:guidance_request"),
          {:ok, guidance_request_id} <- required_argument(arguments, "guidance_request_id"),
          {:ok, answer} <- required_argument(arguments, "answer"),
          {:ok, answered_by} <- optional_string_argument(arguments, "answered_by", session_claimed_by(session)),
@@ -133,7 +133,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
   end
 
   def call("escalate_guidance_request", %Config{} = config, session, arguments) do
-    with {:ok, session} <- architect_session(config.repo, session),
+    with {:ok, session} <- architect_session(config.repo, session, "write:guidance_request"),
          {:ok, guidance_request_id} <- required_argument(arguments, "guidance_request_id"),
          {:ok, reason} <- required_argument(arguments, "reason"),
          {:ok, recommended_language} <- required_argument(arguments, "recommended_language"),
@@ -345,6 +345,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.GuidanceTools do
       {:ok, session}
     else
       false -> {:error, :insufficient_capability}
+      {:error, reason} -> {:error, reason}
     end
   end
 
