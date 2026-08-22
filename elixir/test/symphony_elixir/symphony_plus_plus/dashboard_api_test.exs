@@ -265,8 +265,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   test "serializes package cards and groups the board by status", %{repo: repo} do
     %{work_package: first} = create_dashboard_fixture(repo, id: "SYMPP-DASH-1", status: "planning")
     assert {:ok, _second} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-DASH-2", status: "blocked"))
-    assert {:ok, legacy_ready} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-DASH-LEGACY-READY", status: "ready_for_merge"))
-    repo.query!("UPDATE sympp_work_packages SET status = ? WHERE id = ?", ["ready_for_human_merge", legacy_ready.id])
     architect_secret = create_architect_grant_secret(repo, first.id)
 
     assert {:ok, card} = Dashboard.card(repo, first)
@@ -282,11 +280,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     payload = json_response(get(auth_conn(architect_secret), "/api/v1/sympp/board"), 200)
 
-    assert payload["total_count"] == 3
+    assert payload["total_count"] == 2
     assert [%{"id" => "SYMPP-DASH-1", "operational_state" => %{"key" => "blocked", "raw_status" => "planning"}}] = payload["groups"]["planning"]
     assert [%{"id" => "SYMPP-DASH-2"}] = payload["groups"]["blocked"]
-    assert [%{"id" => "SYMPP-DASH-LEGACY-READY"}] = payload["groups"]["ready_for_human_merge"]
-    assert "ready_for_human_merge" in payload["statuses"]
     assert payload["groups"]["created"] == []
 
     assert %{
@@ -3996,13 +3992,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end
   end
 
-  test "local operator dashboard reads do not write to SQLite" do
-    {_payload, queries} =
+  test "local operator dashboard reads do not write after migration bootstrap" do
+    {bootstrap_queries, queries} =
       with_local_operator_endpoint(fn ->
-        capture_queries(&local_operator_dashboard_payload/0)
+        {_bootstrap_payload, bootstrap_queries} = capture_queries(&local_operator_dashboard_payload/0)
+        {_payload, queries} = capture_queries(&local_operator_dashboard_payload/0)
+        {bootstrap_queries, queries}
       end)
 
-    assert Enum.filter(queries, &Regex.match?(~r/^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/i, &1)) == []
+    write_query? = &Regex.match?(~r/^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/i, &1)
+
+    assert Enum.filter(bootstrap_queries, write_query?) in [
+             [],
+             ["CREATE TABLE IF NOT EXISTS \"schema_migrations\" (\"version\" INTEGER PRIMARY KEY, \"inserted_at\" TEXT)"]
+           ]
+
+    assert Enum.filter(queries, write_query?) == []
   end
 
   test "dashboard fixture export builds a deterministic isolated graph ledger" do

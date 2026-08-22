@@ -355,19 +355,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerToolsReadyGateTest do
     assert {:ok, []} = PlanningRepository.list_artifacts(repo, live.package.id)
   end
 
-  test "legacy stored merge-ready status can still transition to merged", %{repo: repo} do
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-READY-LEGACY-STATUS", kind: "mcp", status: "ready_for_merge")
-             )
-
-    repo.update_all(from(work_package in WorkPackage, where: work_package.id == ^package.id), set: [status: "ready_for_human_merge"])
-
-    assert {:ok, updated} = WorkPackageRepository.update_status(repo, package.id, "ready_for_human_merge", "merged")
-    assert updated.status == "merged"
-  end
-
   test "ready evidence guard reads only the package with 1,000 history rows", %{repo: repo} do
     assert {:ok, package} =
              WorkPackageRepository.create(

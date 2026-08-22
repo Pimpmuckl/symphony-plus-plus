@@ -7,7 +7,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
   @worker_capability "worker:lifecycle.transition"
   @architect_capability "architect:lifecycle.transition"
   @phase_child_kind "phase_child"
-  @legacy_ready_status "ready_for_human_merge"
   @ready_status "ready_for_merge"
 
   @worker_package_transitions %{
@@ -20,7 +19,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
     "reviewing" => ["ci_waiting", "implementing", "blocked", "abandoned"],
     "ci_waiting" => [@ready_status, "reviewing", "blocked", "abandoned"],
     @ready_status => ["merged", "closed"],
-    @legacy_ready_status => ["merged", "closed"],
     "blocked" => ["active", "planning", "implementing", "abandoned"],
     "abandoned" => [],
     "closed" => [],
@@ -89,7 +87,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Lifecycle.StateMachine do
   defp validate_lifecycle_shape(%WorkPackage{} = work_package, next_status) do
     cond do
       not lifecycle_kind?(work_package.kind) -> {:error, :unsupported_kind}
-      work_package.status not in WorkPackage.persisted_statuses() -> {:error, :unknown_lifecycle_status}
+      work_package.status not in WorkPackage.statuses() -> {:error, :unknown_lifecycle_status}
       next_status not in WorkPackage.statuses() -> {:error, :unknown_lifecycle_status}
       not current_status_supported?(work_package) -> {:error, :unknown_lifecycle_status}
       true -> :ok

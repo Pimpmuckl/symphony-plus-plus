@@ -13,7 +13,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.TrackerStates do
   @active_states @worker_dispatchable_states ++
                    [
                      "ready_for_merge",
-                     "ready_for_human_merge",
                      "ready_for_architect_merge",
                      "merging_into_phase"
                    ]
