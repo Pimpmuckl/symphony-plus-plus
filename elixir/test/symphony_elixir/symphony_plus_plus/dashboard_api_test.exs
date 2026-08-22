@@ -3992,14 +3992,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end
   end
 
-  test "local operator dashboard reads do not write to SQLite" do
-    {_payload, queries} =
+  test "local operator dashboard reads do not write after migration bootstrap" do
+    {bootstrap_queries, queries} =
       with_local_operator_endpoint(fn ->
-        local_operator_dashboard_payload()
-        capture_queries(&local_operator_dashboard_payload/0)
+        {_bootstrap_payload, bootstrap_queries} = capture_queries(&local_operator_dashboard_payload/0)
+        {_payload, queries} = capture_queries(&local_operator_dashboard_payload/0)
+        {bootstrap_queries, queries}
       end)
 
-    assert Enum.filter(queries, &Regex.match?(~r/^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/i, &1)) == []
+    write_query? = &Regex.match?(~r/^\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/i, &1)
+
+    assert Enum.filter(bootstrap_queries, write_query?) in [
+             [],
+             ["CREATE TABLE IF NOT EXISTS \"schema_migrations\" (\"version\" INTEGER PRIMARY KEY, \"inserted_at\" TEXT)"]
+           ]
+
+    assert Enum.filter(queries, write_query?) == []
   end
 
   test "dashboard fixture export builds a deterministic isolated graph ledger" do
