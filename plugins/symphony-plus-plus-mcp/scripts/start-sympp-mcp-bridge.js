@@ -692,11 +692,11 @@ async function bridge(identity, state, runtimeFile) {
             sessionId = String(initialized.headers["mcp-session-id"] || "");
             protocol = protocolFrom(initialized.lines) || "2025-03-26";
             response = await mcpPost(mcpUrl, line, sessionId, protocol, timeoutMs);
+            const recoverySession = response.headers["mcp-session-id"];
+            if (recoverySession) sessionId = String(recoverySession);
           }
         }
         if (replayableDeliveryFailure(parsed, response)) {
-          const preReplaySession = response.headers["mcp-session-id"];
-          if (preReplaySession) sessionId = String(preReplaySession);
           response = await mcpPost(mcpUrl, line, sessionId, protocol, timeoutMs);
           const replaySession = response.headers["mcp-session-id"];
           if (replaySession) sessionId = String(replaySession);

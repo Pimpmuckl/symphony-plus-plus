@@ -21,6 +21,7 @@ let server;
 let bridge;
 const deliveryRequests = new Map();
 const deliverySessions = new Map();
+const forwardSessions = [];
 
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -45,6 +46,7 @@ async function main() {
       const body = Buffer.concat(chunks).toString("utf8");
       const message = JSON.parse(body);
       const key = message.params && message.params.name === "record_work_package_delivery" && message.params.arguments.idempotency_key;
+      if (message.params && message.params.name === "test.forward") forwardSessions.push(request.headers["mcp-session-id"]);
       if (key) {
         const requests = deliveryRequests.get(key) || [];
         requests.push(body);
@@ -64,6 +66,10 @@ async function main() {
         if (key === "session-recovery" && requests.length < 3) {
           response.writeHead(requests.length === 1 ? 404 : 500, { "Content-Type": "application/json", "Mcp-Session-Id": requests.length === 1 ? "expired-session" : "recovered-session" });
           return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "Server error", data: { reason: "session_recovery" } } }));
+        }
+        if (key === "successful-recovery") {
+          response.writeHead(requests.length === 1 ? 404 : 200, { "Content-Type": "application/json", "Mcp-Session-Id": requests.length === 1 ? "expired-session" : "recovered-session" });
+          return response.end(JSON.stringify(requests.length === 1 ? { jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "Server error" } } : { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "forwarded" }] } }));
         }
       }
       const payload = message.method === "initialize"
@@ -138,6 +144,14 @@ async function main() {
   bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "record_work_package_delivery", arguments: { idempotency_key: "session-recovery" } } })}\n`);
   assert.equal((await responsePromise).result.content[0].text, "forwarded");
   assert.deepEqual(deliverySessions.get("session-recovery"), ["test-session", "test-session", "recovered-session"]);
+
+  responsePromise = readResponse(6);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "record_work_package_delivery", arguments: { idempotency_key: "successful-recovery" } } })}\n`);
+  assert.equal((await responsePromise).result.content[0].text, "forwarded");
+  responsePromise = readResponse(7);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "test.forward", arguments: {} } })}\n`);
+  await responsePromise;
+  assert.equal(forwardSessions.at(-1), "recovered-session");
 }
 
 function readResponse(id) {
