@@ -1,5 +1,5 @@
 {
-  "mcp_contract_fingerprint": "837dde5a97696216e8f04449e22de946809381b8bf862e7609018ecbaa54f4e2",
+  "mcp_contract_fingerprint": "f710bce2db02c5d7c3930f6930f8c6e39d41e4397a26e80016381aee51ac6ce5",
   "tool_sets": {
     "architect_tools": [
       "list_work_requests",
@@ -11,7 +11,6 @@
       "resolve_blocker",
       "read_delivery_board",
       "reconcile_work_request",
-      "accept_review_rework",
       "cleanup_work_request_work_package_runtime",
       "record_work_package_delivery",
       "revoke_work_package_worker_key",
@@ -87,8 +86,6 @@
       "attach_branch",
       "attach_pr",
       "sync_pr",
-      "submit_review_package",
-      "complete_review",
       "mark_ready"
     ]
   },

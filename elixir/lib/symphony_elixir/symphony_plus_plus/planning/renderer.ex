@@ -1,7 +1,6 @@
 defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
   @moduledoc false
 
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.MetadataProjection
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Finding
   alias SymphonyElixir.SymphonyPlusPlus.Planning.PlanNode
@@ -143,18 +142,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
     |> flatten_join()
   end
 
-  defp review_markdown(%State{work_package: work_package} = state) do
-    completion = current_review_completion(state)
-
+  defp review_markdown(%State{work_package: work_package}) do
     [
       "# Review",
       "",
       "## Requirement",
       "",
-      review_requirement_line(work_package.review_requirement),
-      "## Current-head completion",
-      "",
-      review_completion_lines(completion)
+      review_requirement_line(work_package.review_requirement)
     ]
     |> flatten_join()
   end
@@ -317,42 +311,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Renderer do
 
   defp review_requirement_line(nil), do: "No review required."
   defp review_requirement_line(requirement), do: fenced_text(Jason.encode!(Redactor.redact_output(requirement), pretty: true))
-
-  defp review_completion_lines(nil), do: "Not completed for the current head and requirement."
-
-  defp review_completion_lines(%ProgressEvent{} = event) do
-    payload = event.payload || %{}
-
-    [
-      "- Head: `#{Map.get(payload, "head_sha")}`",
-      "- Reference: #{source_inline(Map.get(payload, "reference"))}",
-      "- Note: #{source_inline(Map.get(payload, "note"))}",
-      "- Actor: #{source_inline(event.actor_id)}",
-      "- Completed: #{timestamp(event.created_at)}"
-    ]
-  end
-
-  defp current_review_completion(%State{work_package: %WorkPackage{review_requirement: nil}}), do: nil
-
-  defp current_review_completion(%State{work_package: work_package, progress_events: progress_events}) do
-    current_head = latest_current_head(progress_events)
-
-    if is_binary(current_head) do
-      MetadataProjection.latest_review_completion_event(
-        progress_events,
-        work_package.id,
-        current_head,
-        work_package.review_requirement
-      )
-    end
-  end
-
-  defp latest_current_head(progress_events) do
-    Enum.find_value(Enum.reverse(progress_events), fn %ProgressEvent{payload: payload} ->
-      if is_map(payload) and Map.get(payload, "type") == "branch" and Map.get(payload, "source_tool") == "attach_branch",
-        do: Map.get(payload, "head_sha")
-    end)
-  end
 
   defp encoded_review_requirement(nil), do: nil
   defp encoded_review_requirement(requirement), do: Jason.encode!(Redactor.redact_output(requirement))

@@ -21,32 +21,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     assert get_in(ready_response, ["result", "structuredContent", "work_package", "status"]) == "ready_for_merge"
   end
 
-  test "non-merge readiness accepts branchless validation packages when branch metadata is not required", %{repo: repo} do
-    assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-BRANCHLESS-REVIEW", kind: "quick_fix", status: "ci_waiting"))
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    response =
-      attach_tool(repo, session, "submit_review_package", %{
-        "summary" => "Branchless quick-fix review",
-        "tests" => ["mix test"],
-        "artifacts" => ["branchless-review.txt"]
-      })
-
-    refute Map.has_key?(response_progress_payload(repo, response), "head_sha")
-    assert get_in(response, ["result", "structuredContent", "remaining_readiness_gates"]) == []
-
-    ready_response =
-      MCPHarness.request(
-        %{"jsonrpc" => "2.0", "id" => "ready-branchless-review", "method" => "tools/call", "params" => %{"name" => "mark_ready"}},
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
-  end
-
   test "hotfix mark_ready uses provider-backed delivery evidence", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-READY-HOTFIX", kind: "hotfix", status: "ci_waiting"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
@@ -101,92 +75,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     assert get_in(ready_response, ["result", "structuredContent", "ready"]) == true
   end
 
-  test "review package head policy covers no-PR, PR, and review-required work", %{repo: repo} do
-    cases = [
-      {"quick_fix", nil, false},
-      {"docs", nil, false},
-      {"investigation", nil, false},
-      {"standard_pr", nil, true},
-      {"mcp", nil, true},
-      {"hotfix", nil, true},
-      {"quick_fix", %{"type" => "human"}, true}
-    ]
-
-    for {kind, review_requirement, head_required?} <- cases do
-      id = "SYMPP-HEAD-POLICY-#{kind}-#{if review_requirement, do: "review", else: "plain"}"
-
-      assert {:ok, package} =
-               WorkPackageRepository.create(
-                 repo,
-                 WorkPackageFactory.attrs(id: id, kind: kind, review_requirement: review_requirement)
-               )
-
-      assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-      assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: id)
-      session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-      response =
-        MCPHarness.request(
-          %{
-            "jsonrpc" => "2.0",
-            "id" => id,
-            "method" => "tools/call",
-            "params" => %{
-              "name" => "submit_review_package",
-              "arguments" => %{"summary" => "Policy matrix", "tests" => ["mix test"], "artifacts" => ["policy-matrix.txt"]}
-            }
-          },
-          repo: repo,
-          session: session
-        )
-
-      if head_required? do
-        assert get_in(response, ["error", "data", "reason"]) == "missing_current_head_sha"
-      else
-        assert get_in(response, ["result", "structuredContent", "progress_event", "id"])
-      end
-    end
-
-    assert {:ok, package} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(id: "SYMPP-HEAD-POLICY-UNBOUND", kind: "quick_fix")
-             )
-
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: package.id)
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => package.id,
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "submit_review_package",
-            "arguments" => %{
-              "summary" => "Unbound head",
-              "tests" => ["mix test"],
-              "artifacts" => ["policy-matrix.txt"],
-              "head_sha" => "not-an-attached-head"
-            }
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(response, ["error", "data", "reason"]) == "unbound_head_sha"
-  end
-
   test "mark_ready rejects spoofed provider metadata", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-READY-SPOOF", kind: "mcp", status: "ci_waiting"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
     assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
 
-    Enum.each(["branch", "pr", "review_package"], fn type ->
+    Enum.each(["branch", "pr"], fn type ->
       response =
         MCPHarness.request(
           %{

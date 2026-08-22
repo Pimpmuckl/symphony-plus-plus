@@ -3,12 +3,11 @@ import type { WorkPackageCard } from "@/types/dashboard";
 
 type PackageMetadata = NonNullable<WorkPackageCard["metadata"]>;
 type PackagePlan = WorkPackageCard["plan"];
-type ReviewPackage = PackageMetadata["review_package"];
 type ReviewPayload = PackageMetadata["review_suite_result"];
 
 export function packageReviewLabel(pkg: WorkPackageCard): string | null {
   const progress = reviewPayloadLabel(pkg.metadata?.review_progress);
-  const result = reviewPayloadLabel(pkg.metadata?.review_suite_result) || reviewPackageLabel(pkg.metadata?.review_package);
+  const result = reviewPayloadLabel(pkg.metadata?.review_suite_result);
 
   return pkg.status === "reviewing" ? progress || result : result || progress;
 }
@@ -40,18 +39,6 @@ export function planProgressLabel(plan?: PackagePlan | null) {
   const open = plan?.open_count || 0;
 
   return open > 0 ? `${open} open / ${total} total` : `${done}/${total} done`;
-}
-
-function reviewPackageLabel(reviewPackage: ReviewPackage): string | null {
-  if (!reviewPackage) return null;
-
-  const reviews = Array.isArray(reviewPackage.reviews) ? reviewPackage.reviews : [];
-  for (let index = reviews.length - 1; index >= 0; index -= 1) {
-    const label = reviewPayloadLabel(reviews[index]);
-    if (label) return label;
-  }
-
-  return reviewPayloadLabel(reviewPackage);
 }
 
 function reviewPayloadLabel(payload?: ReviewPayload | null): string | null {

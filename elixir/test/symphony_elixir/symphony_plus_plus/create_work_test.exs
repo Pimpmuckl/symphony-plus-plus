@@ -711,7 +711,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     missing = get_in(missing_evidence_response, ["error", "data", "missing"])
     assert "branch_attached" in missing
     assert "pr_attached" in missing
-    assert "review_complete" in missing
 
     head_sha = "hotfix-head"
 
@@ -724,15 +723,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
       "url" => "https://github.com/example/symphony-plus-plus/pull/4003",
       "head_sha" => head_sha
     })
-
-    attach_tool(repo, session, "submit_review_package", %{
-      "summary" => "Fake hotfix validation package for the E2E path.",
-      "tests" => ["mix test test/symphony_elixir/symphony_plus_plus/create_work_test.exs"],
-      "artifacts" => ["validation/SYMPP-P4-003-hotfix.json"],
-      "head_sha" => head_sha
-    })
-
-    attach_tool(repo, session, "complete_review", %{"reference" => "maintainer-review-4003"})
 
     ready_response =
       MCPHarness.request(

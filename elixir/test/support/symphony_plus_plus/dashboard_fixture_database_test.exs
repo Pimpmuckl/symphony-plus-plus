@@ -103,11 +103,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
 
     pr!(repo, parse.id, 101, "parse-head", %{status: "pending", completed: 2, total: 5}, false, 31)
 
-    review_package!(repo, parse.id, "parse-head", "running", "review-fanout-parse", 32)
-
     branch!(repo, index.id, "feat/fixture-index", "index-head", 40)
     pr!(repo, index.id, 102, "index-head", %{conclusion: "success", completed: 4, total: 4}, false, 41)
-    review_completion!(repo, index, "index-head", "fixture-approval-102", 42)
 
     branch!(repo, source.id, "feat/fixture-source", "source-head", 50)
     pr!(repo, source.id, 100, "source-head", %{conclusion: "success", completed: 3, total: 3}, true, 51)
@@ -150,7 +147,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
     run!(repo, successor.id, "RUN-RECOVERY-SUCCESSOR", "fictional-recovery-worker", 62)
     branch!(repo, successor.id, "feat/fixture-recovery", "recovery-head", 63)
     pr!(repo, successor.id, 201, "recovery-head", %{conclusion: "failure", completed: 3, total: 4}, false, 64)
-    review_package!(repo, successor.id, "recovery-head", "failed", "review-recovery-failed", 65)
   end
 
   defp seed_dense!(repo) do
@@ -470,37 +466,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardFixtureDatabase do
       check_summary: checks,
       merge_state: %{merged: merged}
     })
-  end
-
-  defp review_package!(repo, work_package_id, head_sha, status, evidence_id, offset) do
-    progress!(repo, work_package_id, "PROGRESS-#{work_package_id}-REVIEW", "Fixture review evidence", "review_package_submitted", offset, %{
-      type: "review_package",
-      source_tool: "submit_review_package",
-      head_sha: head_sha,
-      status: status,
-      evidence_id: evidence_id,
-      artifacts: ["fixture-review.txt"]
-    })
-  end
-
-  defp review_completion!(repo, work_package, head_sha, reference, offset) do
-    progress!(
-      repo,
-      work_package.id,
-      "PROGRESS-#{work_package.id}-REVIEW-COMPLETE",
-      "Fixture review passed",
-      "review_completed",
-      offset,
-      %{
-        type: "review_completion",
-        source_tool: "complete_review",
-        work_package_id: work_package.id,
-        head_sha: head_sha,
-        review: work_package.review_requirement,
-        reference: reference
-      },
-      "complete_review:#{work_package.id}:#{head_sha}:fixture"
-    )
   end
 
   defp progress!(repo, work_package_id, id, summary, status, offset, payload, idempotency_key \\ nil) do

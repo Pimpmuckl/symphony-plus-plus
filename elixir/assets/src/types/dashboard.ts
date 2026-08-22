@@ -120,7 +120,6 @@ export type PackageMetadata = {
   branch?: PackageBranchMetadata | null;
   pr?: PackagePrMetadata | null;
   review_progress?: PackageReviewMetadata | null;
-  review_package?: PackageReviewMetadata | null;
   review_suite_result?: PackageReviewMetadata | null;
 };
 

@@ -692,16 +692,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
               "source_tool" => "attach_branch",
               "branch" => "agent/sympp-demo-wp-review/demo",
               "head_sha" => "2222222222222222222222222222222222222222"
-            }},
-           {"Review package submitted", "review_package_submitted",
-            %{
-              "type" => "review_package",
-              "source_tool" => "submit_review_package",
-              "summary" => "Synthetic demo review package.",
-              "tests" => ["mix test test/mix/tasks/sympp_demo_ledger_test.exs"],
-              "artifacts" => ["docs/operations.md"],
-              "head_sha" => "2222222222222222222222222222222222222222",
-              "acceptance_criteria_met" => true
             }}
          ],
          findings: [{"Copy needs operator confirmation", "medium"}],

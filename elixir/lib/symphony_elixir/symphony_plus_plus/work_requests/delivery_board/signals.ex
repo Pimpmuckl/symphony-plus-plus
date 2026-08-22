@@ -122,18 +122,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
   @spec review(WorkPackage.t(), map(), map() | nil) :: map() | nil
   def review(%WorkPackage{review_requirement: nil}, _metadata, _observation), do: nil
 
-  def review(%WorkPackage{review_requirement: requirement}, metadata, observation) when is_map(requirement) do
+  def review(%WorkPackage{review_requirement: requirement}, _metadata, observation) when is_map(requirement) do
     type = bounded_string(map_value(requirement, "type"))
     args = map_value(requirement, "args")
-    review_package = map_value(metadata, "review_package")
-    completion = map_value(metadata, "review_completion")
-    observation = if is_map(completion), do: nil, else: observation
-    evidence = [completion, observation, review_package, args]
+    evidence = [observation, args]
 
     %{
       type: type,
       args: if(is_map(args), do: Sanitizer.redacted_json(args)),
-      status: map_value(observation, "status") || review_status(type, review_package, completion),
+      status: map_value(observation, "status") || if(filled_string?(type), do: "pending", else: "unavailable"),
       current: evidence |> signal_value(["current", "completed", "completed_count"]) |> integer_value(),
       total: evidence |> signal_value(["total", "total_count"]) |> integer_value(),
       step: evidence |> signal_value(["step", "stage"]) |> bounded_string(),
@@ -242,19 +239,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
 
   defp check_status(_value), do: "unavailable"
 
-  defp review_status(type, review_package, completion) do
-    verdict = signal_value([completion, review_package], ["verdict", "conclusion", "status"])
-
-    cond do
-      not filled_string?(type) -> "unavailable"
-      normalized(verdict) in ["failure", "failed", "failing", "error", "cancelled"] -> "failed"
-      normalized(verdict) in ["success", "succeeded", "passed", "passing", "approved"] -> "passed"
-      is_map(completion) -> "passed"
-      is_map(review_package) -> "in_progress"
-      true -> "pending"
-    end
-  end
-
   defp dependency_input_status(work_package_id, unmet_ids, context) do
     activity = get_in(context, [:activity_contexts, work_package_id]) || WorkPackageActivity.empty_context()
 
@@ -272,9 +256,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryBoard.Signals do
       _value -> nil
     end)
   end
-
-  defp normalized(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
-  defp normalized(_value), do: nil
 
   defp bounded_string(value) when is_binary(value) do
     case String.trim(value) do

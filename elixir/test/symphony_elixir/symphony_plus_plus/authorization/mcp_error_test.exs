@@ -58,7 +58,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.MCPErrorTest do
         legacy_reason: "outside_session_scope"
       )
 
-    assert {:error, -32_003, "Forbidden", data} = MCPError.from_decision(decision, "submit_review_package")
+    assert {:error, -32_003, "Forbidden", data} = MCPError.from_decision(decision, "append_progress")
     refute inspect(data) =~ raw_secret
     refute inspect(data) =~ "ghp_abcdefghijklmnopqrstuvwxyz"
     refute inspect(data) =~ "bearer abcdefghijklmnop"

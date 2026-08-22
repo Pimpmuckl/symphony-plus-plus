@@ -1192,7 +1192,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   defp architect_tool(name, arguments, %__MODULE__{config: config, session: session})
        when name in [
               "reconcile_work_request",
-              "accept_review_rework",
               "record_work_package_delivery",
               "cleanup_work_request_work_package_runtime",
               "revoke_work_package_worker_key"

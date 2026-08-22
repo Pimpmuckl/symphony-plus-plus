@@ -23,9 +23,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     "attach_pr",
     "sync_pr",
     "report_blocker",
-    "resolve_blocker",
-    "submit_review_package",
-    "complete_review"
+    "resolve_blocker"
   ]
 
   @type repo :: module()
@@ -132,14 +130,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
   end
 
   @spec scoped_idempotency_key(String.t(), String.t(), Session.t()) :: String.t()
-  def scoped_idempotency_key("submit_review_package", idempotency_key, %Session{} = session) do
-    ["submit_review_package", session.assignment.work_package_id, idempotency_key] |> Enum.join(":")
-  end
-
-  def scoped_idempotency_key("complete_review", idempotency_key, %Session{} = session) do
-    ["complete_review", session.assignment.work_package_id, idempotency_key] |> Enum.join(":")
-  end
-
   def scoped_idempotency_key(tool, idempotency_key, %Session{} = session) when tool in ["attach_branch", "attach_pr", "sync_pr"] do
     [tool, session.assignment.work_package_id, idempotency_key] |> Enum.join(":")
   end
@@ -157,8 +147,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     |> drop_protected_append_progress_payload()
     |> Map.merge(tool_payload)
   end
-
-  def merge_payload("complete_review", _caller_payload, tool_payload), do: tool_payload
 
   def merge_payload(_tool, caller_payload, tool_payload) when tool_payload == %{} do
     Map.drop(caller_payload, ["source_tool"])
@@ -245,13 +233,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     end
   end
 
-  defp existing_metadata_event(_repo, %Session{}, idempotency_key, "submit_review_package", progress_events) when is_list(progress_events) do
-    case Enum.find(progress_events, fn event -> event.idempotency_key == idempotency_key end) do
-      %ProgressEvent{} = event -> {:ok, event}
-      nil -> {:error, :not_found}
-    end
-  end
-
   defp existing_metadata_event(repo, %Session{} = session, idempotency_key, _tool, _progress_events) do
     PlanningRepository.get_progress_event_by_idempotency_key(
       repo,
@@ -328,8 +309,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
 
   defp canonical_metadata_event_status(arguments, _tool, _status), do: arguments
 
-  defp validate_metadata_caller_payload("complete_review", caller_payload) when map_size(caller_payload) == 0, do: :ok
-  defp validate_metadata_caller_payload("complete_review", _caller_payload), do: {:tool_error, "unexpected_payload"}
   defp validate_metadata_caller_payload(_tool, _caller_payload), do: :ok
 
   defp drop_protected_append_progress_payload(caller_payload) do

@@ -79,26 +79,17 @@ Before ready:
 4. Refresh current state only for the attached PR with zero-state-argument
    `sync_pr()`. Use explicit PR identity only to repair a missing attachment;
    put manual canonical state only in the validated `recovery` import.
-5. Optionally record useful validation context with
-   `submit_review_package(summary, tests?, artifacts?)`. It is not readiness
-   proof. When used for PR-backed or review-required work, it must use the
-   current exact head.
-6. If `review.md` declares a review requirement, consume and classify its
-   provider-neutral structured result. Call `complete_review(reference?, note?)`
-   only after accepting a terminal result for the current exact head.
+5. If `review.md` declares a review requirement, consume and classify its
+   provider-neutral structured result. Keep the result in the provider and
+   final handoff; Symphony++ does not require a duplicate completion call.
    Use bounded `CONTINUE` only while the package contract is unchanged; return
-   findings, contract ambiguity, `REPLAN`, or `RESLICE` to the architect
-   without calling `complete_review`.
-7. Call `mark_ready()` after provider-backed branch/PR state, required
+   findings, contract ambiguity, `REPLAN`, or `RESLICE` to the architect.
+6. Call `mark_ready()` after provider-backed branch/PR state, required
    review, blockers, and investigation findings are settled. Do not add
-   task-plan, review-package, or progress calls only to restate work proved
+   task-plan or progress calls only to restate work proved
    elsewhere. Resolve worker-owned blockers with `resolve_blocker`;
    architect-owned human blockers still require the architect or trusted
    local operator.
-8. If the architect accepts a review finding after readiness, advance to a
-   different exact head, refresh the attached PR with `sync_pr`, and complete
-   the required review. Old-head evidence remains in the ledger but is not
-   readiness evidence for the rework cycle.
 
 Final output:
 - PR URL and final head SHA.
