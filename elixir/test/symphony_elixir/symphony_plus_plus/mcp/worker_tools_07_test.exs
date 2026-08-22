@@ -180,47 +180,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools07Test do
     assert get_in(response, ["error", "data", "reason"]) == "unbound_head_sha"
   end
 
-  test "non-investigation scope requests do not emit recommendation artifact references", %{repo: repo} do
-    assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-HOTFIX-SCOPE-REQUEST", kind: "hotfix"))
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-1")
-    session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
-
-    attach_tool(repo, session, "request_scope_expansion", %{
-      "summary" => "Need extra file",
-      "body" => "Worker recommends expanding allowed files.",
-      "idempotency_key" => "hotfix-scope-request",
-      "payload" => %{
-        "requested_file_globs" => ["lib/other/**"],
-        "source_tool" => "caller"
-      }
-    })
-
-    assert {:ok, [event]} = PlanningRepository.list_progress_events(repo, package.id)
-    assert event.payload["type"] == "scope_expansion_request"
-    assert event.payload["source_tool"] == "request_scope_expansion"
-    assert event.payload["requested_file_globs"] == ["lib/other/**"]
-    assert {:ok, []} = PlanningRepository.list_artifacts(repo, package.id)
-  end
-
-  test "request_scope_expansion without a session returns an auth error", %{repo: repo} do
-    response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "scope-without-session",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "request_scope_expansion",
-            "arguments" => %{"summary" => "Need more scope", "idempotency_key" => "missing-session-scope"}
-          }
-        },
-        repo: repo
-      )
-
-    assert get_in(response, ["error", "data", "reason"]) == "claim_required"
-  end
-
   test "mark_ready rejects spoofed provider metadata", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-READY-SPOOF", kind: "mcp", status: "ci_waiting"))
     assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)

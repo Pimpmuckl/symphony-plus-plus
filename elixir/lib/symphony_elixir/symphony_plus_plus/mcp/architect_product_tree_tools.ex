@@ -53,7 +53,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   ]
   @required_work_package_string_fields ["title", "goal"]
   @required_work_package_array_fields [
-    "allowed_file_globs",
     "acceptance_criteria",
     "validation_steps",
     "stop_conditions"
@@ -713,7 +712,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp architect_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
-  defp architect_error({:work_package_scope_violation, errors}, tool), do: invalid_params_error(tool, {:work_package_scope_violation, errors})
 
   defp architect_error(:open_questions, tool) do
     {:error, -32_602, "Invalid params",
@@ -726,66 +724,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   defp architect_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
-  defp invalid_params_error(tool, {:work_package_scope_violation, errors}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "work_package_scope_violation",
-       "validation_errors" => scope_validation_details(errors)
-     }}
-  end
-
   defp invalid_params_error(tool, reason) do
     {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
   end
 
   defp changeset_invalid_params_error(tool, reason, %Ecto.Changeset{} = changeset) do
     ErrorDetails.changeset_invalid_params_error(tool, reason, changeset)
-  end
-
-  defp scope_validation_details(errors) when is_list(errors), do: Enum.map(errors, &scope_validation_detail/1)
-  defp scope_validation_details(error), do: scope_validation_details([error])
-
-  defp scope_validation_detail({:invalid_constraints, field}) do
-    %{"field" => Atom.to_string(field), "reason" => "invalid_constraints"}
-  end
-
-  defp scope_validation_detail({:invalid_allowed_file_globs, field}) do
-    %{"field" => Atom.to_string(field), "reason" => "invalid_allowed_file_globs"}
-  end
-
-  defp scope_validation_detail({:invalid_path, field, value, reason}) do
-    %{
-      "field" => Atom.to_string(field),
-      "value" => value,
-      "reason" => Atom.to_string(reason)
-    }
-  end
-
-  defp scope_validation_detail({:non_documentation_owned_glob, value}) do
-    %{
-      "field" => "allowed_file_globs",
-      "value" => value,
-      "reason" => "non_documentation_owned_glob"
-    }
-  end
-
-  defp scope_validation_detail({:outside_allowed_paths, value, allowed_paths}) do
-    %{
-      "field" => "allowed_file_globs",
-      "value" => value,
-      "reason" => "outside_allowed_paths",
-      "allowed_paths" => allowed_paths
-    }
-  end
-
-  defp scope_validation_detail({:forbidden_path_overlap, value, forbidden_path}) do
-    %{
-      "field" => "allowed_file_globs",
-      "value" => value,
-      "reason" => "forbidden_path_overlap",
-      "forbidden_path" => forbidden_path
-    }
   end
 
   defp auth_error(:unauthorized, resource), do: {:error, -32_001, "Unauthorized", %{"resource" => resource, "reason" => "missing_session"}}

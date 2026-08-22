@@ -207,8 +207,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant do
         "dispatch:work_request",
         "read:guidance_request",
         "write:guidance_request",
-        "write:phase_plan",
-        "approve:scope_expansion"
+        "write:phase_plan"
       ]
   end
 

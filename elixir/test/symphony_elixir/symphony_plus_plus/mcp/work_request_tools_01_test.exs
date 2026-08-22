@@ -277,33 +277,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
            }
 
     assert {:ok, %WorkRequest{}} = WorkRequestRepository.get(repo, get_in(operator_response, ["result", "structuredContent", "work_request", "id"]))
-
-    {partial_response, _partial_server} =
-      Server.handle_state(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "partial-create-work-request",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "create_work_request",
-            "arguments" => %{
-              "repo" => "nextide/symphony-plus-plus",
-              "base_branch" => "main",
-              "title" => "Invalid-scope WorkRequest",
-              "description" => "Return the supported recovery action.",
-              "request_kind" => "feature",
-              "constraints" => %{"allowed_paths" => [""]}
-            }
-          }
-        },
-        local_mcp_server(local_mcp_config(repo), "partial-create-work-request-state")
-      )
-
-    partial_payload = get_in(partial_response, ["result", "structuredContent"])
-    assert partial_payload["status"] == "partial_success"
-    assert partial_payload["retry"]["type"] == "local_architect_assignment_claim"
-    assert partial_payload["retry"]["operator_action"] == "claim_local_architect_assignment"
-    refute inspect(partial_response) =~ "prepare_architect_handoff"
   end
 
   test "create_work_request requires trusted local HTTP with explicit state", %{repo: repo} do

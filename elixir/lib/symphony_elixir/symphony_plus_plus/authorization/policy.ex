@@ -76,13 +76,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Authorization.Policy do
     :delivery_board_read,
     :delivery_reconcile_dry_run,
     :delivery_reconcile_apply,
-    :delivery_closeout_record,
-    :scope_expansion_request
+    :delivery_closeout_record
   ]
 
   @operator_actions @architect_work_request_actions ++
                       [
-                        :scope_expansion_approve,
                         :dashboard_read,
                         :dangerous_override,
                         :dangerous_rekey,

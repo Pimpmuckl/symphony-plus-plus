@@ -1367,9 +1367,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
   defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
 
-  defp architect_error({:work_package_scope_violation, errors}, tool),
-    do: invalid_params_error(tool, {:work_package_scope_violation, errors})
-
   defp architect_error(reason, tool),
     do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
@@ -1386,15 +1383,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp service_error(_reason, resource),
     do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
-
-  defp invalid_params_error(tool, {:work_package_scope_violation, errors}) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "work_package_scope_violation",
-       "validation_errors" => scope_validation_details(errors)
-     }}
-  end
 
   defp invalid_params_error(tool, {:blocker_closeout_required, blockers}) do
     message =
@@ -1443,37 +1431,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
   defp changeset_invalid_params_error(tool, reason, %Ecto.Changeset{} = changeset) do
     ErrorDetails.changeset_invalid_params_error(tool, reason, changeset)
   end
-
-  defp scope_validation_details(errors) when is_list(errors), do: Enum.map(errors, &scope_validation_detail/1)
-  defp scope_validation_details(error), do: scope_validation_details([error])
-
-  defp scope_validation_detail({:invalid_constraints, field}),
-    do: %{"field" => Atom.to_string(field), "reason" => "invalid_constraints"}
-
-  defp scope_validation_detail({:invalid_allowed_file_globs, field}),
-    do: %{"field" => Atom.to_string(field), "reason" => "invalid_allowed_file_globs"}
-
-  defp scope_validation_detail({:invalid_path, field, value, reason}),
-    do: %{"field" => Atom.to_string(field), "value" => value, "reason" => Atom.to_string(reason)}
-
-  defp scope_validation_detail({:non_documentation_owned_glob, value}),
-    do: %{"field" => "allowed_file_globs", "value" => value, "reason" => "non_documentation_owned_glob"}
-
-  defp scope_validation_detail({:outside_allowed_paths, value, allowed_paths}),
-    do: %{
-      "field" => "allowed_file_globs",
-      "value" => value,
-      "reason" => "outside_allowed_paths",
-      "allowed_paths" => allowed_paths
-    }
-
-  defp scope_validation_detail({:forbidden_path_overlap, value, forbidden_path}),
-    do: %{
-      "field" => "allowed_file_globs",
-      "value" => value,
-      "reason" => "forbidden_path_overlap",
-      "forbidden_path" => forbidden_path
-    }
 
   defp not_found_error(tool), do: {:error, -32_004, "Not found", %{"tool" => tool, "reason" => "not_found"}}
 

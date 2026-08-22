@@ -95,11 +95,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.LifecycleTest do
     assert {:ok, current_pr_state_policy} = Templates.expand("mcp_current_pr_state")
     assert current_pr_state_policy.template == "worker_package"
     assert "current_pr_state" in current_pr_state_policy.required_gates
-
-    assert {:ok, scope_guard_policy} = Templates.expand("mcp_changed_file_scope_guard")
-    assert scope_guard_policy.template == "worker_package"
-    assert "current_pr_state" in scope_guard_policy.required_gates
-    assert "scope_guard" in scope_guard_policy.required_gates
   end
 
   test "policy can be computed from a persisted work package", %{repo: repo} do

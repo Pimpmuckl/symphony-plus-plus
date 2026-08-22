@@ -148,7 +148,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def worker_tool_input_schema(name) when name in ["append_progress", "request_scope_expansion"] do
+  def worker_tool_input_schema("append_progress") do
     schema(progress_properties(), ["summary", "idempotency_key"])
   end
 
@@ -628,18 +628,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("approve_scope_expansion") do
-    schema(
-      %{
-        "work_package_id" => string_schema(),
-        "allowed_file_globs" => nonempty_string_array_schema(),
-        "request_id" => string_schema(),
-        "rationale" => markdown_string_schema("Human-facing approval rationale in Markdown.")
-      },
-      ["work_package_id", "allowed_file_globs", "rationale"]
-    )
-  end
-
   defp delivery_runtime_tool_input_schema("cleanup_work_request_work_package_runtime") do
     schema(
       %{
@@ -860,12 +848,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   defp work_package_contract_schema do
     schema(
       work_package_contract_properties(),
-      ["title", "goal", "allowed_file_globs", "acceptance_criteria"]
+      ["title", "goal", "acceptance_criteria"]
     )
+    |> Map.put("additionalProperties", true)
   end
 
   defp work_package_contract_patch_schema do
     schema(work_package_contract_properties(), [])
+    |> Map.put("additionalProperties", true)
   end
 
   defp work_package_contract_properties do
@@ -877,8 +867,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       "repo" => described_string_schema("Optional delivery repo. Defaults to the WorkRequest primary repo."),
       "base_branch" => described_string_schema("Optional delivery base branch. Defaults to the WorkRequest base branch."),
       "branch_pattern" => described_string_schema("Optional exact branch or {{placeholder}} template."),
-      "allowed_file_globs" => described_string_array_schema("Repo-relative slash-separated owned file globs."),
-      "forbidden_file_globs" => described_string_array_schema("Optional forbidden file globs."),
+      "allowed_file_globs" => described_string_array_schema("Optional descriptive file scope."),
+      "forbidden_file_globs" => described_string_array_schema("Optional descriptive exclusions."),
       "acceptance_criteria" => string_array_schema(),
       "validation_steps" => string_array_schema(),
       "review" => review_requirement_schema(),
@@ -982,7 +972,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     }
   end
 
-  defp nonempty_string_array_schema, do: %{"type" => "array", "minItems" => 1, "items" => nonblank_string_schema()}
   defp string_array_schema, do: %{"type" => "array", "items" => nonblank_string_schema()}
   defp described_string_array_schema(description), do: Map.put(string_array_schema(), "description", description)
 

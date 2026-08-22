@@ -813,8 +813,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
         "write:work_request",
         "read:guidance_request",
         "write:guidance_request",
-        "dispatch:work_request",
-        "approve:scope_expansion"
+        "dispatch:work_request"
       ])
 
     server = Server.new(test_mcp_config(repo), initialized: true, session: session)
@@ -935,7 +934,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert package_schema["required"] == [
              "title",
              "goal",
-             "allowed_file_globs",
              "acceptance_criteria"
            ]
 
@@ -943,7 +941,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert get_in(package_schema, ["properties", "review", "required"]) == ["type"]
     assert get_in(package_schema, ["properties", "review", "properties", "args", "type"]) == "object"
     assert get_in(package_schema, ["properties", "allowed_file_globs", "type"]) == "array"
-    assert get_in(package_schema, ["properties", "allowed_file_globs", "description"]) =~ "Repo-relative"
 
     executable_kinds = get_in(package_schema, ["properties", "kind", "enum"])
     assert executable_kinds == WorkPackage.executable_kinds()
@@ -994,9 +991,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
 
     assert get_in(tools_by_name, ["cleanup_work_package_worktree", "inputSchema", "properties", "target_repo_root", "description"]) =~
              "Optional target product repository root"
-
-    assert get_in(tools_by_name, ["approve_scope_expansion", "inputSchema", "required"]) == ["work_package_id", "allowed_file_globs", "rationale"]
-    assert get_in(tools_by_name, ["approve_scope_expansion", "inputSchema", "properties", "allowed_file_globs", "minItems"]) == 1
   end
 
   test "tools list advertises work-package dispatch even when repo_root is not configured", %{repo: repo} do

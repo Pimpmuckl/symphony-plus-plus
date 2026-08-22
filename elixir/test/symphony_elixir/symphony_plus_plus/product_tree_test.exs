@@ -102,23 +102,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTreeTest do
     assert package.base_branch == "main"
   end
 
-  test "validates the effective file scope when a package becomes docs work", %{repo: repo} do
-    work_request = create_work_request!(repo, id: "WR-DOCS-SCOPE")
-    package = add_work_package!(repo, work_request, id: "wp_docs_scope", allowed_file_globs: ["elixir/lib/**"])
-
-    assert {:error, errors} =
-             WorkRequestRepository.update_work_package(
-               repo,
-               work_request.id,
-               package.id,
-               package.contract_revision,
-               %{kind: "docs"}
-             )
-
-    assert Enum.any?(errors, &match?({:non_documentation_owned_glob, "elixir/lib/**"}, &1))
-    assert repo.get!(WorkPackage, package.id).kind == package.kind
-  end
-
   test "visible-only projection keeps the owned node path without leaking hidden nodes", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-VISIBLE-TREE")
     parent = create_node!(repo, work_request, id: "node_visible_parent")

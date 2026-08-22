@@ -157,41 +157,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     assert {:ok, request} =
              CreateWork.parse_request(%{
                repo: "symphony-plus-plus",
-               base_branch: "symphony-plus-plus/beta",
-               title: "Default changed-file scope policy kind",
-               acceptance_criteria: ["Changed files stay in scope."],
-               policy_template: "mcp_changed_file_scope_guard",
-               allowed_file_globs: ["elixir/lib/**"]
-             })
-
-    assert request["kind"] == "mcp"
-    assert request["policy_template"] == "mcp_changed_file_scope_guard"
-    assert request["allowed_file_globs"] == ["elixir/lib/**"]
-    assert "scope_guard" in request["policy"].required_gates
-    refute "review_complete" in request["policy"].required_gates
-
-    assert {:error, :missing_allowed_file_globs} =
-             CreateWork.parse_request(%{
-               repo: "symphony-plus-plus",
-               base_branch: "symphony-plus-plus/beta",
-               title: "Missing changed-file scope",
-               acceptance_criteria: ["Changed files stay in scope."],
-               policy_template: "mcp_changed_file_scope_guard"
-             })
-
-    assert {:error, :overbroad_allowed_file_globs} =
-             CreateWork.parse_request(%{
-               repo: "symphony-plus-plus",
-               base_branch: "symphony-plus-plus/beta",
-               title: "Overbroad changed-file scope",
-               acceptance_criteria: ["Changed files stay in scope."],
-               policy_template: "mcp_changed_file_scope_guard",
-               allowed_file_globs: ["**/**"]
-             })
-
-    assert {:ok, request} =
-             CreateWork.parse_request(%{
-               repo: "symphony-plus-plus",
                base_branch: "main",
                title: "Docs-only package",
                kind: "docs",
@@ -201,15 +166,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
     assert request["kind"] == "docs"
     assert request["policy_template"] == "docs"
     assert request["allowed_file_globs"] == ["README.md", "docs/**"]
-
-    assert {:error, :non_documentation_allowed_file_globs} =
-             CreateWork.parse_request(%{
-               repo: "symphony-plus-plus",
-               base_branch: "main",
-               title: "Docs kind cannot own code",
-               kind: "docs",
-               allowed_file_globs: ["elixir/lib/**"]
-             })
 
     assert {:error, :invalid_acceptance_criteria} =
              CreateWork.parse_request(%{

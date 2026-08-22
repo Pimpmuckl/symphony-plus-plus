@@ -13,12 +13,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Redactor
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
-  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
   alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-
-  @scope_guard_gate "scope_guard"
 
   @type repo :: module()
   @type mcp_error :: {:error, integer(), String.t(), map()}
@@ -481,13 +478,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ReviewReadiness do
       {current_pr_state_missing?(state), "current_pr_state"},
       {rework_head_not_advanced?(state), "rework_head_advanced"},
       {rework_current_pr_state_missing?(state), "rework_current_pr_state"},
-      {ScopeGuard.missing?(state.work_package, state.progress_events), @scope_guard_gate},
       {review_current_head_missing?(state), "review_current_head"},
       {review_completion_missing?(state), "review_complete"},
       {investigation_findings_missing?(state), "findings_documented"}
     ]
     |> Enum.flat_map(fn
-      {true, @scope_guard_gate} -> ScopeGuard.failure_reasons(state.work_package, state.progress_events)
       {true, "review_complete"} -> [readiness_failure_reason("review_complete", state)]
       {true, gate} -> [readiness_failure_reason(gate)]
       {false, _gate} -> []

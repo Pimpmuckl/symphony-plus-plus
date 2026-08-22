@@ -46,7 +46,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshContractTest d
     assert get_in(work_package_schema, ["properties", "work_packages", "items", "required"]) == [
              "title",
              "goal",
-             "allowed_file_globs",
              "acceptance_criteria"
            ]
   end

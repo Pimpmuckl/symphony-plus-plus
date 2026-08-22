@@ -15,17 +15,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Policies.Templates
-  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
   alias SymphonyElixir.SymphonyPlusPlus.ReviewRequirement
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ScopeConstraints
 
   import Ecto.Query, only: [from: 2]
 
   @default_kind "quick_fix"
   @required_fields ["repo", "base_branch", "title"]
-  @scope_guard_gate "scope_guard"
 
   @type request :: map()
   @type creation :: %{
@@ -46,9 +43,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
           | :sensitive_review_requirement
           | :invalid_work_package_id
           | :missing_acceptance_criteria
-          | :missing_allowed_file_globs
-          | :non_documentation_allowed_file_globs
-          | :overbroad_allowed_file_globs
           | :parent_not_supported
           | :policy_template_mismatch
           | :kind_not_dispatchable
@@ -73,9 +67,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
          {:ok, review_requirement} <- normalize_optional_review_requirement(attrs),
          {:ok, acceptance_criteria} <- normalize_acceptance_criteria(Map.get(attrs, "acceptance_criteria", [])),
          {:ok, allowed_file_globs} <- normalize_allowed_file_globs(Map.get(attrs, "allowed_file_globs", [])),
-         :ok <- require_acceptance_criteria(policy, acceptance_criteria),
-         :ok <- require_scope_guard_constraints(policy, allowed_file_globs),
-         :ok <- require_docs_scope(kind, allowed_file_globs) do
+         :ok <- require_acceptance_criteria(policy, acceptance_criteria) do
       {:ok,
        attrs
        |> Map.take([
@@ -116,10 +108,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
     with {:ok, policy} <- Templates.expand(work_package.policy_template || work_package.kind),
          policy = effective_policy(policy, work_package.review_requirement),
          {:ok, acceptance_criteria} <- normalize_acceptance_criteria(work_package.acceptance_criteria),
-         {:ok, allowed_file_globs} <- normalize_allowed_file_globs(work_package.allowed_file_globs),
-         :ok <- require_acceptance_criteria(policy, acceptance_criteria),
-         :ok <- require_scope_guard_constraints(policy, allowed_file_globs),
-         :ok <- require_docs_scope(work_package.kind, allowed_file_globs) do
+         :ok <- require_acceptance_criteria(policy, acceptance_criteria) do
       repo.transaction(fn -> activate_transaction(repo, work_package, policy) end)
       |> case do
         {:ok, creation} -> {:ok, creation}
@@ -181,9 +170,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   def error_message(:sensitive_review_requirement), do: "review_requirement must not contain secrets"
   def error_message(:invalid_work_package_id), do: "id must be a nonblank string when provided"
   def error_message(:missing_acceptance_criteria), do: "acceptance_criteria is required for this work kind"
-  def error_message(:missing_allowed_file_globs), do: "allowed_file_globs is required for docs and scope-guard policy templates"
-  def error_message(:non_documentation_allowed_file_globs), do: "docs work allowed_file_globs must be documentation-only"
-  def error_message(:overbroad_allowed_file_globs), do: "allowed_file_globs cannot contain repo-wide catch-all globs"
   def error_message(:parent_not_supported), do: "Create-work does not accept parent_id"
   def error_message(:policy_template_mismatch), do: "policy_template must select the work kind policy"
 
@@ -539,29 +525,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   end
 
   defp require_acceptance_criteria(_policy, _acceptance_criteria), do: :ok
-
-  defp require_scope_guard_constraints(%{required_gates: required_gates}, allowed_file_globs) do
-    if @scope_guard_gate in required_gates do
-      cond do
-        allowed_file_globs == [] -> {:error, :missing_allowed_file_globs}
-        Enum.any?(allowed_file_globs, &ScopeGuard.overbroad_glob?/1) -> {:error, :overbroad_allowed_file_globs}
-        true -> :ok
-      end
-    else
-      :ok
-    end
-  end
-
-  defp require_docs_scope("docs", []), do: {:error, :missing_allowed_file_globs}
-
-  defp require_docs_scope("docs", allowed_file_globs) do
-    case ScopeConstraints.validate_docs_allowed_file_globs(allowed_file_globs) do
-      :ok -> :ok
-      {:error, _errors} -> {:error, :non_documentation_allowed_file_globs}
-    end
-  end
-
-  defp require_docs_scope(_kind, _allowed_file_globs), do: :ok
 
   defp normalize_acceptance_criteria(criteria) when is_list(criteria) do
     criteria = Enum.map(criteria, &normalize_acceptance_criterion/1)

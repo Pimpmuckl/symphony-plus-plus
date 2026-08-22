@@ -7,7 +7,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
-  alias SymphonyElixir.SymphonyPlusPlus.Readiness.ScopeGuard
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
@@ -134,8 +133,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
     assert anchor.kind == "delegation"
     assert anchor.repo == work_request.repo
     assert anchor.base_branch == work_request.base_branch
-    assert anchor.allowed_file_globs == ["elixir/lib", "elixir/lib/**"]
-    assert ScopeGuard.glob_match?("elixir/lib/**", "elixir/lib/symphony_elixir/work_requests.ex")
+    assert anchor.allowed_file_globs == []
   end
 
   test "renders unsafe scope fields as null in the local-claim prompt", %{repo: repo, database_path: database_path} do
@@ -353,15 +351,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
     assert repo.aggregate(AccessGrant, :count) == 0
   end
 
-  test "accepts drafts and rejects untrusted and invalid-scope requests", %{repo: repo, database_path: database_path} do
+  test "accepts drafts and rejects untrusted requests", %{repo: repo, database_path: database_path} do
     ready = create_work_request!(repo, id: "WR-ARCH-HANDOFF-READY")
     draft = create_work_request!(repo, id: "WR-ARCH-HANDOFF-DRAFT", status: "draft")
-
-    invalid_scope =
-      create_work_request!(repo,
-        id: "WR-ARCH-HANDOFF-BAD-SCOPE",
-        constraints: %{"allowed_paths" => [""]}
-      )
 
     assert {:error, :forbidden} = ArchitectHandoff.create_or_replay(repo, ready.id, handoff_opts: handoff_opts(database_path))
 
@@ -372,12 +364,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestArchitectHandoffTest do
              )
 
     assert draft_handoff.work_request.status == "draft"
-
-    assert {:error, :invalid_scope} =
-             ArchitectHandoff.create_or_replay(repo, invalid_scope.id,
-               local_operator?: true,
-               handoff_opts: handoff_opts(database_path)
-             )
   end
 
   test "fails closed when handoff WorkRequest lookup cannot verify scope", %{repo: repo, database_path: database_path} do

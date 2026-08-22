@@ -279,7 +279,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("dispatch_work_package"), do: "Activate one planned WorkPackage and return its redacted ledger-backed worker claim bootstrap."
   defp architect_tool_description("prepare_work_package_worktree"), do: "Prepare a scoped WorkPackage git worktree and record only its worktree_path."
   defp architect_tool_description("cleanup_work_package_worktree"), do: "Clean up a scoped WorkPackage git worktree after validating the recorded path and dirty state."
-  defp architect_tool_description("approve_scope_expansion"), do: "Approve additional allowed file globs for this scoped work package."
 
   defp delivery_runtime_tool_description("cleanup_work_request_work_package_runtime"),
     do:

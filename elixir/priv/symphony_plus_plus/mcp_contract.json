@@ -1,56 +1,6 @@
 {
-  "version": 7,
-  "mcp_contract_fingerprint": "dfe2efc9ffd0333c156bc1b42ff14c41bfde4ae6822417bc00d911059195a8bf",
+  "mcp_contract_fingerprint": "837dde5a97696216e8f04449e22de946809381b8bf862e7609018ecbaa54f4e2",
   "tool_sets": {
-    "unbound_tools": [
-      "sympp.health",
-      "release_current_assignment",
-      "solo_attach",
-      "solo_show",
-      "solo_list",
-      "solo_record_task_plan",
-      "solo_append_progress",
-      "solo_append_finding",
-      "solo_record_decision",
-      "solo_report_blocker",
-      "solo_resolve_blocker",
-      "solo_record_validation",
-      "solo_pause",
-      "solo_resume",
-      "solo_complete",
-      "solo_archive",
-      "claim_local_assignment",
-      "claim_local_architect_assignment"
-    ],
-    "trusted_local_http_extra_tools": [
-      "create_work_request",
-      "add_work_request_comment",
-      "record_work_request_operator_decision",
-      "summarize_failed_mcp_calls",
-      "list_comments"
-    ],
-    "worker_tools": [
-      "get_current_assignment",
-      "read_context",
-      "read_task_plan",
-      "update_task_plan",
-      "append_finding",
-      "append_progress",
-      "report_blocker",
-      "resolve_blocker",
-      "abandon",
-      "add_comment",
-      "list_comments",
-      "resolve_comment",
-      "read_guidance_request",
-      "request_scope_expansion",
-      "attach_branch",
-      "attach_pr",
-      "sync_pr",
-      "submit_review_package",
-      "complete_review",
-      "mark_ready"
-    ],
     "architect_tools": [
       "list_work_requests",
       "read_work_request",
@@ -84,8 +34,7 @@
       "skip_work_package",
       "dispatch_work_package",
       "prepare_work_package_worktree",
-      "cleanup_work_package_worktree",
-      "approve_scope_expansion"
+      "cleanup_work_package_worktree"
     ],
     "shared_worker_architect_tools": [
       "add_comment",
@@ -93,6 +42,55 @@
       "resolve_comment",
       "resolve_blocker",
       "read_guidance_request"
+    ],
+    "trusted_local_http_extra_tools": [
+      "create_work_request",
+      "add_work_request_comment",
+      "record_work_request_operator_decision",
+      "summarize_failed_mcp_calls",
+      "list_comments"
+    ],
+    "unbound_tools": [
+      "sympp.health",
+      "release_current_assignment",
+      "solo_attach",
+      "solo_show",
+      "solo_list",
+      "solo_record_task_plan",
+      "solo_append_progress",
+      "solo_append_finding",
+      "solo_record_decision",
+      "solo_report_blocker",
+      "solo_resolve_blocker",
+      "solo_record_validation",
+      "solo_pause",
+      "solo_resume",
+      "solo_complete",
+      "solo_archive",
+      "claim_local_assignment",
+      "claim_local_architect_assignment"
+    ],
+    "worker_tools": [
+      "get_current_assignment",
+      "read_context",
+      "read_task_plan",
+      "update_task_plan",
+      "append_finding",
+      "append_progress",
+      "report_blocker",
+      "resolve_blocker",
+      "abandon",
+      "add_comment",
+      "list_comments",
+      "resolve_comment",
+      "read_guidance_request",
+      "attach_branch",
+      "attach_pr",
+      "sync_pr",
+      "submit_review_package",
+      "complete_review",
+      "mark_ready"
     ]
-  }
+  },
+  "version": 7
 }

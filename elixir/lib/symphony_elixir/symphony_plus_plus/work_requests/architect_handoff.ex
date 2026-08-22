@@ -12,7 +12,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
   alias SymphonyElixir.SymphonyPlusPlus.RepoIdentity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{ArchitectHandoffClaimLease, ScopeConstraints, WorkRequest}
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{ArchitectHandoffClaimLease, WorkRequest}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
   @eligible_statuses [
@@ -96,7 +96,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
 
   @spec eligible_scope?(WorkRequest.t() | map() | term()) :: boolean()
   def eligible_scope?(work_request) when is_map(work_request) do
-    require_frozen_scope(work_request) == :ok and require_valid_file_scope(work_request) == :ok
+    require_frozen_scope(work_request) == :ok
   end
 
   def eligible_scope?(_work_request), do: false
@@ -126,7 +126,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
     with {:ok, work_request} <- WorkRequestRepository.get(repo, work_request_id),
          :ok <- require_eligible_status(work_request),
          :ok <- require_frozen_scope(work_request),
-         :ok <- require_valid_file_scope(work_request),
          {:ok, phase} <- get_or_create_phase(repo, work_request),
          {:ok, anchor} <- get_or_create_anchor(repo, work_request, phase),
          {:ok, grants} <- AccessGrantRepository.list_for_work_package(repo, anchor.id) do
@@ -141,7 +140,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
     with {:ok, work_request} <- WorkRequestRepository.get(repo, work_request_id),
          :ok <- require_eligible_status(work_request),
          :ok <- require_frozen_scope(work_request),
-         :ok <- require_valid_file_scope(work_request),
          {:ok, phase} <- PhaseRepository.get(repo, phase_id(work_request)),
          {:ok, anchor} <- WorkPackageRepository.get(repo, anchor_id(work_request)),
          {:ok, anchor} <- validate_anchor(anchor, work_request, phase),
@@ -310,17 +308,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
       if(phase_id(work_request) != anchor.phase_id, do: :phase_id),
       if(anchor_id(work_request) != anchor.id, do: :architect_anchor_work_package_id),
       if(not repo_scope_match?(work_request.repo, anchor.repo), do: :work_request_repo),
-      if(not BaseBranch.equivalent?(work_request.base_branch, anchor.base_branch), do: :work_request_base_branch),
-      if(not handoff_work_request_file_scope_matches?(work_request, anchor), do: :work_request_allowed_file_globs)
+      if(not BaseBranch.equivalent?(work_request.base_branch, anchor.base_branch), do: :work_request_base_branch)
     ]
     |> Enum.reject(&is_nil/1)
-  end
-
-  defp handoff_work_request_file_scope_matches?(%WorkRequest{} = work_request, %WorkPackage{} = anchor) do
-    case work_request_allowed_file_globs(work_request) do
-      {:ok, allowed_file_globs} -> normalized_strings(anchor.allowed_file_globs || []) == allowed_file_globs
-      {:error, _reason} -> false
-    end
   end
 
   defp work_request_scope_matches_handoff_anchor?(%WorkRequest{} = work_request, %WorkPackage{} = anchor) do
@@ -643,12 +633,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
     end
   end
 
-  defp require_valid_file_scope(work_request) when is_map(work_request) do
-    with {:ok, _allowed_file_globs} <- work_request_allowed_file_globs(work_request) do
-      :ok
-    end
-  end
-
   defp present_string?(value) when is_binary(value), do: String.trim(value) != ""
   defp present_string?(_value), do: false
 
@@ -695,12 +679,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
   end
 
   defp create_anchor(repo, %WorkRequest{} = work_request, %Phase{} = phase, anchor_id) do
-    with {:ok, allowed_file_globs} <- work_request_allowed_file_globs(work_request) do
-      create_anchor(repo, work_request, phase, anchor_id, allowed_file_globs)
-    end
-  end
-
-  defp create_anchor(repo, %WorkRequest{} = work_request, %Phase{} = phase, anchor_id, allowed_file_globs) do
     attrs = %{
       id: anchor_id,
       kind: @anchor_kind,
@@ -711,7 +689,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
       product_description: work_request.human_description,
       engineering_scope:
         "Architect anchor for WorkRequest #{work_request.id}. Launch with opt-in Symphony++ MCP loaded, then use the symphony-plus-plus-mcp:symphony-architect skill and WorkRequest MCP tools before slicing.",
-      allowed_file_globs: allowed_file_globs,
       acceptance_criteria: [
         "Architect agent can read and update the scoped WorkRequest.",
         "Architect agent can answer or escalate scoped guidance requests.",
@@ -737,93 +714,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
   end
 
   defp validate_anchor(%WorkPackage{} = anchor, %WorkRequest{} = work_request, %Phase{} = phase) do
-    with {:ok, allowed_file_globs} <- work_request_allowed_file_globs(work_request) do
-      valid_anchor? =
-        anchor.phase_id == phase.id and
-          anchor.kind == @anchor_kind and
-          repo_scope_match?(anchor.repo, work_request.repo) and
-          BaseBranch.equivalent?(anchor.base_branch, work_request.base_branch) and
-          normalized_strings(anchor.allowed_file_globs || []) == allowed_file_globs
+    valid_anchor? =
+      anchor.phase_id == phase.id and
+        anchor.kind == @anchor_kind and
+        repo_scope_match?(anchor.repo, work_request.repo) and
+        BaseBranch.equivalent?(anchor.base_branch, work_request.base_branch)
 
-      if valid_anchor?, do: {:ok, anchor}, else: {:error, :handoff_anchor_scope_conflict}
-    end
+    if valid_anchor?, do: {:ok, anchor}, else: {:error, :handoff_anchor_scope_conflict}
   end
-
-  defp work_request_allowed_file_globs(%WorkRequest{constraints: constraints}) when is_map(constraints) do
-    work_request_allowed_file_globs_from_constraints(constraints)
-  end
-
-  defp work_request_allowed_file_globs(%WorkRequest{}), do: {:ok, []}
-
-  defp work_request_allowed_file_globs(work_request) when is_map(work_request) do
-    case work_request_value(work_request, :constraints) do
-      constraints when is_map(constraints) -> work_request_allowed_file_globs_from_constraints(constraints)
-      nil -> {:ok, []}
-      _constraints -> {:error, :invalid_scope}
-    end
-  end
-
-  defp work_request_allowed_file_globs_from_constraints(constraints) when is_map(constraints) do
-    case work_request_constraint_value(constraints, :allowed_paths) do
-      :missing -> validate_allowed_file_globs(constraints, [])
-      values when is_list(values) -> normalize_allowed_file_globs(constraints, values)
-      _values -> {:error, :invalid_scope}
-    end
-  end
-
-  defp work_request_constraint_value(constraints, key) when is_map(constraints) do
-    string_key = Atom.to_string(key)
-
-    cond do
-      Map.has_key?(constraints, string_key) -> Map.fetch!(constraints, string_key)
-      Map.has_key?(constraints, key) -> Map.fetch!(constraints, key)
-      true -> :missing
-    end
-  end
-
-  defp normalize_allowed_file_globs(constraints, values) do
-    case normalized_nonblank_strings(values) do
-      {:ok, allowed_paths} ->
-        allowed_file_globs = allowed_paths_to_file_globs(allowed_paths)
-        validate_allowed_file_globs(constraints, allowed_file_globs)
-
-      {:error, :invalid_scope} ->
-        {:error, :invalid_scope}
-    end
-  end
-
-  defp allowed_paths_to_file_globs(allowed_paths) do
-    allowed_paths
-    |> Enum.flat_map(&allowed_path_to_file_globs/1)
-    |> normalized_strings()
-  end
-
-  defp allowed_path_to_file_globs(allowed_path) do
-    if glob_path?(allowed_path) do
-      [allowed_path]
-    else
-      [allowed_path, "#{allowed_path}/**"]
-    end
-  end
-
-  defp glob_path?(path), do: String.contains?(path, ["*", "?", "["])
-
-  defp validate_allowed_file_globs(constraints, allowed_file_globs) do
-    case ScopeConstraints.validate_allowed_file_globs(constraints, allowed_file_globs) do
-      :ok -> {:ok, allowed_file_globs}
-      {:error, _errors} -> {:error, :invalid_scope}
-    end
-  end
-
-  defp normalized_nonblank_strings(values) when is_list(values) do
-    if Enum.all?(values, &(is_binary(&1) and String.trim(&1) != "")) do
-      {:ok, normalized_strings(values)}
-    else
-      {:error, :invalid_scope}
-    end
-  end
-
-  defp normalized_nonblank_strings(_values), do: {:error, :invalid_scope}
 
   defp normalized_strings(values) when is_list(values) do
     values

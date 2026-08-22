@@ -349,27 +349,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
 
     assert get_in(conflicting_progress_response, ["error", "data", "reason"]) == "idempotency_conflict"
 
-    scope_response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "scope",
-          "method" => "tools/call",
-          "params" => %{
-            "name" => "request_scope_expansion",
-            "arguments" => %{
-              "summary" => "Need broader files",
-              "idempotency_key" => "scope-request-1",
-              "payload" => %{"requested_file_globs" => ["lib/other/**"]}
-            }
-          }
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(scope_response, ["result", "structuredContent", "progress_event", "status"]) == "recorded"
-
     denied_response =
       MCPHarness.request(
         %{
@@ -394,10 +373,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
 
     assert {:ok, own_nodes} = PlanningRepository.list_plan_nodes(repo, own_package.id)
     assert {:ok, sibling_nodes} = PlanningRepository.list_plan_nodes(repo, sibling_package.id)
-    assert {:ok, events} = PlanningRepository.list_progress_events(repo, own_package.id)
     assert length(own_nodes) == 1
     assert sibling_nodes == []
-    assert Enum.any?(events, &(get_in(&1.payload, ["type"]) == "scope_expansion_request" and get_in(&1.payload, ["approved"]) == false))
   end
 
   test "worker context projects only its package, parent summary, selected decisions, and direct dependencies", %{repo: repo} do

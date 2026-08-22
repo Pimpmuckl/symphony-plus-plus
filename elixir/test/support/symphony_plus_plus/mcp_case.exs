@@ -49,8 +49,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "skip_work_package",
     "dispatch_work_package",
     "prepare_work_package_worktree",
-    "cleanup_work_package_worktree",
-    "approve_scope_expansion"
+    "cleanup_work_package_worktree"
   ]
   @worker_tool_names [
     "get_current_assignment",
@@ -66,7 +65,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "list_comments",
     "resolve_comment",
     "read_guidance_request",
-    "request_scope_expansion",
     "attach_branch",
     "attach_pr",
     "sync_pr",

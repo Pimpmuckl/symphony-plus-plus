@@ -145,52 +145,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
            |> Enum.map(& &1.scope_id) == [work_request.id]
   end
 
-  test "claim_local_architect_assignment does not repair stale rows when file scope drifts", %{repo: repo} do
-    work_request =
-      create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-STALE-FILE-SCOPE",
-        status: "ready_for_clarification",
-        constraints: %{"allowed_paths" => ["elixir/lib"]}
-      )
-
-    sibling =
-      create_work_request!(repo,
-        id: "WR-MCP-LOCAL-ARCHITECT-STALE-FILE-SCOPE-SIBLING",
-        status: "ready_for_clarification"
-      )
-
-    handoff = create_architect_handoff!(repo, work_request)
-    assert {:ok, [grant]} = AccessGrantRepository.list_for_work_package(repo, handoff.anchor_package.id)
-
-    assert {:ok, _scope} =
-             GrantScope.create_changeset(%{
-               access_grant_id: grant.id,
-               scope_type: "work_request",
-               scope_id: sibling.id
-             })
-             |> repo.insert()
-
-    work_request
-    |> Ecto.Changeset.change(constraints: %{"allowed_paths" => ["docs"]})
-    |> repo.update!()
-
-    {response, _server} =
-      claim_local_architect(
-        repo,
-        %{"work_request_id" => work_request.id, "claimed_by" => "architect-stale-file-scope"},
-        "local-architect-stale-file-scope"
-      )
-
-    assert get_in(response, ["error", "data", "reason"]) == "ambiguous_phase_scope"
-
-    assert {:ok, scopes} = AccessGrantRepository.list_scopes(repo, grant.id)
-
-    assert scopes
-           |> Enum.filter(&(&1.scope_type == "work_request"))
-           |> Enum.map(& &1.scope_id)
-           |> Enum.sort() == Enum.sort([work_request.id, sibling.id])
-  end
-
   test "claim_local_architect_assignment fails closed for cross-branch scope", %{repo: repo} do
     work_request =
       create_work_request!(repo,
@@ -361,7 +315,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       "stop_conditions" => ["Stop before dispatch."]
     }
 
-    required_fields = ["title", "goal", "allowed_file_globs", "acceptance_criteria"]
+    required_fields = ["title", "goal", "acceptance_criteria"]
 
     invalid_contracts =
       Enum.map(required_fields, &Map.delete(contract, &1)) ++
@@ -370,8 +324,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
           Map.put(contract, "title", "  "),
           Map.put(contract, "goal", nil),
           Map.put(contract, "goal", "  "),
-          Map.put(contract, "allowed_file_globs", nil),
-          Map.put(contract, "allowed_file_globs", ["  "]),
           Map.put(contract, "acceptance_criteria", [nil]),
           Map.put(contract, "acceptance_criteria", [""]),
           Map.put(contract, "validation_steps", "mix test"),
@@ -423,7 +375,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     for patch <- [
           %{"goal" => nil},
           %{"goal" => "  "},
-          %{"allowed_file_globs" => [""]},
           %{"acceptance_criteria" => ["  "]},
           %{"validation_steps" => nil},
           %{"stop_conditions" => [nil]}

@@ -85,8 +85,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta",
                  status: "ci_waiting",
-                 policy_template: "mcp_changed_file_scope_guard",
-                 allowed_file_globs: ["elixir/lib/**"],
+                 policy_template: "mcp_current_pr_state",
                  review_requirement: %{"type" => "automated", "args" => %{"policy" => "repository"}}
                )
              )
