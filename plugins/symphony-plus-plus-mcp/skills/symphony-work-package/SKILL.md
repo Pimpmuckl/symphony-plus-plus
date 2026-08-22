@@ -125,6 +125,7 @@ Before `mark_ready()`:
 
 - Provider-backed branch, PR, current-head state, blockers, and investigation
   findings are current.
+- Any external/provider review required by `review.md` is settled.
 - Do not add task-plan or progress calls only to restate facts already proved
   elsewhere.
 - No active blocker remains.
