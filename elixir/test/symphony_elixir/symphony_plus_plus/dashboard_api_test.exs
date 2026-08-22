@@ -5089,7 +5089,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> put_req_header("sec-fetch-mode", "navigate")
           |> get("/sympp/board")
 
-        config = dashboard_shell_config(html_response(shell_conn, 200))
+        html_response(shell_conn, 200)
 
         payload =
           shell_conn
@@ -5132,7 +5132,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
             |> put_req_header("sec-fetch-dest", "empty")
             |> get("/api/v1/sympp/operator/config")
 
-          payload = json_response(conn, 200)
+          json_response(conn, 200)
         end)
       end)
     end)
@@ -5149,11 +5149,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> put_req_header("sec-fetch-dest", "empty")
         |> get("/api/v1/sympp/operator/config")
 
-      payload = json_response(conn, 200)
+      json_response(conn, 200)
     end)
   end
 
-  test "configured nonlocal dashboard origin cannot bootstrap local operator API session" do
+  test "configured nonlocal dashboard origin is rejected" do
     with_local_operator_endpoint(fn ->
       with_local_operator_dashboard_origin("http://example.com:5174", fn ->
         conn =
@@ -5205,7 +5205,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> put_req_header("sec-fetch-dest", "empty")
           |> get("/api/v1/sympp/operator/config")
 
-        payload = json_response(conn, 200)
+        json_response(conn, 200)
         assert Plug.Conn.get_resp_header(conn, "access-control-allow-origin") == ["http://127.0.0.1:5174"]
       end)
     end)
@@ -5244,24 +5244,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> put_req_header("sec-fetch-dest", "empty")
           |> get("/api/v1/sympp/operator/config")
 
-        payload = json_response(conn, 200)
-      end)
-    end)
-  end
-
-  test "local operator accepts configured dashboard origin without session state" do
-    with_local_operator_endpoint(fn ->
-      with_local_operator_dashboard_origin("http://127.0.0.1:5174", fn ->
-        conn =
-          build_conn()
-          |> Map.put(:host, "127.0.0.1")
-          |> Map.put(:remote_ip, {127, 0, 0, 1})
-          |> put_req_header("origin", "http://127.0.0.1:5174")
-          |> put_req_header("sec-fetch-site", "same-site")
-          |> put_req_header("sec-fetch-mode", "cors")
-          |> put_req_header("sec-fetch-dest", "empty")
-
-        payload = json_response(get(conn, "/api/v1/sympp/operator/config"), 200)
+        json_response(conn, 200)
       end)
     end)
   end
@@ -7696,11 +7679,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     |> Map.put(:host, "localhost")
     |> Map.put(:remote_ip, {127, 0, 0, 1})
     |> put_req_header("origin", origin)
-  end
-
-  defp dashboard_shell_config(html) do
-    [_, encoded] = Regex.run(~r/window\.SYMPP_DASHBOARD_CONFIG = (\{.*\});<\/script>/, html)
-    Jason.decode!(encoded)
   end
 
   defp with_operator_github_client(fun) when is_function(fun, 0) do

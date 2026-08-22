@@ -162,10 +162,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
   defp normalize_origin_port("https", nil), do: 443
   defp normalize_origin_port(_scheme, port), do: port
 
-  @spec normalize_package_route_id(term()) :: term()
-  def normalize_package_route_id(work_package_id) when is_binary(work_package_id), do: work_package_id
-  def normalize_package_route_id(work_package_id), do: work_package_id
-
   @spec board(Conn.t(), map()) :: Conn.t()
   def board(conn, _params) do
     send_repo_response(conn, fn repo, secret ->
@@ -200,32 +196,32 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   @spec detail(Conn.t(), map()) :: Conn.t()
   def detail(conn, %{"work_package_id" => work_package_id}) do
-    send_package_response(conn, normalize_package_route_id(work_package_id), &Dashboard.detail/2)
+    send_package_response(conn, work_package_id, &Dashboard.detail/2)
   end
 
   @spec timeline(Conn.t(), map()) :: Conn.t()
   def timeline(conn, %{"work_package_id" => work_package_id}) do
-    send_package_response(conn, normalize_package_route_id(work_package_id), &Dashboard.timeline/2)
+    send_package_response(conn, work_package_id, &Dashboard.timeline/2)
   end
 
   @spec artifacts(Conn.t(), map()) :: Conn.t()
   def artifacts(conn, %{"work_package_id" => work_package_id}) do
-    send_package_response(conn, normalize_package_route_id(work_package_id), &Dashboard.artifacts/2)
+    send_package_response(conn, work_package_id, &Dashboard.artifacts/2)
   end
 
   @spec blockers(Conn.t(), map()) :: Conn.t()
   def blockers(conn, %{"work_package_id" => work_package_id}) do
-    send_package_response(conn, normalize_package_route_id(work_package_id), &Dashboard.blockers/2)
+    send_package_response(conn, work_package_id, &Dashboard.blockers/2)
   end
 
   @spec grants(Conn.t(), map()) :: Conn.t()
   def grants(conn, %{"work_package_id" => work_package_id}) do
-    send_package_response(conn, normalize_package_route_id(work_package_id), &Dashboard.grants/2)
+    send_package_response(conn, work_package_id, &Dashboard.grants/2)
   end
 
   @spec agent_runs(Conn.t(), map()) :: Conn.t()
   def agent_runs(conn, %{"work_package_id" => work_package_id}) do
-    send_package_response(conn, normalize_package_route_id(work_package_id), &Dashboard.agent_runs/2)
+    send_package_response(conn, work_package_id, &Dashboard.agent_runs/2)
   end
 
   @spec operator_dashboard(Conn.t(), map()) :: Conn.t()
@@ -311,7 +307,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       fn repo ->
         with {:ok, repo_identity_catalog} <- Dashboard.local_operator_repo_identity_catalog(repo),
              {:ok, payload} <-
-               Dashboard.detail(repo, normalize_package_route_id(work_package_id), repo_identity_catalog: repo_identity_catalog) do
+               Dashboard.detail(repo, work_package_id, repo_identity_catalog: repo_identity_catalog) do
           json(conn, payload)
         end
       end
@@ -466,7 +462,7 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
              {:ok, work_package} <-
                LocalOperatorActions.change_work_package_for_local_operator(
                  repo,
-                 normalize_package_route_id(work_package_id),
+                 work_package_id,
                  action,
                  params
                ) do
@@ -484,8 +480,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       work_package_target(work_package_id),
       :operator_clear_work_package_blocker,
       fn repo ->
-        work_package_id = normalize_package_route_id(work_package_id)
-
         with {:ok, event} <-
                LocalOperatorActions.clear_work_package_blocker_for_local_operator(
                  repo,
@@ -513,8 +507,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       work_package_target(work_package_id),
       :operator_archive_work_package,
       fn repo ->
-        work_package_id = normalize_package_route_id(work_package_id)
-
         with {:ok, work_package} <- LocalOperatorActions.hide_work_package_for_local_operator(repo, work_package_id) do
           json(conn, mutation_success_payload(%{work_package_id: work_package.id}, %{work_package_id: work_package.id}))
         end
@@ -754,19 +746,12 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp work_request_target(work_request_id), do: Target.work_request(work_request_id)
 
-  defp work_package_target(work_package_id) do
-    work_package_id
-    |> normalize_package_route_id()
-    |> Target.work_package()
-  end
+  defp work_package_target(work_package_id), do: Target.work_package(work_package_id)
 
   defp work_package_target(work_request_id, work_package_id), do: Target.work_package(work_package_id, work_request_id)
 
-  defp guidance_request_target(work_package_id, guidance_request_id) do
-    work_package_id
-    |> normalize_package_route_id()
-    |> then(&Target.package_resource(:guidance_request, &1, id: guidance_request_id))
-  end
+  defp guidance_request_target(work_package_id, guidance_request_id),
+    do: Target.package_resource(:guidance_request, work_package_id, id: guidance_request_id)
 
   defp comment_target(params) do
     target_id = LocalOperatorActions.text_param(params, "target_id")
@@ -796,11 +781,6 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
 
   defp script_name_prefix(%Conn{script_name: []}), do: ""
   defp script_name_prefix(%Conn{script_name: script_name}), do: "/" <> Enum.join(script_name, "/")
-
-  @spec scope_package_payload_for_grant(AccessGrant.t(), map()) :: map()
-  def scope_package_payload_for_grant(%AccessGrant{} = grant, payload) when is_map(payload) do
-    ScopeProjection.scope_package_payload_for_grant(grant, payload)
-  end
 
   defp send_authenticated_repo_response(secret, fun) do
     if WorkKey.secret_shape?(secret) and Runtime.dashboard_storage_present?() do
