@@ -1288,52 +1288,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
   defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
-  defp architect_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
-  defp architect_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
 
   defp architect_error(:architect_grant_required, resource) do
     {:error, code, message, data} = auth_error({:unauthorized, :architect_grant_required}, resource)
     {:error, code, message, Map.put(data, "recovery", %{"next_action" => "return_to_architect", "next_owner" => "architect"})}
   end
 
-  defp architect_error(:insufficient_capability, resource), do: auth_error({:unauthorized, :insufficient_capability}, resource)
   defp architect_error({:authorization_policy_denied, %Decision{} = decision}, resource), do: MCPError.from_decision(decision, resource)
-  defp architect_error({:authorization_policy_denied, code, message, data}, _resource), do: {:error, code, message, data}
-  defp architect_error(:phase_scope_not_available, resource), do: auth_error(:forbidden, resource)
-  defp architect_error({:phase_scope_not_available, _missing_evidence}, resource), do: auth_error(:forbidden, resource)
-  defp architect_error(:ambiguous_phase_scope, resource), do: auth_error(:forbidden, resource)
-  defp architect_error({:work_request_terminal, _terminal_state}, resource), do: auth_error(:forbidden, resource)
-  defp architect_error(:forbidden, resource), do: auth_error(:forbidden, resource)
   defp architect_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
   defp architect_error(:database_busy, tool), do: service_error(:database_busy, tool)
   defp architect_error({:storage_failed, _reason} = reason, tool), do: service_error(reason, tool)
-  defp architect_error({:migration_failed, _reason} = reason, tool), do: service_error(reason, tool)
-
-  defp architect_error(:open_questions, tool) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "open_questions",
-       "message" => "Answer or close all open clarification questions before adding WorkPackages."
-     }}
-  end
-
-  defp architect_error(reason, tool) when reason in [:invalid_repo_root, :missing_repo_root] do
-    invalid_params_error(tool, reason)
-  end
-
-  defp architect_error(reason, tool) when reason in [:invalid_target_repo_root, :missing_target_repo_root] do
-    invalid_params_error(tool, reason)
-  end
-
-  defp architect_error({:git_failed, status, details}, tool) do
-    {:error, -32_602, "Invalid params",
-     %{
-       "tool" => tool,
-       "reason" => "git_failed",
-       "git" => details |> Map.put(:status, status) |> json_safe_payload() |> Redactor.redact_output()
-     }}
-  end
 
   defp architect_error(reason, tool), do: {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason_text(reason)}}
 
