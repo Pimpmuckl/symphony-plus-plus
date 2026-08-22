@@ -8,6 +8,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReadyStatusMigrationTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @migration_version 20_260_822_010_000
+  @cleanup_queue_version 20_260_822_190_000
   @previous_version 20_260_803_143_000
 
   test "canonicalizes merge-ready status without changing claim or delivery records" do
@@ -28,7 +29,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReadyStatusMigrationTest do
       claim_before = rows!("SELECT * FROM sympp_claim_leases WHERE id = 'CLAIM-READY-STATUS'")
       delivery_before = rows!("SELECT * FROM sympp_work_package_deliveries WHERE id = 'DELIVERY-READY-STATUS'")
 
-      assert [@migration_version] = Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false)
+      assert [@migration_version, @cleanup_queue_version] =
+               Ecto.Migrator.run(Repo, Migrations.all(), :up, all: true, log: false)
 
       assert [["ready_for_merge"]] = rows!("SELECT status FROM sympp_work_packages WHERE id = 'WP-READY-STATUS'")
       assert claim_before == rows!("SELECT * FROM sympp_claim_leases WHERE id = 'CLAIM-READY-STATUS'")

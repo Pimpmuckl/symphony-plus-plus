@@ -89,6 +89,37 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
     end
   end
 
+  @doc false
+  @spec cleanup_obligation(WorkPackage.t(), keyword()) :: {:ok, map()} | {:error, error()}
+  def cleanup_obligation(%WorkPackage{worktree_path: worktree_path} = work_package, opts)
+      when is_binary(worktree_path) and is_list(opts) do
+    with {:ok, root} <- worktree_root(opts),
+         {:ok, worktree_path} <- canonicalize(worktree_path),
+         :ok <- require_inside_root(worktree_path, root),
+         {:ok, target_repo_root} <- cleanup_obligation_target_root(work_package, worktree_path) do
+      {:ok,
+       %{
+         worktree_path: worktree_path,
+         work_package_id: work_package.id,
+         target_repo_root: target_repo_root,
+         cleanup_proof: cleanup_proof(work_package, worktree_path, target_repo_root)
+       }}
+    end
+  end
+
+  @doc false
+  @spec cleanup_obligation(repo(), map(), keyword()) :: {:ok, lifecycle_result()} | {:error, error()}
+  def cleanup_obligation(repo, obligation, opts) when is_atom(repo) and is_map(obligation) and is_list(opts) do
+    work_package = %WorkPackage{
+      id: Map.fetch!(obligation, :work_package_id),
+      worktree_path: Map.fetch!(obligation, :worktree_path),
+      worktree_target_repo_root: Map.fetch!(obligation, :target_repo_root),
+      worktree_cleanup_proof: Map.fetch!(obligation, :cleanup_proof)
+    }
+
+    cleanup_recorded_worktree(repo, work_package, Keyword.put(opts, :detached_cleanup, true))
+  end
+
   @spec validate_cleanup(repo(), String.t()) :: {:ok, lifecycle_result()} | {:error, error()}
   @spec validate_cleanup(repo(), String.t(), keyword()) :: {:ok, lifecycle_result()} | {:error, error()}
   def validate_cleanup(repo, work_package_id, opts \\ [])
@@ -364,10 +395,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
            worktree_target_repo_root: target_repo_root,
            worktree_cleanup_proof: cleanup_proof
          } = work_package,
-         _opts
+         opts
        )
        when is_binary(target_repo_root) or is_binary(cleanup_proof) do
-    with {:ok, updated_work_package} <- Repository.update(repo, work_package.id, cleared_worktree_attrs()) do
+    with {:ok, updated_work_package} <- persist_cleanup_state(repo, work_package, cleared_worktree_attrs(), opts) do
       {:ok, result(updated_work_package, "already_clean", nil, nil, nil, nil)}
     end
   end
@@ -449,7 +480,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
          :ok <- remove_stale_metadata_paths(stale_metadata_paths),
          :ok <- remove_empty_directory(worktree_path),
          :ok <- git(repo_root, ["worktree", "prune"], opts),
-         {:ok, updated_work_package} <- Repository.update(repo, work_package.id, cleared_worktree_attrs()) do
+         {:ok, updated_work_package} <- persist_cleanup_state(repo, work_package, cleared_worktree_attrs(), opts) do
       {:ok, result(updated_work_package, "stale_record_cleared", nil, nil, nil, repo_root)}
     end
   end
@@ -481,31 +512,31 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
          opts <- cleanup_context_opts(opts, repo_root, worktree_path),
          :ok <- require_recorded_worktree_owner(repo_root, worktree_path, opts),
          :ok <- require_git_worktree(worktree_path, repo_root, opts),
-         {:ok, work_package} <- persist_cleanup_proof(repo, work_package, worktree_path, repo_root),
+         {:ok, work_package} <- persist_cleanup_proof(repo, work_package, worktree_path, repo_root, opts),
          opts <- cleanup_removal_context_opts(opts, work_package, worktree_path, repo_root),
          :ok <- git(repo_root, worktree_remove_args(worktree_path, opts), opts),
          :ok <- git(repo_root, ["worktree", "prune"], opts),
-         {:ok, updated_work_package} <- Repository.update(repo, work_package.id, cleared_worktree_attrs()) do
+         {:ok, updated_work_package} <- persist_cleanup_state(repo, work_package, cleared_worktree_attrs(), opts) do
       {:ok, result(updated_work_package, "cleaned", worktree_path, nil, nil, repo_root)}
     else
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp persist_cleanup_proof(repo, %WorkPackage{} = work_package, worktree_path, repo_root) do
+  defp persist_cleanup_proof(repo, %WorkPackage{} = work_package, worktree_path, repo_root, opts) do
     proof = cleanup_proof(work_package, worktree_path, repo_root)
 
     if work_package.worktree_cleanup_proof == proof do
       {:ok, work_package}
     else
-      Repository.update(repo, work_package.id, %{worktree_cleanup_proof: proof})
+      persist_cleanup_state(repo, work_package, %{worktree_cleanup_proof: proof}, opts)
     end
   end
 
   defp cleanup_proven_residue(repo, work_package, worktree_path, repo_root, opts) do
     with :ok <- remove_proven_residue(work_package, worktree_path),
          :ok <- git(repo_root, ["worktree", "prune"], opts),
-         {:ok, updated_work_package} <- Repository.update(repo, work_package.id, cleared_worktree_attrs()) do
+         {:ok, updated_work_package} <- persist_cleanup_state(repo, work_package, cleared_worktree_attrs(), opts) do
       {:ok, cleanup_recovery_result(updated_work_package, worktree_path, repo_root, work_package)}
     end
   end
@@ -611,11 +642,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
              compact_owner? <- compact_worktree_owner?(work_package, repo_root, worktree_path),
              :ok <- require_missing_recorded_worktree_owner(repo_root, worktree_path, opts, compact_owner?),
              :ok <- git(repo_root, ["worktree", "prune"], opts) do
-          clear_recorded_worktree(repo, work_package, repo_root)
+          clear_recorded_worktree(repo, work_package, repo_root, opts)
         end
 
       {:error, :invalid_target_repo_root} ->
-        clear_recorded_worktree(repo, work_package, nil)
+        clear_recorded_worktree(repo, work_package, nil, opts)
 
       {:error, reason} ->
         {:error, reason}
@@ -639,9 +670,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
     end
   end
 
-  defp clear_recorded_worktree(repo, work_package, repo_root) do
-    with {:ok, updated_work_package} <- Repository.update(repo, work_package.id, cleared_worktree_attrs()) do
+  defp clear_recorded_worktree(repo, work_package, repo_root, opts) do
+    with {:ok, updated_work_package} <- persist_cleanup_state(repo, work_package, cleared_worktree_attrs(), opts) do
       {:ok, result(updated_work_package, "stale_record_cleared", nil, nil, nil, repo_root)}
+    end
+  end
+
+  defp persist_cleanup_state(repo, work_package, attrs, opts) do
+    if Keyword.get(opts, :detached_cleanup, false) do
+      {:ok, struct(work_package, attrs)}
+    else
+      Repository.update(repo, work_package.id, attrs)
     end
   end
 
@@ -920,6 +959,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
     |> Enum.intersperse(<<0>>)
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode16(case: :lower)
+  end
+
+  defp cleanup_obligation_target_root(%WorkPackage{worktree_target_repo_root: target_repo_root}, _worktree_path)
+       when is_binary(target_repo_root), do: canonicalize(target_repo_root)
+
+  defp cleanup_obligation_target_root(%WorkPackage{} = work_package, worktree_path) do
+    case WorktreeTargetRoot.from_package(work_package, worktree_path) do
+      {:ok, target_repo_root} -> canonicalize(target_repo_root)
+      :error -> {:error, :invalid_target_repo_root}
+    end
   end
 
   defp comparable_path(path) do

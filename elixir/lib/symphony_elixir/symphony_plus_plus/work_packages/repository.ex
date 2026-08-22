@@ -9,6 +9,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.Repo.Migrations
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -181,7 +182,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
 
   @doc false
   @spec clear_terminal_attention(repo(), WorkPackage.t()) :: :ok | {:error, error()}
-  def clear_terminal_attention(repo, %WorkPackage{id: work_package_id})
+  def clear_terminal_attention(repo, %WorkPackage{id: work_package_id} = work_package)
       when is_atom(repo) and is_binary(work_package_id) do
     repo.delete_all(
       from(request in GuidanceRequest,
@@ -190,7 +191,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
       )
     )
 
-    resolve_active_blockers(repo, work_package_id)
+    with :ok <- resolve_active_blockers(repo, work_package_id) do
+      WorktreeCleanupQueue.enqueue_terminal(repo, work_package)
+    end
   end
 
   defp close_delivery_package(repo, %WorkRequest{} = work_request, %WorkPackage{} = work_package, next_status, opts) do
