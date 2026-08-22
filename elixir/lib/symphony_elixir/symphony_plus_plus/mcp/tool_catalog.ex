@@ -66,9 +66,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
   ]
   @shared_worker_architect_tools ["add_comment", "list_comments", "resolve_comment", "resolve_blocker", "read_guidance_request"]
   @architect_tools [
-    "create_child_work_package",
-    "mint_child_worker_key",
-    "revoke_child_worker_key",
     "list_work_requests",
     "read_work_request",
     "read_plan",
@@ -102,11 +99,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "dispatch_work_package",
     "prepare_work_package_worktree",
     "cleanup_work_package_worktree",
-    "read_child_status",
-    "approve_scope_expansion",
-    "read_phase_board",
-    "approve_child_ready_state",
-    "merge_child_into_phase"
+    "approve_scope_expansion"
   ]
   @known_tools Enum.uniq(
                  [@health_tool, @assignment_release_tool] ++

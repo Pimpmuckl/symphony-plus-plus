@@ -414,7 +414,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       work_package_attrs("SYMPP-DEMO-WP-REVIEW", "Review local operator handoff copy", "reviewing", kind("SYMPP-DEMO-WP-REVIEW")),
       work_package_attrs("SYMPP-DEMO-WP-CI", "Wait for cockpit CI package", "ci_waiting", kind("SYMPP-DEMO-WP-CI")),
       work_package_attrs("SYMPP-DEMO-WP-READY", "Ready merge evidence package", "ready_for_merge", kind("SYMPP-DEMO-WP-READY")),
-      work_package_attrs("SYMPP-DEMO-WP-ARCH-READY", "Architect merge approval package", "ready_for_architect_merge", kind("SYMPP-DEMO-WP-ARCH-READY")),
       work_package_attrs("SYMPP-DEMO-WP-BLOCKED", "Blocked product decision package", "blocked", kind("SYMPP-DEMO-WP-BLOCKED")),
       work_package_attrs("SYMPP-DEMO-WP-MERGED", "Merged demo cleanup package", "merged", kind("SYMPP-DEMO-WP-MERGED")),
       work_package_attrs("SYMPP-DEMO-WP-MERGED-DOCS", "Merged operator docs package", "merged", kind("SYMPP-DEMO-WP-MERGED-DOCS")),
@@ -495,7 +494,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
       "SYMPP-DEMO-WP-REVIEW",
       "SYMPP-DEMO-WP-CI",
       "SYMPP-DEMO-WP-READY",
-      "SYMPP-DEMO-WP-ARCH-READY",
       "SYMPP-DEMO-WP-MERGED",
       "SYMPP-DEMO-WP-MERGED-DOCS",
       "SYMPP-DEMO-WP-CLOSED-SPIKE"
@@ -514,7 +512,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
               "SYMPP-DEMO-WP-REVIEW",
               "SYMPP-DEMO-WP-CI",
               "SYMPP-DEMO-WP-READY",
-              "SYMPP-DEMO-WP-ARCH-READY",
               "SYMPP-DEMO-WP-MERGED",
               "SYMPP-DEMO-WP-MERGED-DOCS",
               "SYMPP-DEMO-WP-CLOSED-SPIKE"
@@ -529,7 +526,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
   defp kind("SYMPP-DEMO-WP-REVIEW"), do: "docs"
   defp kind("SYMPP-DEMO-WP-CI"), do: "mcp"
   defp kind("SYMPP-DEMO-WP-READY"), do: "mcp"
-  defp kind("SYMPP-DEMO-WP-ARCH-READY"), do: "mcp"
   defp kind("SYMPP-DEMO-WP-BLOCKED"), do: "investigation"
   defp kind("SYMPP-DEMO-WP-MERGED"), do: "mcp"
   defp kind("SYMPP-DEMO-WP-MERGED-DOCS"), do: "docs"
@@ -735,13 +731,6 @@ defmodule Mix.Tasks.Sympp.DemoLedger do
          progress: [{"Ready for human merge", "ready", %{"head_sha" => "0000000000000000000000000000000000000000"}}],
          findings: [{"Validation is synthetic", "info"}],
          artifacts: [{"PR preview", "https://example.invalid/symphony-plus-plus/pull/101"}]
-       }},
-      {"SYMPP-DEMO-WP-ARCH-READY",
-       %{
-         plan: [{"Required review complete", "done"}, {"Architect merge gate", "pending"}],
-         progress: [{"Ready for architect merge", "ready_for_architect_merge", %{"review_complete" => true}}],
-         findings: [{"Architect signoff is the remaining gate", "info"}],
-         artifacts: [{"Merge checklist", "docs/runbooks/delivery-recovery.md"}]
        }},
       {"SYMPP-DEMO-WP-BLOCKED",
        %{

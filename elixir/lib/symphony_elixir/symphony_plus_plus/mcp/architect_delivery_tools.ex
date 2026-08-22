@@ -17,8 +17,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   import SymphonyElixir.SymphonyPlusPlus.MCP.Payloads,
     only: [
-      child_work_package_payload: 1,
       json_safe_payload: 1,
+      work_package_contract_payload: 1,
       work_package_payload: 1
     ]
 
@@ -262,7 +262,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
       {:ok,
        ToolResult.tool_result(%{
          "work_request" => WorkRequestPayloads.work_request_mutation(work_request),
-         "work_package" => child_work_package_payload(Map.fetch!(cleanup, :work_package)),
+         "work_package" => work_package_contract_payload(Map.fetch!(cleanup, :work_package)),
          "runtime_cleanup" => Map.fetch!(cleanup, :runtime_cleanup),
          "audit_event" => ProgressEvents.payload(Map.fetch!(cleanup, :audit_event)),
          "scope" => scope
@@ -892,9 +892,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
       do: {:ok, %{work_package: work_package, event: event}},
       else: {:tool_error, "idempotency_conflict"}
   end
-
-  defp require_accepted_review_rework_status(%WorkPackage{kind: "phase_child"}),
-    do: {:tool_error, "phase_child_rework_not_allowed"}
 
   defp require_accepted_review_rework_status(%WorkPackage{status: "ready_for_merge"}), do: :ok
   defp require_accepted_review_rework_status(%WorkPackage{}), do: {:tool_error, "work_package_not_ready_for_rework"}

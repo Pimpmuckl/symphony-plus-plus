@@ -272,16 +272,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   end
 
   @spec architect_tool_input_schema(tool_name()) :: input_schema()
-  def architect_tool_input_schema("create_child_work_package"), do: schema(%{"package" => object_schema()}, ["package"])
-
-  def architect_tool_input_schema("mint_child_worker_key") do
-    schema(%{"work_package_id" => string_schema(), "template" => object_schema()}, ["work_package_id"])
-  end
-
-  def architect_tool_input_schema("revoke_child_worker_key") do
-    schema(%{"grant_id" => string_schema(), "reason" => string_schema()}, ["grant_id", "reason"])
-  end
-
   def architect_tool_input_schema("list_work_requests") do
     schema(
       %{
@@ -638,8 +628,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
-  def architect_tool_input_schema("read_child_status"), do: schema(%{"work_package_id" => string_schema()}, ["work_package_id"])
-
   def architect_tool_input_schema("approve_scope_expansion") do
     schema(
       %{
@@ -651,18 +639,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
       ["work_package_id", "allowed_file_globs", "rationale"]
     )
   end
-
-  def architect_tool_input_schema("read_phase_board"), do: schema(%{"phase_id" => string_schema()}, ["phase_id"])
-
-  def architect_tool_input_schema("approve_child_ready_state") do
-    schema(
-      %{"work_package_id" => string_schema(), "rationale" => markdown_string_schema("Human-facing merge approval rationale in Markdown."), "request_id" => string_schema()},
-      ["work_package_id", "rationale"]
-    )
-  end
-
-  def architect_tool_input_schema("merge_child_into_phase"),
-    do: schema(%{"work_package_id" => string_schema(), "merge_artifact" => merge_artifact_schema()}, ["work_package_id", "merge_artifact"])
 
   defp delivery_runtime_tool_input_schema("cleanup_work_request_work_package_runtime") do
     schema(
@@ -1027,21 +1003,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         }
       },
       "anyOf" => [%{"required" => ["head_sha"]}, %{"required" => ["head"]}]
-    }
-  end
-
-  defp merge_artifact_schema do
-    %{
-      "type" => "object",
-      "additionalProperties" => true,
-      "properties" => %{
-        "status" => string_schema(),
-        "uri" => string_schema(),
-        "summary" => string_schema(),
-        "commit_sha" => string_schema(),
-        "merge_commit_sha" => string_schema()
-      },
-      "required" => ["status", "uri"]
     }
   end
 

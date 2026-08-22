@@ -204,7 +204,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
   test "creates package planning state and renders every virtual file", %{repo: repo} do
     assert {:ok, work_package} =
              create_work_package(repo,
-               kind: "phase_child",
+               kind: "mcp",
                acceptance_criteria: ["Render context", "Render task plan"]
              )
 
@@ -694,7 +694,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
 
   test "renders optional review requirements without policy defaults", %{repo: repo} do
     assert {:ok, hotfix} = create_work_package(repo, id: "SYMPP-HOTFIX", kind: "hotfix")
-    assert {:ok, phase_child} = create_work_package(repo, id: "SYMPP-PHASE", kind: "phase_child")
     review = %{"type" => "human", "args" => %{"team" => "maintainers"}}
 
     assert {:ok, reviewed} =
@@ -705,11 +704,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PlanningTest do
              )
 
     assert {:ok, hotfix_markdown} = Renderer.render(repo, hotfix.id, "review.md")
-    assert {:ok, phase_child_markdown} = Renderer.render(repo, phase_child.id, "review.md")
     assert {:ok, reviewed_markdown} = Renderer.render(repo, reviewed.id, "review.md")
 
     assert hotfix_markdown =~ "No review required."
-    assert phase_child_markdown =~ "No review required."
     assert reviewed_markdown =~ "\"type\": \"human\""
     assert reviewed_markdown =~ "\"team\": \"maintainers\""
   end

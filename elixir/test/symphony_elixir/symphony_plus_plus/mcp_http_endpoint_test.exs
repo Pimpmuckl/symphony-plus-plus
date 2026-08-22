@@ -261,7 +261,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       assert tool in names
     end
 
-    for tool <- ["read_context", "read_work_request", "create_child_work_package", "list_work_requests"] do
+    for tool <- ["read_context", "read_work_request", "list_work_requests"] do
       assert tool in names
     end
   end

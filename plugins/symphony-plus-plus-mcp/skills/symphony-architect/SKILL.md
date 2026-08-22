@@ -213,9 +213,8 @@ Record other terminal outcomes with `record_work_package_delivery`:
 - `outcome: "abandoned"`: `evidence` is
   `{"abandoned":{"abandoned_rationale":"..."}}`.
 
-Do not infer delivery from prose decisions or chat. Phase-child PRs remain phase
-controlled; call `merge_child_into_phase` before `pr_merged` closeout when
-required. A successful terminal closeout revokes live worker grants and releases
+Do not infer delivery from prose decisions or chat. A successful terminal
+closeout revokes live worker grants and releases
 current claim leases, including paused leases; do not require a separate worker
 or runtime-cleanup step first. Use `cleanup_work_request_work_package_runtime`
 only to recycle runtime without terminal closeout or to clear recoverable worker

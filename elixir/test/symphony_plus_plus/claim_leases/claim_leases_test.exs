@@ -314,7 +314,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ClaimLeasesTest do
   end
 
   test "terminal packages reject new claim leases", %{repo: repo} do
-    for status <- ["skipped", "merged", "merged_into_phase", "closed", "abandoned"] do
+    for status <- ["skipped", "merged", "closed", "abandoned"] do
       assert {:ok, work_package} =
                WorkPackageRepository.create(
                  repo,

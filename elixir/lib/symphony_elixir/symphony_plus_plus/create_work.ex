@@ -389,7 +389,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
 
       {:ok, kind} ->
         case normalize_nonblank_string(kind) do
-          {:ok, "phase_child"} -> {:error, :kind_not_dispatchable}
           {:ok, kind} -> ensure_dispatchable_kind(kind)
           {:error, :blank} -> {:error, :invalid_kind}
         end
@@ -407,11 +406,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
   defp default_kind([]), do: {:ok, @default_kind}
 
   defp default_kind(policy_templates) do
-    with {:ok, policy_key, policy} <- default_policy_key(policy_templates),
-         {:ok, kind} <- Templates.kind(policy_key),
-         :ok <- reject_phase_child_policy(policy) do
-      {:ok, kind}
-    end
+    with {:ok, policy_key, _policy} <- default_policy_key(policy_templates), do: Templates.kind(policy_key)
   end
 
   defp default_policy_key(policy_templates) do
@@ -433,24 +428,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
     end
   end
 
-  defp policy_for(kind, []) do
-    with {:ok, policy} <- Templates.expand(kind),
-         :ok <- reject_phase_child_policy(policy) do
-      {:ok, kind, policy}
-    else
-      {:error, :unknown_policy_template} -> {:error, :unknown_policy_template}
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  defp policy_for(kind, []), do: with({:ok, policy} <- Templates.expand(kind), do: {:ok, kind, policy})
 
-  defp policy_for(kind, policy_templates) do
-    with {:ok, policy_key, policy} <- policy_key_for(kind, policy_templates),
-         :ok <- reject_phase_child_policy(policy) do
-      {:ok, policy_key, policy}
-    else
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  defp policy_for(kind, policy_templates), do: policy_key_for(kind, policy_templates)
 
   defp policy_key_for(kind, policy_templates) do
     case exact_policy_key(kind, policy_templates) do
@@ -524,9 +504,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWork do
       _reason -> false
     end
   end
-
-  defp reject_phase_child_policy(%{template: "phase_child"}), do: {:error, :kind_not_dispatchable}
-  defp reject_phase_child_policy(_policy), do: :ok
 
   defp explicit_policy_templates(attrs) do
     ["policy_template"]

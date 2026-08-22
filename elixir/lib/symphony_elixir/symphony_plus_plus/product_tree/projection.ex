@@ -5,7 +5,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.{DependencyEdge, ExecutionGraph, Node, Revision}
 
-  @terminal_completion_keys ["merged", "merged_into_phase", "delivered", "completed_no_pr", "closed", "completed"]
+  @terminal_completion_keys ["merged", "delivered", "completed_no_pr", "closed", "completed"]
   @guidance_completion_keys ["human_info_needed", "ready_for_clarification", "clarifying"]
   @not_started_completion_keys ["approved", "planned", "ready_for_worker"]
   @partial_completion_keys [
@@ -22,7 +22,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.Projection do
     "needs_closeout",
     "planning",
     "ready_to_finish",
-    "ready_for_architect_merge",
     "ready_for_merge",
     "reviewing",
     "started_paused"

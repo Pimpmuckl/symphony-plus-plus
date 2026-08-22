@@ -533,24 +533,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
 
   defp create_work_package!(repo, work_request, overrides) do
     attrs = work_package_attrs(overrides)
-
-    if attrs.kind == "phase_child" do
-      insert_phase_child_fixture!(repo, work_request, attrs)
-    else
-      assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, attrs)
-      work_package
-    end
-  end
-
-  defp insert_phase_child_fixture!(repo, work_request, attrs) do
-    attrs =
-      Map.merge(attrs, %{
-        work_request_id: work_request.id,
-        sequence: 1,
-        status: "planned"
-      })
-
-    repo.insert!(struct!(WorkPackage, attrs))
+    assert {:ok, work_package} = CanonicalWorkPackageFixtures.add_work_package(repo, work_request.id, attrs)
+    work_package
   end
 
   defp create_matching_work_package!(repo, work_request, work_package, overrides) do
@@ -599,7 +583,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseoutTerminalN
       acceptance_criteria: ["Delivery closeout is transactional."],
       validation_steps: ["mix test test/symphony_elixir/symphony_plus_plus/work_request_delivery_closeout_test.exs"],
       review_requirement: %{"type" => "review-suite", "args" => %{"mode" => "normal"}},
-      stop_conditions: ["Do not bypass phase-child merge semantics."]
+      stop_conditions: ["Do not bypass delivery semantics."]
     }
 
     Enum.into(overrides, defaults)

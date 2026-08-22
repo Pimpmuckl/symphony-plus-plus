@@ -19,12 +19,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
   @stale_heartbeat_after_seconds 300
-  @ready_statuses ["ready_for_merge", "ready_for_architect_merge"]
+  @ready_statuses ["ready_for_merge"]
   @merge_required_gates ["human_merge", "architect_merge"]
-  @runtime_merge_required_kinds ["hotfix", "adapter", "mcp", "skill", "hooks", "phase_child"]
+  @runtime_merge_required_kinds ["hotfix", "adapter", "mcp", "skill", "hooks"]
   @started_package_statuses ["active", "claimed", "planning", "implementing"]
   @prepared_worktree_statuses ["prepared", "already_prepared"]
-  @merged_package_statuses ["merged", "merged_into_phase"]
+  @merged_package_statuses ["merged"]
   @closed_package_statuses ["closed", "abandoned", "skipped"]
   @scope_guard_gate "scope_guard"
 
@@ -309,9 +309,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Dashboard.OperationalProjection do
 
   defp validation_operational_state(%WorkPackage{status: status} = work_package, metadata, missing_readiness) do
     cond do
-      status == "merging_into_phase" ->
-        operational_state("merging", "Merging", "info", "Package is being merged into its phase.", status)
-
       status in @ready_statuses ->
         ready_operational_state(work_package, missing_readiness)
 

@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ProductTree.ExecutionGraph do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
 
-  @resolved_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
+  @resolved_statuses ["skipped", "merged", "closed", "abandoned"]
   @hard_edge_kinds ["depends_on", "blocks"]
 
   @type graph :: %{

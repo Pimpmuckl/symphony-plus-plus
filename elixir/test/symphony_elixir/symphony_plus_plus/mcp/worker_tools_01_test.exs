@@ -3,16 +3,8 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{PhaseChildScope, WorktreeScope}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.WorktreeScope
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
-
-  defmodule BusyParentRepo do
-    def get(_schema, _id), do: raise(%Exqlite.Error{message: "database is locked"})
-  end
-
-  defmodule BrokenParentRepo do
-    def get(_schema, _id), do: raise(%Exqlite.Error{message: "disk I/O failed"})
-  end
 
   test "worker tools update only the scoped planning state and deny sibling mutations", %{repo: repo} do
     assert {:ok, own_package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-WORKER-OWN", kind: "adapter"))
@@ -416,8 +408,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
         human_description: "Let workers explain their assigned outcome."
       )
 
-    assert {:ok, _phase} = PhaseRepository.create(repo, %{id: "phase-worker-context", title: "Worker context"})
-
     assert {:ok, dependency} =
              WorkPackageRepository.create(
                repo,
@@ -428,22 +418,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
                  repo: parent_work_request.repo,
                  base_branch: parent_work_request.base_branch,
                  status: "ready_for_merge"
-               )
-             )
-
-    assert {:ok, parent} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-WORKER-CONTEXT-PARENT",
-                 work_request_id: parent_work_request.id,
-                 title: "Project worker context",
-                 repo: parent_work_request.repo,
-                 base_branch: parent_work_request.base_branch,
-                 allowed_file_globs: ["elixir/**"],
-                 acceptance_criteria: ["Honor decision WRD-WORKER-CONTEXT-UNRELATED."],
-                 phase_id: "phase-worker-context",
-                 status: "active"
                )
              )
 
@@ -461,19 +435,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
                )
              )
 
-    assert {:ok, child} =
+    assert {:ok, package} =
              WorkPackageRepository.create(
                repo,
                WorkPackageFactory.attrs(
-                 id: "SYMPP-WORKER-CONTEXT-CHILD",
-                 kind: "phase_child",
-                 title: "Scoped phase child",
-                 repo: parent.repo,
-                 base_branch: parent.base_branch,
+                 id: "SYMPP-WORKER-CONTEXT-PACKAGE",
+                 work_request_id: parent_work_request.id,
+                 title: "Scoped work package",
+                 repo: parent_work_request.repo,
+                 base_branch: parent_work_request.base_branch,
                  allowed_file_globs: ["elixir/lib/**"],
                  acceptance_criteria: ["Honor decision WRD-WORKER-CONTEXT-CONTRACT."],
-                 parent_id: parent.id,
-                 phase_id: parent.phase_id,
                  status: "active"
                )
              )
@@ -516,7 +488,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
              ProductTree.create_dependency_edge(repo, %{
                work_request_id: parent_work_request.id,
                source_kind: "work_package",
-               source_id: parent.id,
+               source_id: package.id,
                target_kind: "work_package",
                target_id: dependency.id,
                kind: "depends_on",
@@ -524,8 +496,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
                decision_ref: %{"id" => selected_decision.id}
              })
 
-    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, child.id)
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "phase-child-worker")
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "worker-context")
     session = MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)
     response = mcp_tool(repo, session, "read_context", %{})
     context = get_in(response, ["result", "structuredContent"])
@@ -557,21 +529,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
            ]
 
     assert context["work_package"] == %{
-             "id" => child.id,
-             "status" => child.status,
-             "contract_revision" => child.contract_revision,
-             "repo" => child.repo,
-             "base_branch" => child.base_branch,
-             "branch" => child.branch_pattern,
-             "goal" => child.goal,
-             "product_description" => child.product_description,
-             "engineering_scope" => child.engineering_scope,
-             "allowed_file_globs" => child.allowed_file_globs,
-             "forbidden_file_globs" => child.forbidden_file_globs,
-             "acceptance_criteria" => child.acceptance_criteria,
-             "validation_steps" => child.validation_steps,
-             "stop_conditions" => child.stop_conditions,
-             "review" => child.review_requirement
+             "id" => package.id,
+             "status" => package.status,
+             "contract_revision" => package.contract_revision,
+             "repo" => package.repo,
+             "base_branch" => package.base_branch,
+             "branch" => package.branch_pattern,
+             "goal" => package.goal,
+             "product_description" => package.product_description,
+             "engineering_scope" => package.engineering_scope,
+             "allowed_file_globs" => package.allowed_file_globs,
+             "forbidden_file_globs" => package.forbidden_file_globs,
+             "acceptance_criteria" => package.acceptance_criteria,
+             "validation_steps" => package.validation_steps,
+             "stop_conditions" => package.stop_conditions,
+             "review" => package.review_requirement
            }
 
     assert context["current_binding"] == %{
@@ -586,18 +558,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     refute context_text =~ sibling.title
     refute context_text =~ "sibling-contract-secret"
     refute context_text =~ "Sibling-only decision must stay hidden."
-
-    repo.update_all(from(work_package in WorkPackage, where: work_package.id == ^child.id), set: [repo: "other/repo"])
-    drifted_context = mcp_tool(repo, session, "read_context", %{})
-    assert get_in(drifted_context, ["error", "code"]) == -32_003
-    assert get_in(drifted_context, ["error", "data", "reason"]) == "outside_session_scope"
-  end
-
-  test "phase-child context preserves retryable parent lookup failures" do
-    child = %WorkPackage{kind: "phase_child", parent_id: "SYMPP-PARENT", phase_id: "phase-parent"}
-
-    assert {:error, :database_busy} = PhaseChildScope.context_anchor(BusyParentRepo, child)
-    assert {:error, {:storage_failed, "disk I/O failed"}} = PhaseChildScope.context_anchor(BrokenParentRepo, child)
   end
 
   test "progress metadata tools reject non-string required fields", %{repo: repo} do

@@ -11,8 +11,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.CreateWork
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{Auth, Config, Server}
-  alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
-  alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Artifact
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree
@@ -22,17 +20,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
-
-  @phase_id "phase-p8-001-integration"
-  @architect_capabilities [
-    "create:child_work_package",
-    "mint:child_worker_key",
-    "read:child_progress",
-    "read:child_findings",
-    "read:phase",
-    "approve:child_ready_state",
-    "merge:child_into_phase"
-  ]
 
   setup_all do
     database_path = WorkPackageFactory.database_path()
@@ -50,8 +37,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     repo.delete_all(AccessGrant)
     repo.delete_all(WorkPackage)
     repo.delete_all(WorkRequest)
-    repo.delete_all(Phase)
-
     :ok
   end
 
@@ -255,52 +240,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     assert get_in(sibling_resource, ["error", "data", "reason"]) == "outside_session_scope"
   end
 
-  test "phase architect delegates two packages through ready approval and merge", %{repo: repo} do
-    {anchor, architect_session} = create_architect_session(repo, "SYMPP-P8-001-PHASE-ANCHOR")
-
-    child_a = create_child_work_package(repo, architect_session, "SYMPP-P8-001-PHASE-A")
-    child_b = create_child_work_package(repo, architect_session, "SYMPP-P8-001-PHASE-B")
-
-    for {child_id, suffix} <- [{child_a, "a"}, {child_b, "b"}] do
-      worker_session = claim_phase_child_worker(repo, architect_session, child_id, "phase-worker-#{suffix}")
-      head_sha = "p8-001-phase-head-#{suffix}"
-
-      assert_worker_active(repo, worker_session)
-      attach_phase_child_ready_evidence(repo, worker_session, child_id, head_sha)
-
-      ready_response = mcp_tool(repo, worker_session, "mark_ready", %{})
-      assert get_in(ready_response, ["result", "structuredContent", "work_package", "status"]) == "ready_for_architect_merge"
-
-      approval_response =
-        mcp_tool(repo, architect_session, "approve_child_ready_state", %{
-          "work_package_id" => child_id,
-          "rationale" => "Deterministic P8 harness evidence is green.",
-          "request_id" => "p8-001-approve-#{suffix}"
-        })
-
-      assert get_in(approval_response, ["result", "structuredContent", "work_package", "status"]) == "merging_into_phase"
-
-      merge_response =
-        mcp_tool(repo, architect_session, "merge_child_into_phase", %{
-          "work_package_id" => child_id,
-          "merge_artifact" => %{
-            "status" => "merged_into_phase",
-            "uri" => "https://github.com/nextide/symphony-plus-plus/pull/80#{suffix}",
-            "summary" => "Merged #{child_id} in local harness",
-            "commit_sha" => head_sha
-          }
-        })
-
-      assert get_in(merge_response, ["result", "structuredContent", "work_package", "status"]) == "merged_into_phase"
-    end
-
-    board_response = mcp_tool(repo, architect_session, "read_phase_board", %{"phase_id" => anchor.phase_id})
-
-    assert get_in(board_response, ["result", "structuredContent", "summary", "child_count"]) == 2
-    assert get_in(board_response, ["result", "structuredContent", "summary", "merged_child_count"]) == 2
-    assert get_in(board_response, ["result", "structuredContent", "summary", "open_child_count"]) == 0
-  end
-
   test "security denials reject invalid grants and scope drift", %{repo: repo} do
     assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-P8-001-SECURITY"))
     assert {:ok, sibling} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-P8-001-SIBLING"))
@@ -353,98 +292,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
 
     revoked_response = mcp_tool(repo, session, "append_progress", %{"summary" => "should fail", "idempotency_key" => "revoked"})
     assert get_in(revoked_response, ["error", "data", "reason"]) == "revoked"
-
-    {anchor, architect_session} = create_architect_session(repo, "SYMPP-P8-001-DRIFT-ANCHOR")
-    assert {:ok, other_phase} = PhaseRepository.create(repo, %{id: "phase-p8-001-other", title: "Other phase"})
-    assert {:ok, _updated_anchor} = WorkPackageRepository.update(repo, anchor.id, %{phase_id: other_phase.id})
-
-    drift_response = mcp_tool(repo, architect_session, "read_phase_board", %{"phase_id" => @phase_id})
-    assert get_in(drift_response, ["error", "data", "reason"]) == "outside_session_scope"
-  end
-
-  defp create_architect_session(repo, anchor_id) do
-    assert {:ok, phase} = PhaseRepository.create(repo, %{id: @phase_id, title: "P8 integration phase"})
-
-    assert {:ok, anchor} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: anchor_id,
-                 kind: "mcp",
-                 repo: "nextide/symphony-plus-plus",
-                 base_branch: "symphony-plus-plus/beta",
-                 allowed_file_globs: ["elixir/lib/**"],
-                 phase_id: phase.id,
-                 status: "planning"
-               )
-             )
-
-    assert {:ok, minted} =
-             AccessGrantService.mint_architect_grant(repo, phase.id,
-               work_package_id: anchor.id,
-               capabilities: @architect_capabilities
-             )
-
-    assert {:ok, assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "architect-1")
-    {anchor, MCPHarness.session(assignment, proof_hash: minted.grant.secret_hash)}
-  end
-
-  defp create_child_work_package(repo, session, child_id) do
-    response =
-      mcp_tool(repo, session, "create_child_work_package", %{
-        "package" => %{
-          "id" => child_id,
-          "title" => "Implement #{child_id}",
-          "acceptance_criteria" => ["Complete #{child_id}"],
-          "allowed_file_globs" => ["elixir/lib/symphony_elixir/**"]
-        }
-      })
-
-    assert get_in(response, ["result", "structuredContent", "work_package", "id"]) == child_id
-    child_id
-  end
-
-  defp claim_phase_child_worker(repo, architect_session, child_id, claimed_by) do
-    response =
-      mcp_tool(repo, architect_session, "mint_child_worker_key", %{
-        "work_package_id" => child_id,
-        "template" => %{"claimed_by" => claimed_by}
-      })
-
-    claim_child_worker_from_mint_response(repo, response, claimed_by)
   end
 
   defp test_repo_root do
     Path.expand("../../../..", __DIR__)
-  end
-
-  defp claim_child_worker_from_mint_response(repo, mint_response, claimed_by) do
-    worker_grant = get_in(mint_response, ["result", "structuredContent", "worker_grant"])
-    bootstrap_claim = get_in(worker_grant, ["worker_bootstrap", "claim"])
-    arguments = Map.fetch!(bootstrap_claim, "arguments")
-
-    assert bootstrap_claim["tool"] == "claim_local_assignment"
-    assert arguments["work_package_id"] == worker_grant["work_package_id"]
-    assert arguments["claimed_by"] == claimed_by
-    refute Map.has_key?(arguments, "caller_id")
-
-    {claim_response, claimed_server} =
-      Server.handle_state(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "integration-claim-child-worker-from-bootstrap",
-          "method" => "tools/call",
-          "params" => %{"name" => bootstrap_claim["tool"], "arguments" => arguments}
-        },
-        Server.new(
-          Config.default(repo: repo, mode: :http, repo_root: test_repo_root(), local_daemon_trusted: true),
-          initialized: true,
-          state_key: "integration-child-worker-bootstrap-#{worker_grant["id"]}-#{System.unique_integer([:positive])}"
-        )
-      )
-
-    assert get_in(claim_response, ["result", "structuredContent", "assignment", "grant_id"]) == worker_grant["id"]
-    claimed_server.session
   end
 
   defp claim_worker_grant(repo, grant_id, claimed_by) do
@@ -477,14 +328,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.IntegrationHarnessTest do
     assert {:ok, package} = WorkPackageRepository.get(repo, session.assignment.work_package_id)
     assert package.status == "active"
   end
-
-  defp attach_phase_child_ready_evidence(repo, session, child_id, head_sha) do
-    attach_branch(repo, session, "agent/#{child_id}/worker", head_sha)
-    attach_pr(repo, session, phase_child_pr_url(child_id), head_sha)
-  end
-
-  defp phase_child_pr_url("SYMPP-P8-001-PHASE-A"), do: "https://github.com/nextide/symphony-plus-plus/pull/8003"
-  defp phase_child_pr_url("SYMPP-P8-001-PHASE-B"), do: "https://github.com/nextide/symphony-plus-plus/pull/8004"
 
   defp attach_branch(repo, session, branch, head_sha) do
     attach_tool(repo, session, "attach_branch", %{"branch" => branch, "head_sha" => head_sha})

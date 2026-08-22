@@ -28,8 +28,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff do
     "read:work_request",
     "write:work_request",
     "dispatch:work_request",
-    "read:child_progress",
-    "read:child_findings",
     "read:guidance_request",
     "write:guidance_request"
   ]

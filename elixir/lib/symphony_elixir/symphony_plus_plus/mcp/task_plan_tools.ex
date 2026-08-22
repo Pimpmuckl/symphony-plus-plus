@@ -215,11 +215,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
   defp timestamp_version_part(nil), do: nil
   defp timestamp_version_part(%DateTime{} = timestamp), do: DateTime.to_unix(timestamp, :microsecond)
 
-  defp reject_ready_work_package(%WorkPackage{kind: "phase_child", status: status}) when status in ["merging_into_phase", "merged_into_phase"] do
-    {:tool_error, "child_under_architect_control"}
-  end
-
-  defp reject_ready_work_package(%WorkPackage{status: status}) when status in ["ready_for_merge", "ready_for_architect_merge"],
+  defp reject_ready_work_package(%WorkPackage{status: "ready_for_merge"}),
     do: {:tool_error, "already_ready"}
 
   defp reject_ready_work_package(%WorkPackage{}), do: :ok

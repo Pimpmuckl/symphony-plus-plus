@@ -809,20 +809,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
   test "tools list advertises static architect schemas for architect sessions", %{repo: repo} do
     {_anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-TOOLS-LIST", [
-        "create:child_work_package",
-        "read:child_progress",
-        "read:child_findings",
         "read:work_request",
         "write:work_request",
         "read:guidance_request",
         "write:guidance_request",
-        "mint:child_worker_key",
-        "revoke:child_worker_key",
-        "read:phase",
         "dispatch:work_request",
-        "approve:child_ready_state",
-        "approve:scope_expansion",
-        "merge:child_into_phase"
+        "approve:scope_expansion"
       ])
 
     server = Server.new(test_mcp_config(repo), initialized: true, session: session)
@@ -1003,19 +995,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert get_in(tools_by_name, ["cleanup_work_package_worktree", "inputSchema", "properties", "target_repo_root", "description"]) =~
              "Optional target product repository root"
 
-    assert get_in(tools_by_name, ["read_child_status", "inputSchema", "required"]) == ["work_package_id"]
-    assert get_in(tools_by_name, ["read_child_status", "inputSchema", "properties", "work_package_id", "type"]) == "string"
-    assert get_in(tools_by_name, ["read_phase_board", "inputSchema", "required"]) == ["phase_id"]
     assert get_in(tools_by_name, ["approve_scope_expansion", "inputSchema", "required"]) == ["work_package_id", "allowed_file_globs", "rationale"]
     assert get_in(tools_by_name, ["approve_scope_expansion", "inputSchema", "properties", "allowed_file_globs", "minItems"]) == 1
-    assert get_in(tools_by_name, ["approve_child_ready_state", "inputSchema", "required"]) == ["work_package_id", "rationale"]
-    assert get_in(tools_by_name, ["approve_child_ready_state", "inputSchema", "properties", "request_id", "type"]) == "string"
-    assert get_in(tools_by_name, ["mint_child_worker_key", "inputSchema", "required"]) == ["work_package_id"]
-    assert get_in(tools_by_name, ["mint_child_worker_key", "inputSchema", "properties", "template", "type"]) == "object"
-    assert get_in(tools_by_name, ["revoke_child_worker_key", "inputSchema", "required"]) == ["grant_id", "reason"]
-    assert get_in(tools_by_name, ["revoke_child_worker_key", "inputSchema", "properties", "grant_id", "type"]) == "string"
-    assert get_in(tools_by_name, ["merge_child_into_phase", "inputSchema", "required"]) == ["work_package_id", "merge_artifact"]
-    assert get_in(tools_by_name, ["merge_child_into_phase", "inputSchema", "properties", "merge_artifact", "required"]) == ["status", "uri"]
   end
 
   test "tools list advertises work-package dispatch even when repo_root is not configured", %{repo: repo} do
@@ -1206,31 +1187,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert get_in(denied_response, ["error", "code"]) == -32_003
     assert get_in(denied_response, ["error", "data", "reason"]) == "insufficient_capability"
     assert get_in(denied_response, ["error", "data", "reason_code"]) == "insufficient_capability"
-  end
-
-  test "architect tools reject arguments outside their advertised schemas", %{repo: repo} do
-    assert {:ok, package} = WorkPackageRepository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-ARCHITECT-STRICT", kind: "mcp"))
-    assert {:ok, architect_work_key} = create_architect_work_key(repo, package.id, ["read:child_progress", "read:child_findings"])
-
-    assert {:ok, architect_assignment} =
-             AccessGrantRepository.claim(repo, architect_work_key.secret, %{claimed_by: "architect-1"}, DateTime.utc_now(:microsecond))
-
-    session = MCPHarness.session(architect_assignment, proof_hash: WorkKey.secret_hash(architect_work_key.secret))
-
-    response =
-      MCPHarness.request(
-        %{
-          "jsonrpc" => "2.0",
-          "id" => "strict-architect-args",
-          "method" => "tools/call",
-          "params" => %{"name" => "read_child_status", "arguments" => %{"work_package_id" => package.id, "unexpected" => "value"}}
-        },
-        repo: repo,
-        session: session
-      )
-
-    assert get_in(response, ["error", "data", "reason"]) == "unexpected_argument"
-    assert get_in(response, ["error", "data", "arguments"]) == ["unexpected"]
   end
 
   defp claim_local_bound_assignment!(repo, id) do

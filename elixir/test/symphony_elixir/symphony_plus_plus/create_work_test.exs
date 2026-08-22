@@ -306,21 +306,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
              })
   end
 
-  test "rejects parented and phase-child work" do
+  test "rejects parented work and malformed kinds" do
     assert {:error, :parent_not_supported} =
              CreateWork.parse_request(%{
                repo: "kraken",
                base_branch: "main",
                title: "Bad parent",
                parent_id: "phase_123"
-             })
-
-    assert {:error, :kind_not_dispatchable} =
-             CreateWork.parse_request(%{
-               kind: "phase_child",
-               repo: "kraken",
-               base_branch: "main",
-               title: "Bad kind"
              })
 
     assert {:error, :invalid_kind} =

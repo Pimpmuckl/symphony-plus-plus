@@ -121,7 +121,6 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
           "SYMPP-DEMO-WP-REVIEW" => "reviewing",
           "SYMPP-DEMO-WP-CI" => "ci_waiting",
           "SYMPP-DEMO-WP-READY" => "ready_for_merge",
-          "SYMPP-DEMO-WP-ARCH-READY" => "ready_for_architect_merge",
           "SYMPP-DEMO-WP-BLOCKED" => "blocked",
           "SYMPP-DEMO-WP-MERGED" => "merged",
           "SYMPP-DEMO-WP-MERGED-DOCS" => "merged",
@@ -262,7 +261,7 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
       assert demo_stable_rows(database_path) == first_stable_rows
 
       with_repo(database_path, fn repo ->
-        assert repo.aggregate(WorkPackage, :count) == 13
+        assert repo.aggregate(WorkPackage, :count) == 12
         assert repo.aggregate(WorkRequest, :count) == 5
       end)
     after
@@ -272,7 +271,7 @@ defmodule Mix.Tasks.Sympp.DemoLedgerTest do
 
   test "named scenarios have deterministic shapes and replace safely" do
     expected = %{
-      "simple" => %{packages: 13, edges: 0, repos: [@demo_repo], deliveries: []},
+      "simple" => %{packages: 12, edges: 0, repos: [@demo_repo], deliveries: []},
       "multi-repo" => %{
         packages: 4,
         edges: 3,

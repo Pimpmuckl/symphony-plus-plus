@@ -224,10 +224,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
     }
   end
 
-  defp architect_tool_description("read_child_status"), do: "Read the architect grant's scoped child work-package status without Phase 7 delegation."
-  defp architect_tool_description("create_child_work_package"), do: "Create a phase-child work package inside the architect grant's current phase."
-  defp architect_tool_description("mint_child_worker_key"), do: "Mint a narrower worker grant for a phase-child work package in the architect grant's current phase."
-  defp architect_tool_description("revoke_child_worker_key"), do: "Revoke one live child-worker grant for a same-phase child package in the architect grant's current phase."
   defp architect_tool_description("list_work_requests"), do: "List WorkRequests scoped to the architect grant's repo and base branch."
   defp architect_tool_description("read_work_request"), do: "Read a scoped WorkRequest with clarification questions, decisions, visible WorkPackages, and status summaries."
 
@@ -284,9 +280,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("prepare_work_package_worktree"), do: "Prepare a scoped WorkPackage git worktree and record only its worktree_path."
   defp architect_tool_description("cleanup_work_package_worktree"), do: "Clean up a scoped WorkPackage git worktree after validating the recorded path and dirty state."
   defp architect_tool_description("approve_scope_expansion"), do: "Approve additional allowed file globs for this scoped work package."
-  defp architect_tool_description("read_phase_board"), do: "Read the architect grant's scoped phase board."
-  defp architect_tool_description("approve_child_ready_state"), do: "Approve a ready phase-child package for merge into the architect's phase."
-  defp architect_tool_description("merge_child_into_phase"), do: "Record a local phase merge artifact and mark a phase child merged into the architect's phase."
 
   defp delivery_runtime_tool_description("cleanup_work_request_work_package_runtime"),
     do:

@@ -201,12 +201,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant do
     capability == "architect" or
       String.starts_with?(capability, ["architect:", "architect."]) or
       capability in [
-        "create:child_work_package",
-        "update:child_work_package",
-        "mint:child_worker_key",
-        "revoke:child_worker_key",
-        "read:child_findings",
-        "read:child_progress",
         "read:phase",
         "read:work_request",
         "write:work_request",
@@ -214,9 +208,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant do
         "read:guidance_request",
         "write:guidance_request",
         "write:phase_plan",
-        "approve:scope_expansion",
-        "approve:child_ready_state",
-        "merge:child_into_phase"
+        "approve:scope_expansion"
       ]
   end
 

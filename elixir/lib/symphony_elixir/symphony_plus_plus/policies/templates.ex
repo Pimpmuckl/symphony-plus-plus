@@ -40,11 +40,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Policies.Templates do
       |> Map.update!(:required_gates, &(&1 ++ ["current_pr_state", "scope_guard"])),
     "skill" => @worker_package_policy,
     "hooks" => @worker_package_policy,
-    "phase_child" => %{
-      template: "phase_child",
-      constraints: %{expiry_seconds: nil, planning_depth: "package", terminal_readiness_status: "ready_for_architect_merge"},
-      required_gates: ["package_acceptance", "architect_merge"]
-    },
     "investigation" => %{
       template: "investigation",
       constraints: %{expiry_seconds: nil, planning_depth: "findings", terminal_readiness_status: "ready_for_merge"},

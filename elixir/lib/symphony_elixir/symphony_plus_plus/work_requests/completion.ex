@@ -15,7 +15,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
 
   import Ecto.Query, only: [from: 2]
 
-  @terminal_work_package_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
+  @terminal_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
   @terminal_delivery_outcomes ["pr_merged", "completed_no_pr", "superseded", "abandoned"]
   @durable_cleanup_deferral_reasons ["claim_lease_paused", "claim_lease_active", "worker_grant_active", "architect_grant_active"]
   @completion_blocking_work_request_statuses ["human_info_needed"]

@@ -229,29 +229,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AcceptedReviewReworkTest do
     assert Enum.any?(final_events, &(&1.id == accepted_event_id and &1.payload["head_sha"] == head_a))
   end
 
-  test "phase children and terminal packages cannot use accepted review rework", %{repo: repo} do
+  test "terminal packages cannot use accepted review rework", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-MCP-REWORK-REJECTED", status: "ready_for_slicing")
-    assert {:ok, _phase} = PhaseRepository.create(repo, %{id: "phase-rework-rejected", title: "Rejected rework phase"})
-
-    assert {:ok, parent} =
-             CanonicalWorkPackageFixtures.add_work_package(
-               repo,
-               work_request.id,
-               work_request_work_package_attrs(id: "WP-MCP-REWORK-PARENT", status: "active")
-             )
-
-    assert {:ok, child} =
-             CanonicalWorkPackageFixtures.add_work_package(
-               repo,
-               work_request.id,
-               work_request_work_package_attrs(
-                 id: "WP-MCP-REWORK-CHILD",
-                 kind: "phase_child",
-                 status: "ready_for_architect_merge",
-                 parent_id: parent.id,
-                 phase_id: "phase-rework-rejected"
-               )
-             )
 
     assert {:ok, terminal} =
              CanonicalWorkPackageFixtures.add_work_package(
@@ -262,12 +241,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.AcceptedReviewReworkTest do
 
     {_anchor, session, _grant} =
       create_work_request_handoff_architect_session(repo, work_request, ["read:work_request", "write:work_request"])
-
-    assert get_in(mcp_tool(repo, session, "accept_review_rework", accepted_rework_arguments(work_request.id, child.id)), [
-             "error",
-             "data",
-             "reason"
-           ]) == "phase_child_rework_not_allowed"
 
     assert get_in(mcp_tool(repo, session, "accept_review_rework", accepted_rework_arguments(work_request.id, terminal.id)), [
              "error",

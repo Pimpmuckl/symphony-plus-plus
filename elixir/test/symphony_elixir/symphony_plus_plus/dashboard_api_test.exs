@@ -556,7 +556,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert {:ok, work_package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-DASH-EXACT-PHASE", kind: "phase_child", phase_id: phase_id, status: "planning")
+               WorkPackageFactory.attrs(id: "SYMPP-DASH-EXACT-PHASE", kind: "delegation", phase_id: phase_id, status: "planning")
              )
 
     work_key = WorkKey.generate()
@@ -584,119 +584,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert [%{"id" => "SYMPP-DASH-EXACT-PHASE"}] = payload["groups"]["planning"]
   end
 
-  test "phase board exposes scoped child merge progress summary", %{repo: repo} do
-    phase_id = "phase-dashboard-progress"
-    assert {:ok, _phase} = PhaseRepository.create(repo, %{id: phase_id, title: "Progress phase"})
-
-    assert {:ok, anchor} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-DASH-PROGRESS-ANCHOR",
-                 kind: "mcp",
-                 phase_id: phase_id,
-                 repo: "nextide/symphony-plus-plus",
-                 base_branch: "symphony-plus-plus/beta",
-                 status: "planning"
-               )
-             )
-
-    for {id, status} <- [
-          {"SYMPP-DASH-PROGRESS-MERGED", "merged_into_phase"},
-          {"SYMPP-DASH-PROGRESS-READY", "ready_for_architect_merge"},
-          {"SYMPP-DASH-PROGRESS-CLOSED", "closed"},
-          {"SYMPP-DASH-PROGRESS-ABANDONED", "abandoned"}
-        ] do
-      assert {:ok, _child} =
-               WorkPackageRepository.create(
-                 repo,
-                 WorkPackageFactory.attrs(
-                   id: id,
-                   kind: "phase_child",
-                   policy_template: "phase_child",
-                   phase_id: phase_id,
-                   parent_id: anchor.id,
-                   repo: anchor.repo,
-                   base_branch: anchor.base_branch,
-                   status: status
-                 )
-               )
-    end
-
-    assert {:ok, _out_of_scope_child} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-DASH-PROGRESS-OUT-OF-SCOPE",
-                 kind: "phase_child",
-                 policy_template: "phase_child",
-                 phase_id: phase_id,
-                 parent_id: anchor.id,
-                 repo: "nextide/other",
-                 base_branch: anchor.base_branch,
-                 status: "merged_into_phase"
-               )
-             )
-
-    assert {:ok, _out_of_scope_base_child} =
-             WorkPackageRepository.create(
-               repo,
-               WorkPackageFactory.attrs(
-                 id: "SYMPP-DASH-PROGRESS-OUT-OF-BASE",
-                 kind: "phase_child",
-                 policy_template: "phase_child",
-                 phase_id: phase_id,
-                 parent_id: anchor.id,
-                 repo: anchor.repo,
-                 base_branch: "main",
-                 status: "merged_into_phase"
-               )
-             )
-
-    work_key = WorkKey.generate()
-
-    assert {:ok, _grant} =
-             AccessGrantRepository.create(repo, %{
-               work_package_id: anchor.id,
-               phase_id: phase_id,
-               display_key: work_key.display_key,
-               secret_hash: WorkKey.secret_hash(work_key.secret),
-               grant_role: "architect",
-               capabilities: ["read:phase"],
-               expires_at: DateTime.add(DateTime.utc_now(:microsecond), 3600, :second)
-             })
-
-    assert {:ok, _assignment} =
-             AccessGrantRepository.claim(repo, work_key.secret, %{claimed_by: "architect-1"}, DateTime.utc_now(:microsecond))
-
-    payload = json_response(get(auth_conn(work_key.secret), "/api/v1/sympp/board"), 200)
-
-    assert payload["total_count"] == 5
-
-    assert payload["summary"] == %{
-             "child_count" => 3,
-             "merged_child_count" => 1,
-             "ready_child_count" => 1,
-             "merging_child_count" => 0,
-             "open_child_count" => 1
-           }
-
-    assert {:ok, filtered_board} =
-             Dashboard.phase_board(repo, phase_id,
-               repo: anchor.repo,
-               base_branch: anchor.base_branch,
-               status: "merged_into_phase"
-             )
-
-    assert filtered_board.summary == %{
-             child_count: 3,
-             merged_child_count: 1,
-             ready_child_count: 1,
-             merging_child_count: 0,
-             open_child_count: 1
-           }
-  end
-
   test "phase board status filters keep repo identity from the phase scope", %{repo: repo} do
     with_trusted_repo_remotes(["Pimpmuckl/symphony-plus-plus"], fn ->
       assert {:ok, phase} = PhaseRepository.create(repo, %{id: "phase-dashboard-repo-identity", title: "Repo identity phase"})
@@ -706,7 +593,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  repo,
                  WorkPackageFactory.attrs(
                    id: "SYMPP-DASH-PHASE-REPO-BARE",
-                   kind: "phase_child",
+                   kind: "delegation",
                    phase_id: phase.id,
                    status: "planning",
                    repo: "symphony-plus-plus",
@@ -719,7 +606,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  repo,
                  WorkPackageFactory.attrs(
                    id: "SYMPP-DASH-PHASE-REPO-OWNER",
-                   kind: "phase_child",
+                   kind: "delegation",
                    phase_id: phase.id,
                    status: "blocked",
                    repo: "Pimpmuckl/symphony-plus-plus",
@@ -744,13 +631,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert {:ok, anchor} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-DASH-LEGACY-ANCHOR", kind: "phase_child", phase_id: phase.id, status: "planning")
+               WorkPackageFactory.attrs(id: "SYMPP-DASH-LEGACY-ANCHOR", kind: "delegation", phase_id: phase.id, status: "planning")
              )
 
     assert {:ok, sibling} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-DASH-LEGACY-SIBLING", kind: "phase_child", phase_id: phase.id, status: "blocked")
+               WorkPackageFactory.attrs(id: "SYMPP-DASH-LEGACY-SIBLING", kind: "delegation", phase_id: phase.id, status: "blocked")
              )
 
     secret = create_legacy_phase_grant_secret(repo, anchor.id, "grant-dashboard-legacy-derived")
@@ -761,8 +648,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert payload["total_count"] == 2
     assert [%{"id" => "SYMPP-DASH-LEGACY-ANCHOR"}] = payload["groups"]["planning"]
     assert [%{"id" => "SYMPP-DASH-LEGACY-SIBLING"}] = payload["groups"]["blocked"]
-    assert payload["summary"]["child_count"] == 0
-    assert payload["summary"]["merged_child_count"] == 0
 
     phase_id = phase.id
     sibling_id = sibling.id
@@ -791,13 +676,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert {:ok, anchor} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-DASH-LEGACY-OWN", kind: "phase_child", phase_id: phase.id, status: "planning")
+               WorkPackageFactory.attrs(id: "SYMPP-DASH-LEGACY-OWN", kind: "delegation", phase_id: phase.id, status: "planning")
              )
 
     assert {:ok, other_package} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-DASH-LEGACY-OTHER", kind: "phase_child", phase_id: other_phase.id, status: "planning")
+               WorkPackageFactory.attrs(id: "SYMPP-DASH-LEGACY-OTHER", kind: "delegation", phase_id: other_phase.id, status: "planning")
              )
 
     secret = create_legacy_phase_grant_secret(repo, anchor.id, "grant-dashboard-legacy-other")
@@ -844,19 +729,19 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     assert {:ok, anchor} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-DASH-ANCHOR", kind: "phase_child", phase_id: phase.id, status: "planning")
+               WorkPackageFactory.attrs(id: "SYMPP-DASH-ANCHOR", kind: "delegation", phase_id: phase.id, status: "planning")
              )
 
     assert {:ok, sibling} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-DASH-ANCHOR-SIBLING", kind: "phase_child", phase_id: phase.id, status: "planning")
+               WorkPackageFactory.attrs(id: "SYMPP-DASH-ANCHOR-SIBLING", kind: "delegation", phase_id: phase.id, status: "planning")
              )
 
     assert {:ok, other_sibling} =
              WorkPackageRepository.create(
                repo,
-               WorkPackageFactory.attrs(id: "SYMPP-DASH-ANCHOR-OTHER-SIBLING", kind: "phase_child", phase_id: other_phase.id, status: "planning")
+               WorkPackageFactory.attrs(id: "SYMPP-DASH-ANCHOR-OTHER-SIBLING", kind: "delegation", phase_id: other_phase.id, status: "planning")
              )
 
     work_key = WorkKey.generate()
@@ -896,7 +781,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-SCOPED-ANCHOR",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta"
@@ -908,7 +793,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-SCOPED-SIBLING",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "blocked",
                  repo: "symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta"
@@ -920,7 +805,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-SCOPED-OTHER-REPO",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "Pimpmuckl/symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta"
@@ -932,7 +817,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-SCOPED-OTHER-BASE",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "symphony-plus-plus",
                  base_branch: "main"
@@ -978,7 +863,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-DETAIL-SCOPED-ANCHOR",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta"
@@ -990,7 +875,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-DETAIL-SCOPED-SIBLING",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "blocked",
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta"
@@ -1002,7 +887,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-DETAIL-SCOPED-OTHER-REPO",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "nextide/other-repo",
                  base_branch: "symphony-plus-plus/beta"
@@ -1014,7 +899,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-DETAIL-SCOPED-OTHER-BASE",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "main"
@@ -1039,7 +924,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-WR-ANCHOR",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta"
@@ -1166,7 +1051,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-WR-ORDER-ANCHOR",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta"
@@ -1191,7 +1076,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-WR-DETAIL-ANCHOR",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta"
@@ -1303,7 +1188,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-SCRATCH-ANCHOR",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta"
@@ -1387,7 +1272,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-COMMENT-ANCHOR",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta"
@@ -1459,7 +1344,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-COMMENT-CAP-ANCHOR",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta"
@@ -1857,7 +1742,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-OP-GRANT-ANCHOR",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "symphony-plus-plus/beta"
@@ -1982,7 +1867,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-WR-AUTH-ANCHOR",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "planning",
                  repo: "nextide/symphony-plus-plus",
                  base_branch: "main"
@@ -1998,7 +1883,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                repo,
                WorkPackageFactory.attrs(
                  id: "SYMPP-DASH-WR-AUTH-LEGACY-PACKAGE",
-                 kind: "phase_child",
+                 kind: "delegation",
                  status: "blocked",
                  repo: anchor.repo,
                  base_branch: anchor.base_branch

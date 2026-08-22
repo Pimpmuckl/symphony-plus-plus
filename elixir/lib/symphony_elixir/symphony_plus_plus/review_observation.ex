@@ -7,7 +7,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.ReviewObservation do
   @ttl_ms 120_000
   @timeout_ms 3_000
   @max_output_bytes 64_000
-  @terminal_statuses ["skipped", "merged", "merged_into_phase", "closed", "abandoned"]
+  @terminal_statuses ["skipped", "merged", "closed", "abandoned"]
 
   @spec observe([WorkPackage.t()], keyword()) :: %{optional(String.t()) => map()}
   def observe(work_packages, opts \\ []) when is_list(work_packages) do

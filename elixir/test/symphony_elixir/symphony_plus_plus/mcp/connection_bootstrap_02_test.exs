@@ -390,9 +390,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
     refute Map.has_key?(get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties"]), "reviews")
     assert get_in(tools_by_name, ["submit_review_package", "inputSchema", "properties", "head_sha", "type"]) == "string"
 
-    assert Map.has_key?(tools_by_name, "read_child_status")
-    assert Map.has_key?(tools_by_name, "mint_child_worker_key")
-
     refute Map.has_key?(tools_by_name, "claim_work_key")
     refute Map.has_key?(tools_by_name, "claim_private_handoff")
   end

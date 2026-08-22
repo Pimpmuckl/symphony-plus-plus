@@ -61,9 +61,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
       assert [["sliced"]] = rows!("SELECT status FROM sympp_work_requests WHERE id = 'WR-CANONICAL-MIGRATION'")
       assert [["sliced"]] = rows!("SELECT status FROM sympp_work_requests WHERE id = 'WR-DISPATCHED-MIGRATION'")
 
-      assert [["WP-DIRECT", nil, "phase_child", "PHASE-DIRECT"]] =
-               rows!("SELECT id, work_request_id, kind, phase_id FROM sympp_work_packages WHERE id = 'WP-DIRECT'")
-
       assert [["work_package", "WP-LINKED", "work_package:WP-LINKED"]] =
                rows!("SELECT scope_type, scope_id, scope_key FROM sympp_access_grant_scopes WHERE id = 'AGS-LEGACY-SLICE'")
 
@@ -196,18 +193,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CanonicalWorkPackageMigrationTest do
       })
     )
 
-    query!("INSERT INTO sympp_phases (id, title, status, inserted_at, updated_at) VALUES (?, ?, ?, ?, ?)", [
-      "PHASE-DIRECT",
-      "Direct phase",
-      "active",
-      now,
-      now
-    ])
-
     insert_legacy_work_package!("WP-LINKED", "mcp", nil, "ready_for_worker", now)
     insert_legacy_work_package!("WP-CLOSEOUT", "mcp", nil, "closed", now)
     insert_legacy_work_package!("WP-DISPATCHED", "mcp", nil, "ready_for_worker", now)
-    insert_legacy_work_package!("WP-DIRECT", "phase_child", "PHASE-DIRECT", "ready_for_worker", now)
 
     query!(
       """

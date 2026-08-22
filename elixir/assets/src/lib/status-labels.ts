@@ -12,8 +12,6 @@ const STATUS_LABELS: Record<string, string> = {
   completed: "Completed",
   merging: "Merging",
   ready_for_merge: "Merge Ready",
-  ready_for_architect_merge: "Merge Ready",
-  merging_into_phase: "Merging",
   ci_waiting: "CI Waiting",
 };
 
