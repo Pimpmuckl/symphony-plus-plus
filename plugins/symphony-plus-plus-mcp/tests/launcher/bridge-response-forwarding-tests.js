@@ -19,6 +19,7 @@ const revision = "b".repeat(40);
 const contract = "c".repeat(64);
 let server;
 let bridge;
+const deliveryRequests = new Map();
 
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -40,7 +41,23 @@ async function main() {
     const chunks = [];
     request.on("data", (chunk) => chunks.push(chunk));
     request.on("end", () => {
-      const message = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const body = Buffer.concat(chunks).toString("utf8");
+      const message = JSON.parse(body);
+      const key = message.params && message.params.name === "record_work_package_delivery" && message.params.arguments.idempotency_key;
+      if (key) {
+        const requests = deliveryRequests.get(key) || [];
+        requests.push(body);
+        deliveryRequests.set(key, requests);
+        if (key === "replay-success" && requests.length === 1) {
+          response.writeHead(200, { "Content-Type": "application/json", "Mcp-Session-Id": "test-session" });
+          return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "Server error", data: { reason: "ledger_unavailable" } } }));
+        }
+        if (key === "replay-failure") {
+          const reason = requests.length === 1 ? "first_transient" : "second_transient";
+          response.writeHead(requests.length === 1 ? 500 : 503, { "Content-Type": "application/json", "Mcp-Session-Id": "test-session" });
+          return response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: "Server error", data: { reason } } }));
+        }
+      }
       const payload = message.method === "initialize"
         ? { jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "stub", version: "1" } } }
         : { jsonrpc: "2.0", id: message.id, result: { content: [{ type: "text", text: "forwarded" }] } };
@@ -97,6 +114,17 @@ async function main() {
   bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "test.forward", arguments: {} } })}\n`);
   const response = await responsePromise;
   assert.equal(response.result.content[0].text, "forwarded");
+
+  responsePromise = readResponse(3);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "record_work_package_delivery", arguments: { idempotency_key: "replay-success" } } })}\n`);
+  assert.equal((await responsePromise).result.content[0].text, "forwarded");
+  assert.equal(deliveryRequests.get("replay-success").length, 2);
+  assert.equal(new Set(deliveryRequests.get("replay-success")).size, 1);
+
+  responsePromise = readResponse(4);
+  bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "record_work_package_delivery", arguments: { idempotency_key: "replay-failure" } } })}\n`);
+  assert.equal(JSON.parse((await responsePromise).error.data.detail).error.data.reason, "second_transient");
+  assert.equal(deliveryRequests.get("replay-failure").length, 2);
 }
 
 function readResponse(id) {

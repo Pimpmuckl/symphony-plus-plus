@@ -447,6 +447,15 @@ async function mcpPost(url, body, sessionId, protocol, timeoutMs) {
   return { ok: response.status >= 200 && response.status < 300, status: response.status, headers: response.headers, lines: responseLines(response), error: response.body || `HTTP ${response.status}` };
 }
 
+function replayableDeliveryFailure(parsed, response) {
+  const key = parsed && parsed.method === "tools/call" && parsed.params && parsed.params.name === "record_work_package_delivery" && parsed.params.arguments && parsed.params.arguments.idempotency_key;
+  if (typeof key !== "string" || !key.trim()) return false;
+  if (response.status === 500 || response.status === 503) return true;
+  return response.lines.some((line) => {
+    try { return JSON.parse(line).error?.data?.reason === "ledger_unavailable"; } catch (_) { return false; }
+  });
+}
+
 function initializeBody() {
   return JSON.stringify({ jsonrpc: "2.0", id: "sympp-plugin-launcher-init", method: "initialize", params: { protocolVersion: "2025-03-26", clientInfo: { name: "sympp-plugin-launcher", version: "0.1.0" }, capabilities: {} } });
 }
@@ -684,6 +693,11 @@ async function bridge(identity, state, runtimeFile) {
             protocol = protocolFrom(initialized.lines) || "2025-03-26";
             response = await mcpPost(mcpUrl, line, sessionId, protocol, timeoutMs);
           }
+        }
+        if (replayableDeliveryFailure(parsed, response)) {
+          response = await mcpPost(mcpUrl, line, sessionId, protocol, timeoutMs);
+          const replaySession = response.headers["mcp-session-id"];
+          if (replaySession) sessionId = String(replaySession);
         }
       } catch (error) {
         response = { ok: false, error: error.message, lines: [] };
