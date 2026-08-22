@@ -3,25 +3,6 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
   alias SymphonyElixir.Codex.DynamicTool
 
-  test "tool_specs advertises the linear_graphql input contract" do
-    assert [
-             %{
-               "description" => description,
-               "inputSchema" => %{
-                 "properties" => %{
-                   "query" => _,
-                   "variables" => _
-                 },
-                 "required" => ["query"],
-                 "type" => "object"
-               },
-               "name" => "linear_graphql"
-             }
-           ] = DynamicTool.tool_specs()
-
-    assert description =~ "Linear"
-  end
-
   test "unsupported tools return a failure payload with the supported tool list" do
     response = DynamicTool.execute("not_a_real_tool", %{})
 

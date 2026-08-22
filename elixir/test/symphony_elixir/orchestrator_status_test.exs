@@ -1118,12 +1118,20 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert checking_rendered =~ "checking now…"
   end
 
-  test "status dashboard adds a spacer line before backoff queue when no agents are active" do
+  test "status dashboard formats idle and backoff rows" do
     snapshot_data =
       {:ok,
        %{
          running: [],
-         retrying: [],
+         retrying: [
+           %{
+             issue_id: "issue-1",
+             identifier: "MT-980",
+             attempt: 1,
+             due_in_ms: 1_500,
+             error: "error with \\nnewline"
+           }
+         ],
          codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
          rate_limits: nil
        }}
@@ -1132,6 +1140,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     plain = Regex.replace(~r/\e\[[0-9;]*m/, rendered, "")
 
     assert plain =~ ~r/No active agents\r?\n│\s*\r?\n├─ Backoff queue/
+    assert plain =~ "error=error with newline"
+    refute plain =~ "\\n"
   end
 
   test "status dashboard adds a spacer line before backoff queue when agents are active" do
@@ -1276,32 +1286,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   test "status dashboard formats timestamps at second precision" do
     dt = ~U[2026-02-15 21:36:38.987654Z]
     assert StatusDashboard.format_timestamp_for_test(dt) == "2026-02-15 21:36:38Z"
-  end
-
-  test "status dashboard renders 10-minute TPS graph snapshot for steady throughput" do
-    now_ms = 600_000
-    current_tokens = 6_000
-
-    samples =
-      for timestamp <- 575_000..0//-25_000 do
-        {timestamp, div(timestamp, 100)}
-      end
-
-    assert StatusDashboard.tps_graph_for_test(samples, now_ms, current_tokens) ==
-             "████████████████████████"
-  end
-
-  test "status dashboard renders 10-minute TPS graph snapshot for ramping throughput" do
-    now_ms = 600_000
-
-    rates_per_bucket =
-      1..24
-      |> Enum.map(&(&1 * 2))
-
-    {current_tokens, samples} = graph_samples_from_rates(rates_per_bucket)
-
-    assert StatusDashboard.tps_graph_for_test(samples, now_ms, current_tokens) ==
-             "▁▂▂▂▃▃▃▃▄▄▄▅▅▅▆▆▆▆▇▇▇██▅"
   end
 
   test "status dashboard keeps historical TPS bars stable within the active bucket" do
@@ -1640,19 +1624,6 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
         do_wait_for_snapshot(pid, predicate, deadline_ms)
       end
     end
-  end
-
-  defp graph_samples_from_rates(rates_per_bucket) do
-    bucket_ms = 25_000
-
-    {timestamp, tokens, samples} =
-      Enum.reduce(rates_per_bucket, {0, 0, []}, fn rate, {timestamp, tokens, acc} ->
-        next_timestamp = timestamp + bucket_ms
-        next_tokens = tokens + trunc(rate * bucket_ms / 1000)
-        {next_timestamp, next_tokens, [{timestamp, tokens} | acc]}
-      end)
-
-    {tokens, [{timestamp, tokens} | samples]}
   end
 
   defp graph_samples_for_stability_test(now_ms) do

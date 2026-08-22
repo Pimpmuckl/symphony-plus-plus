@@ -7,7 +7,6 @@ if System.get_env("SYMPHONY_RUN_LIVE_E2E") != "1" do
 end
 
 Code.require_file("support/github_test_support.exs", __DIR__)
-Code.require_file("support/snapshot_support.exs", __DIR__)
 Code.require_file("support/test_support.exs", __DIR__)
 Code.require_file("support/work_package_factory.exs", __DIR__)
 Code.require_file("support/canonical_work_package_fixtures.ex", __DIR__)
