@@ -130,7 +130,7 @@ S++ explicitly gives scoped context.
 
 Before `mark_ready()`:
 
-- Provider-backed branch, PR, current-head state, scope, blockers,
+- Provider-backed branch, PR, current-head state, blockers,
   investigation findings, and any required review completion are current.
 - Do not add task-plan, review-package, or progress calls only to restate facts
   already proved elsewhere.
