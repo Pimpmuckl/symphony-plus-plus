@@ -1,7 +1,7 @@
 import type { DashboardMutationPayload } from "@/types/dashboard";
 import { useEffect, useMemo } from "react";
 
-import { mutationHeaders, operatorApiUrl, operatorFetch, readDashboardApiResponse, withRuntimeConfigRetry } from "./runtime";
+import { mutationHeaders, operatorApiUrl, operatorFetch, readDashboardApiResponse } from "./runtime";
 
 const BEST_EFFORT_GITHUB_SYNC_COOLDOWN_MS = 5 * 60_000;
 
@@ -15,14 +15,12 @@ export function useBestEffortGithubSync(
     void sync.ready(
       ready
         ? async () => {
-            const payload = await withRuntimeConfigRetry(async () => {
-              const response = await operatorFetch(operatorApiUrl("/github/sync-prs"), {
-                method: "POST",
-                headers: await mutationHeaders(),
-                body: JSON.stringify({ mode: "auto" }),
-              });
-              return readDashboardApiResponse(response, "GitHub sync unavailable");
+            const response = await operatorFetch(operatorApiUrl("/github/sync-prs"), {
+              method: "POST",
+              headers: mutationHeaders(),
+              body: JSON.stringify({ mode: "auto" }),
             });
+            const payload = await readDashboardApiResponse(response, "GitHub sync unavailable");
             await refreshDashboard(payload as DashboardMutationPayload);
           }
         : null,

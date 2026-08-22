@@ -2,7 +2,7 @@ import type { ArchitectHandoffPayload, ContextComment, CopyArchitectHandoff, Cre
 import type { NewRequestForm } from "@/components/dashboard/new-request-dialog";
 import type * as React from "react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, createLatestTaskQueue, dashboardBootstrapFromRuntimeConfig, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, enqueueLatestTask, ensureDashboardRuntimeConfig, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, removeDashboardWorkRequest, withRuntimeConfigRetry } from "./runtime";
+import { CardDetailSelection, DASHBOARD_RECONNECT_GRACE_MS, DashboardConnectionIssue, DashboardResponseSelector, ResolveContextComment, SubmitContextComment, WorkPackageArchiveMutation, WorkPackageBlockerClearMutation, WorkPackageStateMutation, WorkRequestMutation, WorkRequestStateMutation, WorkspaceTab, copyTextToClipboard, createLatestTaskQueue, dashboardBootstrapFromRuntimeConfig, dashboardCaughtMessage, dashboardEventsUrl, dashboardMutationWorkRequest, dashboardRefreshPath, enqueueLatestTask, ensureDashboardRuntimeConfig, jsonHeaders, mergeDashboardPayload, mutationHeaders, mutationShouldRefreshDashboard, operatorApiUrl, operatorFetch, patchDashboardWorkRequest, readDashboardApiResponse, removeDashboardWorkRequest } from "./runtime";
 import { DashboardShell } from "./dashboard-shell";
 import { DashboardDebugTools } from "./dashboard-debug-tools";
 import { SoloSessions } from "./solo-sessions";
@@ -18,6 +18,15 @@ import { useDashboardSurfaceLoading } from "./dashboard-surface-loading";
 import { createDashboardEventRefresh, useBestEffortGithubSync } from "./dashboard-demand-loading";
 import { attentionTargetForGuidance, dashboardAttentionItems, type AttentionJumpDestination, type AttentionJumpTarget, type AttentionTarget } from "./workstream-attention";
 type DashboardLoadMode = "initial" | "refresh" | "silent";
+function isCurrentBootstrap(
+  bootstrap: DashboardPayload | null,
+  loadSequence: number,
+  currentLoadSequence: number,
+  mutationVersion: number,
+  currentMutationVersion: number,
+): bootstrap is DashboardPayload {
+  return Boolean(bootstrap) && loadSequence === currentLoadSequence && mutationVersion === currentMutationVersion;
+}
 export function DashboardApp() { return <><DashboardDebugTools /><DashboardShell {...useDashboardController()} /></>; }
 function useDashboardController() {
   const [appState, dispatchApp] = useReducer(appStateReducer, null, createInitialAppState);
@@ -127,17 +136,15 @@ function useDashboardController() {
       setRefreshing(true);
     }
     try {
-      await withRuntimeConfigRetry(async () => {
-        const config = await ensureDashboardRuntimeConfig();
-        const bootstrap = mode === "initial" ? dashboardBootstrapFromRuntimeConfig(config) : null;
-        if (bootstrap && loadSequence === loadSequenceRef.current && loadMutationVersion === mutationVersionRef.current) {
-          setDashboard(mergeDashboardPayload(dashboardRef.current, bootstrap)); clearConnectionFailure(failureVersion); setSurfaceRefreshVersion((version) => version + 1); return;
-        }
-        const response = await operatorFetch(operatorApiUrl(dashboardRefreshPath()), { headers: jsonHeaders() });
-        if (loadSequence !== loadSequenceRef.current) return;
-        const loaded = await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current, failureVersion);
-        if (loaded) setSurfaceRefreshVersion((version) => version + 1);
-      });
+      const config = await ensureDashboardRuntimeConfig();
+      const bootstrap = mode === "initial" ? dashboardBootstrapFromRuntimeConfig(config) : null;
+      if (isCurrentBootstrap(bootstrap, loadSequence, loadSequenceRef.current, loadMutationVersion, mutationVersionRef.current)) {
+        setDashboard(mergeDashboardPayload(dashboardRef.current, bootstrap)); clearConnectionFailure(failureVersion); setSurfaceRefreshVersion((version) => version + 1); return;
+      }
+      const response = await operatorFetch(operatorApiUrl(dashboardRefreshPath()), { headers: jsonHeaders() });
+      if (loadSequence !== loadSequenceRef.current) return;
+      const loaded = await applyDashboardResponse(response, "Dashboard API unavailable", undefined, loadMutationVersion, () => loadSequence === loadSequenceRef.current, failureVersion);
+      if (loaded) setSurfaceRefreshVersion((version) => version + 1);
     } catch (caught) {
       recordDashboardLoadFailure(loadSequence, caught, mode);
     } finally {
@@ -162,14 +169,12 @@ function useDashboardController() {
     const loadSequence = deferredLoadSequenceRef.current + 1;
     deferredLoadSequenceRef.current = loadSequence;
     try {
-      await withRuntimeConfigRetry(async () => {
-        const response = await operatorFetch(operatorApiUrl("/dashboard/deferred"), { headers: jsonHeaders() });
-        const payload = await readDashboardApiResponse(response, "Dashboard details unavailable");
-        if (loadSequence !== deferredLoadSequenceRef.current || loadMutationVersion !== mutationVersionRef.current || dashboardRef.current !== baseDashboard) return;
-        const nextDashboard = mergeDashboardPayload(dashboardRef.current, payload as DashboardPayload);
-        if (nextDashboard) setDashboard(nextDashboard);
-        clearConnectionFailure(failureVersion);
-      });
+      const response = await operatorFetch(operatorApiUrl("/dashboard/deferred"), { headers: jsonHeaders() });
+      const payload = await readDashboardApiResponse(response, "Dashboard details unavailable");
+      if (loadSequence !== deferredLoadSequenceRef.current || loadMutationVersion !== mutationVersionRef.current || dashboardRef.current !== baseDashboard) return;
+      const nextDashboard = mergeDashboardPayload(dashboardRef.current, payload as DashboardPayload);
+      if (nextDashboard) setDashboard(nextDashboard);
+      clearConnectionFailure(failureVersion);
     } catch (caught) {
       if (loadSequence !== deferredLoadSequenceRef.current) return;
       recordConnectionFailure(dashboardCaughtMessage(caught, "Dashboard details unavailable"));
@@ -199,14 +204,12 @@ function useDashboardController() {
   useBestEffortGithubSync(Boolean(dashboard && !dashboard.deferred?.dashboard_sections), refreshAfterMutation);
   const mutateWorkRequest = useCallback(
     async (workRequestId: string, action: "archive" | "delete" | "state", body: Record<string, unknown>, fallbackMessage: string, options: { archive?: boolean; remove?: boolean } = {}) => {
-      const payload = (await withRuntimeConfigRetry(async () => {
-        const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/${action}`), {
-          method: "POST",
-          headers: await mutationHeaders(),
-          body: JSON.stringify(body),
-        });
-        return readDashboardApiResponse(response, fallbackMessage);
-      })) as DashboardMutationPayload;
+      const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/${action}`), {
+        method: "POST",
+        headers: mutationHeaders(),
+        body: JSON.stringify(body),
+      });
+      const payload = (await readDashboardApiResponse(response, fallbackMessage)) as DashboardMutationPayload;
       const workRequest = dashboardMutationWorkRequest(payload);
       mutationVersionRef.current += 1;
       if (options.remove) setDashboard(removeDashboardWorkRequest(dashboardRef.current, workRequestId));
@@ -218,26 +221,22 @@ function useDashboardController() {
     [clearConnectionFailure, loadDashboard, setDashboard, setSelectedAttention, setSelectedCardDetail],
   );
   const submitGuidanceAnswer = useCallback(async (item: GuidanceItem, submission: GuidanceAnswerSubmission) => {
-    await withRuntimeConfigRetry(async () => {
-      const response = await operatorFetch(guidanceAnswerUrl(item), {
-        method: "POST",
-        headers: await mutationHeaders(),
-        body: JSON.stringify(submission),
-      });
-      const payload = (await readDashboardApiResponse(response, "Answer was not recorded")) as DashboardMutationPayload;
-      await refreshAfterMutation(payload);
+    const response = await operatorFetch(guidanceAnswerUrl(item), {
+      method: "POST",
+      headers: mutationHeaders(),
+      body: JSON.stringify(submission),
     });
+    const payload = (await readDashboardApiResponse(response, "Answer was not recorded")) as DashboardMutationPayload;
+    await refreshAfterMutation(payload);
     setSelectedAttention(null);
   }, [refreshAfterMutation, setSelectedAttention]);
   const createWorkRequest = useCallback(async (form: NewRequestForm) => {
-    const payload = (await withRuntimeConfigRetry(async () => {
-      const response = await operatorFetch(operatorApiUrl("/work-requests"), {
-        method: "POST",
-        headers: await mutationHeaders(),
-        body: JSON.stringify(form),
-      });
-      return readDashboardApiResponse(response, "Request was not created");
-    })) as CreateWorkRequestPayload;
+    const response = await operatorFetch(operatorApiUrl("/work-requests"), {
+      method: "POST",
+      headers: mutationHeaders(),
+      body: JSON.stringify(form),
+    });
+    const payload = (await readDashboardApiResponse(response, "Request was not created")) as CreateWorkRequestPayload;
 
     if (!payload.work_request) {
       throw new Error("Request was created, but the dashboard response was incomplete");
@@ -248,18 +247,16 @@ function useDashboardController() {
   }, [refreshAfterMutation]);
 
   const submitComment = useCallback<SubmitContextComment>(async (target, body) => {
-    const payload = (await withRuntimeConfigRetry(async () => {
-      const response = await operatorFetch(operatorApiUrl("/comments"), {
-        method: "POST",
-        headers: await mutationHeaders(),
-        body: JSON.stringify({
-          target_kind: target.target_kind,
-          target_id: target.target_id,
-          body,
-        }),
-      });
-      return readDashboardApiResponse(response, "Comment was not recorded");
-    })) as { comment?: ContextComment } & DashboardMutationPayload;
+    const response = await operatorFetch(operatorApiUrl("/comments"), {
+      method: "POST",
+      headers: mutationHeaders(),
+      body: JSON.stringify({
+        target_kind: target.target_kind,
+        target_id: target.target_id,
+        body,
+      }),
+    });
+    const payload = (await readDashboardApiResponse(response, "Comment was not recorded")) as { comment?: ContextComment } & DashboardMutationPayload;
 
     if (!payload.comment) {
       throw new Error("Comment was recorded, but the dashboard response was incomplete");
@@ -270,16 +267,14 @@ function useDashboardController() {
   }, [refreshAfterMutation]);
 
   const resolveComment = useCallback<ResolveContextComment>(async (commentId, resolutionNote) => {
-    const payload = (await withRuntimeConfigRetry(async () => {
-      const response = await operatorFetch(operatorApiUrl(`/comments/${encodeURIComponent(commentId)}/resolve`), {
-        method: "POST",
-        headers: await mutationHeaders(),
-        body: JSON.stringify({
-          resolution_note: resolutionNote || "",
-        }),
-      });
-      return readDashboardApiResponse(response, "Comment was not resolved");
-    })) as { comment?: ContextComment } & DashboardMutationPayload;
+    const response = await operatorFetch(operatorApiUrl(`/comments/${encodeURIComponent(commentId)}/resolve`), {
+      method: "POST",
+      headers: mutationHeaders(),
+      body: JSON.stringify({
+        resolution_note: resolutionNote || "",
+      }),
+    });
+    const payload = (await readDashboardApiResponse(response, "Comment was not resolved")) as { comment?: ContextComment } & DashboardMutationPayload;
 
     if (!payload.comment) {
       throw new Error("Comment was resolved, but the dashboard response was incomplete");
@@ -294,14 +289,12 @@ function useDashboardController() {
     let refreshPayload: DashboardMutationPayload | undefined;
 
     if (!handoff) {
-      const payload = (await withRuntimeConfigRetry(async () => {
-        const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/architect-handoff`), {
-          method: "POST",
-          headers: await mutationHeaders(),
-          body: JSON.stringify({}),
-        });
-        return readDashboardApiResponse(response, "Architect handoff unavailable");
-      })) as ArchitectHandoffPayload;
+      const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/architect-handoff`), {
+        method: "POST",
+        headers: mutationHeaders(),
+        body: JSON.stringify({}),
+      });
+      const payload = (await readDashboardApiResponse(response, "Architect handoff unavailable")) as ArchitectHandoffPayload;
 
       handoff = payload.architect_handoff || null;
       refreshPayload = payload;
@@ -336,58 +329,50 @@ function useDashboardController() {
   const deleteWorkRequest = useCallback<WorkRequestMutation>((workRequestId) => mutateWorkRequest(workRequestId, "delete", {}, "WorkRequest was not deleted", { remove: true }), [mutateWorkRequest]);
 
   const restoreWorkRequest = useCallback<WorkRequestMutation>(async (workRequestId) => {
-    await withRuntimeConfigRetry(async () => {
-      const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/restore`), {
-        method: "POST",
-        headers: await mutationHeaders(),
-        body: JSON.stringify({}),
-      });
-      const payload = (await readDashboardApiResponse(response, "WorkRequest was not restored")) as DashboardMutationPayload;
-      setDashboard(removeDashboardWorkRequest(dashboardRef.current, workRequestId));
-      await refreshAfterMutation(payload);
+    const response = await operatorFetch(operatorApiUrl(`/work-requests/${encodeURIComponent(workRequestId)}/restore`), {
+      method: "POST",
+      headers: mutationHeaders(),
+      body: JSON.stringify({}),
     });
+    const payload = (await readDashboardApiResponse(response, "WorkRequest was not restored")) as DashboardMutationPayload;
+    setDashboard(removeDashboardWorkRequest(dashboardRef.current, workRequestId));
+    await refreshAfterMutation(payload);
   }, [refreshAfterMutation, setDashboard]);
 
   const changeWorkRequestState = useCallback<WorkRequestStateMutation>((workRequestId, nextState) => mutateWorkRequest(workRequestId, "state", { state: nextState }, "WorkRequest state was not changed"), [mutateWorkRequest]);
 
   const changeWorkPackageState = useCallback<WorkPackageStateMutation>(async (workPackageId, action, options) => {
-    await withRuntimeConfigRetry(async () => {
-      const response = await operatorFetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/state`), {
-        method: "POST",
-        headers: await mutationHeaders(),
-        body: JSON.stringify({ status: action, no_pr_evidence: options?.noPrEvidence }),
-      });
-      const payload = (await readDashboardApiResponse(response, "WorkPackage state was not changed")) as DashboardMutationPayload;
-      await refreshAfterMutation(payload);
+    const response = await operatorFetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/state`), {
+      method: "POST",
+      headers: mutationHeaders(),
+      body: JSON.stringify({ status: action, no_pr_evidence: options?.noPrEvidence }),
     });
+    const payload = (await readDashboardApiResponse(response, "WorkPackage state was not changed")) as DashboardMutationPayload;
+    await refreshAfterMutation(payload);
     setSelectedAttention(null);
     setSelectedCardDetail(null);
   }, [refreshAfterMutation, setSelectedAttention, setSelectedCardDetail]);
 
   const archiveWorkPackage = useCallback<WorkPackageArchiveMutation>(async (workPackageId) => {
-    await withRuntimeConfigRetry(async () => {
-      const response = await operatorFetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/archive`), {
-        method: "POST",
-        headers: await mutationHeaders(),
-        body: JSON.stringify({}),
-      });
-      const payload = (await readDashboardApiResponse(response, "WorkPackage was not archived")) as DashboardMutationPayload;
-      await refreshAfterMutation(payload);
+    const response = await operatorFetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/archive`), {
+      method: "POST",
+      headers: mutationHeaders(),
+      body: JSON.stringify({}),
     });
+    const payload = (await readDashboardApiResponse(response, "WorkPackage was not archived")) as DashboardMutationPayload;
+    await refreshAfterMutation(payload);
     setSelectedAttention(null);
     setSelectedCardDetail(null);
   }, [refreshAfterMutation, setSelectedAttention, setSelectedCardDetail]);
 
   const clearWorkPackageBlocker = useCallback<WorkPackageBlockerClearMutation>(async (workPackageId, blockerId) => {
-    await withRuntimeConfigRetry(async () => {
-      const response = await operatorFetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/blockers/${encodeURIComponent(blockerId)}/clear`), {
-        method: "POST",
-        headers: await mutationHeaders(),
-        body: JSON.stringify({}),
-      });
-      const payload = (await readDashboardApiResponse(response, "Blocker was not cleared")) as DashboardMutationPayload;
-      await refreshAfterMutation(payload);
+    const response = await operatorFetch(operatorApiUrl(`/work-packages/${encodeURIComponent(workPackageId)}/blockers/${encodeURIComponent(blockerId)}/clear`), {
+      method: "POST",
+      headers: mutationHeaders(),
+      body: JSON.stringify({}),
     });
+    const payload = (await readDashboardApiResponse(response, "Blocker was not cleared")) as DashboardMutationPayload;
+    await refreshAfterMutation(payload);
     setSelectedAttention(null);
     setSelectedCardDetail(null);
   }, [refreshAfterMutation, setSelectedAttention, setSelectedCardDetail]);
@@ -409,7 +394,7 @@ function useDashboardController() {
   useEffect(() => {
     if (!dashboardReady || typeof EventSource === "undefined") return;
 
-    const events = new EventSource(dashboardEventsUrl(), { withCredentials: true });
+    const events = new EventSource(dashboardEventsUrl());
     const eventRefresh = createDashboardEventRefresh(() => void loadDashboard("silent"), () => document.visibilityState);
     events.addEventListener("dashboard_changed", eventRefresh.dashboardChanged);
     document.addEventListener("visibilitychange", eventRefresh.visibilityChanged);

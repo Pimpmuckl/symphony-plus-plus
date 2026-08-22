@@ -64,7 +64,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   @default_list_limit 50
   @max_list_limit 200
   @list_candidate_batch_size @max_list_limit + 1
-  @max_list_candidate_batches 3
 
   @spec tools() :: [String.t()]
   def tools, do: @tools
@@ -691,7 +690,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   end
 
   defp scoped_work_request_page(repo, repository_filters, filters, session, opts, %{limit: limit, cursor: cursor}) do
-    page = %{limit: limit, cursor: cursor, collected: [], batches_left: @max_list_candidate_batches}
+    page = %{limit: limit, cursor: cursor, collected: []}
 
     collect_scoped_work_request_page(
       repo,
@@ -717,9 +716,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
         length(candidates) < @list_candidate_batch_size ->
           {:ok, collected, nil}
 
-        page.batches_left == 1 ->
-          {:ok, collected, encode_list_cursor(List.last(candidates))}
-
         true ->
           collect_scoped_work_request_page(
             repo,
@@ -730,8 +726,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
             %{
               page
               | cursor: list_cursor_position(List.last(candidates)),
-                collected: collected,
-                batches_left: page.batches_left - 1
+                collected: collected
             }
           )
       end

@@ -39,9 +39,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service do
           {:ok, WorkRequest.t()} | {:error, error()}
   def update_status(repo, id, current_status, next_status), do: notify_dashboard(Repository.update_status(repo, id, current_status, next_status))
 
-  @spec prepare_for_work_packages(Repository.repo(), String.t()) :: {:ok, WorkRequest.t()} | {:error, error()}
-  def prepare_for_work_packages(repo, id), do: notify_dashboard(Repository.prepare_for_work_packages(repo, id))
-
   @spec ask_question(Repository.repo(), String.t(), map()) :: {:ok, ClarificationQuestion.t()} | {:error, error()}
   def ask_question(repo, work_request_id, attrs), do: notify_dashboard(Repository.ask_question(repo, work_request_id, attrs))
 

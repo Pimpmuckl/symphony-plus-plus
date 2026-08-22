@@ -26,7 +26,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
   alias SymphonyElixir.WorkPackageFactory
-  alias SymphonyElixirWeb.SymppDashboardApiController
 
   @endpoint SymphonyElixirWeb.Endpoint
 
@@ -198,7 +197,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
         )
 
       archive_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{delivered_package.id}/archive", %{})
         |> json_response(200)
 
@@ -321,15 +320,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiLocalOperatorVisibilityTes
     |> Map.put(:host, "localhost")
     |> Map.put(:remote_ip, {127, 0, 0, 1})
     |> put_req_header("origin", "http://localhost")
-    |> Plug.Test.init_test_session(%{})
-    |> SymppDashboardApiController.put_local_operator_session()
-  end
-
-  defp local_operator_csrf_conn do
-    csrf_token = Plug.CSRFProtection.get_csrf_token()
-
-    local_operator_conn()
-    |> put_req_header("x-csrf-token", csrf_token)
   end
 
   defp local_operator_dashboard_payload do

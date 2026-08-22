@@ -103,7 +103,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
     assert length(queries) < 25
   end
 
-  test "sparse authorization returns a bounded continuation without skipping visible rows", %{repo: repo} do
+  test "sparse authorization scans through to the visible rows", %{repo: repo} do
     {anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-PAGE-SPARSE", ["read:work_request"])
 
@@ -121,29 +121,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestListPaginationTest do
     grant_work_request_scope!(repo, session, visible.id)
     remove_grant_scope_type!(repo, session, "repo")
 
-    handler_id = {__MODULE__, self(), make_ref()}
-    event = repo.config()[:telemetry_prefix] ++ [:query]
-    :ok = :telemetry.attach(handler_id, event, &QueryProbe.handle/4, self())
+    result = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing", "limit" => 1})
+    payload = get_in(result, ["result", "structuredContent"])
 
-    first = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing", "limit" => 1})
-    :telemetry.detach(handler_id)
-    first_payload = get_in(first, ["result", "structuredContent"])
-    queries = drain_queries([])
-
-    assert first_payload["work_requests"] == []
-    assert is_binary(first_payload["next_cursor"])
-    assert length(queries) < 25
-
-    second =
-      mcp_tool(repo, session, "list_work_requests", %{
-        "status" => "ready_for_slicing",
-        "limit" => 1,
-        "cursor" => first_payload["next_cursor"]
-      })
-
-    second_payload = get_in(second, ["result", "structuredContent"])
-    assert Enum.map(second_payload["work_requests"], & &1["id"]) == [visible.id]
-    refute Map.has_key?(second_payload, "next_cursor")
+    assert Enum.map(payload["work_requests"], & &1["id"]) == [visible.id]
+    refute Map.has_key?(payload, "next_cursor")
   end
 
   defp drain_queries(queries) do

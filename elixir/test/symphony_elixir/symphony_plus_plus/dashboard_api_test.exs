@@ -62,7 +62,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   alias SymphonyElixir.WorkPackageFactory
   alias SymphonyElixirWeb.ReactDashboardController
   alias SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard
-  alias SymphonyElixirWeb.SymppDashboardApiController
 
   @endpoint SymphonyElixirWeb.Endpoint
   @dashboard_phase_id "phase-dashboard-test"
@@ -4576,7 +4575,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert :ok = DashboardPubSub.subscribe()
 
-      local_operator_csrf_conn()
+      local_operator_conn()
       |> post("/api/v1/sympp/operator/work-requests/#{work_request.id}/archive", %{})
       |> json_response(200)
 
@@ -4611,7 +4610,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert :ok = DashboardPubSub.subscribe()
 
-      local_operator_csrf_conn()
+      local_operator_conn()
       |> post("/api/v1/sympp/operator/comments", %{
         "target_kind" => "work_request",
         "target_id" => work_request.id,
@@ -5036,15 +5035,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "local operator config returns runtime csrf and asset paths" do
+  test "local operator config returns runtime paths" do
     with_local_operator_endpoint(fn ->
       payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/config"), 200)
 
       assert payload["apiBase"] == "/api/v1/sympp/operator"
       assert payload["basePath"] == ""
       assert payload["logoUrl"] == "/splusplus-logo.png"
-      assert is_binary(payload["csrfToken"])
-      assert byte_size(payload["csrfToken"]) > 20
       assert payload["dashboard"]["deferred"] == %{"dashboard_sections" => true}
     end)
   end
@@ -5055,13 +5052,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       payload = json_response(get(local_operator_conn(), "/api/v1/sympp/operator/config"), 200)
 
-      refute Map.has_key?(payload, "operatorMode")
-      assert is_binary(payload["csrfToken"])
       refute Map.has_key?(payload, "dashboard")
     end)
   end
 
-  test "unbound localhost agent requests do not become local operator" do
+  test "localhost requests without same-origin browser metadata are rejected" do
     with_local_operator_endpoint(fn ->
       conn =
         build_conn()
@@ -5069,11 +5064,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> Map.put(:remote_ip, {127, 0, 0, 1})
 
       assert %{"error" => %{"code" => "unauthorized"}} =
-               json_response(get(conn, "/api/v1/sympp/operator/config"), 401)
+               json_response(
+                 post(conn, "/api/v1/sympp/operator/work-requests", %{
+                   "title" => "Cross-origin request",
+                   "repo" => "symphony-plus-plus",
+                   "base_branch" => "main"
+                 }),
+                 401
+               )
     end)
   end
 
-  test "ordinary local dashboard load injects CSRF and can mutate without operator mode or bootstrap", %{repo: repo} do
+  test "ordinary local dashboard load can mutate directly", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-LOCAL-ORDINARY-MUTATION", status: "ready_for_slicing")
       index = "<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>"
@@ -5088,13 +5090,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> get("/sympp/board")
 
         config = dashboard_shell_config(html_response(shell_conn, 200))
-        refute Map.has_key?(config, "operatorMode")
-        assert is_binary(config["csrfToken"])
 
         payload =
           shell_conn
           |> recycle_local_operator_conn("http://localhost")
-          |> put_req_header("x-csrf-token", config["csrfToken"])
           |> post("/api/v1/sympp/operator/work-requests/#{work_request.id}/state", %{"state" => "completed"})
           |> json_response(200)
 
@@ -5104,52 +5103,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         assert {:ok, %{completed_at: %DateTime{}, completion_source: "operator"}} =
                  WorkRequestRepository.get(repo, work_request.id)
       end)
-    end)
-  end
-
-  test "ordinary local requests ignore stale work-key session state", %{repo: repo} do
-    with_local_operator_endpoint(fn ->
-      %{work_package: work_package} = create_dashboard_fixture(repo, id: "SYMPP-LOCAL-RECONNECT")
-
-      stale_session = %{
-        "sympp_board_grant_id" => "stale-board-grant",
-        "sympp_package_grant_ids" => %{work_package.id => "stale-package-grant"},
-        "sympp_package_grant_order" => [work_package.id]
-      }
-
-      stale_conn =
-        build_conn()
-        |> Map.put(:host, "localhost")
-        |> Map.put(:remote_ip, {127, 0, 0, 1})
-        |> put_req_header("origin", "http://localhost")
-        |> Plug.Test.init_test_session(stale_session)
-        |> get("/api/v1/sympp/operator/dashboard")
-
-      assert %{"deferred" => %{"dashboard_sections" => true}} = json_response(stale_conn, 200)
-
-      config_conn =
-        build_conn()
-        |> Map.put(:host, "localhost")
-        |> Map.put(:remote_ip, {127, 0, 0, 1})
-        |> put_req_header("origin", "http://localhost")
-        |> put_req_header("sec-fetch-site", "same-origin")
-        |> put_req_header("sec-fetch-mode", "cors")
-        |> put_req_header("sec-fetch-dest", "empty")
-        |> Plug.Test.init_test_session(stale_session)
-        |> get("/api/v1/sympp/operator/config")
-
-      config = json_response(config_conn, 200)
-      refute Map.has_key?(config, "operatorMode")
-      csrf_token = config["csrfToken"]
-      assert is_binary(csrf_token)
-
-      payload =
-        config_conn
-        |> recycle_local_operator_conn("http://localhost")
-        |> get("/api/v1/sympp/operator/dashboard/deferred")
-        |> json_response(200)
-
-      refute Enum.any?(dashboard_work_package_ids(payload), &(&1 == work_package.id))
     end)
   end
 
@@ -5165,7 +5118,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
             |> Map.put(:remote_ip, {127, 0, 0, 1})
             |> put_req_header("sec-fetch-site", "none")
             |> put_req_header("sec-fetch-mode", "navigate")
-            |> Plug.Test.init_test_session(%{})
             |> ReactDashboardController.index(%{})
 
           assert redirected_to(shell_conn, 302) == "http://127.0.0.1:5174/sympp/board"
@@ -5178,12 +5130,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
             |> put_req_header("sec-fetch-site", "same-site")
             |> put_req_header("sec-fetch-mode", "cors")
             |> put_req_header("sec-fetch-dest", "empty")
-            |> Plug.Test.init_test_session(%{})
             |> get("/api/v1/sympp/operator/config")
 
           payload = json_response(conn, 200)
-          refute Map.has_key?(payload, "operatorMode")
-          assert is_binary(payload["csrfToken"])
         end)
       end)
     end)
@@ -5198,12 +5147,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> put_req_header("sec-fetch-site", "same-origin")
         |> put_req_header("sec-fetch-mode", "cors")
         |> put_req_header("sec-fetch-dest", "empty")
-        |> Plug.Test.init_test_session(%{})
         |> get("/api/v1/sympp/operator/config")
 
       payload = json_response(conn, 200)
-      refute Map.has_key?(payload, "operatorMode")
-      assert is_binary(payload["csrfToken"])
     end)
   end
 
@@ -5218,11 +5164,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> put_req_header("sec-fetch-site", "same-site")
           |> put_req_header("sec-fetch-mode", "cors")
           |> put_req_header("sec-fetch-dest", "empty")
-          |> Plug.Test.init_test_session(%{})
           |> get("/api/v1/sympp/operator/config")
 
         assert %{"error" => %{"code" => "unauthorized"}} = json_response(conn, 401)
-        refute SymppDashboardApiController.local_operator_session?(conn.private.plug_session)
       end)
     end)
   end
@@ -5237,7 +5181,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> put_req_header("sec-fetch-site", "cross-site")
 
       assert %{"error" => %{"code" => "unauthorized"}} =
-               json_response(get(conn, "/api/v1/sympp/operator/config"), 401)
+               json_response(
+                 post(conn, "/api/v1/sympp/operator/work-requests", %{
+                   "title" => "Cross-origin request",
+                   "repo" => "symphony-plus-plus",
+                   "base_branch" => "main"
+                 }),
+                 401
+               )
     end)
   end
 
@@ -5252,19 +5203,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> put_req_header("sec-fetch-site", "same-site")
           |> put_req_header("sec-fetch-mode", "cors")
           |> put_req_header("sec-fetch-dest", "empty")
-          |> Plug.Test.init_test_session(%{})
           |> get("/api/v1/sympp/operator/config")
 
         payload = json_response(conn, 200)
-        refute Map.has_key?(payload, "operatorMode")
-        assert is_binary(payload["csrfToken"])
         assert Plug.Conn.get_resp_header(conn, "access-control-allow-origin") == ["http://127.0.0.1:5174"]
-        assert Plug.Conn.get_resp_header(conn, "access-control-allow-credentials") == ["true"]
       end)
     end)
   end
 
-  test "configured local dashboard origin receives credentialed operator API preflight" do
+  test "configured local dashboard origin receives operator API preflight" do
     with_local_operator_endpoint(fn ->
       with_local_operator_dashboard_origin("http://127.0.0.1:5174", fn ->
         conn =
@@ -5273,14 +5220,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> Map.put(:remote_ip, {127, 0, 0, 1})
           |> put_req_header("origin", "http://127.0.0.1:5174")
           |> put_req_header("access-control-request-method", "POST")
-          |> put_req_header("access-control-request-headers", "content-type,x-csrf-token")
+          |> put_req_header("access-control-request-headers", "content-type")
           |> options("/api/v1/sympp/operator/work-requests")
 
         assert response(conn, 204) == ""
         assert Plug.Conn.get_resp_header(conn, "access-control-allow-origin") == ["http://127.0.0.1:5174"]
-        assert Plug.Conn.get_resp_header(conn, "access-control-allow-credentials") == ["true"]
         assert Plug.Conn.get_resp_header(conn, "access-control-allow-methods") == ["GET, POST, OPTIONS"]
-        assert Plug.Conn.get_resp_header(conn, "access-control-allow-headers") == ["accept, content-type, x-csrf-token"]
+        assert Plug.Conn.get_resp_header(conn, "access-control-allow-headers") == ["accept, content-type"]
       end)
     end)
   end
@@ -5296,11 +5242,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> put_req_header("sec-fetch-site", "same-site")
           |> put_req_header("sec-fetch-mode", "cors")
           |> put_req_header("sec-fetch-dest", "empty")
-          |> Plug.Test.init_test_session(%{})
           |> get("/api/v1/sympp/operator/config")
 
         payload = json_response(conn, 200)
-        refute Map.has_key?(payload, "operatorMode")
       end)
     end)
   end
@@ -5316,10 +5260,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           |> put_req_header("sec-fetch-site", "same-site")
           |> put_req_header("sec-fetch-mode", "cors")
           |> put_req_header("sec-fetch-dest", "empty")
-          |> Plug.Test.init_test_session(%{})
 
         payload = json_response(get(conn, "/api/v1/sympp/operator/config"), 200)
-        refute Map.has_key?(payload, "operatorMode")
       end)
     end)
   end
@@ -5369,7 +5311,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         FakeGitHubClient.put_response("nextide/repo", 22, GitHubPullRequestFixtures.metadata(22, "head-a", merged?: true))
 
         payload =
-          local_operator_csrf_conn()
+          local_operator_conn()
           |> post("/api/v1/sympp/operator/github/sync-prs", %{})
           |> json_response(200)
 
@@ -5416,7 +5358,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           FakeGhCli.put_response("nextide/repo", 23, GitHubPullRequestFixtures.gh_view(23, "head-a", merged?: true))
 
           payload =
-            local_operator_csrf_conn()
+            local_operator_conn()
             |> post("/api/v1/sympp/operator/github/sync-prs", %{mode: "auto"})
             |> json_response(200)
 
@@ -5468,7 +5410,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
           FakeGitHubClient.put_response("nextide/repo", 25, GitHubPullRequestFixtures.metadata(25, "head-a", merged?: true))
 
           payload =
-            local_operator_csrf_conn()
+            local_operator_conn()
             |> post("/api/v1/sympp/operator/github/sync-prs", %{mode: "auto"})
             |> json_response(200)
 
@@ -5515,7 +5457,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
   test "local operator can create a WorkRequest through the dashboard API", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-requests", %{
           "title" => "Fresh dashboard request",
           "repo" => "symphony-plus-plus",
@@ -5550,7 +5492,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         )
 
       payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-requests/#{request.id}/architect-handoff", %{})
         |> json_response(200)
 
@@ -5580,7 +5522,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert dashboard_payload["archived_work_requests"]["work_requests"] == []
 
       archive_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/settings", %{
           "work_request_archive_after_days" => 1,
           "open_dashboard_on_boot" => false,
@@ -5601,7 +5543,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert is_binary(archived_at)
 
       restore_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-requests/#{request.id}/restore", %{})
         |> json_response(200)
 
@@ -5965,7 +5907,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       completed = create_completed_skipped_work_request!(repo, "WR-LOCAL-MANUAL-ARCHIVE", completed_at)
 
       archive_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-requests/#{completed.id}/archive", %{})
         |> json_response(200)
 
@@ -6000,7 +5942,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                )
 
       delivered_archive_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-requests/#{delivered.id}/archive", %{})
         |> json_response(200)
 
@@ -6017,7 +5959,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       incomplete = create_work_request!(repo, id: "WR-LOCAL-MANUAL-NOT-COMPLETE", status: "ready_for_slicing")
 
       error_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-requests/#{incomplete.id}/archive", %{})
         |> json_response(422)
 
@@ -6043,7 +5985,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", work_package.id)
 
       payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/state", %{"status" => "merged"})
         |> json_response(200)
 
@@ -6087,7 +6029,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                })
 
       _payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/blockers/local-clear-blocker/clear", %{})
         |> json_response(200)
 
@@ -6107,7 +6049,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                })
 
       second_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/blockers/local-clear-blocker/clear", %{})
         |> json_response(200)
 
@@ -6136,7 +6078,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  WorkPackageFactory.attrs(id: "WP-LOCAL-UNBLOCK", status: "blocked")
                )
 
-      local_operator_csrf_conn()
+      local_operator_conn()
       |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/state", %{"status" => "unblock"})
       |> json_response(200)
 
@@ -6144,7 +6086,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert unblocked.status == "ready_for_worker"
 
       retry_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/state", %{"status" => "unblock"})
         |> json_response(409)
 
@@ -6200,7 +6142,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert %{rows: [["not-json"]]} = repo.query!("SELECT hidden_work_package_ids FROM sympp_operator_settings WHERE id = ?", [OperatorSettings.settings_id()])
 
       payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/blockers/local-clear-blocker-stale-dashboard/clear", %{})
         |> json_response(200)
 
@@ -6216,7 +6158,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert persisted_package.status == "implementing"
 
       archive_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{archive_package.id}/archive", %{})
         |> json_response(200)
 
@@ -6249,7 +6191,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       append_blocker_event!(repo, work_package.id, "local-no-pr-closeout", true, [])
 
       payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/state", %{
           "status" => "completed_no_pr",
           "no_pr_evidence" => "Operator confirmed the exploratory work landed without a PR."
@@ -6300,7 +6242,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                )
 
       payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/state", %{
           "status" => "completed_no_pr",
           "no_pr_evidence" => "Operator closed the package while worker runtime was active."
@@ -6333,7 +6275,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", work_package.id)
 
       error =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/state", %{
           "status" => "completed_no_pr",
           "no_pr_evidence" => "Operator tried to close an already merged package without PR."
@@ -6364,12 +6306,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         )
 
       merge_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{merge_package.id}/state", %{"status" => "merged_and_archive"})
         |> json_response(200)
 
       close_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{close_package.id}/state", %{"status" => "closed_and_archive"})
         |> json_response(200)
 
@@ -6401,7 +6343,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         )
 
       active_error =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{active_package.id}/archive", %{})
         |> json_response(422)
 
@@ -6423,7 +6365,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, _dispatched} = CanonicalWorkPackageFixtures.dispatch_work_package(repo, work_request.id, approved.id, "approved", linked_package.id)
 
       linked_error =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-packages/#{linked_package.id}/archive", %{})
         |> json_response(422)
 
@@ -6439,7 +6381,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                  WorkPackageFactory.attrs(id: "WP-LOCAL-MARK-CLOSED", status: "closed")
                )
 
-      local_operator_csrf_conn()
+      local_operator_conn()
       |> post("/api/v1/sympp/operator/work-packages/#{work_package.id}/state", %{"status" => "merged"})
       |> json_response(422)
 
@@ -6448,24 +6390,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "local operator can clear status-only WorkRequest human info", %{repo: repo} do
+  test "local operator can clear every status-only WorkRequest clarification state", %{repo: repo} do
     with_local_operator_endpoint(fn ->
-      clearable = create_work_request!(repo, id: "WR-LOCAL-CLEAR-HUMAN-INFO", status: "human_info_needed")
+      for status <- ["ready_for_clarification", "clarifying", "human_info_needed"] do
+        clearable = create_work_request!(repo, id: "WR-LOCAL-CLEAR-#{status}", status: status)
 
-      payload =
-        local_operator_csrf_conn()
-        |> post("/api/v1/sympp/operator/work-requests/#{clearable.id}/state", %{"state" => "ready_for_slicing"})
-        |> json_response(200)
+        payload =
+          local_operator_conn()
+          |> post("/api/v1/sympp/operator/work-requests/#{clearable.id}/state", %{"state" => "ready_for_slicing"})
+          |> json_response(200)
 
-      assert get_in(payload, ["refresh", "work_request_id"]) == clearable.id
-      assert get_in(payload, ["work_request", "status"]) == "ready_for_slicing"
-      assert {:ok, %{status: "ready_for_slicing"}} = WorkRequestRepository.get(repo, clearable.id)
+        assert get_in(payload, ["refresh", "work_request_id"]) == clearable.id
+        assert get_in(payload, ["work_request", "status"]) == "ready_for_slicing"
+        assert {:ok, %{status: "ready_for_slicing"}} = WorkRequestRepository.get(repo, clearable.id)
+      end
 
       guarded = create_work_request!(repo, id: "WR-LOCAL-GUARD-HUMAN-INFO", status: "human_info_needed")
       assert {:ok, _question} = WorkRequestRepository.ask_question(repo, guarded.id, question_attrs(id: "WRQ-LOCAL-GUARD-HUMAN-INFO"))
 
       error =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-requests/#{guarded.id}/state", %{"state" => "ready_for_slicing"})
         |> json_response(409)
 
@@ -6509,7 +6453,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                })
 
       payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-requests/#{work_request.id}/state", %{"state" => "completed"})
         |> json_response(200)
 
@@ -6544,9 +6488,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert persisted_question.id == open_question.id
       assert persisted_question.status == "closed"
 
-      assert {:ok, persisted_guidance} = GuidanceRequestRepository.get(repo, guidance_request.id)
-      assert persisted_guidance.status == "answered"
-      assert persisted_guidance.answered_by == "terminal-cleanup"
+      assert {:error, :not_found} = GuidanceRequestRepository.get(repo, guidance_request.id)
 
       assert {:ok, progress_events} = PlanningRepository.list_progress_events(repo, work_package.id)
       refute Enum.any?(BlockerProjection.blockers(progress_events), & &1.active)
@@ -6563,8 +6505,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert audit.target_type == "work_request"
       assert audit.target_id == work_request.id
       assert audit.target_work_request_id == work_request.id
-      assert audit.decision == "allowed"
-      assert audit.reason == "allowed"
+      assert audit.decision == "not_applicable"
+      assert audit.reason == "trusted_local_human"
       assert audit.request_metadata["method"] == "POST"
       assert audit.request_metadata["path"] == "/api/v1/sympp/operator/work-requests/#{work_request.id}/state"
       assert audit.tool_metadata["name"] == "operator_update_work_request_state"
@@ -6624,7 +6566,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                })
 
       payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-requests/#{work_request.id}/delete", %{})
         |> json_response(200)
 
@@ -6665,7 +6607,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
                })
 
       payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/work-requests/#{work_request.id}/delete", %{})
         |> json_response(409)
 
@@ -6680,7 +6622,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       work_request = create_work_request!(repo, id: "WR-LOCAL-COMMENTS", status: "ready_for_slicing")
 
       create_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/comments", %{
           "target_kind" => "work_request",
           "target_id" => work_request.id,
@@ -6708,7 +6650,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, %Comment{source_type: "operator", author_name: "local-operator", body: "Operator note [REDACTED]"}} = CommentService.get(repo, comment_id)
 
       resolve_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/comments/#{comment_id}/resolve", %{
           "resolved_by" => "spoofed-worker",
           "resolved_source_type" => "worker",
@@ -6732,7 +6674,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert {:ok, %Comment{resolution_note: "Handled [REDACTED]"}} = CommentService.get(repo, comment_id)
 
       overlong_payload =
-        local_operator_csrf_conn()
+        local_operator_conn()
         |> post("/api/v1/sympp/operator/comments", %{
           "target_kind" => "work_request",
           "target_id" => work_request.id,
@@ -6742,33 +6684,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert get_in(overlong_payload, ["error", "code"]) == "invalid_request"
       assert get_in(overlong_payload, ["error", "message"]) =~ "body"
-    end)
-  end
-
-  test "local operator mutations require CSRF protection" do
-    with_local_operator_endpoint(fn ->
-      index = "<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>"
-
-      with_static_dashboard_file("index.html", index, fn ->
-        shell_conn =
-          local_operator_conn()
-          |> ReactDashboardController.index(%{})
-
-        assert html_response(shell_conn, 200) =~ "csrfToken"
-
-        assert_raise Plug.CSRFProtection.InvalidCSRFTokenError, fn ->
-          shell_conn
-          |> recycle_local_operator_conn("http://evil.example")
-          |> post("/api/v1/sympp/operator/work-requests", %{
-            "title" => "Cross-site dashboard request",
-            "repo" => "symphony-plus-plus",
-            "base_branch" => "main",
-            "work_type" => "feature",
-            "human_description" => "This should not reach the local ledger.",
-            "desired_dispatch_shape" => "architect_led_feature_branch"
-          })
-        end
-      end)
     end)
   end
 
@@ -6787,7 +6702,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     with_static_dashboard_file("index.html", index, fn ->
       html =
         build_conn(:get, "/sympp/board")
-        |> Plug.Test.init_test_session(%{})
         |> Map.put(:script_name, ["app"])
         |> ReactDashboardController.index(%{})
         |> html_response(200)
@@ -6797,7 +6711,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert html =~ "window.SYMPP_DASHBOARD_CONFIG"
       assert html =~ ~s("apiBase":"/app/api/v1/sympp/operator")
       assert html =~ ~s("logoUrl":"/app/splusplus-logo.png")
-      assert is_binary(dashboard_shell_config(html)["csrfToken"])
     end)
   end
 
@@ -6827,20 +6740,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
     assert %{"error" => %{"code" => "unauthorized"}} =
              json_response(get(auth_conn(secret), "/api/v1/sympp/work-packages/#{work_package.id}"), 401)
-  end
-
-  test "dashboard browser sessions reject unknown work keys with login responses", %{repo: repo} do
-    %{work_package: work_package} = create_dashboard_fixture(repo)
-    unknown_secret = WorkKey.generate().secret
-
-    board_conn = post(build_conn(), "/sympp/board/session", %{"work_key" => unknown_secret})
-
-    assert response(board_conn, 401) =~ "The work key could not access the board."
-
-    package_conn =
-      post(build_conn(), "/sympp/work-packages/#{work_package.id}/session", %{"work_key" => unknown_secret})
-
-    assert response(package_conn, 401) =~ "The work key could not access this package."
   end
 
   test "Phoenix request logger filters dashboard session secret parameters" do
@@ -6950,33 +6849,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end
   end
 
-  test "dashboard board grant auth migrates pre-phase ledgers before phase auth reads phase columns" do
-    database_path = WorkPackageFactory.database_path()
-
-    try do
-      {_work_package_id, _secret} =
-        seed_pre_phase_dashboard_database(database_path,
-          work_package_id: "SYMPP-PRE-PHASE-BOARD-AUTH",
-          grant_id: "grant-pre-phase-board-auth",
-          grant_role: "architect",
-          capabilities: ["read:phase"],
-          claimed_by: "architect-pre-phase"
-        )
-
-      refute "phase_id" in table_columns(database_path, "sympp_access_grants")
-      refute "phase_id" in table_columns(database_path, "sympp_work_packages")
-
-      with_configured_endpoint_database(database_path, fn ->
-        assert {:error, :forbidden} = SymppDashboardApiController.authorize_board_grant_id("grant-pre-phase-board-auth")
-      end)
-
-      assert "phase_id" in table_columns(database_path, "sympp_access_grants")
-      assert "phase_id" in table_columns(database_path, "sympp_work_packages")
-    after
-      File.rm(database_path)
-    end
-  end
-
   test "dashboard API board endpoint migrates pristine pre-phase ledgers before phase auth reads" do
     database_path = WorkPackageFactory.database_path()
 
@@ -6996,63 +6868,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       with_configured_endpoint_database(database_path, fn ->
         assert %{"error" => %{"code" => "forbidden"}} =
                  json_response(get(auth_conn(secret), "/api/v1/sympp/board"), 403)
-      end)
-
-      assert "phase_id" in table_columns(database_path, "sympp_access_grants")
-      assert "phase_id" in table_columns(database_path, "sympp_work_packages")
-    after
-      File.rm(database_path)
-    end
-  end
-
-  test "dashboard package grant auth migrates pre-phase ledgers before phase package auth reads" do
-    database_path = WorkPackageFactory.database_path()
-
-    try do
-      {work_package_id, _secret} =
-        seed_pre_phase_dashboard_database(database_path,
-          work_package_id: "SYMPP-PRE-PHASE-PACKAGE-AUTH",
-          grant_id: "grant-pre-phase-package-auth",
-          grant_role: "architect",
-          capabilities: ["read:phase"],
-          claimed_by: "architect-pre-phase"
-        )
-
-      refute "phase_id" in table_columns(database_path, "sympp_access_grants")
-      refute "phase_id" in table_columns(database_path, "sympp_work_packages")
-
-      with_configured_endpoint_database(database_path, fn ->
-        assert {:error, :forbidden} =
-                 SymppDashboardApiController.authorize_package_grant_id("grant-pre-phase-package-auth", work_package_id)
-      end)
-
-      assert "phase_id" in table_columns(database_path, "sympp_access_grants")
-      assert "phase_id" in table_columns(database_path, "sympp_work_packages")
-    after
-      File.rm(database_path)
-    end
-  end
-
-  test "dashboard package session migrates pristine pre-phase ledgers before phase package auth reads" do
-    database_path = WorkPackageFactory.database_path()
-
-    try do
-      {work_package_id, secret} =
-        seed_pre_phase_dashboard_database(database_path,
-          work_package_id: "SYMPP-PRE-PHASE-PACKAGE-SESSION",
-          grant_id: "grant-pre-phase-package-session",
-          grant_role: "architect",
-          capabilities: ["read:phase"],
-          claimed_by: "architect-pre-phase"
-        )
-
-      refute "phase_id" in table_columns(database_path, "sympp_access_grants")
-      refute "phase_id" in table_columns(database_path, "sympp_work_packages")
-
-      with_configured_endpoint_database(database_path, fn ->
-        conn = post(build_conn(), "/sympp/work-packages/#{work_package_id}/session", %{"work_key" => secret})
-
-        assert response(conn, 403) =~ "The work key is not allowed to open this package."
       end)
 
       assert "phase_id" in table_columns(database_path, "sympp_access_grants")
@@ -7084,32 +6899,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
 
       assert "scope_repo" in table_columns(database_path, "sympp_access_grants")
       assert "scope_base_branch" in table_columns(database_path, "sympp_access_grants")
-      assert "provenance" in table_columns(database_path, "sympp_access_grants")
-    after
-      File.rm(database_path)
-    end
-  end
-
-  test "dashboard package session migrates existing ledgers before auth reads provenance" do
-    database_path = WorkPackageFactory.database_path()
-
-    try do
-      {work_package_id, secret} =
-        seed_dashboard_database_at_migration(database_path, 20_260_506_143_000,
-          work_package_id: "SYMPP-PRE-PROVENANCE-SESSION",
-          grant_id: "grant-pre-provenance-session"
-        )
-
-      assert "scope_repo" in table_columns(database_path, "sympp_access_grants")
-      assert "scope_base_branch" in table_columns(database_path, "sympp_access_grants")
-      refute "provenance" in table_columns(database_path, "sympp_access_grants")
-
-      with_configured_endpoint_database(database_path, fn ->
-        conn = post(build_conn(), "/sympp/work-packages/#{work_package_id}/session", %{"work_key" => secret})
-
-        assert redirected_to(conn) == "/sympp/work-packages/#{work_package_id}"
-      end)
-
       assert "provenance" in table_columns(database_path, "sympp_access_grants")
     after
       File.rm(database_path)
@@ -7150,33 +6939,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         nil -> Application.delete_env(:symphony_elixir, :sympp_repo_database)
         value -> Application.put_env(:symphony_elixir, :sympp_repo_database, value)
       end
-    end
-  end
-
-  test "dashboard browser sessions use the default database when endpoint sympp_repo is unset" do
-    database_path = WorkPackageFactory.database_path()
-    original_database = Application.get_env(:symphony_elixir, :sympp_repo_database)
-
-    try do
-      {work_package_id, board_secret, package_secret} = seed_dashboard_session_database(database_path)
-      Application.put_env(:symphony_elixir, :sympp_repo_database, database_path)
-
-      with_runtime_endpoint_repo(nil, fn ->
-        board_conn = post(build_conn(), "/sympp/board/session", %{"work_key" => board_secret})
-        assert redirected_to(board_conn) == "/sympp/board"
-
-        package_conn =
-          post(build_conn(), "/sympp/work-packages/#{work_package_id}/session", %{"work_key" => package_secret})
-
-        assert redirected_to(package_conn) == "/sympp/work-packages/#{work_package_id}"
-      end)
-    after
-      case original_database do
-        nil -> Application.delete_env(:symphony_elixir, :sympp_repo_database)
-        value -> Application.put_env(:symphony_elixir, :sympp_repo_database, value)
-      end
-
-      File.rm(database_path)
     end
   end
 
@@ -7259,8 +7021,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     on_exit(fn -> LockedPhaseAnchorRepo.clear_grant() end)
 
     with_endpoint_repo(LockedPhaseAnchorRepo, fn ->
-      assert {:error, :database_busy} = SymppDashboardApiController.authorize_board_grant_id(grant.id)
-
       assert %{"error" => %{"code" => "database_busy"}} =
                json_response(get(auth_conn(secret), "/api/v1/sympp/board"), 503)
     end)
@@ -7928,14 +7688,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     |> Map.put(:host, "localhost")
     |> Map.put(:remote_ip, {127, 0, 0, 1})
     |> put_req_header("origin", "http://localhost")
-    |> Plug.Test.init_test_session(%{})
-  end
-
-  defp local_operator_csrf_conn do
-    csrf_token = Plug.CSRFProtection.get_csrf_token()
-
-    local_operator_conn()
-    |> put_req_header("x-csrf-token", csrf_token)
   end
 
   defp recycle_local_operator_conn(conn, origin) do
@@ -8082,26 +7834,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end
   end
 
-  defp with_runtime_endpoint_repo(repo, fun) when is_atom(repo) and is_function(fun, 0) do
-    endpoint_config = Application.get_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, [])
-    original_runtime_repo = SymphonyElixirWeb.Endpoint.config(:sympp_repo)
-
-    Application.put_env(
-      :symphony_elixir,
-      SymphonyElixirWeb.Endpoint,
-      Keyword.put(endpoint_config, :sympp_repo, repo)
-    )
-
-    SymphonyElixirWeb.Endpoint.config_change([{SymphonyElixirWeb.Endpoint, [sympp_repo: repo]}], [])
-
-    try do
-      fun.()
-    after
-      Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
-      SymphonyElixirWeb.Endpoint.config_change([{SymphonyElixirWeb.Endpoint, [sympp_repo: original_runtime_repo]}], [])
-    end
-  end
-
   defp with_dynamic_endpoint_database(database_path, fun) when is_function(fun, 0) do
     endpoint_config = Application.get_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, [])
     original_database = Application.get_env(:symphony_elixir, :sympp_repo_database)
@@ -8185,25 +7917,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
       assert :ok = WorkPackageRepository.migrate(Repo)
       %{work_package: work_package, work_key_secret: secret} = create_dashboard_fixture(Repo, id: "SYMPP-ALT-DB")
       {work_package.id, secret}
-    after
-      Repo.put_dynamic_repo(original_repo)
-      GenServer.stop(pid)
-    end
-  end
-
-  defp seed_dashboard_session_database(database_path) do
-    {:ok, pid} = Repo.start_link(database: database_path, name: nil, pool_size: 1, log: false)
-    original_repo = Repo.put_dynamic_repo(pid)
-
-    try do
-      assert :ok = WorkPackageRepository.migrate(Repo)
-
-      %{work_package: work_package, work_key_secret: package_secret} =
-        create_dashboard_fixture(Repo, id: "SYMPP-DEFAULT-SESSION")
-
-      board_secret = create_architect_grant_secret(Repo, work_package.id)
-
-      {work_package.id, board_secret, package_secret}
     after
       Repo.put_dynamic_repo(original_repo)
       GenServer.stop(pid)

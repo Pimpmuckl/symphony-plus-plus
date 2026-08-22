@@ -8,7 +8,6 @@ import {
   operatorApiUrl,
   operatorFetch,
   readDashboardApiResponse,
-  withRuntimeConfigRetry,
 } from "./runtime";
 
 export type DashboardSurface = "archived" | "solo";
@@ -40,13 +39,11 @@ export function useDashboardSurfaceLoading({
     setLoading((state) => ({ ...state, [surface]: true }));
 
     try {
-      await withRuntimeConfigRetry(async () => {
-        const response = await operatorFetch(operatorApiUrl(`/dashboard?surface=${surface}`), { headers: jsonHeaders() });
-        const payload = (await readDashboardApiResponse(response, `Dashboard ${surface} data unavailable`)) as DashboardPayload;
-        if (requestVersions.current[surface] !== requestVersion) return;
-        setDashboard(mergeDashboardPayload(dashboardRef.current, payload));
-        clearFailure(failureVersion);
-      });
+      const response = await operatorFetch(operatorApiUrl(`/dashboard?surface=${surface}`), { headers: jsonHeaders() });
+      const payload = (await readDashboardApiResponse(response, `Dashboard ${surface} data unavailable`)) as DashboardPayload;
+      if (requestVersions.current[surface] !== requestVersion) return;
+      setDashboard(mergeDashboardPayload(dashboardRef.current, payload));
+      clearFailure(failureVersion);
     } catch (caught) {
       if (requestVersions.current[surface] !== requestVersion) return;
       recordFailure(dashboardCaughtMessage(caught, `Dashboard ${surface} data unavailable`));

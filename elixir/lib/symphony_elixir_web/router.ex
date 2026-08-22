@@ -6,16 +6,11 @@ defmodule SymphonyElixirWeb.Router do
   use Phoenix.Router
 
   pipeline :browser do
-    plug(:fetch_session)
-    plug(:protect_from_forgery)
     plug(:put_secure_browser_headers)
   end
 
   pipeline :operator_dashboard_api do
     plug(:put_local_operator_cors_headers)
-    plug(:fetch_session)
-    plug(:protect_from_forgery)
-    plug(:require_operator_csrf_header)
     plug(:put_secure_browser_headers)
   end
 
@@ -25,9 +20,6 @@ defmodule SymphonyElixirWeb.Router do
     get("/", ReactDashboardController, :index)
     get("/sympp", ReactDashboardController, :index)
     get("/sympp/*path", ReactDashboardController, :index)
-
-    post("/sympp/board/session", SymppDashboardApiController, :board_session)
-    post("/sympp/work-packages/:work_package_id/session", SymppDashboardApiController, :package_session)
   end
 
   scope "/", SymphonyElixirWeb do
@@ -132,25 +124,14 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/*path", ObservabilityApiController, :not_found)
   end
 
-  defp require_operator_csrf_header(%Plug.Conn{method: method} = conn, _opts)
-       when method in ["POST", "PUT", "PATCH", "DELETE"] do
-    case Plug.Conn.get_req_header(conn, "x-csrf-token") do
-      [_token | _rest] -> conn
-      [] -> raise Plug.CSRFProtection.InvalidCSRFTokenError
-    end
-  end
-
-  defp require_operator_csrf_header(conn, _opts), do: conn
-
   defp put_local_operator_cors_headers(conn, _opts) do
     case Plug.Conn.get_req_header(conn, "origin") do
       [origin | _rest] when is_binary(origin) ->
         if local_operator_cors_origin?(conn, origin) do
           conn
           |> Plug.Conn.put_resp_header("access-control-allow-origin", origin)
-          |> Plug.Conn.put_resp_header("access-control-allow-credentials", "true")
           |> Plug.Conn.put_resp_header("access-control-allow-methods", "GET, POST, OPTIONS")
-          |> Plug.Conn.put_resp_header("access-control-allow-headers", "accept, content-type, x-csrf-token")
+          |> Plug.Conn.put_resp_header("access-control-allow-headers", "accept, content-type")
           |> Plug.Conn.put_resp_header("vary", "origin")
         else
           conn
