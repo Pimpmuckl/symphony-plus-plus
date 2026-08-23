@@ -1,4 +1,4 @@
-[System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+﻿[System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
 $ErrorActionPreference = "Stop"
 function Assert-True($Condition, [string]$Message) {
   if (-not $Condition) { throw $Message }
