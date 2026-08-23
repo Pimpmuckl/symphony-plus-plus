@@ -44,7 +44,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
         }
   @type error ::
           Repository.error()
-          | :dirty_worktree
           | :git_not_found
           | :invalid_base_branch
           | :invalid_branch
@@ -507,14 +506,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
   defp cleanup_existing_worktree(repo, %WorkPackage{} = work_package, worktree_path, opts) do
     opts = cleanup_status_context_opts(opts, worktree_path)
 
-    with :ok <- maybe_require_clean(worktree_path, opts),
+    with {:ok, _status_output} <- git_output(worktree_path, ["status", "--porcelain"], opts),
          {:ok, repo_root} <- cleanup_repo_root(opts),
          opts <- cleanup_context_opts(opts, repo_root, worktree_path),
          :ok <- require_recorded_worktree_owner(repo_root, worktree_path, opts),
          :ok <- require_git_worktree(worktree_path, repo_root, opts),
          {:ok, work_package} <- persist_cleanup_proof(repo, work_package, worktree_path, repo_root, opts),
          opts <- cleanup_removal_context_opts(opts, work_package, worktree_path, repo_root),
-         :ok <- git(repo_root, worktree_remove_args(worktree_path, opts), opts),
+         :ok <- git(repo_root, ["worktree", "remove", "--force", worktree_path], opts),
          :ok <- git(repo_root, ["worktree", "prune"], opts),
          {:ok, updated_work_package} <- persist_cleanup_state(repo, work_package, cleared_worktree_attrs(), opts) do
       {:ok, result(updated_work_package, "cleaned", worktree_path, nil, nil, repo_root)}
@@ -583,8 +582,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
   defp validate_existing_worktree_cleanup(%WorkPackage{} = work_package, worktree_path, opts) do
     opts = cleanup_status_context_opts(opts, worktree_path)
 
-    with {:ok, status_output} <- git_output(worktree_path, ["status", "--porcelain"], opts),
-         :ok <- require_clean(status_output),
+    with {:ok, _status_output} <- git_output(worktree_path, ["status", "--porcelain"], opts),
          {:ok, repo_root} <- cleanup_repo_root(opts),
          opts <- cleanup_context_opts(opts, repo_root, worktree_path),
          :ok <- require_recorded_worktree_owner(repo_root, worktree_path, opts),
@@ -764,25 +762,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
       false -> {:error, :invalid_worktree_path}
       {:error, _reason} -> {:error, :invalid_worktree_path}
     end
-  end
-
-  defp require_clean(""), do: :ok
-  defp require_clean(_status_output), do: {:error, :dirty_worktree}
-
-  defp maybe_require_clean(worktree_path, opts) do
-    if Keyword.get(opts, :force), do: :ok, else: require_clean_status(opts, worktree_path)
-  end
-
-  defp require_clean_status(opts, worktree_path) do
-    with {:ok, status_output} <- git_output(worktree_path, ["status", "--porcelain"], opts) do
-      require_clean(status_output)
-    end
-  end
-
-  defp worktree_remove_args(worktree_path, opts) do
-    if Keyword.get(opts, :force),
-      do: ["worktree", "remove", "--force", worktree_path],
-      else: ["worktree", "remove", worktree_path]
   end
 
   defp require_recorded_worktree_owner(repo_root, worktree_path, opts) do

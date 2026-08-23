@@ -3,7 +3,7 @@ Code.require_file("work_packages_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackagesCleanupOwnershipTest do
   use SymphonyElixir.SymphonyPlusPlus.WorkPackagesCase
 
-  test "cleanup refuses dirty worktrees and clears clean recorded worktrees", %{repo: repo} do
+  test "cleanup removes disposable dirty worktrees and clears their records", %{repo: repo} do
     fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-worktree-lifecycle")
     codex_home = Path.join(fixture.root, "codex-home")
 
@@ -20,12 +20,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackagesCleanupOwnershipTest do
 
     dirty_path = Path.join(prepared.worktree_path, "dirty.txt")
     File.write!(dirty_path, "dirty")
-
-    assert {:error, :dirty_worktree} = WorktreeLifecycle.cleanup(repo, package.id, codex_home: codex_home)
-    assert {:ok, dirty_package} = Repository.get(repo, package.id)
-    assert dirty_package.worktree_path == prepared.worktree_path
-
-    File.rm!(dirty_path)
 
     assert {:ok, cleaned} = WorktreeLifecycle.cleanup(repo, package.id, codex_home: codex_home)
     assert cleaned.status == "cleaned"

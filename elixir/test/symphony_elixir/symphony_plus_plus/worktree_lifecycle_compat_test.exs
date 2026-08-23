@@ -159,7 +159,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeLifecycleCompatTest do
 
     fn repo_root, args ->
       case args do
-        ["worktree", "remove", ^worktree_path] ->
+        ["worktree", "remove", "--force", ^worktree_path] ->
           File.rm!(Path.join(worktree_path, ".git"))
           {_output, 0} = System.cmd(git, ["-C", repo_root, "worktree", "prune"], stderr_to_stdout: true)
           {"simulated Windows partial worktree removal\n", 255}
