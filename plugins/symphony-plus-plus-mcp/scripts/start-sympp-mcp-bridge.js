@@ -885,7 +885,6 @@ async function bridge(identity, state, runtimeFile) {
     return true;
   } finally {
     closing = true;
-    if (startupLock) { try { fs.closeSync(startupLock); } catch (_) { } }
     if (heartbeat) clearInterval(heartbeat);
     agent.destroy();
     cancelPreparation();
