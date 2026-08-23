@@ -1,7 +1,11 @@
-﻿$ErrorActionPreference = "Stop"
+[System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+$ErrorActionPreference = "Stop"
 function Assert-True($Condition, [string]$Message) {
   if (-not $Condition) { throw $Message }
 }
+$inheritedPriority = & (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -NonInteractive -Command '[System.Diagnostics.Process]::GetCurrentProcess().PriorityClass'
+Assert-True ([System.Diagnostics.Process]::GetCurrentProcess().PriorityClass -eq [System.Diagnostics.ProcessPriorityClass]::BelowNormal) "Launcher test parent must run BelowNormal"
+Assert-True ($inheritedPriority -eq "BelowNormal") "Launcher test descendants must inherit BelowNormal priority"
 function Import-ScriptFunction([string]$Path, [string]$Name) {
   $tokens = $null
   $errors = $null
@@ -98,8 +102,7 @@ Assert-True ($null -eq (Resolve-LocalWarmAttachIdentity $staleState $pluginRoot 
 $health = [pscustomobject]@{ healthy = $true; source_revision = $state.backend.source_revision; contract_fingerprint = $fingerprint }
 $plan = Resolve-FastAttachRuntimePlan $state $state.backend.source_revision $fingerprint 0 0 $false $false $null $null $health $true $true
 Assert-True ($null -ne $plan -and -not $plan.dashboard_plan.managed) "Artifact-static runtime should produce an unmanaged-dashboard fallback plan"
-Assert-True (-not (Test-BackendShouldShutdownOnIdle $state.backend $state.frontend "artifact")) "Artifact-static backends must remain resident after transient bridge churn"
-Assert-True (Test-BackendShouldShutdownOnIdle $state.backend $state.frontend "source") "Source backends without a managed dashboard must remain idle-disposable"
+Assert-True (Test-BackendShouldShutdownOnIdle $state.backend $state.frontend) "Managed backends without a managed dashboard must shut down on idle in source and artifact modes"
 Assert-True (Test-SymppBackendCommandLine 'cmd.exe /c C:\cache\artifacts\mcp\windows-x86_64\abc\runtime\start-runtime.cmd') "Supported artifact command wrappers must remain recoverable before binding"
 $sourceState = [pscustomobject]@{ runtime_kind = "managed"; backend = [pscustomobject]@{ url = "http://127.0.0.1:20000" } }
 $reusedSourcePlan = [pscustomobject]@{ reused = $true; should_start = $false; url = "http://127.0.0.1:20000" }
@@ -166,7 +169,7 @@ try {
   Assert-True ([int]$pendingState.publication.backend.pid -eq $ownedPid -and [int]$pendingState.publication.backend.pid -ne $unrelated.Id) "Pending recovery must not adopt an unrelated loopback process"
 } finally {
   foreach ($processId in @($(if ($unrelated) { $unrelated.Id }), $ownedPid, $wrapperPid, $(if ($leader) { $leader.Id }))) {
-    if ($processId) { & taskkill.exe /PID $processId /T /F 2>$null | Out-Null }
+    if ($processId -and (Get-Process -Id $processId -ErrorAction SilentlyContinue)) { & taskkill.exe /PID $processId /T /F 2>$null | Out-Null }
   }
   Remove-Item Env:SYMPP_TEST_WRAPPER_READY,Env:SYMPP_TEST_WRAPPER_RELEASE,Env:SYMPP_TEST_RUNTIME_CMD,Env:SYMPP_TEST_RUNTIME_ROOT -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $pendingBase -Recurse -Force -ErrorAction SilentlyContinue
@@ -489,13 +492,28 @@ $nodeBurst = $nodeBurstJson | ConvertFrom-Json
 Assert-True ($nodeBurst.clients -eq 200 -and $nodeBurst.board -eq 0 -and $nodeBurst.earlyLease -eq 1 -and $nodeBurst.initialize -eq 200) "200 concurrent production Node bridges must initialize with one health-leader lease and no dashboard traffic"
 $coldSmokeJson = & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "cold-start-singleton-smoke.js")
 $coldExitCode = $LASTEXITCODE
-Assert-True ($coldExitCode -eq 0) "Installed cold-herd matrix and leader-death suite must pass"
+Assert-True ($coldExitCode -eq 0) "Installed cold-herd, leader-death, and rotating-owner suite must pass"
 $coldSmoke = $coldSmokeJson | ConvertFrom-Json
-Assert-True ((@($coldSmoke.matrix.clients) -join ",") -eq "30,100,200" -and @($coldSmoke.matrix | Where-Object { $_.manifest -ne 1 -or $_.artifact -ne 1 -or $_.backends -ne 1 }).Count -eq 0) "30/100/200 shipped-command matrices must preserve singleton manifest, artifact, and backend work"
+Assert-True ((@($coldSmoke.matrix.clients) -join ",") -eq "30,100,200" -and @($coldSmoke.matrix | Where-Object { $_.manifest -ne 1 -or $_.artifact -ne 1 -or $_.backends -ne 1 -or $_.listeners -ne 0 }).Count -eq 0) "30/100/200 shipped-command matrices must preserve singleton cold work and release the backend listener after the final client"
 Assert-True ($coldSmoke.powershell_5_1 -and $coldSmoke.pwsh -and $coldSmoke.cleanup -and @($coldSmoke.leader_death).Count -eq 4) "Cold-herd coverage must prove both PowerShell shells, cleanup, and all leader-death phases"
+Assert-True (@($coldSmoke.recovery).Count -eq 11 -and @($coldSmoke.recovery | Where-Object { $_.mode -notin "shutdown_during_recovery", "powershell_fallback_initialize_retry" -and ($_.backends -ne 2 -or $_.pids -ne 2 -or $_.listeners -ne 0 -or $_.recovery_leaders -ne 1) }).Count -eq 0) "Node and PowerShell fallback recovery must each elect exactly one replacement backend and still reach zero listeners"
+Assert-True (@($coldSmoke.recovery | Where-Object { $_.mode -like "*ambiguous_tool" -and $_.mutations -eq 1 }).Count -eq 2 -and @($coldSmoke.recovery | Where-Object { $_.mode -notin "shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery", "powershell_fallback_initialize_retry" -and $_.tools_list -le $_.clients }).Count -eq 0) "Recovered adapters that issue tools/list must rebind it and never replay the ambiguous mutating tool call"
+Assert-True (@($coldSmoke.recovery | Where-Object { $_.mode -like "*backend_only_read_recovery" -and $_.tools_list -eq 3 -and $_.mutations -eq 0 }).Count -eq 2) "Node and PowerShell fallback bridges must replay an ambiguous read-only request after backend-only recovery"
+Assert-True (($coldSmoke.recovery | Where-Object mode -eq "shutdown_during_recovery").shutdown_race) "Adapters must exit when STDIO closes during heartbeat recovery"
+Assert-True (($coldSmoke.recovery | Where-Object mode -eq "generation_changed_recovery").fatal_generation) "A replacement rejected by generation validation must detach its lease and fail the adapter closed"
+Assert-True (($coldSmoke.recovery | Where-Object mode -eq "cleanup_source_changed_recovery").fatal_cleanup) "A replacement rejected by cleanup-source validation must detach its lease, fail closed, and stop cleanly"
+Assert-True (($coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_recovery").fallback_recovery -and ($coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_recovery").cancelled_recovery) "Surviving PowerShell fallback adapters must retain STDIO, rebind the replacement, cancel recovery on final close, and drain it after final detach"
+Assert-True (($coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_initialize_retry").initialize_retry) "A provably unsent initialize must be retransmitted after PowerShell fallback recovery"
 Assert-True ($coldSmoke.powershell_fallback.clients -eq 30 -and $coldSmoke.powershell_fallback.preparations -eq 1 -and $coldSmoke.powershell_fallback.backends -eq 1) "Direct PowerShell fallback must elect one cold leader before installed identity and runtime work"
+$jobCertificationJson = & (Join-Path $PSScriptRoot "run-job-object-certification.ps1")
+$jobCertificationExitCode = $LASTEXITCODE
+Assert-True ($jobCertificationExitCode -eq 0) "Windows Job Object certification must pass"
+$jobCertification = $jobCertificationJson | ConvertFrom-Json
+Assert-True ($jobCertification.clients -eq 32 -and $jobCertification.initial_epochs -eq 1 -and $jobCertification.owner_rotations -eq 3) "Independent Job clients must preserve singleton startup and three owner rotations"
+Assert-True ($jobCertification.backend_recoveries -eq 2 -and $jobCertification.mutations -eq 1 -and $jobCertification.original_stdio) "Job clients must preserve backend recovery, ambiguous-call safety, and original follower STDIO"
+Assert-True ($jobCertification.processes_after -eq 0 -and $jobCertification.listeners_after -eq 0 -and $jobCertification.active_leases_after -eq 0) "Final Job close must leave no owned process, listener, or active lease"
 $persistentRuntime = @(& (Join-Path $PSScriptRoot "persistent-artifact-runtime-smoke.ps1"))[-1] | ConvertFrom-Json
-Assert-True ($persistentRuntime.artifact_waves -eq 2 -and $persistentRuntime.initialize_and_tools_list -eq 2 -and $persistentRuntime.artifact_pid_reused) "Installed artifact-static runtime must survive idle detach and serve a second real MCP bridge wave on the same backend PID"
-Assert-True ($persistentRuntime.stale_cleanup_preserved_current -and $persistentRuntime.explicit_cleanup_stopped_exact -and $persistentRuntime.source_last_detach_stopped -and $persistentRuntime.isolated_runtime_ledger_ports) "Cleanup must remain exact, explicit, disposable for source runtimes, and isolated from the main runtime"
+Assert-True ($persistentRuntime.installed_waves -eq 2 -and $persistentRuntime.initialize_and_tools_list -eq 3 -and $persistentRuntime.installed_pids_distinct) "Installed command must stop the artifact-static runtime and start a new backend PID for the next wave"
+Assert-True ($persistentRuntime.artifact_last_detach_stopped -and $persistentRuntime.listeners_closed -and $persistentRuntime.source_last_detach_stopped -and $persistentRuntime.isolated_runtime_ledger_ports) "Source and installed artifact cleanup must stop their managed listeners and remain isolated from the main runtime"
 
 Write-Host "Launcher bootstrap, contract freshness, cold singleton, and lease identity regressions passed."

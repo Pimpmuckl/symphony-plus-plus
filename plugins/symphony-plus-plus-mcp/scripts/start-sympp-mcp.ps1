@@ -3,7 +3,6 @@ param(
   [switch]$ValidateOnly,
   [switch]$PrepareRuntimeOnly,
   [switch]$CleanupPreparedRuntime,
-  [switch]$PreserveCurrentArtifactRuntime,
   [string]$CleanupRuntimeKey
 )
 
@@ -596,6 +595,15 @@ function Convert-HttpClientHeaders($Response) {
   return $headers
 }
 
+function Test-McpRequestProvablyUnsent($Exception) {
+  while ($null -ne $Exception) {
+    if ($Exception -is [System.Net.Sockets.SocketException] -and
+        $Exception.SocketErrorCode -eq [System.Net.Sockets.SocketError]::ConnectionRefused) { return $true }
+    $Exception = $Exception.InnerException
+  }
+  return $false
+}
+
 function Wait-McpTaskWithLeaseHeartbeat($Task, [string]$McpUrl, [string]$LeaseClientId, [int]$HeartbeatIntervalMs) {
   $waitMs = [Math]::Max(1000, $HeartbeatIntervalMs)
   while (-not $Task.Wait($waitMs)) {
@@ -634,6 +642,7 @@ function Invoke-McpPostWithLeaseHeartbeat([string]$Url, [string]$Body, [string]$
       content = [string]$content
       content_lines = if ($ok) { @(Convert-McpHttpContentToJsonLines ([string]$content) $headers) } else { @() }
       error = if ($ok) { $null } else { $response.ReasonPhrase }
+      may_have_reached_backend = $true
     }
   } catch {
     return [pscustomobject]@{
@@ -643,6 +652,7 @@ function Invoke-McpPostWithLeaseHeartbeat([string]$Url, [string]$Body, [string]$
       content = $null
       content_lines = @()
       error = $_.Exception.Message
+      may_have_reached_backend = -not (Test-McpRequestProvablyUnsent $_.Exception)
     }
   } finally {
     if ($null -ne $response) {
@@ -686,6 +696,7 @@ function Invoke-McpPost([string]$Url, [string]$Body, [string]$SessionId, [string
       content = [string]$response.Content
       content_lines = @(Convert-McpHttpContentToJsonLines ([string]$response.Content) $response.Headers)
       error = $null
+      may_have_reached_backend = $true
     }
   } catch {
     $response = $_.Exception.Response
@@ -705,6 +716,7 @@ function Invoke-McpPost([string]$Url, [string]$Body, [string]$SessionId, [string
       content = Read-ErrorResponseBody $response
       content_lines = @()
       error = $_.Exception.Message
+      may_have_reached_backend = -not (Test-McpRequestProvablyUnsent $_.Exception)
     }
   }
 }
@@ -1002,11 +1014,14 @@ function Test-SymppPublicationControlsMatch($Recorded, $Expected) {
 
 function Set-SymppRuntimePublication($State, [string]$Status, $InstalledIdentity, $Controls, $BackendPlan, [string]$RuntimeRoot, [string]$BackendStartIdentity = $null) {
   $backendPid = if ($null -ne $BackendPlan) { $BackendPlan.pid } else { $null }
+  $ownerAdapterPid = 0
+  if (-not [int]::TryParse([string]$env:SYMPP_BACKEND_OWNER_PID, [ref]$ownerAdapterPid) -or $ownerAdapterPid -le 0) { $ownerAdapterPid = $PID }
   $publication = [pscustomobject]@{
     status = $Status
     generation_key = [string]$InstalledIdentity.generation_key
     installed_revision = [string]$InstalledIdentity.revision
     leader_pid = $PID
+    owner_adapter_pid = $ownerAdapterPid
     leader_process_start_time_utc_ticks = Get-ProcessStartIdentity (Get-Process -Id $PID -ErrorAction SilentlyContinue)
     published_at = [DateTimeOffset]::UtcNow.ToString("o")
     controls = $Controls
@@ -1307,10 +1322,9 @@ function Test-RuntimeStateExternalLoopback($RuntimeState) {
     [string]$RuntimeState.frontend.status -eq "external_loopback"
 }
 
-function Test-BackendShouldShutdownOnIdle($BackendPlan, $DashboardPlan, [string]$RuntimeMode) {
+function Test-BackendShouldShutdownOnIdle($BackendPlan, $DashboardPlan) {
   return ($BackendPlan.managed -eq $true) -and
-    ($DashboardPlan.managed -ne $true) -and
-    -not ($RuntimeMode -eq "artifact" -and [string]$DashboardPlan.status -eq "artifact_static")
+    ($DashboardPlan.managed -ne $true)
 }
 
 function Test-RuntimeEntryEndpointMatches([string]$Role, $Entry, [string]$Endpoint) {
@@ -1613,7 +1627,7 @@ function Get-ManagedListenerPid([string]$Role, [int]$Port) {
   return $null
 }
 
-function Stop-ManagedServersIfUnused([string]$RuntimeFile, [string]$RuntimeKey, [bool]$PreserveCurrentArtifactRuntime = $false) {
+function Stop-ManagedServersIfUnused([string]$RuntimeFile, [string]$RuntimeKey) {
   $lock = Enter-FileLock (Resolve-StartupLockFile $RuntimeFile) 30
   try {
     $activeLeases = @(Get-ActiveBridgeLeases $RuntimeFile)
@@ -1631,11 +1645,7 @@ function Stop-ManagedServersIfUnused([string]$RuntimeFile, [string]$RuntimeKey, 
     if ((Test-ActiveLegacyBridgeLease $activeLeases) -or (Test-ActiveBridgeLeaseForRuntimeKey $activeLeases $RuntimeKey)) {
       return
     }
-    $preserveCurrent = $PreserveCurrentArtifactRuntime -and
-      [string]$state.runtime_kind -eq "artifact" -and
-      [string]$state.runtime_mode -eq "artifact" -and
-      [string]$state.frontend.status -eq "artifact_static"
-    if ([System.StringComparer]::OrdinalIgnoreCase.Equals($stateKey, $RuntimeKey) -and -not $preserveCurrent) {
+    if ([System.StringComparer]::OrdinalIgnoreCase.Equals($stateKey, $RuntimeKey)) {
       [void](Stop-CurrentManagedRuntimeStateEntries $state $activeLeases)
     }
     $supersededStates = Stop-SupersededRuntimeStatesIfUnused $RuntimeFile (Get-SupersededRuntimeStates $state)
@@ -2029,6 +2039,58 @@ function Resolve-FastAttachRuntimePlan {
   }
 }
 
+function Invoke-PowerShellFallbackRuntimeRecovery {
+  param(
+    [string]$RuntimeFile, [string]$PluginRoot, [int]$BackendPort, [int]$DashboardPort,
+    [bool]$BackendPortExplicit, [bool]$DashboardPortExplicit,
+    [string]$ConfiguredBackendUrl, [string]$ConfiguredDashboardOrigin, [string]$LauncherPath,
+    $StdinReadState
+  )
+
+  $previousOwnerPid = $env:SYMPP_BACKEND_OWNER_PID
+  try {
+    $env:SYMPP_BACKEND_OWNER_PID = [string]$PID
+    $powerShell = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $preparationArgs = @{
+      FilePath = $powerShell
+      ArgumentList = (Join-ProcessArgumentList @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $LauncherPath, "-PrepareRuntimeOnly"))
+      RedirectStandardOutput = (Join-Path (Resolve-LogDir) "fallback-recovery-$PID.out.log")
+      PassThru = $true
+    }
+    if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) { $preparationArgs["WindowStyle"] = "Hidden" }
+    $preparation = Start-Process @preparationArgs
+    while (-not $preparation.WaitForExit(100)) {
+      $stdinClosed = $null -ne $StdinReadState -and (Update-McpStdinReadState $StdinReadState)
+      if ($stdinClosed) {
+        if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+          & taskkill.exe /PID $preparation.Id /T /F 2>$null | Out-Null
+        } else {
+          Stop-Process -Id $preparation.Id -Force -ErrorAction SilentlyContinue
+        }
+        throw [System.OperationCanceledException]::new("STDIO closed during fallback backend recovery.")
+      }
+    }
+  } finally {
+    $env:SYMPP_BACKEND_OWNER_PID = $previousOwnerPid
+  }
+  Write-SymppLauncherTrace "fallback_recovery_prepared"
+
+  try {
+    $state = Read-RuntimeState $RuntimeFile
+    $identity = Resolve-LocalWarmAttachIdentity $state $PluginRoot $BackendPort $DashboardPort $BackendPortExplicit $DashboardPortExplicit $ConfiguredBackendUrl $ConfiguredDashboardOrigin
+    if ($null -eq $identity) { throw "Replacement runtime identity was unavailable." }
+    Write-SymppLauncherTrace "fallback_recovery_identity"
+    $plan = Resolve-FastAttachRuntimePlan $state $identity.source_revision $identity.contract_fingerprint 0 0 $false $false $null $null
+    if ($null -eq $plan) { throw "Replacement runtime was not healthy." }
+    Write-SymppLauncherTrace "fallback_recovery_plan"
+    return $plan
+  } catch {
+    $failedKey = Get-RuntimeStateKey (Read-RuntimeState $RuntimeFile)
+    if (-not [string]::IsNullOrWhiteSpace($failedKey)) { Stop-ManagedServersIfUnused $RuntimeFile $failedKey }
+    throw
+  }
+}
+
 function Invoke-WarmAttachFromRuntimeState {
   param(
     [string]$RuntimeFile,
@@ -2057,6 +2119,7 @@ function Invoke-WarmAttachFromRuntimeState {
 
   # Publish before probing so a concurrent last-detach cleanup sees this client.
   $leasePath = New-BridgeLease $RuntimeFile $provisionalPlan.backend_plan $provisionalPlan.dashboard_plan $provisionalPlan.runtime_key
+  $leaseState = [pscustomobject]@{ path = $leasePath; runtime_key = $identity.runtime_key }
   $attached = $false
   try {
     $confirmedState = Read-RuntimeState $RuntimeFile
@@ -2073,12 +2136,21 @@ function Invoke-WarmAttachFromRuntimeState {
 
     $attached = $true
     Write-Diagnostic "Symphony++ MCP bridge attached: backend=$($confirmedPlan.backend_plan.url) dashboard=$($confirmedPlan.dashboard_plan.url) runtime=$RuntimeFile"
-    Invoke-HttpMcpBridge $confirmedPlan.backend_plan.mcp_url $BridgeTimeout (New-McpClientLeaseId) $ClientHeartbeatInterval
+    $fallbackRecovery = { param($stdinReadState)
+      $plan = Invoke-PowerShellFallbackRuntimeRecovery $RuntimeFile $PluginRoot $BackendPort $DashboardPort $BackendPortExplicit $DashboardPortExplicit $ConfiguredBackendUrl $ConfiguredDashboardOrigin $PSCommandPath $stdinReadState
+      if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($leaseState.runtime_key, $plan.runtime_key)) {
+        $replacementLeasePath = New-BridgeLease $RuntimeFile $plan.backend_plan $plan.dashboard_plan $plan.runtime_key
+        Remove-BridgeLease $leaseState.path
+        $leaseState.path = $replacementLeasePath; $leaseState.runtime_key = $plan.runtime_key
+      }
+      return [pscustomobject]@{ mcp_url = $plan.backend_plan.mcp_url }
+    }
+    Invoke-HttpMcpBridge $confirmedPlan.backend_plan.mcp_url $BridgeTimeout (New-McpClientLeaseId) $ClientHeartbeatInterval $fallbackRecovery
     return $true
   } finally {
-    Remove-BridgeLease $leasePath
+    Remove-BridgeLease $leaseState.path
     if ($attached) {
-      Stop-ManagedServersIfUnused $RuntimeFile $identity.runtime_key $true
+      Stop-ManagedServersIfUnused $RuntimeFile $leaseState.runtime_key
     }
   }
 }
@@ -2245,7 +2317,7 @@ if ($Help) {
 }
 
 if (-not [string]::IsNullOrWhiteSpace($CleanupRuntimeKey)) {
-  Stop-ManagedServersIfUnused (Resolve-RuntimeFile) $CleanupRuntimeKey ([bool]$PreserveCurrentArtifactRuntime)
+  Stop-ManagedServersIfUnused (Resolve-RuntimeFile) $CleanupRuntimeKey
   exit 0
 }
 if ($CleanupPreparedRuntime) {
@@ -2552,7 +2624,7 @@ try {
       [void](Initialize-ElixirRuntime $elixirDir $launcher $mix $mise $logDir $elixirSetupTimeout)
     }
     $backendDashboardOrigin = if ($runtimeMode -eq "artifact" -and [string]$dashboardPlan.status -eq "artifact_static") { $null } else { $dashboardPlan.origin }
-    $backendShutdownOnIdle = Test-BackendShouldShutdownOnIdle $backendPlan $dashboardPlan $runtimeMode
+    $backendShutdownOnIdle = Test-BackendShouldShutdownOnIdle $backendPlan $dashboardPlan
     $startingRuntimeRoot = if ($runtimeMode -eq "artifact") { [string]$artifactRuntime.root } else { [string]$repoRoot }
     if ($installedHttpCold) {
       $startingState.runtime_mode = $runtimeMode; $startingState.runtime_kind = $runtimeMode
@@ -2695,8 +2767,20 @@ if ($PrepareRuntimeOnly) {
   exit 0
 }
 try {
-  Invoke-HttpMcpBridge $backendPlan.mcp_url $bridgeTimeout (New-McpClientLeaseId) $clientHeartbeatInterval
+  $leaseState = [pscustomobject]@{ path = $bridgeLeasePath; runtime_key = $runtimeKey }
+  $fallbackRecovery = { param($stdinReadState)
+    $recoveryPlan = Invoke-PowerShellFallbackRuntimeRecovery $runtimeFile $pluginRoot $backendPort $dashboardPort $backendPortExplicit $dashboardPortExplicit $env:SYMPP_BACKEND_URL $env:SYMPP_DASHBOARD_ORIGIN $PSCommandPath $stdinReadState
+    if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($leaseState.runtime_key, $recoveryPlan.runtime_key)) {
+      $replacementLeasePath = New-BridgeLease $runtimeFile $recoveryPlan.backend_plan $recoveryPlan.dashboard_plan $recoveryPlan.runtime_key
+      Remove-BridgeLease $leaseState.path
+      $leaseState.path = $replacementLeasePath; $leaseState.runtime_key = $recoveryPlan.runtime_key
+    }
+    $script:backendPlan = $recoveryPlan.backend_plan
+    $script:dashboardPlan = $recoveryPlan.dashboard_plan
+    return [pscustomobject]@{ mcp_url = $recoveryPlan.backend_plan.mcp_url }
+  }
+  Invoke-HttpMcpBridge $backendPlan.mcp_url $bridgeTimeout (New-McpClientLeaseId) $clientHeartbeatInterval $fallbackRecovery
 } finally {
-  Remove-BridgeLease $bridgeLeasePath
-  Stop-ManagedServersIfUnused $runtimeFile $runtimeKey $true
+  Remove-BridgeLease $leaseState.path
+  Stop-ManagedServersIfUnused $runtimeFile $leaseState.runtime_key
 }
