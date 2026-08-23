@@ -34,6 +34,14 @@ $faultedRead.SetException([System.IO.IOException]::new("test read failure"))
 $faultedState = [pscustomobject]@{ pending_task = $faultedRead.Task; buffered_lines = [System.Collections.Generic.Queue[string]]::new(); eof = $false }
 $faultedResult = Receive-McpStdinLine $faultedState 1
 Assert-True ($faultedResult.ready -and $null -eq $faultedResult.line -and $faultedState.eof) "Faulted stdin reads must become EOF"
+$firstRead = [System.Threading.Tasks.TaskCompletionSource[string]]::new(); $firstRead.SetResult("first")
+$secondRead = [System.Threading.Tasks.TaskCompletionSource[string]]::new(); $secondRead.SetResult("second")
+$pendingRead = [System.Threading.Tasks.TaskCompletionSource[string]]::new()
+$boundedReader = [pscustomobject]@{ next_task = $secondRead.Task; pending_task = $pendingRead.Task }
+$boundedReader | Add-Member -MemberType ScriptMethod -Name ReadLineAsync -Value { $next = $this.next_task; $this.next_task = $this.pending_task; return $next }
+$boundedState = [pscustomobject]@{ reader = $boundedReader; pending_task = $firstRead.Task; buffered_lines = [System.Collections.Generic.Queue[string]]::new(); eof = $false }
+[void](Update-McpStdinReadState $boundedState)
+Assert-True ($boundedState.buffered_lines.Count -eq 1 -and $boundedState.pending_task.IsCompleted) "STDIN polling must leave pipe backpressure after one buffered line"
 Assert-True (-not (Test-McpBackendUnavailableResponse ([pscustomobject]@{ ok = $false; statusCode = 503 }))) "HTTP errors must remain backend responses"
 Assert-True (Test-McpBackendUnavailableResponse ([pscustomobject]@{ ok = $false; statusCode = $null })) "Transport failures without a status must trigger recovery"
 foreach ($name in @(
