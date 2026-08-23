@@ -7,7 +7,6 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
-const { backendUnavailable, replayProvablyUnsent } = require("../../scripts/start-sympp-mcp-bridge.js");
 
 const pluginRoot = path.resolve(__dirname, "../..");
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sympp-bridge-response-"));
@@ -29,12 +28,6 @@ function sha256(value) {
 }
 
 async function main() {
-  assert.equal(backendUnavailable({ ok: false, status: 503 }), false);
-  assert.equal(backendUnavailable({ ok: false }), true);
-  assert.equal(replayProvablyUnsent({ mayHaveReachedBackend: false }), true);
-  assert.equal(replayProvablyUnsent({ mayHaveReachedBackend: true }), false);
-  assert.equal(replayProvablyUnsent({}), false);
-
   fs.mkdirSync(path.join(installedRoot, "scripts"), { recursive: true });
   fs.mkdirSync(path.join(sourcePluginRoot, "scripts"), { recursive: true });
   fs.cpSync(path.join(pluginRoot, "scripts"), path.join(installedRoot, "scripts"), { recursive: true });

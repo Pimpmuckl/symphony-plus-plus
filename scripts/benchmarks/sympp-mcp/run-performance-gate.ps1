@@ -132,6 +132,7 @@ function Write-Result($Metrics, [string[]]$Failures, $Cleanup) {
   [Console]::Out.WriteLine("  direct_elapsed_ms: $MaxDirectMs")
   [Console]::Out.WriteLine("  backend_private_bytes: $MaxBackendBytes")
   [Console]::Out.WriteLine("  backend_processes: 1")
+  [Console]::Out.WriteLine("  process_priority: $([System.Diagnostics.Process]::GetCurrentProcess().PriorityClass)")
   [Console]::Out.WriteLine("  response_list: list_queries=$($responseListCaps.list_queries),list_bytes=$($responseListCaps.list_bytes),list_p95_ms=$($responseListCaps.list_p95_ms),read_plan_p50_ratio=$($responseListCaps.read_plan_p50_ratio),read_plan_reductions_ratio=$($responseListCaps.read_plan_reductions_ratio)")
   [Console]::Out.WriteLine("  warm_leases_peak: $Clients")
   [Console]::Out.WriteLine("  zero_limits[5]: warm_leases_after,warm_network_attempts,wrapper_processes,wrapper_private_bytes,cold_leases_after_close")

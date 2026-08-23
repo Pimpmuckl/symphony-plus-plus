@@ -2044,7 +2044,7 @@ function Invoke-PowerShellFallbackRuntimeRecovery {
     [string]$RuntimeFile, [string]$PluginRoot, [int]$BackendPort, [int]$DashboardPort,
     [bool]$BackendPortExplicit, [bool]$DashboardPortExplicit,
     [string]$ConfiguredBackendUrl, [string]$ConfiguredDashboardOrigin, [string]$LauncherPath,
-    $StdinReadState
+    $StdinReadState, [bool]$ActiveRequest = $false
   )
 
   $previousOwnerPid = $env:SYMPP_BACKEND_OWNER_PID
@@ -2061,7 +2061,7 @@ function Invoke-PowerShellFallbackRuntimeRecovery {
     $preparation = Start-Process @preparationArgs
     while (-not $preparation.WaitForExit(100)) {
       $stdinClosed = $null -ne $StdinReadState -and (Update-McpStdinReadState $StdinReadState)
-      if ($stdinClosed) {
+      if ($stdinClosed -and -not $ActiveRequest -and $StdinReadState.buffered_lines.Count -eq 0) {
         if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
           & taskkill.exe /PID $preparation.Id /T /F 2>$null | Out-Null
         } else {
@@ -2136,8 +2136,8 @@ function Invoke-WarmAttachFromRuntimeState {
 
     $attached = $true
     Write-Diagnostic "Symphony++ MCP bridge attached: backend=$($confirmedPlan.backend_plan.url) dashboard=$($confirmedPlan.dashboard_plan.url) runtime=$RuntimeFile"
-    $fallbackRecovery = { param($stdinReadState)
-      $plan = Invoke-PowerShellFallbackRuntimeRecovery $RuntimeFile $PluginRoot $BackendPort $DashboardPort $BackendPortExplicit $DashboardPortExplicit $ConfiguredBackendUrl $ConfiguredDashboardOrigin $PSCommandPath $stdinReadState
+    $fallbackRecovery = { param($stdinReadState, $activeRequest)
+      $plan = Invoke-PowerShellFallbackRuntimeRecovery $RuntimeFile $PluginRoot $BackendPort $DashboardPort $BackendPortExplicit $DashboardPortExplicit $ConfiguredBackendUrl $ConfiguredDashboardOrigin $PSCommandPath $stdinReadState $activeRequest
       if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($leaseState.runtime_key, $plan.runtime_key)) {
         $replacementLeasePath = New-BridgeLease $RuntimeFile $plan.backend_plan $plan.dashboard_plan $plan.runtime_key
         Remove-BridgeLease $leaseState.path
@@ -2768,8 +2768,8 @@ if ($PrepareRuntimeOnly) {
 }
 try {
   $leaseState = [pscustomobject]@{ path = $bridgeLeasePath; runtime_key = $runtimeKey }
-  $fallbackRecovery = { param($stdinReadState)
-    $recoveryPlan = Invoke-PowerShellFallbackRuntimeRecovery $runtimeFile $pluginRoot $backendPort $dashboardPort $backendPortExplicit $dashboardPortExplicit $env:SYMPP_BACKEND_URL $env:SYMPP_DASHBOARD_ORIGIN $PSCommandPath $stdinReadState
+  $fallbackRecovery = { param($stdinReadState, $activeRequest)
+    $recoveryPlan = Invoke-PowerShellFallbackRuntimeRecovery $runtimeFile $pluginRoot $backendPort $dashboardPort $backendPortExplicit $dashboardPortExplicit $env:SYMPP_BACKEND_URL $env:SYMPP_DASHBOARD_ORIGIN $PSCommandPath $stdinReadState $activeRequest
     if (-not [System.StringComparer]::OrdinalIgnoreCase.Equals($leaseState.runtime_key, $recoveryPlan.runtime_key)) {
       $replacementLeasePath = New-BridgeLease $runtimeFile $recoveryPlan.backend_plan $recoveryPlan.dashboard_plan $recoveryPlan.runtime_key
       Remove-BridgeLease $leaseState.path
