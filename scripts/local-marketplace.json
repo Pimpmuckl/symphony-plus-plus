@@ -1,0 +1,19 @@
+{
+  "name": "symphony-plus-plus",
+  "plugins": [
+    {
+      "name": "symphony-plus-plus",
+      "source": {
+        "source": "local",
+        "path": "./plugins/symphony-plus-plus"
+      }
+    },
+    {
+      "name": "symphony-plus-plus-mcp",
+      "source": {
+        "source": "local",
+        "path": "./plugins/symphony-plus-plus-mcp"
+      }
+    }
+  ]
+}

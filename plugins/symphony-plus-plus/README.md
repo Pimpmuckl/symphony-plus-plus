@@ -52,9 +52,9 @@ See the authoritative operator docs:
 
 ## Development
 
-The committed marketplace entry at `.agents/plugins/marketplace.json` points
-at `./plugins/symphony-plus-plus` for isolated source development. The local
-refresh helper is only for isolated development Codex homes and refuses the
+The committed marketplace entry at `.agents/plugins/marketplace.json` always
+resolves plugins from Git `main`. The local refresh helper uses its own
+non-discoverable manifest for isolated development Codex homes and refuses the
 default `~/.codex` cache unless explicitly overridden.
 
 Use the lifecycle doctor for non-destructive diagnostics:

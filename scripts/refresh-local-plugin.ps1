@@ -505,7 +505,7 @@ function Invoke-InstalledCacheValidation([string]$TargetRoot, [string]$Label, [s
 
 $repoRoot = Resolve-StrictPath (Join-Path $PSScriptRoot "..")
 if ([string]::IsNullOrWhiteSpace($MarketplacePath)) {
-  $MarketplacePath = Join-Path $repoRoot ".agents\plugins\marketplace.json"
+  $MarketplacePath = Join-Path $PSScriptRoot "local-marketplace.json"
 }
 
 $marketplaceFile = Resolve-StrictPath $MarketplacePath

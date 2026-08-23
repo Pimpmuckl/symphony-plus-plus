@@ -7,8 +7,10 @@
     {
       "name": "symphony-plus-plus",
       "source": {
-        "source": "local",
-        "path": "./plugins/symphony-plus-plus"
+        "source": "url",
+        "url": "https://github.com/Pimpmuckl/symphony-plus-plus.git",
+        "path": "plugins/symphony-plus-plus",
+        "ref": "main"
       },
       "policy": {
         "installation": "AVAILABLE",
@@ -19,8 +21,10 @@
     {
       "name": "symphony-plus-plus-mcp",
       "source": {
-        "source": "local",
-        "path": "./plugins/symphony-plus-plus-mcp"
+        "source": "url",
+        "url": "https://github.com/Pimpmuckl/symphony-plus-plus.git",
+        "path": "plugins/symphony-plus-plus-mcp",
+        "ref": "main"
       },
       "policy": {
         "installation": "AVAILABLE",
