@@ -540,7 +540,7 @@ async function runCase(clientCount, shell, mode = "normal") {
       assert.notEqual(Number(stopped.publication.owner_adapter_pid), firstOwnerPid);
       assert.equal(fs.readdirSync(leaseDir, { withFileTypes: true }).filter((entry) => entry.isFile()).length, 0);
       backendPid = 0;
-      return { mode, shell: path.basename(shell), clients: clientCount, p95_ms: percentile(latencies, 0.95), max_ms: Math.max(...latencies), manifest: channel.counts.manifest_successes, artifact: channel.counts.archive_successes, preparations: traceCount(traceDir, "artifact_prepare_end"), backends: backend.starts, pids: 2, listeners: 0, initializes: backend.initialize, tools_list: backend.tools_list, mutations: backend.mutations, lease_peak: backend.lease_peak, leases_after: 0, recovery_leaders: traceCount(traceDir, "runtime_ready_published") - 1, fallback_recovery: true, cancelled_recovery: true };
+      return { mode, shell: path.basename(shell), clients: clientCount, p95_ms: percentile(latencies, 0.95), max_ms: Math.max(...latencies), manifest: channel.counts.manifest_successes, artifact: channel.counts.archive_successes, preparations: traceCount(traceDir, "artifact_prepare_end"), backends: backend.starts, pids: 3, listeners: 0, initializes: backend.initialize, tools_list: backend.tools_list, mutations: backend.mutations, lease_peak: backend.lease_peak, leases_after: 0, recovery_leaders: traceCount(traceDir, "runtime_ready_published") - 1, fallback_recovery: true, cancelled_recovery: true };
     } else if (mode === "shutdown_during_recovery") {
       await terminate(firstBackend.pid);
       await waitFor(() => traceCount(traceDir, "backend_recovery_leader") === 1, "Heartbeat recovery did not start.");
