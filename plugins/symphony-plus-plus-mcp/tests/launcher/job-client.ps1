@@ -2,15 +2,20 @@ param([Parameter(Mandatory)][string]$StateFile, [Parameter(Mandatory)][string]$C
 $ErrorActionPreference = "Stop"
 Add-Type -Path $env:SYMPP_JOB_HELPER_ASSEMBLY
 $job = [JobHandle]::new()
+$gateFile = "$StateFile.gate"
 try {
-  $start = [System.Diagnostics.ProcessStartInfo]::new("cmd.exe", "/d /s /c call `"$ClientScript`"")
+  Remove-Item -LiteralPath $gateFile -Force -ErrorAction SilentlyContinue
+  $start = [System.Diagnostics.ProcessStartInfo]::new((Get-Command pwsh.exe -ErrorAction Stop).Source, '-NoProfile -NonInteractive -Command "while (-not (Test-Path -LiteralPath $env:SYMPP_JOB_GATE)) { Start-Sleep -Milliseconds 10 }; & $env:SYMPP_JOB_CLIENT_SCRIPT"')
   $start.UseShellExecute = $false
   $start.RedirectStandardInput = $true
   $start.RedirectStandardOutput = $true
   $start.RedirectStandardError = $true
   $start.CreateNoWindow = $true
+  $start.Environment["SYMPP_JOB_GATE"] = $gateFile
+  $start.Environment["SYMPP_JOB_CLIENT_SCRIPT"] = $ClientScript
   $process = [System.Diagnostics.Process]::Start($start)
   $job.Assign($process)
+  [System.IO.File]::WriteAllText($gateFile, "ready")
   [Console]::Error.WriteLine("JOB_READY:$($process.Id)")
   $inputTask = [JobHandle]::ProxyInput([Console]::OpenStandardInput(), $process.StandardInput.BaseStream)
   $outputTask = $process.StandardOutput.BaseStream.CopyToAsync([Console]::OpenStandardOutput())
@@ -26,4 +31,5 @@ try {
   exit $process.ExitCode
 } finally {
   $job.Dispose()
+  Remove-Item -LiteralPath $gateFile -Force -ErrorAction SilentlyContinue
 }
