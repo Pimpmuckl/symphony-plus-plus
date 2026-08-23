@@ -29,6 +29,13 @@ $betaPath = Join-Path $repoRoot "scripts/sympp-beta.ps1"
 . $runtimePath
 . $helperPath
 . $processRuntimePath
+$faultedRead = [System.Threading.Tasks.TaskCompletionSource[string]]::new()
+$faultedRead.SetException([System.IO.IOException]::new("test read failure"))
+$faultedState = [pscustomobject]@{ pending_task = $faultedRead.Task; buffered_lines = [System.Collections.Generic.Queue[string]]::new(); eof = $false }
+$faultedResult = Receive-McpStdinLine $faultedState 1
+Assert-True ($faultedResult.ready -and $null -eq $faultedResult.line -and $faultedState.eof) "Faulted stdin reads must become EOF"
+Assert-True (-not (Test-McpBackendUnavailableResponse ([pscustomobject]@{ ok = $false; statusCode = 503 }))) "HTTP errors must remain backend responses"
+Assert-True (Test-McpBackendUnavailableResponse ([pscustomobject]@{ ok = $false; statusCode = $null })) "Transport failures without a status must trigger recovery"
 foreach ($name in @(
     "Normalize-McpContractFingerprint", "Get-McpContractFingerprintFromContractFile",
     "Get-McpContractFingerprintFromMarketplaceSource", "Resolve-LocalMcpContractFingerprint",

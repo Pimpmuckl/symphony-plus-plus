@@ -584,8 +584,9 @@ function Update-McpStdinReadState($State) {
 }
 
 function Receive-McpStdinLine($State, [int]$WaitMs) {
-  if ($State.buffered_lines.Count -eq 0 -and -not $State.eof -and -not $State.pending_task.Wait($WaitMs)) {
-    return [pscustomobject]@{ ready = $false; line = $null }
+  if ($State.buffered_lines.Count -eq 0 -and -not $State.eof) {
+    try { $completed = $State.pending_task.Wait($WaitMs) } catch { $State.eof = $true; $completed = $true }
+    if (-not $completed) { return [pscustomobject]@{ ready = $false; line = $null } }
   }
   [void](Update-McpStdinReadState $State)
   if ($State.buffered_lines.Count -gt 0) {
@@ -597,7 +598,7 @@ function Receive-McpStdinLine($State, [int]$WaitMs) {
 function Test-McpBackendUnavailableResponse($Response) {
   if ($null -eq $Response -or $Response.ok) { return $false }
   $statusCode = 0
-  return -not [int]::TryParse([string]$Response.statusCode, [ref]$statusCode) -or $statusCode -in @(502, 503, 504)
+  return -not [int]::TryParse([string]$Response.statusCode, [ref]$statusCode)
 }
 
 function Test-McpToolCall([string]$Line) {

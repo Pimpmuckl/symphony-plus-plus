@@ -326,7 +326,8 @@ async function certifyJobs({ clients, shell, runtimeFile, backendState, backendP
 
   const firstTrigger = clients.find((client) => client.child.exitCode === null && client !== sentinel && client !== initialOwner);
   await rotate(firstTrigger);
-  const secondTrigger = clients.find((client) => client.child.exitCode === null && client !== sentinel && client !== firstTrigger);
+  const secondOwner = await jobOwner(clients, readJson(backendState).pid);
+  const secondTrigger = clients.find((client) => client.child.exitCode === null && client !== sentinel && client !== firstTrigger && client !== secondOwner);
   await rotate(secondTrigger);
 
   const currentOwner = await jobOwner(clients, readJson(backendState).pid);

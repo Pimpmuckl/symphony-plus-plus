@@ -742,7 +742,8 @@ async function bridge(identity, state, runtimeFile) {
         throw error;
       }
     } catch (error) {
-      if (replacementAttached) await clientLease(next.mcpUrl, clientId, "detach", false);
+      const reusedLease = attached && current.identity.epoch === next.identity.epoch && current.identity.runtimeKey === next.identity.runtimeKey;
+      if (replacementAttached && !reusedLease) await clientLease(next.mcpUrl, clientId, "detach", false);
       if (replacementLease !== localLease) { try { fs.unlinkSync(replacementLease); } catch (_) { } }
       throw error;
     }
