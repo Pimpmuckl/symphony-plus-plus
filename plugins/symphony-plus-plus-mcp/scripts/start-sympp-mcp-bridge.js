@@ -763,7 +763,11 @@ async function bridge(identity, state, runtimeFile) {
   };
   const initializeSession = async () => {
     const initialized = await mcpPost(current.mcpUrl, initializeBody(), null, null, timeoutMs);
-    if (!initialized.ok) throw new Error(initialized.error || "Symphony++ MCP session reinitialization failed.");
+    if (!initialized.ok) {
+      const error = new Error(initialized.error || "Symphony++ MCP session reinitialization failed.");
+      error.symppHttpStatus = initialized.status;
+      throw error;
+    }
     sessionId = String(initialized.headers["mcp-session-id"] || "");
     protocol = protocolFrom(initialized.lines) || protocol || "2025-03-26";
   };
@@ -824,13 +828,17 @@ async function bridge(identity, state, runtimeFile) {
       try { parsed = JSON.parse(line); } catch (_) { }
       const requestProtocol = parsed && parsed.method === "initialize" && parsed.params ? String(parsed.params.protocolVersion || "") : null;
       let response;
+      let requestStarted = false;
       try {
         if (!requestProtocol && !sessionId && protocol) await initializeSession();
+        requestStarted = true;
         response = await mcpPost(current.mcpUrl, line, sessionId, protocol, timeoutMs);
         const nextSession = response.headers["mcp-session-id"];
         if (nextSession) sessionId = String(nextSession);
         if (!response.ok && response.status === 404 && sessionId && !requestProtocol) {
+          requestStarted = false;
           await initializeSession();
+          requestStarted = true;
           response = await mcpPost(current.mcpUrl, line, sessionId, protocol, timeoutMs);
           const recoverySession = response.headers["mcp-session-id"];
           if (recoverySession) sessionId = String(recoverySession);
@@ -841,10 +849,10 @@ async function bridge(identity, state, runtimeFile) {
           if (replaySession) sessionId = String(replaySession);
         }
       } catch (error) {
-        response = { ok: false, error: error.message, lines: [], mayHaveReachedBackend: error.symppRequestMayHaveReachedBackend };
+        response = { ok: false, status: error.symppHttpStatus, error: error.message, lines: [], mayHaveReachedBackend: error.symppRequestMayHaveReachedBackend };
       }
       if (!response.ok && !Number.isInteger(response.status) && current.state.backend.managed === true) {
-        const ambiguousToolCall = parsed && parsed.method === "tools/call" && response.mayHaveReachedBackend !== false;
+        const ambiguousToolCall = requestStarted && parsed && parsed.method === "tools/call" && response.mayHaveReachedBackend !== false;
         let recovered = false;
         try { await recover(); recovered = true; } catch (error) {
           if (error.symppFatal) throw error;
@@ -854,14 +862,20 @@ async function bridge(identity, state, runtimeFile) {
           process.stdout.write(`${JSON.stringify(indeterminateToolCall(parsed.id))}\n`);
           continue;
         }
-        if (recovered && (response.mayHaveReachedBackend === false || !parsed || parsed.method !== "tools/call")) {
+        if (recovered && (!requestStarted || response.mayHaveReachedBackend === false || !parsed || parsed.method !== "tools/call")) {
           try {
+            requestStarted = false;
             if (!requestProtocol) await initializeSession();
+            requestStarted = true;
             response = await mcpPost(current.mcpUrl, line, sessionId, protocol, timeoutMs);
             const nextSession = response.headers["mcp-session-id"];
             if (nextSession) sessionId = String(nextSession);
           } catch (error) {
-            response = { ok: false, error: error.message, lines: [] };
+            response = { ok: false, status: error.symppHttpStatus, error: error.message, lines: [], mayHaveReachedBackend: error.symppRequestMayHaveReachedBackend };
+          }
+          if (!response.ok && !Number.isInteger(response.status) && requestStarted && parsed && parsed.method === "tools/call" && response.mayHaveReachedBackend !== false) {
+            process.stdout.write(`${JSON.stringify(indeterminateToolCall(parsed.id))}\n`);
+            continue;
           }
         }
       }
