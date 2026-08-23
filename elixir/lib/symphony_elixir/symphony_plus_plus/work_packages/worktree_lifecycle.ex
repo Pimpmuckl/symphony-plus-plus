@@ -504,7 +504,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
   end
 
   defp cleanup_existing_worktree(repo, %WorkPackage{} = work_package, worktree_path, opts) do
-    with {:ok, repo_root} <- cleanup_repo_root(opts),
+    opts = cleanup_status_context_opts(opts, worktree_path)
+
+    with {:ok, _status_output} <- git_output(worktree_path, ["status", "--porcelain"], opts),
+         {:ok, repo_root} <- cleanup_repo_root(opts),
          opts <- cleanup_context_opts(opts, repo_root, worktree_path),
          :ok <- require_recorded_worktree_owner(repo_root, worktree_path, opts),
          :ok <- require_git_worktree(worktree_path, repo_root, opts),
@@ -577,7 +580,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
   end
 
   defp validate_existing_worktree_cleanup(%WorkPackage{} = work_package, worktree_path, opts) do
-    with {:ok, repo_root} <- cleanup_repo_root(opts),
+    opts = cleanup_status_context_opts(opts, worktree_path)
+
+    with {:ok, _status_output} <- git_output(worktree_path, ["status", "--porcelain"], opts),
+         {:ok, repo_root} <- cleanup_repo_root(opts),
          opts <- cleanup_context_opts(opts, repo_root, worktree_path),
          :ok <- require_recorded_worktree_owner(repo_root, worktree_path, opts),
          :ok <- require_git_worktree(worktree_path, repo_root, opts) do
@@ -1001,6 +1007,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
     Keyword.put(opts, :git_context, %{
       worktree_path: worktree_path
     })
+  end
+
+  defp cleanup_status_context_opts(opts, worktree_path) do
+    case cleanup_repo_root(opts) do
+      {:ok, target_repo_root} -> cleanup_context_opts(opts, target_repo_root, worktree_path)
+      _result -> cleanup_context_opts(opts, worktree_path)
+    end
   end
 
   defp cleanup_context_opts(opts, target_repo_root, worktree_path) do
