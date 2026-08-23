@@ -721,7 +721,7 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
       }
 
       $requestMayHaveReachedBackend = -not ($response.PSObject.Properties["may_have_reached_backend"] -and $response.may_have_reached_backend -eq $false)
-      if ((Test-McpBackendUnavailableResponse $response) -and -not (Test-LoopbackHttpTcpOpen $McpUrl)) {
+      if (Test-McpBackendUnavailableResponse $response) {
         $recovered = Invoke-McpBackendRecovery $Recover $McpUrl $ClientId $HeartbeatIntervalSec $stdinReadState
         if ($null -ne $recovered) {
           $McpUrl = $recovered.mcp_url; $heartbeatIntervalMs = $recovered.heartbeat_interval_ms
