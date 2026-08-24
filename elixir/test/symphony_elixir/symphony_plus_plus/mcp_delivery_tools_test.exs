@@ -902,17 +902,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
     assert repo.get!(WorkPackage, oracle_package.id).status == "ready_for_worker"
   end
 
-  test "abandoned delivery closeout reports currently non-abandonable packages as preconditions",
+  test "abandoned delivery closeout accepts terminal packages with worker lifecycle history",
        %{repo: repo} do
-    {work_request, work_package, _linked_package} =
+    {work_request, work_package, linked_package} =
       linked_slice!(
         repo,
-        work_request_id: "WR-MCP-DELIVERY-ABANDONED-BLOCKED",
-        work_package_status: "blocked"
+        work_request_id: "WR-MCP-DELIVERY-ABANDONED-HISTORY",
+        work_package_status: "ready_for_worker"
       )
+
+    for status <- ["blocked", "implementing", "reviewing", "abandoned"] do
+      assert {:ok, _event} =
+               PlanningRepository.append_progress_event(repo, %{
+                 work_package_id: linked_package.id,
+                 summary: "Worker lifecycle reached #{status}.",
+                 status: status,
+                 idempotency_key: "abandoned-worker-history-#{status}",
+                 payload: %{"next_status" => status}
+               })
+    end
+
+    assert {:ok, _abandoned_package} =
+             WorkPackageRepository.update(repo, linked_package.id, %{
+               status: "abandoned",
+               worktree_path: nil
+             })
 
     session =
       create_work_request_architect_session(repo, work_request, ArchitectHandoff.capabilities())
+
+    assert "terminal_package_without_delivery_outcome" in slice_by_id(delivery_board_payload_for(repo, session, work_request), work_package.id)[
+             "attention_reason_codes"
+           ]
 
     response =
       record_delivery(
@@ -921,15 +942,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPDeliveryToolsTest do
         abandoned_args(
           work_request,
           work_package,
-          "delivery-mcp-abandoned-blocked",
-          "Currently blocked packages should be superseded rather than hidden as no-code abandonments."
+          "delivery-mcp-abandoned-worker-history",
+          "The worker stopped and the package is already abandoned."
         )
       )
 
-    assert get_in(response, ["error", "code"]) == -32_009
-    assert get_in(response, ["error", "data", "decision_reason"]) == "precondition_denied"
-    assert get_in(response, ["error", "data", "reason"]) == "work_package_not_abandonable"
-    assert get_in(response, ["error", "data", "reason_code"]) == "work_package_not_abandonable"
+    assert response["error"] == nil
+    payload = get_in(response, ["result", "structuredContent"])
+    assert payload["work_package_delivery"]["outcome"] == "abandoned"
+
+    assert slice_by_id(
+             delivery_board_payload_for(repo, session, work_request),
+             work_package.id
+           )["attention_reason_codes"] == []
+
+    assert repo.get!(WorkPackage, linked_package.id).status == "abandoned"
   end
 
   test "workers and out-of-scope WR architects cannot record or revoke delivery", %{repo: repo} do

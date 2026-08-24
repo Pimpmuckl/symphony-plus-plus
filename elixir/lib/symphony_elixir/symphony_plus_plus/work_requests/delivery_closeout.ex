@@ -34,16 +34,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
     :superseded_reason,
     :abandoned_rationale
   ]
-  @non_abandonable_history_statuses [
-    "blocked",
-    "implementing",
-    "reviewing",
-    "ci_waiting",
-    "ready_for_merge",
-    "merged",
-    "closed"
-  ]
-
   @type error ::
           Repository.error()
           | WorkPackageRepository.error()
@@ -522,9 +512,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
        ) do
     with {:ok, events} <- PlanningRepository.list_progress_events(repo, work_package_id) do
       cond do
-        Enum.any?(events, &non_abandonable_history_event?/1) ->
-          {:error, :work_package_not_abandonable}
-
         recycled_runtime_context?(context) and
             Enum.any?(events, &abandoned_runtime_cleanup_event?/1) ->
           :ok
@@ -559,26 +546,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.DeliveryCloseout do
   end
 
   defp abandoned_progress_event?(_event), do: false
-
-  defp non_abandonable_history_event?(event) do
-    event
-    |> progress_history_statuses()
-    |> Enum.any?(&(&1 in @non_abandonable_history_statuses))
-  end
-
-  defp progress_history_statuses(%{status: status, payload: payload}) when is_map(payload) do
-    [
-      status,
-      map_value(payload, :status),
-      map_value(payload, :previous_status),
-      map_value(payload, :next_status),
-      map_value(payload, :work_package_status)
-    ]
-    |> Enum.filter(&is_binary/1)
-  end
-
-  defp progress_history_statuses(%{status: status}) when is_binary(status), do: [status]
-  defp progress_history_statuses(_event), do: []
 
   defp empty_closeout_context do
     closeout_context(WorkPackageActivity.empty_context(), [], [], allow_active_blockers?: false)
