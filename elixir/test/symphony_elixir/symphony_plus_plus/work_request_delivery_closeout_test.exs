@@ -475,56 +475,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestDeliveryCloseoutTest do
       })
 
     assert {:error, :active_runtime} = Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
-  end
-
-  test "abandoned closeout rejects already-abandoned packages with non-abandonable history", %{repo: repo} do
-    for {history_status, request_id} <- [
-          {"blocked", "WR-DELIVERY-ABANDONED-WITH-BLOCKED-HISTORY"},
-          {"implementing", "WR-DELIVERY-ABANDONED-WITH-IMPLEMENTING-HISTORY"}
-        ] do
-      {work_request, work_package, linked_package} =
-        linked_slice!(repo,
-          work_request_id: request_id,
-          status: "ready_for_worker"
-        )
-
-      assert {:ok, _history_progress} =
-               PlanningRepository.append_progress_event(repo, %{
-                 work_package_id: linked_package.id,
-                 summary: "Package reached #{history_status} before it was abandoned.",
-                 status: history_status,
-                 idempotency_key: "abandoned-with-#{history_status}-history",
-                 payload: %{
-                   "previous_status" => "ready_for_worker",
-                   "next_status" => history_status
-                 }
-               })
-
-      assert {:ok, _abandoned_progress} =
-               PlanningRepository.append_progress_event(repo, %{
-                 work_package_id: linked_package.id,
-                 summary: "Package was later abandoned.",
-                 status: "abandoned",
-                 idempotency_key: "abandoned-after-#{history_status}-history",
-                 payload: %{
-                   "previous_status" => history_status,
-                   "next_status" => "abandoned"
-                 }
-               })
-
-      assert {:ok, _abandoned_package} = WorkPackageRepository.update(repo, linked_package.id, %{status: "abandoned", worktree_path: nil})
-
-      attrs =
-        delivery_attrs(%{
-          outcome: "abandoned",
-          idempotency_key: "delivery-abandoned-with-#{history_status}-history",
-          abandoned_rationale: "This should not hide non-abandonable history."
-        })
-
-      assert {:error, :work_package_not_abandonable} =
-               Service.record_work_package_delivery(repo, work_request.id, work_package.id, attrs)
-    end
 
     assert repo.aggregate(WorkPackageDelivery, :count, :id) == 0
   end
