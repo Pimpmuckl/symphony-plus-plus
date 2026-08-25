@@ -268,10 +268,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     )
   end
 
-  defp existing_work_package_progress_event(repo, %Session{} = session, idempotency_key) do
-    existing_work_package_progress_event(repo, Session.work_package_id(session), idempotency_key)
-  end
-
   defp existing_work_package_progress_event(repo, work_package_id, idempotency_key) do
     case PlanningRepository.list_progress_events(repo, work_package_id) do
       {:ok, progress_events} -> matching_progress_event(progress_events, idempotency_key)
