@@ -8,7 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$DefaultBackendPort = 19998
+$DefaultBackendPort = 0
 $DefaultDashboardPort = 19999
 $BoardPath = "/sympp/board"
 
@@ -35,7 +35,7 @@ function Write-Usage {
   Write-Host "  SYMPP_MIX                    Optional mix executable path or name for direct launcher. Defaults to 'mix'."
   Write-Host "  SYMPP_MISE                   Optional mise executable path or name for mise launcher. Defaults to 'mise'."
   Write-Host "  MIX_BUILD_ROOT               Optional Mix build-root override. Defaults under %USERPROFILE%\.agents\splusplus\build\mcp for plugin launcher runs."
-  Write-Host "  SYMPP_BACKEND_PORT           Backend/API port. Defaults to $DefaultBackendPort. Use 0 for any available port."
+  Write-Host "  SYMPP_BACKEND_PORT           Preferred backend/API port. Defaults to any available port."
   Write-Host "  SYMPP_BACKEND_URL            Reuse an already-running backend URL instead of starting mix sympp.cockpit."
   Write-Host "  SYMPP_DASHBOARD_PORT         Preferred dashboard port. Defaults to $DefaultDashboardPort. Use 0 for any available port."
   Write-Host "  SYMPP_DASHBOARD_ORIGIN       Reuse an external dashboard origin instead of starting Vite."
@@ -2159,30 +2159,6 @@ function Resolve-DashboardPlan([int]$PreferredPort, [string]$ConfiguredOrigin, [
   if (-not [string]::IsNullOrWhiteSpace($ConfiguredOrigin)) {
     $origin = $ConfiguredOrigin.TrimEnd("/")
     return New-ReusedDashboardPlan "external_override" $origin $false $null
-  }
-
-  $backendPort = Get-PortFromOrigin $BackendUrl
-  if ($PreferredPort -gt 0 -and $PreferredPort -eq $DefaultDashboardPort -and $backendPort -eq $DefaultBackendPort) {
-    $preferredOrigin = "http://127.0.0.1:$PreferredPort"
-    if ((Test-HealthySymppDashboard $preferredOrigin) -and (Test-SymppDashboardMcpProxyMatches $preferredOrigin $ExpectedContractFingerprint)) {
-      $preferredEntry = if ($null -ne $RuntimeState) { $RuntimeState.frontend } else { $null }
-      $managed = $false
-      $entryPid = $null
-      $status = "external_loopback"
-      if (Test-RuntimeEntryExternalOverride $preferredEntry $preferredOrigin "frontend") {
-        Write-Diagnostic "Ignoring recorded external dashboard $preferredOrigin for implicit default-port reuse. Set SYMPP_DASHBOARD_ORIGIN=$preferredOrigin to reuse it explicitly."
-      } elseif (Test-RuntimeEntryEndpointMatches "frontend" $preferredEntry $preferredOrigin) {
-        $managed = $preferredEntry.managed -eq $true
-        $entryPid = $preferredEntry.pid
-        if ($managed) {
-          $status = "reused"
-        }
-
-        return New-ReusedDashboardPlan $status $preferredOrigin $managed $entryPid
-      } else {
-        return New-ReusedDashboardPlan $status $preferredOrigin $managed $entryPid
-      }
-    }
   }
 
   if ($AllowRecordedRuntimeReuse -and $null -ne $RuntimeState -and $null -ne $RuntimeState.frontend) {

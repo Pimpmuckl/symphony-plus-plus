@@ -49,11 +49,12 @@ home is
 if that home is unavailable, Symphony++ falls back under a temp/relative
 `.agents/splusplus` root. Pass
 `--port 0` for dynamic-port manual tests, or `--port <n>` for a different
-explicit port. The bundled opt-in plugin prefers backend port `19998` and
-dashboard port `19999`, chooses fallback ports when defaults are occupied by
-other services, and records the actual runtime in
+explicit port. The bundled opt-in plugin chooses an available backend port by
+default, uses `19999` only for the separate source/Vite dashboard, and records
+the actual runtime in
 `$HOME/.agents/splusplus/runtime/codex-plugin.json` unless
-`SYMPP_RUNTIME_FILE` overrides it.
+`SYMPP_RUNTIME_FILE` overrides it. Set `SYMPP_BACKEND_PORT` only to prefer a
+specific port; the launcher can fall back when it is unavailable.
 
 Starting the legacy stdio process from a shell does not register tools with an
 already-running model session. S++ MCP opt-in should use a one-session top-level
@@ -125,7 +126,7 @@ url = "http://127.0.0.1:19998/mcp"
 
 That URL-only shape works only when the backend is already listening on the
 configured port before Codex starts; it cannot follow the launcher's dynamic
-fallback port selection. Stateless one-shot URL probes may prove health, but
+port selection. Stateless one-shot URL probes may prove health, but
 do not treat a fresh probe as a recovered worker session. Claim on the actual
 MCP session that will do the WorkPackage work.
 

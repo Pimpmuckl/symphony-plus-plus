@@ -2579,9 +2579,6 @@ function Get-ReadinessSummary($CachePackages, $Config, [string]$MarketplaceName,
       reference_mcp_server_status = if ($null -ne $companionPackage) { $companionPackage.reference_mcp_server_status } else { $null }
       http_mcp_reachability_status = if ($null -ne $companionPackage) { $companionPackage.http_mcp_reachability_status } else { $null }
       transport = if ($null -ne $companionPackage -and $companionPackage.http_mcp_reachability_status -eq "not_applicable") { "command_stdio_to_http_bridge" } else { "http_url" }
-      default_backend_url = "http://127.0.0.1:19998"
-      default_mcp_url = "http://127.0.0.1:19998/mcp"
-      default_dashboard_url = "http://127.0.0.1:19999/sympp/board"
       runtime_file = [System.IO.Path]::GetFullPath((Join-Path $HOME ".agents/splusplus/runtime/codex-plugin.json"))
     }
     next_actions = @($actions)
@@ -2622,8 +2619,6 @@ function Write-DoctorSummary($Summary) {
   Write-Host "  server: $($readiness.workrequest_mcp.reference_mcp_server_status)"
   Write-Host "  endpoint: $($readiness.workrequest_mcp.http_mcp_reachability_status)"
   Write-Host "  transport: $($readiness.workrequest_mcp.transport)"
-  Write-Host "  backend: $($readiness.workrequest_mcp.default_backend_url)"
-  Write-Host "  dashboard: $($readiness.workrequest_mcp.default_dashboard_url)"
   Write-Host "  runtime file: $($readiness.workrequest_mcp.runtime_file)"
   Write-Host ""
 
