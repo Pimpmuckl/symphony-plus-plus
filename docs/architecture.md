@@ -14,10 +14,10 @@ Codex MCP client
   -> local SQLite ledger
 ```
 
-The installed launcher prefers loopback backend port `19998` and falls back to
-the next available port. The MCP endpoint and packaged dashboard share it, and
-the runtime state records both URLs. Port `19999` is a source-development Vite
-detail, not part of the installed product.
+The installed launcher chooses an available loopback backend port. The MCP
+endpoint and packaged dashboard share it, and the runtime state records both
+URLs. Port `19999` is a source-development Vite detail, not part of the
+installed product.
 
 ## Product Layers
 

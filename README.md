@@ -39,8 +39,8 @@ home unless you intentionally want both skill prefixes visible.
 When the MCP companion starts, it launches or reuses the local Symphony++
 runtime.
 
-The launcher prefers `127.0.0.1:19998` and falls back to the next available
-loopback port when needed. On Windows, read the active dashboard URL with:
+The launcher chooses an available loopback port. On Windows, read the active
+dashboard URL with:
 
 ```powershell
 (Get-Content "$env:USERPROFILE\.agents\splusplus\runtime\codex-plugin.json" -Raw | ConvertFrom-Json).frontend.url
@@ -50,7 +50,7 @@ The same runtime file records the MCP endpoint as `backend.mcp_url`.
 
 Installed artifact runtimes serve the packaged dashboard from the selected
 backend endpoint. A separate `19999` dashboard listener is only a source/Vite
-development detail. Set `SYMPP_BACKEND_PORT` to prefer a different backend
+development detail. Set `SYMPP_BACKEND_PORT` only to prefer a specific backend
 port; the launcher can fall back when it is unavailable.
 
 The launcher records the actual URLs here:
