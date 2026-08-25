@@ -27,15 +27,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
         config: %Config{surface_profile: :full} = config,
         session: %Session{assignment: %{grant_role: "architect"}}
       }) do
-    architect_sync_pr =
+    architect_tools =
       ToolCatalog.startup_tool_specs(:architect, config)
-      |> Enum.find(&(&1["name"] == "sync_pr"))
+      |> Map.new(&{&1["name"], &1})
 
     tools =
       :full
       |> ToolCatalog.startup_tool_specs(config)
       |> Enum.map(fn
-        %{"name" => "sync_pr"} -> architect_sync_pr
+        %{"name" => name} when name in ["attach_branch", "sync_pr"] -> Map.fetch!(architect_tools, name)
         tool -> tool
       end)
 
