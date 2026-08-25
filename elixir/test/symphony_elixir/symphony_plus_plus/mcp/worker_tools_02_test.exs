@@ -157,4 +157,107 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
     assert {:ok, [unchanged_sibling]} = PlanningRepository.list_plan_nodes(repo, sibling.id)
     assert unchanged_sibling.status == "pending"
   end
+
+  test "WorkRequest architects manage descendant planning evidence and discover its resources", %{repo: repo} do
+    work_request =
+      create_work_request!(repo,
+        id: "WR-ARCH-DESCENDANT-PLANNING",
+        status: "sliced",
+        repo_scopes: [%{repo: "nextide/secondary-service", base_branch: "release"}]
+      )
+
+    assert {:ok, package} =
+             CanonicalWorkPackageFixtures.add_work_package(
+               repo,
+               work_request.id,
+               WorkPackageFactory.attrs(
+                 id: "WP-ARCH-DESCENDANT-PLANNING",
+                 repo: "nextide/secondary-service",
+                 base_branch: "release",
+                 status: "planning"
+               )
+             )
+
+    assert {:ok, existing} =
+             PlanningRepository.append_plan_node(repo, %{
+               "work_package_id" => package.id,
+               "title" => "Inspect descendant"
+             })
+
+    {_anchor, session, grant} =
+      create_work_request_handoff_architect_session(repo, work_request, ArchitectHandoff.capabilities())
+
+    read_response = mcp_tool(repo, session, "read_task_plan", %{"work_package_id" => package.id})
+    version = get_in(read_response, ["result", "structuredContent", "version"])
+    assert is_integer(version)
+
+    update_response =
+      mcp_tool(repo, session, "update_task_plan", %{
+        "work_package_id" => package.id,
+        "expected_version" => version,
+        "nodes" => [%{"id" => existing.id, "status" => "in_progress"}]
+      })
+
+    assert get_in(update_response, ["result", "structuredContent", "plan_nodes"]) == [
+             %{"id" => existing.id, "title" => "Inspect descendant", "status" => "in_progress"}
+           ]
+
+    finding_response =
+      mcp_tool(repo, session, "append_finding", %{
+        "work_package_id" => package.id,
+        "title" => "Secondary repository confirmed",
+        "body" => "The descendant remains inside the claimed WorkRequest.",
+        "idempotency_key" => "architect-descendant-finding"
+      })
+
+    assert get_in(finding_response, ["result", "structuredContent", "finding", "title"]) ==
+             "Secondary repository confirmed"
+
+    progress_response =
+      mcp_tool(repo, session, "append_progress", %{
+        "work_package_id" => package.id,
+        "summary" => "Descendant plan supervised",
+        "idempotency_key" => "architect-descendant-progress"
+      })
+
+    assert get_in(progress_response, ["result", "structuredContent", "progress_event", "status"]) == "recorded"
+
+    assert {:ok, [finding]} = PlanningRepository.list_findings(repo, package.id)
+    assert finding.access_grant_id == grant.id
+    assert {:ok, [progress]} = PlanningRepository.list_progress_events(repo, package.id)
+    assert {progress.actor_type, progress.actor_id, progress.access_grant_id} == {"architect", "architect-1", grant.id}
+
+    list_response =
+      MCPHarness.request(
+        %{"jsonrpc" => "2.0", "id" => "resources", "method" => "resources/list", "params" => %{}},
+        repo: repo,
+        session: session
+      )
+
+    resource_uri = "sympp://work-packages/#{package.id}/task_plan.md"
+    resource_uris = list_response |> get_in(["result", "resources"]) |> Enum.map(& &1["uri"])
+    assert resource_uri in resource_uris
+
+    resource_response =
+      MCPHarness.request(
+        %{"jsonrpc" => "2.0", "id" => "resource", "method" => "resources/read", "params" => %{"uri" => resource_uri}},
+        repo: repo,
+        session: session
+      )
+
+    assert resource_response["error"] == nil
+
+    other_work_request = create_work_request!(repo, id: "WR-ARCH-FOREIGN", status: "sliced")
+
+    assert {:ok, foreign_package} =
+             CanonicalWorkPackageFixtures.add_work_package(
+               repo,
+               other_work_request.id,
+               WorkPackageFactory.attrs(id: "WP-ARCH-FOREIGN", status: "planning")
+             )
+
+    foreign_response = mcp_tool(repo, session, "read_task_plan", %{"work_package_id" => foreign_package.id})
+    assert get_in(foreign_response, ["error", "data", "reason"]) == "not_found"
+    refute "sympp://work-packages/#{foreign_package.id}/task_plan.md" in resource_uris
+  end
 end

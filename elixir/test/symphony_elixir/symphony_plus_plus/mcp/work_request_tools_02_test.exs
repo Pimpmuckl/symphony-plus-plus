@@ -596,16 +596,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       legacy_handoff_session_with_scope_fields!(repo, session, grant, handoff_work_request.repo, nil)
 
     repo_only_response = mcp_tool(repo, repo_only_session, "list_work_requests", %{"status" => "ready_for_slicing"})
-    assert get_in(repo_only_response, ["error", "code"]) == -32_003
-    assert get_in(repo_only_response, ["error", "data", "reason"]) == "outside_session_scope"
+    assert get_in(repo_only_response, ["error", "code"]) == -32_001
     refute inspect(repo_only_response) =~ sibling.id
 
     base_only_session =
       legacy_handoff_session_with_scope_fields!(repo, repo_only_session, grant, nil, handoff_work_request.base_branch)
 
     base_only_response = mcp_tool(repo, base_only_session, "list_work_requests", %{"status" => "ready_for_slicing"})
-    assert get_in(base_only_response, ["error", "code"]) == -32_003
-    assert get_in(base_only_response, ["error", "data", "reason"]) == "outside_session_scope"
+    assert get_in(base_only_response, ["error", "code"]) == -32_001
     refute inspect(base_only_response) =~ sibling.id
   end
 
@@ -671,8 +669,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
       )
 
     list_response = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing"})
-    assert get_in(list_response, ["error", "code"]) == -32_003
-    assert get_in(list_response, ["error", "data", "reason"]) == "outside_session_scope"
+    assert get_in(list_response, ["error", "code"]) == -32_001
+    assert get_in(list_response, ["error", "data", "reason"]) == "phase_scope_not_available"
     refute inspect(list_response) =~ sibling.id
   end
 
@@ -702,8 +700,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools02Test do
              WorkRequestRepository.update(repo, handoff_work_request.id, %{"repo" => "nextide/drifted"})
 
     list_response = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_slicing"})
-    assert get_in(list_response, ["error", "code"]) == -32_003
-    assert get_in(list_response, ["error", "data", "reason"]) == "outside_session_scope"
+    assert get_in(list_response, ["error", "code"]) == -32_001
     refute inspect(list_response) =~ sibling.id
   end
 

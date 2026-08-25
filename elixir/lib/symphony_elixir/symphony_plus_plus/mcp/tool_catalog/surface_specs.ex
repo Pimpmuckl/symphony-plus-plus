@@ -230,6 +230,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("read_plan"),
     do: "Read the scoped WorkRequest execution graph, Groups, effective WorkPackage dependencies, and optional WorkPackage payloads."
 
+  defp architect_tool_description("read_task_plan"),
+    do: "Read the task plan for an explicit descendant WorkPackage."
+
+  defp architect_tool_description("update_task_plan"),
+    do: "Update the task plan for an explicit descendant WorkPackage with optimistic version checking."
+
+  defp architect_tool_description("append_finding"),
+    do: "Append idempotent finding evidence to an explicit descendant WorkPackage."
+
+  defp architect_tool_description("append_progress"),
+    do: "Append an idempotent progress event to an explicit descendant WorkPackage."
+
   defp architect_tool_description("add_comment"), do: "Add a policy-scoped comment to a claimed WorkRequest descendant package surface, or a narrow external comment to a visible WorkRequest."
   defp architect_tool_description("list_comments"), do: "List comments attached to a scoped WorkRequest or WorkPackage."
   defp architect_tool_description("resolve_comment"), do: "Resolve a policy-scoped comment attached to a claimed WorkRequest descendant package surface."

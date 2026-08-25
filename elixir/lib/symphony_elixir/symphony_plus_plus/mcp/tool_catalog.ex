@@ -54,11 +54,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "sync_pr",
     "mark_ready"
   ]
+  @architect_planning_tools ["read_task_plan", "update_task_plan", "append_finding", "append_progress"]
   @shared_worker_architect_tools ["add_comment", "list_comments", "resolve_comment", "read_guidance_request"]
   @architect_tools [
     "list_work_requests",
     "read_work_request",
     "read_plan",
+    "read_task_plan",
+    "update_task_plan",
+    "append_finding",
+    "append_progress",
     "add_comment",
     "list_comments",
     "resolve_comment",
@@ -207,6 +212,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   @spec shared_worker_architect_tools() :: [tool_name()]
   def shared_worker_architect_tools, do: @shared_worker_architect_tools
+
+  @spec architect_planning_tools() :: [tool_name()]
+  def architect_planning_tools, do: @architect_planning_tools
 
   @spec architect_tools() :: [tool_name()]
   def architect_tools, do: @architect_tools

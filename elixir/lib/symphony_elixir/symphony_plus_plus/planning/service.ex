@@ -104,22 +104,35 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Service do
     with {:ok, idempotency_key} <- idempotency_key(attrs),
          {:ok, work_package_id} <- scoped_work_package_id(assignment, attrs),
          :ok <- reject_duplicate_caller_keys(attrs, [:summary, :body, :status, :payload]) do
-      attrs = normalize_keys(attrs)
-      payload = Map.get(attrs, "payload", %{})
-
-      insert_attrs =
-        attrs
-        |> Map.take(["summary", "body", "status"])
-        |> Map.put("work_package_id", work_package_id)
-        |> Map.put("idempotency_key", idempotency_key)
-        |> Map.put("payload", payload)
-
-      Repository.append_audit_progress_event(repo, assignment, insert_attrs, agent_run_id: Keyword.get(opts, :agent_run_id))
+      append_authenticated_progress_event_for_package(repo, assignment, work_package_id, attrs, idempotency_key, opts)
     end
   end
 
   def append_authenticated_progress_event(repo, _assignment, attrs, _opts) when is_atom(repo) and is_map(attrs) do
     {:error, :unauthenticated}
+  end
+
+  @spec append_authenticated_progress_event_for_work_package(Repository.repo(), Assignment.t(), String.t(), map()) ::
+          {:ok, ProgressEvent.t()} | {:error, error()}
+  def append_authenticated_progress_event_for_work_package(repo, %Assignment{} = assignment, work_package_id, attrs)
+      when is_atom(repo) and is_binary(work_package_id) and is_map(attrs) do
+    with {:ok, idempotency_key} <- idempotency_key(attrs),
+         :ok <- reject_duplicate_caller_keys(attrs, [:summary, :body, :status, :payload]) do
+      append_authenticated_progress_event_for_package(repo, assignment, work_package_id, attrs, idempotency_key, [])
+    end
+  end
+
+  defp append_authenticated_progress_event_for_package(repo, assignment, work_package_id, attrs, idempotency_key, opts) do
+    attrs = normalize_keys(attrs)
+
+    insert_attrs =
+      attrs
+      |> Map.take(["summary", "body", "status"])
+      |> Map.put("work_package_id", work_package_id)
+      |> Map.put("idempotency_key", idempotency_key)
+      |> Map.put("payload", Map.get(attrs, "payload", %{}))
+
+    Repository.append_audit_progress_event_for_work_package(repo, assignment, work_package_id, insert_attrs, agent_run_id: Keyword.get(opts, :agent_run_id))
   end
 
   @spec require_valid_assignment(Repository.repo(), Assignment.t()) :: :ok | {:error, error()}

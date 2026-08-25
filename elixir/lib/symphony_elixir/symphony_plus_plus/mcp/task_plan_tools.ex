@@ -22,9 +22,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
   @spec read_task_plan(repo(), Session.t() | nil) :: result()
   def read_task_plan(repo, session) do
     with {:ok, session} <- Auth.require_session(session, repo),
-         :ok <- require_worker_assignment(session.assignment),
-         work_package_id = Session.work_package_id(session),
-         {:ok, state} <- PlanningRepository.get_task_plan_render_state(repo, work_package_id),
+         :ok <- require_worker_assignment(session.assignment) do
+      read_task_plan_for_package(repo, Session.work_package_id(session))
+    end
+  end
+
+  @spec read_task_plan_for_work_package(repo(), Session.t(), String.t()) :: result()
+  def read_task_plan_for_work_package(repo, %Session{} = session, work_package_id) when is_binary(work_package_id) do
+    with {:ok, _session} <- Auth.require_session(session, repo),
+         :ok <- require_architect_assignment(session.assignment) do
+      read_task_plan_for_package(repo, work_package_id)
+    end
+  end
+
+  defp read_task_plan_for_package(repo, work_package_id) do
+    with {:ok, state} <- PlanningRepository.get_task_plan_render_state(repo, work_package_id),
          {:ok, markdown} <- PlanningRenderer.render_state(state, "task_plan.md"),
          uri = "sympp://work-packages/#{work_package_id}/task_plan.md",
          version = plan_version(state.plan_version_material),
@@ -39,10 +51,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
 
   @spec update_task_plan(repo(), Session.t(), map()) :: result()
   def update_task_plan(repo, %Session{} = session, arguments) do
+    update_task_plan_for_package(repo, session, Session.work_package_id(session), arguments)
+  end
+
+  @spec update_task_plan_for_work_package(repo(), Session.t(), String.t(), map()) :: result()
+  def update_task_plan_for_work_package(repo, %Session{} = session, work_package_id, arguments)
+      when is_binary(work_package_id) and is_map(arguments) do
+    with :ok <- require_architect_assignment(session.assignment) do
+      update_task_plan_for_package(repo, session, work_package_id, arguments)
+    end
+  end
+
+  defp update_task_plan_for_package(repo, %Session{} = session, work_package_id, arguments) do
     with {:ok, expected_version} <- required_integer(arguments, "expected_version"),
          {:ok, nodes} <- required_nodes(arguments),
          :ok <- require_update_task_plan_keys(arguments),
-         work_package_id = Session.work_package_id(session),
          {:ok, plan_nodes, version} <-
            transaction_plan_update(repo, session.assignment, work_package_id, expected_version, nodes) do
       {:ok,
@@ -55,6 +78,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
 
   defp require_worker_assignment(%{grant_role: "worker"}), do: :ok
   defp require_worker_assignment(_assignment), do: {:error, :worker_grant_required}
+
+  defp require_architect_assignment(%{grant_role: "architect"}), do: :ok
+  defp require_architect_assignment(_assignment), do: {:error, :architect_grant_required}
 
   defp transaction_plan_update(repo, assignment, work_package_id, expected_version, nodes) do
     transaction_fun = fn ->

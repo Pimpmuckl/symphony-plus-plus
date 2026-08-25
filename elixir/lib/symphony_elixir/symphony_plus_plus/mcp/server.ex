@@ -77,6 +77,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
   @worker_tools ToolCatalog.worker_tools()
   @worker_tool_module_tools WorkerTools.tools()
   @architect_tools ToolCatalog.architect_tools()
+  @architect_planning_tools ToolCatalog.architect_planning_tools()
   @architect_work_request_tools ArchitectWorkRequestTools.tools()
   @architect_product_tree_tools ArchitectProductTreeTools.tools()
   @delivery_policy_tools ToolCatalog.delivery_policy_tools()
@@ -602,7 +603,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          %{"name" => name} = params,
          %__MODULE__{session: %Session{assignment: %{grant_role: "architect"}}} = server
        )
-       when name in ["add_comment", "resolve_comment", "resolve_blocker", "attach_branch", "sync_pr"] do
+       when name in ["add_comment", "resolve_comment", "resolve_blocker", "attach_branch", "sync_pr"] or
+              name in @architect_planning_tools do
     case prepare_architect_tool_call(server, params, name) do
       {:ok, arguments} -> architect_tool(name, arguments, server)
       {:error, code, message, data} -> {:error, code, message, data}
@@ -1197,6 +1199,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
 
   defp architect_tool("resolve_blocker", arguments, %__MODULE__{config: config, session: session}),
     do: GuidanceTools.call("resolve_blocker", config, session, arguments)
+
+  defp architect_tool(name, arguments, %__MODULE__{config: config, session: session})
+       when name in @architect_planning_tools,
+       do: WorkerTools.call(name, config, session, arguments)
 
   defp architect_tool(name, arguments, %__MODULE__{config: config, session: session})
        when name in [

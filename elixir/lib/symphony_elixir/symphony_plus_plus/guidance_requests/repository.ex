@@ -163,19 +163,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.GuidanceRequests.Repository do
          %{"phase_id" => phase_id, "repo" => repo_name, "base_branch" => base_branch} = filters
        ) do
     work_package_ids = normalized_work_package_ids(Map.get(filters, "work_package_ids"))
-    equivalent_base_branches = BaseBranch.equivalent_refs(base_branch)
 
     repo.all(
       from(work_package in WorkPackage,
-        where: work_package.base_branch in ^equivalent_base_branches,
-        where: work_package.phase_id == ^phase_id or (is_nil(work_package.phase_id) and work_package.id in ^work_package_ids),
-        select: {work_package.id, work_package.repo, work_package.base_branch}
+        where:
+          work_package.phase_id == ^phase_id or
+            (is_nil(work_package.phase_id) and work_package.id in ^work_package_ids),
+        select: {work_package.id, work_package.repo, work_package.base_branch, work_package.phase_id}
       )
     )
-    |> Enum.filter(fn {_id, package_repo, package_base_branch} ->
-      repo_scope_match?(repo_name, package_repo) and BaseBranch.equivalent?(base_branch, package_base_branch)
+    |> Enum.filter(fn {id, package_repo, package_base_branch, package_phase_id} ->
+      (is_nil(package_phase_id) and id in work_package_ids) or
+        (package_phase_id == phase_id and repo_scope_match?(repo_name, package_repo) and
+           BaseBranch.equivalent?(base_branch, package_base_branch))
     end)
-    |> Enum.map(fn {id, _repo, _base_branch} -> id end)
+    |> Enum.map(fn {id, _repo, _base_branch, _phase_id} -> id end)
     |> Enum.uniq()
   end
 
