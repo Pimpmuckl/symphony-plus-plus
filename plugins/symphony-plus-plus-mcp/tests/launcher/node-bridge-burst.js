@@ -105,6 +105,7 @@ function runClient(bridge) {
     let answered = false;
     const timeout = setTimeout(() => child.kill(), 120000);
     child.stdout.on("data", (chunk) => {
+      timeout.refresh();
       stdout += chunk;
       if (!answered && stdout.includes("\n")) {
         answered = true;
@@ -113,7 +114,7 @@ function runClient(bridge) {
         released.then(() => child.stdin.end());
       }
     });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.stderr.on("data", (chunk) => { timeout.refresh(); stderr += chunk; });
     child.on("error", reject);
     child.on("exit", (code) => {
       clearTimeout(timeout);
@@ -171,6 +172,8 @@ async function main() {
       runs.push(runClient(path.join(installedRoot, "scripts", "start-sympp-mcp-bridge.js")));
       if (index % 25 === 24) await new Promise((resolve) => setImmediate(resolve));
     }
+    // Keep the fixture responsive while the Windows bridge children retain the suite's BelowNormal priority.
+    if (process.platform === "win32") os.setPriority(os.constants.priority.PRIORITY_NORMAL);
     const completed = Promise.all(runs);
     await Promise.race([allReady, completed]);
     releaseClients();
