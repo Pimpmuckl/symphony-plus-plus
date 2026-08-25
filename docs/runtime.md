@@ -67,9 +67,9 @@ pwsh -NoProfile -File .\scripts\sympp-beta.ps1 -Action Codex -ResumeSessionId <t
 The source beta lane uses backend `20000`, Vite `20001`, and separate
 `SYMPP_HOME`, `SYMPP_RUNTIME_FILE`, `SYMPP_LOG_DIR`, `MIX_BUILD_ROOT`, and SQLite
 database paths. It keeps `CODEX_HOME` unchanged, so existing authentication and
-the normal installed bridge remain available. Stable ports `19998/19999`, the
-stable runtime state, and the default installed plugin cache are not control
-targets.
+the normal installed bridge remain available. The installed bridge's selected
+loopback ports, stable runtime state, and default installed plugin cache are not
+control targets.
 
 Use the same command with `-Action Start`, `Restart`, `Status`, or `Stop` for
 beta-only runtime control. Vite owns frontend hot reload. `Restart` restarts

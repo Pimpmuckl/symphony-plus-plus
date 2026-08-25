@@ -87,10 +87,11 @@ operator preflight and repair; ordinary startup and crash recovery do not
 require it.
 
 Runtime identity is the agent-facing MCP contract fingerprint plus the backend
-and dashboard endpoints. In artifact mode, the dashboard URL is normally
-`http://127.0.0.1:19998/sympp/board`; a separate `19999` listener is only
-expected for source/Vite dashboard development. If the singleton disappears,
-the next MCP-enabled Codex session starts it again.
+and dashboard endpoints. In artifact mode, the launcher chooses an available
+loopback backend port and serves the dashboard from the same endpoint; a
+separate `19999` listener is only expected for source/Vite dashboard
+development. The actual endpoints are recorded in the runtime state. If the
+singleton disappears, the next MCP-enabled Codex session starts it again.
 
 To prove the daemon independently of Codex plugin loading, run this from the
 marketplace source checkout after cutover or `mix sympp.cockpit` is running.
@@ -107,5 +108,5 @@ latest skill Markdown; refresh the local plugin cache, then reload or start
 that dedicated MCP-enabled session after changing plugin config, cache state,
 or skill files. If the smoke reports `stale_or_unverified_daemon` or
 `stale_daemon_source_revision_mismatch`, an old manual cockpit may still own
-the port. Resolve that operator state before cutover; do not point the installed
-plugin at a developer checkout as a workaround.
+the configured port. Resolve that operator state before cutover; do not point
+the installed plugin at a developer checkout as a workaround.

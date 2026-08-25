@@ -80,6 +80,7 @@ function Invoke-McpBridge([string]$FilePath, [string[]]$Arguments, [hashtable]$E
     }
     return [pscustomobject]@{
       backend_pid = [int]$activeState.backend.pid
+      backend_port = [int]$activeState.backend.port
       backend_start_ticks = $activeBackendStartTicks
       runtime_mode = [string]$activeState.runtime_mode
       artifact_root = [string]$activeState.artifact.root
@@ -219,7 +220,6 @@ server.listen(port,"127.0.0.1");
   $backendProcessId = $null
 
   $laterInstalledEnvironment = $installedEnvironment.Clone()
-  $laterInstalledEnvironment.SYMPP_BACKEND_PORT = [string]$backendPort
   $laterInstalledEnvironment.SYMPP_AUTOSTART_FRONTEND = "0"
   $laterInstalledEnvironment.SYMPP_ELIXIR_SETUP_TIMEOUT_SEC = "30"
   $laterInstalledEnvironment.SYMPP_BACKEND_STARTUP_TIMEOUT_SEC = "60"
@@ -233,11 +233,12 @@ server.listen(port,"127.0.0.1");
   $backendProcessId = $secondWave.backend_pid
   $backendStartTicks = $secondWave.backend_start_ticks
   if ($backendProcessId -eq $firstBackendProcessId) { throw "Later installed command wave reused backend pid=$backendProcessId." }
+  if ($secondWave.backend_port -in @(19998, 19999)) { throw "Implicit installed launch forced reserved port $($secondWave.backend_port)." }
   $artifactCacheRoot = [System.IO.Path]::GetFullPath((Join-Path $sourceEnvironment.SYMPP_HOME "artifacts/mcp"))
   if ($secondWave.runtime_mode -ne "artifact" -or -not ([System.IO.Path]::GetFullPath($secondWave.artifact_root).StartsWith($artifactCacheRoot, [StringComparison]::OrdinalIgnoreCase))) {
     throw "Later installed command wave was not artifact-backed."
   }
-  Wait-ManagedRuntimeStopped $backendProcessId $backendPort
+  Wait-ManagedRuntimeStopped $backendProcessId $secondWave.backend_port
   $backendProcessId = $null
 
   [void](Invoke-IsolatedCommand $pwsh @("-NoProfile", "-File", $launcher, "-PrepareRuntimeOnly") $sourceEnvironment)
@@ -254,6 +255,7 @@ server.listen(port,"127.0.0.1");
 
   [pscustomobject]@{
     installed_waves = 2; initialize_and_tools_list = 3; installed_pids_distinct = $true
+    implicit_backend_port_dynamic = $true
     artifact_last_detach_stopped = $true; listeners_closed = $true
     source_last_detach_stopped = $true; isolated_runtime_ledger_ports = $true
   } | ConvertTo-Json -Compress

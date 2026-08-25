@@ -6,10 +6,11 @@ in packaged skills and are not repeated here.
 ## Install And Open
 
 Install or update the marketplace package as described in the root
-[`README.md`](../README.md), then open:
+[`README.md`](../README.md). The launcher chooses an available loopback port.
+On Windows, read the active dashboard URL with:
 
-```text
-http://127.0.0.1:19998/sympp/board
+```powershell
+(Get-Content "$env:USERPROFILE\.agents\splusplus\runtime\codex-plugin.json" -Raw | ConvertFrom-Json).frontend.url
 ```
 
 The installed MCP companion starts or reuses the local backend and serves the
