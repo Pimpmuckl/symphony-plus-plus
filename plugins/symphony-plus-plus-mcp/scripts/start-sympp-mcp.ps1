@@ -2193,7 +2193,8 @@ function Resolve-DashboardPlan([int]$PreferredPort, [string]$ConfiguredOrigin, [
     return New-DisabledDashboardPlan "disabled_source_drift" "backend_source_revision_mismatch"
   }
 
-  $avoid = if ($backendPort) { @([int]$backendPort) } else { @() }
+  $selectedBackendPort = Get-PortFromOrigin $BackendUrl
+  $avoid = if ($selectedBackendPort -gt 0) { @([int]$selectedBackendPort) } else { @() }
   $selectedPort = Select-AvailablePort $PreferredPort $avoid
   $origin = "http://127.0.0.1:$selectedPort"
   return [pscustomobject]@{
