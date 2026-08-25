@@ -278,6 +278,67 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.DeliveryReconcile01Test do
     assert persisted_package.status == "merged"
   end
 
+  test "claimed architect repairs a descendant branch head visible on the delivery board", %{repo: repo} do
+    {anchor, session, _grant} =
+      create_phase_architect_session(repo, "SYMPP-ARCHITECT-ATTACH-BRANCH", ["read:work_request", "write:work_request"],
+        repo: "nextide/repo",
+        base_branch: "main"
+      )
+
+    work_request =
+      create_work_request!(repo,
+        id: "WR-MCP-ARCHITECT-ATTACH-BRANCH",
+        repo: anchor.repo,
+        base_branch: anchor.base_branch,
+        status: "sliced"
+      )
+
+    grant_work_request_scope!(repo, session, work_request.id)
+
+    assert {:ok, package} =
+             CanonicalWorkPackageFixtures.add_work_package(
+               repo,
+               work_request.id,
+               work_request_work_package_attrs(id: "WRS-MCP-ARCHITECT-ATTACH-BRANCH")
+             )
+
+    assert {:ok, _stale_branch} =
+             PlanningRepository.append_progress_event(repo, %{
+               work_package_id: package.id,
+               summary: "Branch attached",
+               status: "branch_attached",
+               payload: %{type: "branch", source_tool: "attach_branch", branch: "feat/repair", head_sha: "stale-head"}
+             })
+
+    tools =
+      %{test_mcp_config(repo) | surface_profile: :architect}
+      |> Server.new(initialized: true, session: session)
+      |> tools_for_server()
+      |> Map.new(&{&1["name"], &1})
+
+    full_tools =
+      test_mcp_config(repo)
+      |> Server.new(initialized: true, session: session)
+      |> tools_for_server()
+      |> Map.new(&{&1["name"], &1})
+
+    assert get_in(tools, ["attach_branch", "inputSchema", "required"]) == ["work_package_id", "head_sha"]
+    assert full_tools["attach_branch"] == tools["attach_branch"]
+
+    repaired =
+      mcp_tool(repo, session, "attach_branch", %{
+        "work_package_id" => package.id,
+        "branch" => "feat/repair",
+        "head_sha" => "current-head"
+      })
+
+    assert get_in(repaired, ["result", "structuredContent", "progress_event", "status"]) == "branch_attached"
+
+    board = mcp_tool(repo, session, "read_delivery_board", %{"work_request_id" => work_request.id})
+    [board_package] = get_in(board, ["result", "structuredContent", "delivery_board", "work_packages"])
+    assert board_package["work_package"]["branch"]["head_sha"] == "current-head"
+  end
+
   test "architect WorkRequest work-package dispatch tool creates safe worker handoff", %{repo: repo} do
     {anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-SLICE-DISPATCH", [

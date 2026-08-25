@@ -274,6 +274,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
+  def architect_tool_input_schema("attach_branch") do
+    schema(
+      %{
+        "work_request_id" => current_work_request_id_schema(),
+        "work_package_id" => described_string_schema("Explicit descendant WorkPackage whose canonical branch metadata will be updated."),
+        "branch" => string_schema(),
+        "head_sha" => string_schema()
+      },
+      ["work_package_id", "head_sha"]
+    )
+  end
+
   def architect_tool_input_schema("reconcile_work_request") do
     schema(
       %{
