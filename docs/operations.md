@@ -6,9 +6,8 @@ in packaged skills and are not repeated here.
 ## Install And Open
 
 Install or update the marketplace package as described in the root
-[`README.md`](../README.md). The launcher prefers `127.0.0.1:19998` and falls
-back to the next available loopback port. On Windows, read the active dashboard
-URL with:
+[`README.md`](../README.md). The launcher chooses an available loopback port.
+On Windows, read the active dashboard URL with:
 
 ```powershell
 (Get-Content "$env:USERPROFILE\.agents\splusplus\runtime\codex-plugin.json" -Raw | ConvertFrom-Json).frontend.url

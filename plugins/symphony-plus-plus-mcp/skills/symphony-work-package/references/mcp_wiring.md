@@ -49,12 +49,12 @@ home is
 if that home is unavailable, Symphony++ falls back under a temp/relative
 `.agents/splusplus` root. Pass
 `--port 0` for dynamic-port manual tests, or `--port <n>` for a different
-explicit port. The bundled opt-in plugin prefers backend port `19998`, falls
-back to the next available port, uses `19999` only for the separate source/Vite
-dashboard, and records the actual runtime in
+explicit port. The bundled opt-in plugin chooses an available backend port by
+default, uses `19999` only for the separate source/Vite dashboard, and records
+the actual runtime in
 `$HOME/.agents/splusplus/runtime/codex-plugin.json` unless
-`SYMPP_RUNTIME_FILE` overrides it. Set `SYMPP_BACKEND_PORT` to prefer a
-different port; the launcher can fall back when it is unavailable.
+`SYMPP_RUNTIME_FILE` overrides it. Set `SYMPP_BACKEND_PORT` only to prefer a
+specific port; the launcher can fall back when it is unavailable.
 
 Starting the legacy stdio process from a shell does not register tools with an
 already-running model session. S++ MCP opt-in should use a one-session top-level

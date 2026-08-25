@@ -8,7 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$DefaultBackendPort = 19998
+$DefaultBackendPort = 0
 $DefaultDashboardPort = 19999
 $BoardPath = "/sympp/board"
 
@@ -35,7 +35,7 @@ function Write-Usage {
   Write-Host "  SYMPP_MIX                    Optional mix executable path or name for direct launcher. Defaults to 'mix'."
   Write-Host "  SYMPP_MISE                   Optional mise executable path or name for mise launcher. Defaults to 'mise'."
   Write-Host "  MIX_BUILD_ROOT               Optional Mix build-root override. Defaults under %USERPROFILE%\.agents\splusplus\build\mcp for plugin launcher runs."
-  Write-Host "  SYMPP_BACKEND_PORT           Preferred backend/API port. Defaults to 19998 and falls back when unavailable."
+  Write-Host "  SYMPP_BACKEND_PORT           Preferred backend/API port. Defaults to any available port."
   Write-Host "  SYMPP_BACKEND_URL            Reuse an already-running backend URL instead of starting mix sympp.cockpit."
   Write-Host "  SYMPP_DASHBOARD_PORT         Preferred dashboard port. Defaults to $DefaultDashboardPort. Use 0 for any available port."
   Write-Host "  SYMPP_DASHBOARD_ORIGIN       Reuse an external dashboard origin instead of starting Vite."

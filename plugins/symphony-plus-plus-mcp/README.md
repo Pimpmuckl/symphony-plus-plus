@@ -87,11 +87,11 @@ operator preflight and repair; ordinary startup and crash recovery do not
 require it.
 
 Runtime identity is the agent-facing MCP contract fingerprint plus the backend
-and dashboard endpoints. In artifact mode, the launcher prefers loopback port
-`19998`, falls back to the next available port, and serves the dashboard from
-the same endpoint; a separate `19999` listener is only expected for source/Vite
-dashboard development. The actual endpoints are recorded in the runtime state.
-If the singleton disappears, the next MCP-enabled Codex session starts it again.
+and dashboard endpoints. In artifact mode, the launcher chooses an available
+loopback backend port and serves the dashboard from the same endpoint; a
+separate `19999` listener is only expected for source/Vite dashboard
+development. The actual endpoints are recorded in the runtime state. If the
+singleton disappears, the next MCP-enabled Codex session starts it again.
 
 To prove the daemon independently of Codex plugin loading, run this from the
 marketplace source checkout after cutover or `mix sympp.cockpit` is running.
