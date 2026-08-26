@@ -755,6 +755,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   defp worker_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
   defp worker_error({:unauthorized, :work_package_terminal}, resource), do: terminal_auth_error(resource)
+  defp worker_error({:unauthorized, {:work_request_terminal, terminal_state}}, resource), do: work_request_terminal_auth_error(resource, terminal_state)
   defp worker_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
   defp worker_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
   defp worker_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)

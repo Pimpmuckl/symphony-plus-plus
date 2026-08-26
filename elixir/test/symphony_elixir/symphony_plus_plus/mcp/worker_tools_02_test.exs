@@ -303,5 +303,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
                "expected_version" => version,
                "nodes" => [%{"id" => existing.id, "status" => "done"}]
              })
+
+    terminal_response = mcp_tool(repo, session, "read_task_plan", %{"work_package_id" => package.id})
+    assert get_in(terminal_response, ["error", "data", "reason"]) == "work_request_terminal"
+    assert get_in(terminal_response, ["error", "data", "terminal_state"]) == "archived"
   end
 end
