@@ -267,7 +267,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
     assert get_in(foreign_response, ["error", "data", "reason"]) == "not_found"
     refute "sympp://work-packages/#{foreign_package.id}/task_plan.md" in resource_uris
 
-    assert {:ok, _merged} = WorkPackageRepository.update(repo, package.id, %{status: "merged"})
+    assert {:ok, _skipped} = WorkPackageRepository.update(repo, package.id, %{status: "skipped"})
 
     terminal_calls = [
       {"update_task_plan", %{"work_package_id" => package.id, "expected_version" => version, "nodes" => [%{"id" => existing.id, "status" => "done"}]}},

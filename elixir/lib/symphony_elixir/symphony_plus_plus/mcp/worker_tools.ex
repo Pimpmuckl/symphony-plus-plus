@@ -57,8 +57,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     "sync_pr",
     "mark_ready"
   ]
-  @architect_planning_write_actions [:task_plan_update, :finding_append, :progress_append]
-  @terminal_work_package_statuses ["merged", "closed", "abandoned"]
   @finding_replay_retry_attempts 50
 
   @typep result :: {:ok, map()} | {:error, integer(), String.t(), map()}
@@ -728,7 +726,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     with {:ok, session} <- Auth.require_session(session, repo),
          {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
          {:ok, work_request_id} <- CurrentWorkRequest.id_argument(%{}, session),
-         {:ok, _work_request, work_package, _filters, _scope} <-
+         {:ok, _work_request, _work_package, _filters, _scope} <-
            WorkRequestScope.authorized_work_package_scope(
              repo,
              session,
@@ -736,17 +734,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
              work_package_id,
              action,
              tool
-           ),
-         :ok <- require_live_architect_planning_target(work_package, action) do
+           ) do
       {:ok, session, work_package_id}
     end
   end
-
-  defp require_live_architect_planning_target(%WorkPackage{status: status}, action)
-       when action in @architect_planning_write_actions and status in @terminal_work_package_statuses,
-       do: {:error, :work_package_terminal}
-
-  defp require_live_architect_planning_target(%WorkPackage{}, _action), do: :ok
 
   defp actor_for_package_resource(repo, %Session{} = session, resource_type, work_package_id) do
     with {:ok, target} <- PlanningService.package_resource_target(repo, work_package_id, resource_type) do

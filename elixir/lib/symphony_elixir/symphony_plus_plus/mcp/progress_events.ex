@@ -14,6 +14,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
+  @terminal_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
+
   @finding_replay_retry_attempts 50
   @ready_evidence_tools [
     "abandon",
@@ -220,9 +222,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
 
   @spec reject_ready_evidence_mutation(repo(), Session.t(), String.t(), String.t()) ::
           :ok | {:tool_error, term()} | {:error, term()}
-  def reject_ready_evidence_mutation(repo, %Session{}, work_package_id, tool) when tool in @ready_evidence_tools do
+  def reject_ready_evidence_mutation(repo, %Session{} = session, work_package_id, tool) when tool in @ready_evidence_tools do
     with :ok <- lock_work_package(repo, work_package_id),
-         {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
+         {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
+         :ok <- reject_terminal_architect_target(session.assignment, work_package) do
       reject_ready_work_package(work_package)
     end
   end
@@ -234,6 +237,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
   end
 
   defp reject_ready_work_package(%WorkPackage{}), do: :ok
+
+  defp reject_terminal_architect_target(
+         %{grant_role: "architect"},
+         %WorkPackage{status: status}
+       )
+       when status in @terminal_work_package_statuses,
+       do: {:error, :work_package_terminal}
+
+  defp reject_terminal_architect_target(_assignment, %WorkPackage{}), do: :ok
 
   defp replay_with_retry(repo, %Session{} = session, work_package_id, attrs, idempotency_key, tool, attempts_left) do
     retry_fun = fn ->

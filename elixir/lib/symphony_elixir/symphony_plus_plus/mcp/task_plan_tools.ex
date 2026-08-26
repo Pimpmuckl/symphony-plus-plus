@@ -13,6 +13,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
+  @terminal_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
+
   @plan_argument_keys ["expected_version", "nodes"]
   @plan_node_keys ["body", "id", "status", "title"]
 
@@ -97,6 +99,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
     with :ok <- PlanningService.require_valid_assignment(repo, assignment),
          :ok <- lock_work_package(repo, work_package_id),
          {:ok, state} <- PlanningRepository.get_state(repo, work_package_id),
+         :ok <- reject_terminal_architect_target(assignment, state.work_package),
          :ok <- reject_ready_work_package(state.work_package),
          plan_nodes = state.plan_nodes,
          :ok <- require_plan_version(plan_nodes, expected_version),
@@ -118,6 +121,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools do
       {0, _rows} -> {:error, :not_found}
     end
   end
+
+  defp reject_terminal_architect_target(
+         %{grant_role: "architect"},
+         %WorkPackage{status: status}
+       )
+       when status in @terminal_work_package_statuses,
+       do: {:error, :work_package_terminal}
+
+  defp reject_terminal_architect_target(_assignment, %WorkPackage{}), do: :ok
 
   defp prepare_plan_updates(nodes, plan_nodes) do
     nodes
