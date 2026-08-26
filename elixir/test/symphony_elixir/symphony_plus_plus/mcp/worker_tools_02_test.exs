@@ -227,6 +227,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
     assert {:ok, [progress]} = PlanningRepository.list_progress_events(repo, package.id)
     assert {progress.actor_type, progress.actor_id, progress.access_grant_id} == {"architect", "architect-1", grant.id}
 
+    assert {:ok, _active_sibling} =
+             CanonicalWorkPackageFixtures.add_work_package(
+               repo,
+               work_request.id,
+               WorkPackageFactory.attrs(id: "WP-ARCH-DESCENDANT-ACTIVE", status: "planning")
+             )
+
     list_response =
       MCPHarness.request(
         %{"jsonrpc" => "2.0", "id" => "resources", "method" => "resources/list", "params" => %{}},
@@ -259,5 +266,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
     foreign_response = mcp_tool(repo, session, "read_task_plan", %{"work_package_id" => foreign_package.id})
     assert get_in(foreign_response, ["error", "data", "reason"]) == "not_found"
     refute "sympp://work-packages/#{foreign_package.id}/task_plan.md" in resource_uris
+
+    assert {:ok, _merged} = WorkPackageRepository.update(repo, package.id, %{status: "merged"})
+
+    terminal_calls = [
+      {"update_task_plan", %{"work_package_id" => package.id, "expected_version" => version, "nodes" => [%{"id" => existing.id, "status" => "done"}]}},
+      {"append_finding", %{"work_package_id" => package.id, "title" => "Too late", "body" => "Terminal package", "idempotency_key" => "terminal-finding"}},
+      {"append_progress", %{"work_package_id" => package.id, "summary" => "Too late", "idempotency_key" => "terminal-progress"}}
+    ]
+
+    for {tool, arguments} <- terminal_calls do
+      response = mcp_tool(repo, session, tool, arguments)
+      assert get_in(response, ["error", "data", "reason"]) == "work_package_terminal"
+    end
   end
 end
