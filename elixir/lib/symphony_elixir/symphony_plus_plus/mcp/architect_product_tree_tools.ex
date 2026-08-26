@@ -37,8 +37,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @work_request_authoring_states ["ready_for_slicing", "sliced"]
-  @work_package_authoring_states ["planned"]
   @work_package_terminal_states ["skipped", "merged", "closed", "abandoned"]
+  @work_package_authoring_states WorkPackage.statuses() -- @work_package_terminal_states
 
   @tools [
     "ask_question",
@@ -468,16 +468,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp require_work_package_authoring_status(%WorkRequest{status: status}, revision),
     do: {:error, {:work_request_not_authorable, status, revision}}
 
-  defp require_mutable_work_package_contract(%WorkPackage{status: "planned"}), do: :ok
-
   defp require_mutable_work_package_contract(%WorkPackage{status: status} = work_package)
        when status in @work_package_terminal_states do
     {:error, {:work_package_terminal, status, work_package.contract_revision}}
   end
 
-  defp require_mutable_work_package_contract(%WorkPackage{} = work_package) do
-    {:error, {:work_package_contract_frozen, work_package.status, work_package.contract_revision}}
-  end
+  defp require_mutable_work_package_contract(%WorkPackage{}), do: :ok
 
   defp update_work_package(repo, work_request_id, work_package_id, expected_revision, patch) do
     case WorkRequestService.update_work_package(repo, work_request_id, work_package_id, expected_revision, patch) do
@@ -699,10 +695,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   end
 
   defp architect_error({reason, status, revision}, tool)
-       when reason in [:contract_revision_conflict, :work_package_contract_frozen, :work_package_terminal] do
+       when reason in [:contract_revision_conflict, :work_package_terminal] do
     ErrorDetails.lifecycle_error(tool, reason, %{
       "actual_status" => reason_text(status),
-      "allowed_authoring_states" => @work_package_authoring_states,
+      "allowed_authoring_states" => if(tool == "skip_work_package", do: ["planned"], else: @work_package_authoring_states),
       "current_contract_revision" => revision
     })
   end

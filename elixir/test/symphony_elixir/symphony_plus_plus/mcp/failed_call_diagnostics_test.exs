@@ -336,6 +336,44 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCallDiagnosticsTest do
     assert is_binary(reset_summary["last_reset_at"])
   end
 
+  test "summary retains safe domain recovery and drops unsafe error data", %{repo: repo} do
+    assert {:ok, _settings} = OperatorSettingsRepository.update(repo, %{"capture_failed_mcp_calls" => true})
+    config = local_mcp_config(repo)
+
+    :ok =
+      FailedCall.observe_error(
+        config,
+        tool_call("cleanup_work_package_worktree", %{"work_package_id" => "WP-SAFE-SUMMARY"}),
+        -32_009,
+        "Precondition failed",
+        %{
+          "reason" => "worktree_cleanup_failed",
+          "recovery" => %{
+            "next_action" => "retry_cleanup_worktree",
+            "tool" => "cleanup_work_package_worktree",
+            "fresh_mcp_session_required" => false,
+            "message" => "Bearer summary-secret",
+            "path" => "C:/private/worktree",
+            "provider" => %{"token" => "summary-secret"}
+          }
+        },
+        :tool,
+        FailedCall.monotonic_now()
+      )
+
+    assert [group] = FailedCall.summary()["groups"]
+    assert group["failure_reason"] == "worktree_cleanup_failed"
+
+    assert group["recovery"] == %{
+             "fresh_mcp_session_required" => false,
+             "next_action" => "retry_cleanup_worktree",
+             "tool" => "cleanup_work_package_worktree"
+           }
+
+    refute inspect(group) =~ "summary-secret"
+    refute inspect(group) =~ "C:/private/worktree"
+  end
+
   defp failed_health_request(secret) do
     %{
       "jsonrpc" => "2.0",

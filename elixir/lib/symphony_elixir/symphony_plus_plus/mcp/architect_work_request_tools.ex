@@ -41,6 +41,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Service, as: WorkPackageService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
@@ -486,15 +487,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
              work_package,
              config
            ),
-         {:ok, result} <-
-           WorkPackageService.cleanup_worktree(
-             config.repo,
-             work_package_id,
-             cleanup_worktree_opts(cleanup_target_repo_root)
-           ),
+         cleanup_opts = cleanup_worktree_opts(cleanup_target_repo_root),
+         {:ok, result} <- cleanup_or_queue_worktree(config.repo, work_package, cleanup_opts),
          {:ok, _runtime_cleanup} <- ArchitectDeliveryTools.cleanup_worktree_runtime(config.repo, session, work_package),
          {:ok, audit_event} <- maybe_append_cleanup_worktree_audit(config.repo, session, work_package_id, result) do
-      {:ok, ToolResult.tool_result(worktree_lifecycle_payload(result, scope, audit_event))}
+      payload = worktree_lifecycle_payload(result, scope, audit_event)
+      payload = if result.status == "cleanup_queued", do: Map.put(payload, "next_action", "wait_for_cleanup_retry"), else: payload
+      {:ok, ToolResult.tool_result(payload)}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "cleanup_work_package_worktree", "reason" => reason}}
       {:error, :not_found} -> not_found_error("cleanup_work_package_worktree")
@@ -564,6 +563,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   defp cleanup_worktree_opts(nil), do: []
   defp cleanup_worktree_opts(target_repo_root), do: [target_repo_root: target_repo_root]
 
+  defp cleanup_or_queue_worktree(repo, %WorkPackage{} = work_package, opts) do
+    case WorkPackageService.cleanup_worktree(repo, work_package.id, opts) do
+      {:error, reason} -> WorktreeCleanupQueue.queue_retryable_cleanup(repo, work_package, reason, opts)
+      result -> result
+    end
+  end
+
   defp require_planned_dispatch_work_package(%WorkPackage{status: "planned"}), do: :ok
 
   defp require_planned_dispatch_work_package(%WorkPackage{status: status}),
@@ -630,6 +636,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
 
   defp worktree_lifecycle_summary("prepare_work_package_worktree", "already_prepared"), do: "WorkPackage worktree already prepared"
   defp worktree_lifecycle_summary("prepare_work_package_worktree", _status), do: "Prepared WorkPackage worktree"
+  defp worktree_lifecycle_summary("cleanup_work_package_worktree", "cleanup_queued"), do: "Worktree cleanup queued for retry"
   defp worktree_lifecycle_summary("cleanup_work_package_worktree", _status), do: "Success removing worktree. Subagent can be closed now."
 
   defp worktree_lifecycle_idempotency_key(work_package_id, source_tool, result) do

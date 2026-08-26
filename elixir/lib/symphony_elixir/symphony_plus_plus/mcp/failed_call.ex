@@ -15,6 +15,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
   @safe_identity ~r/\A[0-9a-f]{7,64}\z/i
   @safe_reasons ~w(
     already_initialized
+    already_ready
     architect_grant_required
     batch_not_supported
     branch_scope_mismatch
@@ -61,6 +62,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
     unknown_action
     unknown_state_key
     worker_grant_required
+    work_package_contract_frozen
+    worktree_cleanup_failed
   )
 
   defmodule Descriptor do
@@ -468,20 +471,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.FailedCall do
   defp recovery("precondition_failed", _reason), do: %{"next_action" => "satisfy_precondition"}
   defp recovery(_classification, _reason), do: %{"next_action" => "retry_or_check_health"}
 
-  defp safe_existing_recovery(%{
-         "fresh_mcp_session_required" => fresh_session?,
-         "next_action" => "call_release_current_assignment_then_retry_solo_tool",
-         "tool" => "release_current_assignment"
-       })
-       when is_boolean(fresh_session?) do
-    %{
-      "fresh_mcp_session_required" => fresh_session?,
-      "next_action" => "call_release_current_assignment_then_retry_solo_tool",
-      "tool" => "release_current_assignment"
-    }
+  defp safe_existing_recovery(%{"next_action" => next_action} = recovery) when is_binary(next_action) do
+    if safe_unexpected_argument_key?(next_action) do
+      %{"next_action" => next_action}
+      |> maybe_put_safe_recovery_tool(recovery["tool"])
+      |> maybe_put_safe_recovery_session_flag(recovery["fresh_mcp_session_required"])
+    end
   end
 
   defp safe_existing_recovery(_recovery), do: nil
+
+  defp maybe_put_safe_recovery_tool(recovery, tool) when is_binary(tool) do
+    if ToolCatalog.known_tool?(tool), do: Map.put(recovery, "tool", tool), else: recovery
+  end
+
+  defp maybe_put_safe_recovery_tool(recovery, _tool), do: recovery
+
+  defp maybe_put_safe_recovery_session_flag(recovery, flag) when is_boolean(flag),
+    do: Map.put(recovery, "fresh_mcp_session_required", flag)
+
+  defp maybe_put_safe_recovery_session_flag(recovery, _flag), do: recovery
 
   defp attach_diagnostic(response, {diagnostic_id, %Descriptor{} = descriptor}) do
     case response do

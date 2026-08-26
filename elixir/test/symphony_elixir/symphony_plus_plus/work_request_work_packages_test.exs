@@ -228,7 +228,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     assert final.status == "skipped"
   end
 
-  test "dispatch activates the canonical package in place", %{repo: repo, database_path: database_path} do
+  test "dispatch activates the canonical package in place and leaves its non-terminal contract mutable", %{
+    repo: repo,
+    database_path: database_path
+  } do
     work_request = create_work_request!(repo)
     package = slice_one!(repo, work_request.id)
     assert :ok = DashboardPubSub.subscribe()
@@ -251,14 +254,25 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     assert_receive :operator_dashboard_changed
     refute_receive :operator_dashboard_changed, 50
 
-    assert {:error, :invalid_status} =
+    assert {:ok, updated} =
              Repository.update_work_package(repo, work_request.id, package.id, package.contract_revision, %{
-               title: "Mutated after dispatch"
+               title: "Updated after dispatch"
+             })
+
+    assert updated.title == "Updated after dispatch"
+    assert updated.contract_revision == package.contract_revision + 1
+
+    closed = repo.update!(Ecto.Changeset.change(updated, status: "closed"))
+
+    assert {:error, :invalid_status} =
+             Repository.update_work_package(repo, work_request.id, package.id, closed.contract_revision, %{
+               title: "Must remain closed"
              })
 
     assert {:ok, persisted} = WorkPackageRepository.get(repo, package.id)
-    assert persisted.title == package.title
-    assert persisted.contract_revision == package.contract_revision
+    assert persisted.title == updated.title
+    assert persisted.status == "closed"
+    assert persisted.contract_revision == updated.contract_revision
   end
 
   test "dispatch enforces the effective package policy before activation", %{repo: repo, database_path: database_path} do

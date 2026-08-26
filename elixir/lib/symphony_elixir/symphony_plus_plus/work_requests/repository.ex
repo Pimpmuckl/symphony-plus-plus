@@ -54,6 +54,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     "updated_at",
     "contract_revision"
   ]
+  @terminal_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
 
   @type repo :: module()
   @type error ::
@@ -1086,8 +1087,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   defp require_contract_revision(%WorkPackage{contract_revision: revision}, revision), do: :ok
   defp require_contract_revision(%WorkPackage{}, _expected_revision), do: {:error, :stale_status}
 
-  defp require_mutable_contract(%WorkPackage{status: "planned"}), do: :ok
-  defp require_mutable_contract(%WorkPackage{}), do: {:error, :invalid_status}
+  defp require_mutable_contract(%WorkPackage{status: status}) when status in @terminal_work_package_statuses,
+    do: {:error, :invalid_status}
+
+  defp require_mutable_contract(%WorkPackage{}), do: :ok
 
   defp update_contract(repo, %WorkPackage{} = work_package, attrs) do
     attrs =
@@ -1119,13 +1122,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
       |> normalize_keys()
       |> Map.merge(attrs)
 
+    next_status = Map.get(attrs, "status", work_package.status)
+    contract_attrs = Map.delete(attrs, "status")
+
     with :ok <- validate_executable_work_package_kind(effective_contract),
          :ok <- validate_product_tree_node(repo, work_package.work_request_id, Map.get(attrs, "product_tree_node_id")),
          {:ok, %WorkRequest{} = work_request} <- get(repo, work_package.work_request_id),
          :ok <- WorkPackageDeliveryScope.validate(repo, work_request, effective_contract) do
       work_package
-      |> WorkPackage.update_changeset(attrs)
-      |> Ecto.Changeset.optimistic_lock(:status, & &1)
+      |> WorkPackage.update_changeset(contract_attrs)
+      |> Ecto.Changeset.optimistic_lock(:status, fn _current -> next_status end)
       |> Ecto.Changeset.optimistic_lock(:contract_revision)
       |> repo.update()
     end
