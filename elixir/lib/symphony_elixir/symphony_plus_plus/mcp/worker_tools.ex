@@ -75,7 +75,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
       {:ok, result}
     else
       {:tool_error, reason} -> invalid_params_error("read_task_plan", reason)
-      {:error, _code, _message, _data} = error -> error
       {:error, reason} -> worker_error(reason, "read_task_plan")
     end
   end
@@ -95,9 +94,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
       {:tool_error, reason} ->
         invalid_params_error("update_task_plan", reason)
-
-      {:error, _code, _message, _data} = error ->
-        error
 
       {:error, reason} ->
         worker_error(reason, "update_task_plan")
@@ -121,7 +117,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     case architect_package_scope(config.repo, session, arguments, :finding_append, "append_finding") do
       {:ok, session, work_package_id} -> append_finding_for_package(config.repo, session, work_package_id, arguments)
       {:tool_error, reason} -> invalid_params_error("append_finding", reason)
-      {:error, _code, _message, _data} = error -> error
       {:error, reason} -> worker_error(reason, "append_finding")
     end
   end
@@ -135,9 +130,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
       {:tool_error, reason} ->
         invalid_params_error("append_progress", reason)
-
-      {:error, _code, _message, _data} = error ->
-        error
 
       {:error, reason} ->
         worker_error(reason, "append_progress")
@@ -629,7 +621,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
          :ok <- authorize_current_package_policy(repo, session, :progress_append, :progress) do
       append_progress_for_package(repo, session, Session.work_package_id(session), arguments, tool, payload)
     else
-      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
       {:error, reason} -> worker_error(reason, tool)
     end
   end
