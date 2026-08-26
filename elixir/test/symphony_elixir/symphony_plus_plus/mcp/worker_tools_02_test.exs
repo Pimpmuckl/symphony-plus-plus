@@ -265,7 +265,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
 
     foreign_response = mcp_tool(repo, session, "read_task_plan", %{"work_package_id" => foreign_package.id})
     assert get_in(foreign_response, ["error", "data", "reason"]) == "not_found"
-    refute "sympp://work-packages/#{foreign_package.id}/task_plan.md" in resource_uris
+
+    refreshed_resource_uris =
+      MCPHarness.request(
+        %{"jsonrpc" => "2.0", "id" => "resources-after-foreign", "method" => "resources/list", "params" => %{}},
+        repo: repo,
+        session: session
+      )
+      |> get_in(["result", "resources"])
+      |> Enum.map(& &1["uri"])
+
+    assert resource_uri in refreshed_resource_uris
+    refute "sympp://work-packages/#{foreign_package.id}/task_plan.md" in refreshed_resource_uris
 
     assert {:ok, _skipped} = WorkPackageRepository.update(repo, package.id, %{status: "skipped"})
 

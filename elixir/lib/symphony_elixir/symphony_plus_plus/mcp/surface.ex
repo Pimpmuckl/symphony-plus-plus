@@ -153,6 +153,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
          {:ok, current} <- listed_current_assignment_resource(session) do
       {:ok, current ++ Enum.flat_map(work_packages, &work_package_resources(&1.id))}
     else
+      {:error, {:service_unavailable, _reason} = reason} -> service_error(reason, @assignment_resource)
+      {:error, :database_busy = reason} -> service_error(reason, @assignment_resource)
+      {:error, {:storage_failed, _reason} = reason} -> service_error(reason, @assignment_resource)
       _reason -> listed_current_assignment_resource(session)
     end
   end

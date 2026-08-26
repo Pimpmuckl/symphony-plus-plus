@@ -243,7 +243,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     response = mcp_tool(repo, session, "list_work_requests", %{"status" => "ready_for_clarification"})
 
     assert get_in(response, ["error", "code"]) == -32_001
-    assert get_in(response, ["error", "data", "reason"]) == "{:work_request_terminal, :archived}"
+    assert get_in(response, ["error", "data", "reason"]) == "work_request_terminal"
+    assert get_in(response, ["error", "data", "terminal_state"]) == "archived"
   end
 
   test "WorkRequest MCP work-package mutations require slice authoring status", %{repo: repo} do

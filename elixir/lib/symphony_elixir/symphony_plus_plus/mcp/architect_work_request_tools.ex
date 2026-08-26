@@ -913,6 +913,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectWorkRequestTools do
   end
 
   defp architect_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
+
+  defp architect_error({:unauthorized, {:work_request_terminal, terminal_state}}, resource) do
+    {:error, -32_001, "Unauthorized",
+     %{
+       "resource" => resource,
+       "reason" => "work_request_terminal",
+       "terminal_state" => reason_text(terminal_state)
+     }}
+  end
+
   defp architect_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
   defp architect_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
   defp architect_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
