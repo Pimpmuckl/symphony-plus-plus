@@ -760,6 +760,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp worker_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
   defp worker_error(:assignment_mismatch, resource), do: auth_error({:unauthorized, :assignment_mismatch}, resource)
   defp worker_error(:worker_grant_required, resource), do: auth_error({:unauthorized, :worker_grant_required}, resource)
+  defp worker_error({:work_request_terminal, terminal_state}, resource), do: work_request_terminal_auth_error(resource, terminal_state)
   defp worker_error({:authorization_policy_denied, %Decision{} = decision}, resource), do: MCPError.from_decision(decision, resource)
   defp worker_error(:forbidden, resource), do: auth_error(:forbidden, resource)
   defp worker_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
@@ -789,6 +790,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp auth_error({:service_unavailable, reason}, resource), do: service_error(reason, resource)
   defp auth_error(:forbidden, resource), do: {:error, -32_003, "Forbidden", %{"resource" => resource, "reason" => "outside_session_scope"}}
   defp terminal_auth_error(resource), do: {:error, -32_001, "Unauthorized", put_architect_next_step(%{"resource" => resource, "reason" => "work_package_terminal"})}
+
+  defp work_request_terminal_auth_error(resource, terminal_state) do
+    {:error, -32_001, "Unauthorized",
+     %{
+       "resource" => resource,
+       "reason" => "work_request_terminal",
+       "terminal_state" => reason_text(terminal_state)
+     }}
+  end
+
   defp service_error(_reason, resource), do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
   defp reason_text(reason) when is_binary(reason), do: reason
   defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)

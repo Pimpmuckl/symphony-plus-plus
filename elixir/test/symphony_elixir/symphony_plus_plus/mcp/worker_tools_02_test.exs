@@ -3,6 +3,7 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.TaskPlanTools
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog
   alias SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas
 
@@ -290,5 +291,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools02Test do
       response = mcp_tool(repo, session, tool, arguments)
       assert get_in(response, ["error", "data", "reason"]) == "work_package_terminal"
     end
+
+    archived_at = DateTime.utc_now(:microsecond)
+
+    work_request
+    |> Ecto.Changeset.change(archived_at: archived_at, archive_reason: "manual")
+    |> repo.update!()
+
+    assert {:error, {:work_request_terminal, :archived}} =
+             TaskPlanTools.update_task_plan_for_work_package(repo, session, package.id, %{
+               "expected_version" => version,
+               "nodes" => [%{"id" => existing.id, "status" => "done"}]
+             })
   end
 end

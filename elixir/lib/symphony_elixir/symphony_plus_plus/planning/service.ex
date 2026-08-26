@@ -6,6 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Service do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Assignment
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
+  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Policy
@@ -137,7 +138,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Service do
 
   @spec require_valid_assignment(Repository.repo(), Assignment.t()) :: :ok | {:error, error()}
   def require_valid_assignment(repo, %Assignment{} = assignment) when is_atom(repo) do
-    lock_valid_assignment(repo, assignment)
+    with :ok <- lock_valid_assignment(repo, assignment) do
+      require_live_architect_authority(repo, assignment)
+    end
   end
 
   def require_valid_assignment(repo, _assignment) when is_atom(repo), do: {:error, :unauthenticated}
@@ -308,6 +311,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Service do
       end
     end
   end
+
+  defp require_live_architect_authority(repo, %Assignment{grant_role: "architect", grant_id: grant_id}) do
+    with {:ok, %AccessGrant{} = grant} <- AccessGrantRepository.get(repo, grant_id) do
+      AccessGrantService.require_live_package_authority(repo, grant)
+    end
+  end
+
+  defp require_live_architect_authority(_repo, %Assignment{}), do: :ok
 
   defp valid_assignment_query(%Assignment{} = assignment) do
     now = DateTime.utc_now(:microsecond)
