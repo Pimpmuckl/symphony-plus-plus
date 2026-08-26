@@ -72,14 +72,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema02Test do
           "jsonrpc" => "2.0",
           "id" => "architect-worker-call",
           "method" => "tools/call",
-          "params" => %{"name" => "append_progress", "arguments" => %{"unexpected" => "value"}}
+          "params" => %{"name" => "attach_pr", "arguments" => %{"unexpected" => "value"}}
         },
         repo: repo,
         session: architect_session
       )
 
     assert get_in(architect_response, ["error", "code"]) == -32_001
-    assert get_in(architect_response, ["error", "data", "resource"]) == "append_progress"
+    assert get_in(architect_response, ["error", "data", "resource"]) == "attach_pr"
     assert get_in(architect_response, ["error", "data", "reason"]) == "worker_grant_required"
     assert {:ok, []} = PlanningRepository.list_progress_events(repo, package.id)
 

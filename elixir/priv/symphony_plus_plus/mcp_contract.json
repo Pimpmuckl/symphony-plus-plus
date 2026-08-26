@@ -1,10 +1,14 @@
 {
-  "mcp_contract_fingerprint": "c22de35f760253d9d1f6103b56722de7a1cccb7e84afd75d424582af37fe4f76",
+  "mcp_contract_fingerprint": "bd0ca3cf2037b80bb00612dc0600a2d1d3119186239b43e55780d40b6c686636",
   "tool_sets": {
     "architect_tools": [
       "list_work_requests",
       "read_work_request",
       "read_plan",
+      "read_task_plan",
+      "update_task_plan",
+      "append_finding",
+      "append_progress",
       "add_comment",
       "list_comments",
       "resolve_comment",

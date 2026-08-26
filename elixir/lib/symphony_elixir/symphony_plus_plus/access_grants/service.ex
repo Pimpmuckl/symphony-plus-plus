@@ -6,6 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.WorkKey
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.ArchitectHandoff
 
   @default_worker_capabilities ["worker:claim", "worker:lifecycle.transition"]
   @default_architect_capabilities ["read:phase"]
@@ -201,6 +202,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service do
   end
 
   @spec require_live_package_authority(Repository.repo(), AccessGrant.t()) :: :ok | {:error, error()}
+  def require_live_package_authority(repo, %AccessGrant{grant_role: "architect"} = grant) when is_atom(repo) do
+    case ArchitectHandoff.handoff_phase_grant?(repo, grant) do
+      {:ok, true} -> :ok
+      {:ok, false} -> require_claimable_worker_package(repo, grant.work_package_id)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   def require_live_package_authority(repo, %AccessGrant{work_package_id: work_package_id}) when is_atom(repo) and is_binary(work_package_id) do
     require_claimable_worker_package(repo, work_package_id)
   end

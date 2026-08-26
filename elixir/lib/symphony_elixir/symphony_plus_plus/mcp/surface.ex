@@ -9,15 +9,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
     Auth,
     Config,
+    CurrentWorkRequest,
     LocalTrustedTools,
     Response,
     Session,
-    ToolCatalog
+    ToolCatalog,
+    WorkRequestScope
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Renderer, as: PlanningRenderer
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Repository, as: PlanningRepository
   alias SymphonyElixir.SymphonyPlusPlus.Planning.Service, as: PlanningService
+  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   @agent_text_mime_type "text/vnd.toon"
   @assignment_resource "sympp://assignment/current"
   @version_resource "sympp://health/version"
@@ -31,12 +34,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
       ToolCatalog.startup_tool_specs(:architect, config)
       |> Map.new(&{&1["name"], &1})
 
+    worker_only_tools = ToolCatalog.worker_tools() -- (["get_current_assignment"] ++ ToolCatalog.architect_tools())
+    rejected_tools = ToolCatalog.solo_tools() ++ [ToolCatalog.local_assignment_claim_tool()] ++ worker_only_tools
+    architect_schema_overrides = ["attach_branch", "sync_pr"] ++ ToolCatalog.architect_planning_tools()
+
     tools =
       :full
       |> ToolCatalog.startup_tool_specs(config)
-      |> Enum.map(fn
-        %{"name" => name} when name in ["attach_branch", "sync_pr"] -> Map.fetch!(architect_tools, name)
-        tool -> tool
+      |> Enum.reject(&(&1["name"] in rejected_tools))
+      |> Enum.map(fn %{"name" => name} = tool ->
+        if name in architect_schema_overrides, do: Map.get(architect_tools, name, tool), else: tool
       end)
 
     {:ok, tools}
@@ -110,7 +117,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
   defp assignment_resources(%Session{} = session, repo) do
     case Auth.require_session(session, repo) do
       {:ok, %Session{} = session} ->
-        assignment_resources_for_session(session)
+        assignment_resources_for_session(session, repo)
 
       {:error, {:service_unavailable, reason}} ->
         service_error(reason, @assignment_resource)
@@ -122,21 +129,36 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
 
   defp assignment_resources(_session, _repo), do: {:ok, []}
 
-  defp assignment_resources_for_session(%Session{assignment: %{grant_role: "worker"}} = session) do
+  defp assignment_resources_for_session(%Session{assignment: %{grant_role: "worker"}} = session, _repo) do
     case require_worker_assignment(session.assignment) do
       :ok -> listed_assignment_resources(session)
       {:error, _reason} -> {:ok, []}
     end
   end
 
-  defp assignment_resources_for_session(%Session{assignment: %{grant_role: "architect"}} = session) do
+  defp assignment_resources_for_session(%Session{assignment: %{grant_role: "architect"}} = session, repo) do
     case require_assignment_introspection(session.assignment) do
-      :ok -> listed_current_assignment_resource(session)
+      :ok -> listed_architect_resources(repo, session)
       {:error, _reason} -> {:ok, []}
     end
   end
 
-  defp assignment_resources_for_session(%Session{}), do: {:ok, []}
+  defp assignment_resources_for_session(%Session{}, _repo), do: {:ok, []}
+
+  defp listed_architect_resources(repo, %Session{} = session) do
+    with {:ok, work_request_id} <- CurrentWorkRequest.id_argument(%{}, session),
+         {:ok, _work_request, _filters, _scope} <-
+           WorkRequestScope.authorized_work_request_scope(repo, session, work_request_id, :work_request_read, "resources/list"),
+         {:ok, work_packages} <- WorkRequestService.list_work_packages(repo, work_request_id),
+         {:ok, current} <- listed_current_assignment_resource(session) do
+      {:ok, current ++ Enum.flat_map(work_packages, &work_package_resources(&1.id))}
+    else
+      {:error, {:service_unavailable, _reason} = reason} -> service_error(reason, @assignment_resource)
+      {:error, :database_busy = reason} -> service_error(reason, @assignment_resource)
+      {:error, {:storage_failed, _reason} = reason} -> service_error(reason, @assignment_resource)
+      _reason -> listed_current_assignment_resource(session)
+    end
+  end
 
   defp listed_assignment_resources(%Session{} = session) do
     work_package_id = Session.work_package_id(session)

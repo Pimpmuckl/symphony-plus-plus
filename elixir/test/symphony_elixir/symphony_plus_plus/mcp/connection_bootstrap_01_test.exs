@@ -107,6 +107,51 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap01Test do
     assert Auth.require_session(session, repo) == {:error, {:unauthorized, :work_package_terminal}}
   end
 
+  test "WorkRequest architect sessions follow handoff authority instead of anchor terminality", %{repo: repo} do
+    work_request = create_work_request!(repo, id: "WR-AUTH-ARCH-HANDOFF", status: "sliced")
+
+    {anchor, session, grant} =
+      create_work_request_handoff_architect_session(repo, work_request, ArchitectHandoff.capabilities())
+
+    assert {:ok, _terminal_anchor} = WorkPackageRepository.update(repo, anchor.id, %{status: "merged"})
+    assert {:ok, live_session} = Auth.require_session(session, repo)
+    assert live_session.assignment.grant_id == grant.id
+
+    completed_at = DateTime.utc_now(:microsecond)
+
+    assert {1, nil} =
+             repo.update_all(
+               from(request in WorkRequest, where: request.id == ^work_request.id),
+               set: [completed_at: completed_at, completion_source: "operator"]
+             )
+
+    assert Auth.require_session(session, repo) ==
+             {:error, {:unauthorized, {:work_request_terminal, :completed}}}
+
+    assert {1, nil} =
+             repo.update_all(
+               from(request in WorkRequest, where: request.id == ^work_request.id),
+               set: [completed_at: nil, completion_source: nil]
+             )
+
+    assert {1, nil} =
+             repo.update_all(
+               from(access_grant in AccessGrant, where: access_grant.id == ^grant.id),
+               set: [expires_at: DateTime.add(completed_at, -1, :second)]
+             )
+
+    assert Auth.require_session(session, repo) == {:error, {:unauthorized, :expired}}
+
+    assert {1, nil} =
+             repo.update_all(
+               from(access_grant in AccessGrant, where: access_grant.id == ^grant.id),
+               set: [expires_at: nil]
+             )
+
+    assert {:ok, _revoked} = AccessGrantService.revoke(repo, grant.id)
+    assert Auth.require_session(session, repo) == {:error, {:unauthorized, :revoked}}
+  end
+
   test "config parser defaults to stdio and rejects unsupported modes" do
     assert {:ok, %Config{mode: :stdio, database: nil}} = Config.parse([])
 

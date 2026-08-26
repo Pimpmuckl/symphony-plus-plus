@@ -25,6 +25,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     ArchitectDeliveryTools,
     Auth,
     Config,
+    CurrentWorkRequest,
     ErrorDetails,
     ProgressEvents,
     PullRequestMetadata,
@@ -33,6 +34,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     TaskPlanTools,
     ToolResult,
     WorkRequestPayloads,
+    WorkRequestScope,
     WorktreeScope
   }
 
@@ -67,10 +69,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     read_current_virtual_file(config, session, "context.md")
   end
 
+  def call("read_task_plan", %Config{} = config, %Session{assignment: %{grant_role: "architect"}} = session, arguments) do
+    with {:ok, session, work_package_id} <- architect_package_scope(config.repo, session, arguments, :task_plan_read, "read_task_plan"),
+         {:ok, result} <- TaskPlanTools.read_task_plan_for_work_package(config.repo, session, work_package_id) do
+      {:ok, result}
+    else
+      {:tool_error, reason} -> invalid_params_error("read_task_plan", reason)
+      {:error, reason} -> worker_error(reason, "read_task_plan")
+    end
+  end
+
   def call("read_task_plan", %Config{} = config, session, _arguments) do
     case TaskPlanTools.read_task_plan(config.repo, session) do
       {:error, reason} -> worker_error(reason, "read_task_plan.md")
       result -> result
+    end
+  end
+
+  def call("update_task_plan", %Config{} = config, %Session{assignment: %{grant_role: "architect"}} = session, arguments) do
+    case architect_package_scope(config.repo, session, arguments, :task_plan_update, "update_task_plan") do
+      {:ok, session, work_package_id} ->
+        arguments = Map.delete(arguments, "work_package_id")
+        normalize_update_task_plan_result(TaskPlanTools.update_task_plan_for_work_package(config.repo, session, work_package_id, arguments))
+
+      {:tool_error, reason} ->
+        invalid_params_error("update_task_plan", reason)
+
+      {:error, reason} ->
+        worker_error(reason, "update_task_plan")
     end
   end
 
@@ -87,7 +113,28 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     end
   end
 
+  def call("append_finding", %Config{} = config, %Session{assignment: %{grant_role: "architect"}} = session, arguments) do
+    case architect_package_scope(config.repo, session, arguments, :finding_append, "append_finding") do
+      {:ok, session, work_package_id} -> append_finding_for_package(config.repo, session, work_package_id, arguments)
+      {:tool_error, reason} -> invalid_params_error("append_finding", reason)
+      {:error, reason} -> worker_error(reason, "append_finding")
+    end
+  end
+
   def call("append_finding", %Config{} = config, session, arguments), do: append_finding_tool(config.repo, session, arguments)
+
+  def call("append_progress", %Config{} = config, %Session{assignment: %{grant_role: "architect"}} = session, arguments) do
+    case architect_package_scope(config.repo, session, arguments, :progress_append, "append_progress") do
+      {:ok, session, work_package_id} ->
+        append_progress_for_package(config.repo, session, work_package_id, arguments, "append_progress", %{})
+
+      {:tool_error, reason} ->
+        invalid_params_error("append_progress", reason)
+
+      {:error, reason} ->
+        worker_error(reason, "append_progress")
+    end
+  end
 
   def call("append_progress", %Config{} = config, session, arguments) do
     append_scoped_progress(config.repo, session, arguments, "append_progress", %{})
@@ -167,15 +214,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   defp append_finding_tool(repo, %Session{} = session, arguments) do
     with {:ok, session} <- scoped_session(repo, session, arguments),
-         :ok <- authorize_current_package_policy(repo, session, :finding_append, :finding),
-         {:ok, title} <- required_argument(arguments, "title"),
+         :ok <- authorize_current_package_policy(repo, session, :finding_append, :finding) do
+      append_finding_for_package(repo, session, Session.work_package_id(session), arguments)
+    else
+      {:error, reason} -> worker_error(reason, "append_finding")
+    end
+  end
+
+  defp append_finding_for_package(repo, %Session{} = session, work_package_id, arguments) do
+    with {:ok, title} <- required_argument(arguments, "title"),
          {:ok, body} <- required_argument(arguments, "body"),
          {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
          idempotency_key = String.trim(idempotency_key),
-         {:ok, finding_id} <- optional_finding_id(arguments, session, idempotency_key),
+         {:ok, finding_id} <- optional_finding_id(arguments, session, work_package_id, idempotency_key),
          attrs = %{
            "id" => finding_id,
-           "work_package_id" => Session.work_package_id(session),
+           "work_package_id" => work_package_id,
            "title" => title,
            "body" => body,
            "severity" => optional_argument(arguments, "severity", "info"),
@@ -183,7 +237,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
            "access_grant_id" => session.assignment.grant_id,
            "caller_supplied_id" => Map.has_key?(arguments, "id")
          },
-         {:ok, finding} <- append_authenticated_idempotent_finding(repo, session, finding_id, attrs) do
+         {:ok, finding} <- append_authenticated_idempotent_finding(repo, session, work_package_id, finding_id, attrs) do
       {:ok, ToolResult.agent_tool_result(%{"finding" => %{"id" => finding.id, "title" => finding.title, "severity" => finding.severity}})}
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "append_finding", "reason" => reason}}
@@ -420,9 +474,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     end
   end
 
-  defp append_authenticated_idempotent_finding(repo, %Session{} = session, finding_id, attrs) do
-    work_package_id = Session.work_package_id(session)
-
+  defp append_authenticated_idempotent_finding(repo, %Session{} = session, work_package_id, finding_id, attrs) do
     transaction_fun = fn ->
       append_authenticated_idempotent_finding_tx(repo, session, work_package_id, finding_id, attrs)
     end
@@ -444,7 +496,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
            repo
            |> PlanningRepository.list_findings(work_package_id)
            |> find_existing_finding_by_idempotency(attrs),
-         :ok <- ProgressEvents.reject_ready_evidence_mutation(repo, session, "append_finding") do
+         :ok <- ProgressEvents.reject_ready_evidence_mutation(repo, session, work_package_id, "append_finding") do
       case PlanningRepository.append_finding(repo, attrs) do
         {:ok, finding} ->
           {:ok, finding}
@@ -537,7 +589,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     if expected == actual, do: {:ok, finding}, else: {:tool_error, "idempotency_conflict"}
   end
 
-  defp optional_finding_id(arguments, session, idempotency_key) do
+  defp optional_finding_id(arguments, session, work_package_id, idempotency_key) do
     case Map.get(arguments, "id") do
       id when is_binary(id) ->
         case String.trim(id) do
@@ -546,15 +598,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
         end
 
       nil ->
-        {:ok, generated_finding_id(session, idempotency_key)}
+        {:ok, generated_finding_id(session, work_package_id, idempotency_key)}
 
       _id ->
         {:tool_error, "invalid_id"}
     end
   end
 
-  defp generated_finding_id(session, idempotency_key) do
-    material = [session.assignment.work_package_id, session.assignment.grant_id, idempotency_key] |> Enum.join(":")
+  defp generated_finding_id(session, work_package_id, idempotency_key) do
+    material = [work_package_id, session.assignment.grant_id, idempotency_key] |> Enum.join(":")
     "finding_" <> Base.url_encode64(:crypto.hash(:sha256, material), padding: false)
   end
 
@@ -566,8 +618,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   defp append_scoped_progress(repo, session, arguments, tool, payload) do
     with {:ok, session} <- scoped_session(repo, session, arguments),
-         :ok <- authorize_current_package_policy(repo, session, :progress_append, :progress),
-         {:ok, summary} <- required_argument(arguments, "summary"),
+         :ok <- authorize_current_package_policy(repo, session, :progress_append, :progress) do
+      append_progress_for_package(repo, session, Session.work_package_id(session), arguments, tool, payload)
+    else
+      {:error, reason} -> worker_error(reason, tool)
+    end
+  end
+
+  defp append_progress_for_package(repo, %Session{} = session, work_package_id, arguments, tool, payload) do
+    with {:ok, summary} <- required_argument(arguments, "summary"),
          {:ok, idempotency_key} <- required_argument(arguments, "idempotency_key"),
          {:ok, caller_payload} <- optional_payload(arguments) do
       idempotency_key = ProgressEvents.scoped_idempotency_key(tool, String.trim(idempotency_key), session)
@@ -580,10 +639,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
         "payload" => ProgressEvents.merge_payload(tool, caller_payload, payload)
       }
 
-      ProgressEvents.append_or_replay(repo, session, attrs, idempotency_key, tool)
+      ProgressEvents.append_or_replay(repo, session, work_package_id, attrs, idempotency_key, tool)
     else
       {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
-      {:error, reason} -> worker_error(reason, tool)
     end
   end
 
@@ -655,6 +713,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
     end
   end
 
+  defp architect_package_scope(repo, %Session{} = session, arguments, action, tool) do
+    with {:ok, session} <- Auth.require_session(session, repo),
+         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
+         {:ok, work_request_id} <- CurrentWorkRequest.id_argument(%{}, session),
+         {:ok, _work_request, _work_package, _filters, _scope} <-
+           WorkRequestScope.authorized_work_package_scope(
+             repo,
+             session,
+             work_request_id,
+             work_package_id,
+             action,
+             tool
+           ) do
+      {:ok, session, work_package_id}
+    end
+  end
+
   defp actor_for_package_resource(repo, %Session{} = session, resource_type, work_package_id) do
     with {:ok, target} <- PlanningService.package_resource_target(repo, work_package_id, resource_type) do
       ActorResolver.from_session(session, PlanningService.package_surface_actor_opts(session.assignment, target))
@@ -680,11 +755,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
 
   defp worker_error(:unauthorized, resource), do: auth_error(:unauthorized, resource)
   defp worker_error({:unauthorized, :work_package_terminal}, resource), do: terminal_auth_error(resource)
+  defp worker_error({:unauthorized, {:work_request_terminal, terminal_state}}, resource), do: work_request_terminal_auth_error(resource, terminal_state)
   defp worker_error({:unauthorized, _reason} = reason, resource), do: auth_error(reason, resource)
   defp worker_error(:expired, resource), do: auth_error({:unauthorized, :expired}, resource)
   defp worker_error(:assignment_revoked, resource), do: auth_error({:unauthorized, :revoked}, resource)
   defp worker_error(:assignment_mismatch, resource), do: auth_error({:unauthorized, :assignment_mismatch}, resource)
   defp worker_error(:worker_grant_required, resource), do: auth_error({:unauthorized, :worker_grant_required}, resource)
+  defp worker_error({:work_request_terminal, terminal_state}, resource), do: work_request_terminal_auth_error(resource, terminal_state)
   defp worker_error({:authorization_policy_denied, %Decision{} = decision}, resource), do: MCPError.from_decision(decision, resource)
   defp worker_error(:forbidden, resource), do: auth_error(:forbidden, resource)
   defp worker_error({:service_unavailable, _reason} = reason, resource), do: auth_error(reason, resource)
@@ -714,6 +791,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools do
   defp auth_error({:service_unavailable, reason}, resource), do: service_error(reason, resource)
   defp auth_error(:forbidden, resource), do: {:error, -32_003, "Forbidden", %{"resource" => resource, "reason" => "outside_session_scope"}}
   defp terminal_auth_error(resource), do: {:error, -32_001, "Unauthorized", put_architect_next_step(%{"resource" => resource, "reason" => "work_package_terminal"})}
+
+  defp work_request_terminal_auth_error(resource, terminal_state) do
+    {:error, -32_001, "Unauthorized",
+     %{
+       "resource" => resource,
+       "reason" => "work_request_terminal",
+       "terminal_state" => reason_text(terminal_state)
+     }}
+  end
+
   defp service_error(_reason, resource), do: {:error, -32_000, "Server error", %{"resource" => resource, "reason" => "ledger_unavailable"}}
   defp reason_text(reason) when is_binary(reason), do: reason
   defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)

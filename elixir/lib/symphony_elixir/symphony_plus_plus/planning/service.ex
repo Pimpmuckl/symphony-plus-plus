@@ -6,6 +6,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Service do
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Assignment
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Repository, as: AccessGrantRepository
+  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Actor
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Decision
   alias SymphonyElixir.SymphonyPlusPlus.Authorization.Policy
@@ -104,17 +105,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Service do
     with {:ok, idempotency_key} <- idempotency_key(attrs),
          {:ok, work_package_id} <- scoped_work_package_id(assignment, attrs),
          :ok <- reject_duplicate_caller_keys(attrs, [:summary, :body, :status, :payload]) do
-      attrs = normalize_keys(attrs)
-      payload = Map.get(attrs, "payload", %{})
-
-      insert_attrs =
-        attrs
-        |> Map.take(["summary", "body", "status"])
-        |> Map.put("work_package_id", work_package_id)
-        |> Map.put("idempotency_key", idempotency_key)
-        |> Map.put("payload", payload)
-
-      Repository.append_audit_progress_event(repo, assignment, insert_attrs, agent_run_id: Keyword.get(opts, :agent_run_id))
+      append_authenticated_progress_event_for_package(repo, assignment, work_package_id, attrs, idempotency_key, opts)
     end
   end
 
@@ -122,9 +113,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Service do
     {:error, :unauthenticated}
   end
 
+  @spec append_authenticated_progress_event_for_work_package(Repository.repo(), Assignment.t(), String.t(), map()) ::
+          {:ok, ProgressEvent.t()} | {:error, error()}
+  def append_authenticated_progress_event_for_work_package(repo, %Assignment{} = assignment, work_package_id, attrs)
+      when is_atom(repo) and is_binary(work_package_id) and is_map(attrs) do
+    with {:ok, idempotency_key} <- idempotency_key(attrs),
+         :ok <- reject_duplicate_caller_keys(attrs, [:summary, :body, :status, :payload]) do
+      append_authenticated_progress_event_for_package(repo, assignment, work_package_id, attrs, idempotency_key, [])
+    end
+  end
+
+  defp append_authenticated_progress_event_for_package(repo, assignment, work_package_id, attrs, idempotency_key, opts) do
+    attrs = normalize_keys(attrs)
+
+    insert_attrs =
+      attrs
+      |> Map.take(["summary", "body", "status"])
+      |> Map.put("work_package_id", work_package_id)
+      |> Map.put("idempotency_key", idempotency_key)
+      |> Map.put("payload", Map.get(attrs, "payload", %{}))
+
+    Repository.append_audit_progress_event_for_work_package(repo, assignment, work_package_id, insert_attrs, agent_run_id: Keyword.get(opts, :agent_run_id))
+  end
+
   @spec require_valid_assignment(Repository.repo(), Assignment.t()) :: :ok | {:error, error()}
   def require_valid_assignment(repo, %Assignment{} = assignment) when is_atom(repo) do
-    lock_valid_assignment(repo, assignment)
+    with :ok <- lock_valid_assignment(repo, assignment) do
+      require_live_architect_authority(repo, assignment)
+    end
   end
 
   def require_valid_assignment(repo, _assignment) when is_atom(repo), do: {:error, :unauthenticated}
@@ -295,6 +311,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Service do
       end
     end
   end
+
+  defp require_live_architect_authority(repo, %Assignment{grant_role: "architect", grant_id: grant_id}) do
+    with {:ok, %AccessGrant{} = grant} <- AccessGrantRepository.get(repo, grant_id) do
+      AccessGrantService.require_live_package_authority(repo, grant)
+    end
+  end
+
+  defp require_live_architect_authority(_repo, %Assignment{}), do: :ok
 
   defp valid_assignment_query(%Assignment{} = assignment) do
     now = DateTime.utc_now(:microsecond)

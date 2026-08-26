@@ -258,6 +258,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPGuidanceRequestsTest do
       create_matching_work_package!(repo, work_request, approved_slice,
         id: "WP-GUIDANCE-WR-DISPATCHED",
         phase_id: nil,
+        repo: "nextide/secondary-service",
+        base_branch: "release",
         status: "planning"
       )
 

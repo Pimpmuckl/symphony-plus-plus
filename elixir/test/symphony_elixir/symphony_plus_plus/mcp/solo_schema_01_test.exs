@@ -827,6 +827,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     refute Map.has_key?(tools_by_name, "claim_work_key")
     refute Map.has_key?(tools_by_name, "claim_private_handoff")
 
+    for tool <- @solo_tool_names ++ ["claim_local_assignment", "read_context", "abandon", "attach_pr", "mark_ready"] do
+      refute Map.has_key?(tools_by_name, tool)
+    end
+
     for tool <- @architect_tool_names do
       assert Map.has_key?(tools_by_name, tool)
     end
@@ -837,6 +841,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SoloSchema01Test do
     assert get_in(tools_by_name, ["read_work_request", "inputSchema", "properties", "work_request_id", "type"]) == "string"
     refute Map.has_key?(get_in(tools_by_name, ["read_work_request", "inputSchema", "properties"]), "include_planning_scratch")
     assert get_in(tools_by_name, ["read_plan", "inputSchema", "required"]) == ["work_request_id"]
+    assert get_in(tools_by_name, ["read_task_plan", "inputSchema", "required"]) == ["work_package_id"]
+
+    assert get_in(tools_by_name, ["update_task_plan", "inputSchema", "required"]) == [
+             "work_package_id",
+             "expected_version",
+             "nodes"
+           ]
+
+    assert get_in(tools_by_name, ["append_finding", "inputSchema", "required"]) == [
+             "work_package_id",
+             "title",
+             "body",
+             "idempotency_key"
+           ]
+
+    assert get_in(tools_by_name, ["append_progress", "inputSchema", "required"]) == [
+             "work_package_id",
+             "summary",
+             "idempotency_key"
+           ]
 
     assert get_in(tools_by_name, ["read_plan", "inputSchema", "properties", "view", "enum"]) == [
              "groups_only",

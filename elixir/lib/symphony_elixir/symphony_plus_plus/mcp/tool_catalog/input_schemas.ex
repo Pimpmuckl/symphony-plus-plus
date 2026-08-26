@@ -219,6 +219,38 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
   end
 
   @spec architect_tool_input_schema(tool_name()) :: input_schema()
+  def architect_tool_input_schema("read_task_plan") do
+    schema(%{"work_package_id" => string_schema()}, ["work_package_id"])
+  end
+
+  def architect_tool_input_schema("update_task_plan") do
+    schema(
+      %{
+        "work_package_id" => string_schema(),
+        "expected_version" => integer_schema(),
+        "nodes" => plan_nodes_schema()
+      },
+      ["work_package_id", "expected_version", "nodes"]
+    )
+  end
+
+  def architect_tool_input_schema("append_finding") do
+    schema(
+      scoped_properties(%{
+        "body" => markdown_string_schema("Human-facing finding details in Markdown."),
+        "id" => string_schema(),
+        "idempotency_key" => string_schema(),
+        "severity" => string_schema(),
+        "title" => string_schema()
+      }),
+      ["work_package_id", "title", "body", "idempotency_key"]
+    )
+  end
+
+  def architect_tool_input_schema("append_progress") do
+    schema(progress_properties(:explicit), ["work_package_id", "summary", "idempotency_key"])
+  end
+
   def architect_tool_input_schema("list_work_requests") do
     schema(
       %{

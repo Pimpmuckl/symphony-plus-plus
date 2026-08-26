@@ -203,7 +203,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
              Repository.slice_work_request(repo, owner.id, [package_attrs(product_tree_node_id: foreign_node.id)])
   end
 
-  test "keeps one active package in sliced requests and protects stale skips", %{repo: repo} do
+  test "allows all planned packages to be skipped and protects stale skips", %{repo: repo} do
     work_request = create_work_request!(repo)
     first_attrs = package_attrs(id: "wp_skip_first")
     second_attrs = package_attrs(id: "wp_skip_second")
@@ -224,27 +224,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequestWorkPackagesTest do
     assert skipped.status == "skipped"
     refute WorkPackageActivity.context(repo, first.id).blocker_state.active?
     assert {:error, :stale_status} = Repository.skip_work_package(repo, work_request.id, first.id, "planned")
-    assert {:error, :last_active_work_package} = Repository.skip_work_package(repo, work_request.id, second.id, "planned")
-    assert {:ok, %{status: "planned"}} = WorkPackageRepository.get(repo, second.id)
-  end
-
-  test "does not count terminal sibling packages as active", %{repo: repo} do
-    for terminal_status <- ["merged", "closed", "abandoned"] do
-      work_request = create_work_request!(repo)
-
-      assert {:ok, %{work_packages: [terminal, planned]}} =
-               Repository.slice_work_request(repo, work_request.id, [
-                 package_attrs(),
-                 package_attrs()
-               ])
-
-      terminal
-      |> Ecto.Changeset.change(status: terminal_status)
-      |> repo.update!()
-
-      assert {:error, :last_active_work_package} =
-               Repository.skip_work_package(repo, work_request.id, planned.id, "planned")
-    end
+    assert {:ok, final} = Repository.skip_work_package(repo, work_request.id, second.id, "planned")
+    assert final.status == "skipped"
   end
 
   test "dispatch activates the canonical package in place", %{repo: repo, database_path: database_path} do

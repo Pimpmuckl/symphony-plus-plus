@@ -16,7 +16,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   @completion_blocking_statuses ["human_info_needed"]
-  @inactive_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
   @work_package_delivery_replay_fields [
     :work_request_id,
     :work_package_id,
@@ -62,7 +61,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
           | :already_closed
           | :database_busy
           | :delivery_outcome_conflict
-          | :last_active_work_package
           | :no_work_packages
           | :open_questions
           | :not_found
@@ -952,7 +950,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
             work_package.status == ^current_status and work_package.status in ^allowed_current_statuses,
         where: work_request.status in ["ready_for_slicing", "sliced"]
       )
-      |> preserve_sliced_active_work_package(next_status)
       |> repo.update_all(set: [status: next_status, updated_at: now])
 
     case result do
@@ -969,28 +966,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end
   end
 
-  defp preserve_sliced_active_work_package(query, "skipped") do
-    from([work_package, work_request] in query,
-      where:
-        work_request.status != "sliced" or
-          fragment(
-            """
-            EXISTS (
-              SELECT 1
-              FROM sympp_work_packages AS sibling
-              WHERE sibling.work_request_id = ?
-                AND sibling.id != ?
-                AND sibling.status NOT IN ('skipped', 'merged', 'closed', 'abandoned')
-            )
-            """,
-            work_package.work_request_id,
-            work_package.id
-          )
-    )
-  end
-
-  defp preserve_sliced_active_work_package(query, _next_status), do: query
-
   defp work_package_status_error(repo, work_request_id, id, current_status, next_status) do
     case repo.get(WorkPackage, id) do
       %WorkPackage{work_request_id: ^work_request_id, status: ^current_status} ->
@@ -1004,35 +979,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository do
     end
   end
 
-  defp parent_work_package_status_error(repo, work_request_id, work_package_id, "planned", "skipped") do
-    case get(repo, work_request_id) do
-      {:ok, %WorkRequest{status: "sliced"}} ->
-        if other_active_work_package?(repo, work_request_id, work_package_id),
-          do: :invalid_status,
-          else: :last_active_work_package
-
-      {:ok, %WorkRequest{}} ->
-        :invalid_status
-
-      {:error, reason} ->
-        reason
-    end
-  end
-
   defp parent_work_package_status_error(_repo, _work_request_id, _work_package_id, _current_status, _next_status),
     do: :invalid_status
-
-  defp other_active_work_package?(repo, work_request_id, work_package_id) do
-    repo.exists?(
-      from(work_package in WorkPackage,
-        where:
-          work_package.work_request_id == ^work_request_id and work_package.id != ^work_package_id and
-            work_package.status not in ^@inactive_work_package_statuses,
-        select: 1,
-        limit: 1
-      )
-    )
-  end
 
   defp require_slicing_status(status) when status in ["ready_for_slicing", "sliced"], do: :ok
   defp require_slicing_status(_status), do: {:error, :invalid_status}

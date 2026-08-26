@@ -14,6 +14,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
 
+  @terminal_work_package_statuses ["skipped", "merged", "closed", "abandoned"]
+
   @finding_replay_retry_attempts 50
   @ready_evidence_tools [
     "abandon",
@@ -30,9 +32,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
 
   @spec append_or_replay(repo(), Session.t(), map(), String.t(), String.t()) :: worker_result()
   def append_or_replay(repo, %Session{} = session, attrs, idempotency_key, tool) do
-    case existing(repo, session, idempotency_key) do
+    append_or_replay(repo, session, Session.work_package_id(session), attrs, idempotency_key, tool)
+  end
+
+  @spec append_or_replay(repo(), Session.t(), String.t(), map(), String.t(), String.t()) :: worker_result()
+  def append_or_replay(repo, %Session{} = session, work_package_id, attrs, idempotency_key, tool) do
+    case existing(repo, session, work_package_id, idempotency_key) do
       {:ok, event} -> replay(repo, session, event, attrs, tool)
-      {:error, :not_found} -> append_new_or_replay(repo, session, attrs, idempotency_key, tool)
+      {:error, :not_found} -> append_new_or_replay(repo, session, work_package_id, attrs, idempotency_key, tool)
       {:error, reason} -> worker_error(reason, tool)
     end
   end
@@ -77,14 +84,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
 
   @spec existing(repo(), Session.t(), String.t()) :: {:ok, ProgressEvent.t()} | {:error, term()}
   def existing(repo, %Session{} = session, idempotency_key) do
+    existing(repo, session, Session.work_package_id(session), idempotency_key)
+  end
+
+  defp existing(repo, %Session{} = session, work_package_id, idempotency_key) do
     case PlanningRepository.get_progress_event_by_idempotency_key(
            repo,
-           Session.work_package_id(session),
+           work_package_id,
            idempotency_key,
            session.assignment.grant_id
          ) do
       {:ok, event} -> {:ok, event}
-      {:error, :not_found} -> existing_work_package_progress_event(repo, session, idempotency_key)
+      {:error, :not_found} -> existing_work_package_progress_event(repo, work_package_id, idempotency_key)
       {:error, reason} -> {:error, reason}
     end
   end
@@ -165,11 +176,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
 
   def payload(nil), do: nil
 
-  defp append_new_or_replay(repo, %Session{} = session, attrs, idempotency_key, tool) do
+  defp append_new_or_replay(repo, %Session{} = session, work_package_id, attrs, idempotency_key, tool) do
     transaction_fun = fn ->
       with :ok <- PlanningService.require_valid_assignment(repo, session.assignment),
-           :ok <- reject_ready_evidence_mutation(repo, session, tool) do
-        PlanningService.append_authenticated_progress_event(repo, session.assignment, attrs)
+           :ok <- reject_ready_evidence_mutation(repo, session, work_package_id, tool) do
+        PlanningService.append_authenticated_progress_event_for_work_package(
+          repo,
+          session.assignment,
+          work_package_id,
+          attrs
+        )
       end
     end
 
@@ -181,7 +197,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
         {:error, -32_602, "Invalid params", %{"tool" => tool, "reason" => reason}}
 
       {:error, :idempotency_key_conflict} ->
-        replay_with_retry(repo, session, attrs, idempotency_key, tool, progress_replay_retry_attempts())
+        replay_with_retry(
+          repo,
+          session,
+          work_package_id,
+          attrs,
+          idempotency_key,
+          tool,
+          progress_replay_retry_attempts()
+        )
 
       {:error, reason} ->
         worker_error(reason, tool)
@@ -191,15 +215,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
   @spec reject_ready_evidence_mutation(repo(), Session.t(), String.t()) ::
           :ok | {:tool_error, term()} | {:error, term()}
   def reject_ready_evidence_mutation(repo, %Session{} = session, tool) when tool in @ready_evidence_tools do
-    work_package_id = Session.work_package_id(session)
+    reject_ready_evidence_mutation(repo, session, Session.work_package_id(session), tool)
+  end
 
+  def reject_ready_evidence_mutation(_repo, %Session{}, _tool), do: :ok
+
+  @spec reject_ready_evidence_mutation(repo(), Session.t(), String.t(), String.t()) ::
+          :ok | {:tool_error, term()} | {:error, term()}
+  def reject_ready_evidence_mutation(repo, %Session{} = session, work_package_id, tool) when tool in @ready_evidence_tools do
     with :ok <- lock_work_package(repo, work_package_id),
-         {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
+         {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id),
+         :ok <- reject_terminal_architect_target(session.assignment, work_package) do
       reject_ready_work_package(work_package)
     end
   end
 
-  def reject_ready_evidence_mutation(_repo, %Session{}, _tool), do: :ok
+  def reject_ready_evidence_mutation(_repo, %Session{}, _work_package_id, _tool), do: :ok
 
   defp reject_ready_work_package(%WorkPackage{status: "ready_for_merge"}) do
     {:tool_error, "already_ready"}
@@ -207,13 +238,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
 
   defp reject_ready_work_package(%WorkPackage{}), do: :ok
 
-  defp replay_with_retry(repo, %Session{} = session, attrs, idempotency_key, tool, attempts_left) do
+  defp reject_terminal_architect_target(
+         %{grant_role: "architect"},
+         %WorkPackage{status: status}
+       )
+       when status in @terminal_work_package_statuses,
+       do: {:error, :work_package_terminal}
+
+  defp reject_terminal_architect_target(_assignment, %WorkPackage{}), do: :ok
+
+  defp replay_with_retry(repo, %Session{} = session, work_package_id, attrs, idempotency_key, tool, attempts_left) do
     retry_fun = fn ->
-      replay_with_retry(repo, session, attrs, idempotency_key, tool, attempts_left - 1)
+      replay_with_retry(repo, session, work_package_id, attrs, idempotency_key, tool, attempts_left - 1)
     end
 
     repo
-    |> replay(session, attrs, idempotency_key, tool)
+    |> replay(session, work_package_id, attrs, idempotency_key, tool)
     |> retry_missing(retry_fun, attempts_left)
   end
 
@@ -224,8 +264,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
     end
   end
 
-  defp replay(repo, %Session{} = session, attrs, idempotency_key, tool) do
-    case existing(repo, session, idempotency_key) do
+  defp replay(repo, %Session{} = session, work_package_id, attrs, idempotency_key, tool) do
+    case existing(repo, session, work_package_id, idempotency_key) do
       {:ok, event} -> replay(repo, session, event, attrs, tool)
       {:error, reason} -> worker_error(reason, tool)
     end
@@ -238,10 +278,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProgressEvents do
       idempotency_key,
       session.assignment.grant_id
     )
-  end
-
-  defp existing_work_package_progress_event(repo, %Session{} = session, idempotency_key) do
-    existing_work_package_progress_event(repo, Session.work_package_id(session), idempotency_key)
   end
 
   defp existing_work_package_progress_event(repo, work_package_id, idempotency_key) do

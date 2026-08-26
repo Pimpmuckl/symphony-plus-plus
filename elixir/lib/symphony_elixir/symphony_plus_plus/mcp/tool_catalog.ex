@@ -54,43 +54,43 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
     "sync_pr",
     "mark_ready"
   ]
+  @architect_planning_tools ["read_task_plan", "update_task_plan", "append_finding", "append_progress"]
   @shared_worker_architect_tools ["add_comment", "list_comments", "resolve_comment", "read_guidance_request"]
-  @architect_tools [
-    "list_work_requests",
-    "read_work_request",
-    "read_plan",
-    "add_comment",
-    "list_comments",
-    "resolve_comment",
-    "resolve_blocker",
-    "read_delivery_board",
-    "attach_branch",
-    "sync_pr",
-    "reconcile_work_request",
-    "cleanup_work_request_work_package_runtime",
-    "record_work_package_delivery",
-    "revoke_work_package_worker_key",
-    "list_guidance_requests",
-    "read_guidance_request",
-    "answer_guidance_request",
-    "escalate_guidance_request",
-    "set_work_request_status",
-    "ask_question",
-    "answer_question",
-    "answer_question_and_record_decision",
-    "close_question",
-    "record_decision",
-    "slice_work_request",
-    "update_work_package",
-    "upsert_group",
-    "delete_group",
-    "upsert_dependency",
-    "delete_dependency",
-    "skip_work_package",
-    "dispatch_work_package",
-    "prepare_work_package_worktree",
-    "cleanup_work_package_worktree"
-  ]
+  @architect_tools ["list_work_requests", "read_work_request", "read_plan"] ++
+                     @architect_planning_tools ++
+                     [
+                       "add_comment",
+                       "list_comments",
+                       "resolve_comment",
+                       "resolve_blocker",
+                       "read_delivery_board",
+                       "attach_branch",
+                       "sync_pr",
+                       "reconcile_work_request",
+                       "cleanup_work_request_work_package_runtime",
+                       "record_work_package_delivery",
+                       "revoke_work_package_worker_key",
+                       "list_guidance_requests",
+                       "read_guidance_request",
+                       "answer_guidance_request",
+                       "escalate_guidance_request",
+                       "set_work_request_status",
+                       "ask_question",
+                       "answer_question",
+                       "answer_question_and_record_decision",
+                       "close_question",
+                       "record_decision",
+                       "slice_work_request",
+                       "update_work_package",
+                       "upsert_group",
+                       "delete_group",
+                       "upsert_dependency",
+                       "delete_dependency",
+                       "skip_work_package",
+                       "dispatch_work_package",
+                       "prepare_work_package_worktree",
+                       "cleanup_work_package_worktree"
+                     ]
   @known_tools Enum.uniq(
                  [@health_tool, @assignment_release_tool] ++
                    @solo_tools ++
@@ -207,6 +207,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog do
 
   @spec shared_worker_architect_tools() :: [tool_name()]
   def shared_worker_architect_tools, do: @shared_worker_architect_tools
+
+  @spec architect_planning_tools() :: [tool_name()]
+  def architect_planning_tools, do: @architect_planning_tools
 
   @spec architect_tools() :: [tool_name()]
   def architect_tools, do: @architect_tools
