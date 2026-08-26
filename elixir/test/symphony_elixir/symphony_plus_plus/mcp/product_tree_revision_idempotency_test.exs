@@ -4,6 +4,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProductTreeRevisionIdempotencyTest
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
   alias SymphonyElixir.SymphonyPlusPlus.ProductTree.Revision
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
 
   test "delivery replay does not record another product tree revision", %{repo: repo} do
@@ -42,7 +43,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProductTreeRevisionIdempotencyTest
     assert revision_count(repo, work_request.id) == 1
   end
 
-  test "package contract failures preserve revision-first lifecycle recovery", %{repo: repo} do
+  test "architect package updates preserve revision conflicts and terminal rejection", %{repo: repo} do
     work_request = create_work_request!(repo, id: "WR-MCP-CONTRACT-LIFECYCLE", status: "sliced")
 
     assert {:ok, package} =
@@ -60,28 +61,41 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProductTreeRevisionIdempotencyTest
 
     conflict = mcp_tool(repo, session, "update_work_package", put_in(args["expected_contract_revision"], package.contract_revision + 1))
 
-    assert_lifecycle_error(conflict, "contract_revision_conflict", "active", ["planned"], package.contract_revision, "read_work_request")
+    authoring_states = WorkPackage.statuses() -- ["skipped", "merged", "closed", "abandoned"]
+    assert_lifecycle_error(conflict, "contract_revision_conflict", "active", authoring_states, package.contract_revision, "read_work_request")
 
-    frozen = mcp_tool(repo, session, "update_work_package", args)
+    updated = mcp_tool(repo, session, "update_work_package", args)
+    updated_revision = get_in(updated, ["result", "structuredContent", "contract_revision"])
 
-    assert_lifecycle_error(
-      frozen,
-      "work_package_contract_frozen",
-      "active",
-      ["planned"],
-      package.contract_revision,
-      "create_successor"
-    )
+    assert updated_revision == package.contract_revision + 1
+    assert get_in(updated, ["result", "structuredContent", "status", "work_package_status"]) == "active"
+    assert repo.get!(WorkPackage, package.id).title == "Updated package"
 
-    repo.update!(Ecto.Changeset.change(package, status: "closed"))
-    terminal = mcp_tool(repo, session, "update_work_package", args)
+    ready_package = repo.get!(WorkPackage, package.id)
+    repo.update!(Ecto.Changeset.change(ready_package, status: "ready_for_merge"))
+
+    readiness_args =
+      work_request.id
+      |> update_args(package.id, updated_revision)
+      |> put_in(["patch", "title"], "Updated from readiness")
+
+    readiness_update = mcp_tool(repo, session, "update_work_package", readiness_args)
+    readiness_revision = get_in(readiness_update, ["result", "structuredContent", "contract_revision"])
+
+    assert readiness_revision == updated_revision + 1
+    assert get_in(readiness_update, ["result", "structuredContent", "status", "work_package_status"]) == "implementing"
+    assert repo.get!(WorkPackage, package.id).title == "Updated from readiness"
+
+    implementing_package = repo.get!(WorkPackage, package.id)
+    repo.update!(Ecto.Changeset.change(implementing_package, status: "closed"))
+    terminal = mcp_tool(repo, session, "update_work_package", update_args(work_request.id, package.id, readiness_revision))
 
     assert_lifecycle_error(
       terminal,
       "work_package_terminal",
       "closed",
-      ["planned"],
-      package.contract_revision,
+      authoring_states,
+      readiness_revision,
       "create_successor"
     )
 
@@ -97,11 +111,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProductTreeRevisionIdempotencyTest
       "work_package_terminal",
       "closed",
       ["planned"],
-      package.contract_revision,
+      readiness_revision,
       "create_successor"
     )
 
-    assert revision_count(repo, work_request.id) == 0
+    assert revision_count(repo, work_request.id) == 1
   end
 
   defp update_args(work_request_id, work_package_id, revision) do
@@ -109,7 +123,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ProductTreeRevisionIdempotencyTest
       "work_request_id" => work_request_id,
       "work_package_id" => work_package_id,
       "expected_contract_revision" => revision,
-      "patch" => %{"title" => "Must not persist"}
+      "patch" => %{"title" => "Updated package"}
     }
   end
 

@@ -117,7 +117,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ErrorDetails do
 
   defp lifecycle_next_action(:contract_revision_conflict), do: "read_work_request"
   defp lifecycle_next_action(:work_request_not_authorable), do: "read_work_request"
-  defp lifecycle_next_action(:work_package_contract_frozen), do: "create_successor"
   defp lifecycle_next_action(:work_package_terminal), do: "create_successor"
   defp lifecycle_next_action(:work_request_terminal), do: "no_change"
 end
