@@ -181,18 +181,22 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
   end
 
   @doc false
-  @spec clear_terminal_attention(repo(), WorkPackage.t()) :: :ok | {:error, error()}
-  def clear_terminal_attention(repo, %WorkPackage{id: work_package_id} = work_package)
-      when is_atom(repo) and is_binary(work_package_id) do
+  @spec clear_terminal_attention(repo(), WorkPackage.t() | [WorkPackage.t()]) :: :ok | {:error, error()}
+  def clear_terminal_attention(repo, %WorkPackage{} = work_package), do: clear_terminal_attention(repo, [work_package])
+  def clear_terminal_attention(_repo, []), do: :ok
+
+  def clear_terminal_attention(repo, work_packages) when is_atom(repo) and is_list(work_packages) do
+    work_package_ids = Enum.map(work_packages, & &1.id)
+
     repo.delete_all(
       from(request in GuidanceRequest,
-        where: request.work_package_id == ^work_package_id,
+        where: request.work_package_id in ^work_package_ids,
         where: request.status in ["open", "human_info_needed"]
       )
     )
 
-    with :ok <- resolve_active_blockers(repo, work_package_id) do
-      WorktreeCleanupQueue.enqueue_terminal(repo, work_package)
+    with :ok <- resolve_active_blockers(repo, work_package_ids) do
+      WorktreeCleanupQueue.enqueue_terminal(repo, work_packages)
     end
   end
 
@@ -367,25 +371,27 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp resolve_active_blockers(repo, work_package_id) do
-    with {:ok, owned_events} <- PlanningRepository.list_progress_events(repo, work_package_id),
+  defp resolve_active_blockers(repo, work_package_ids) do
+    with {:ok, owned_events} <- PlanningRepository.list_progress_events(repo, work_package_ids),
          {:ok, targeting_events} <-
-           PlanningRepository.list_progress_events_for_blockers_targeting_work_package(
+           PlanningRepository.list_progress_events_for_blockers_targeting_work_packages(
              repo,
-             work_package_id
+             work_package_ids
            ) do
+      terminal_work_package_ids = MapSet.new(work_package_ids)
+
       (owned_events ++ targeting_events)
       |> Enum.uniq_by(& &1.id)
       |> Enum.group_by(& &1.work_package_id)
       |> Enum.sort_by(fn {owner_id, _events} -> owner_id end)
-      |> Enum.reduce_while(:ok, &resolve_targeted_blocker_group(repo, work_package_id, &1, &2))
+      |> Enum.reduce_while(:ok, &resolve_targeted_blocker_group(repo, terminal_work_package_ids, &1, &2))
     end
   end
 
-  defp resolve_targeted_blocker_group(repo, terminal_work_package_id, {owner_id, events}, :ok) do
+  defp resolve_targeted_blocker_group(repo, terminal_work_package_ids, {owner_id, events}, :ok) do
     events
     |> BlockerProjection.blockers()
-    |> Enum.filter(&terminal_cleanup_blocker?(&1, owner_id, terminal_work_package_id))
+    |> Enum.filter(&terminal_cleanup_blocker?(&1, owner_id, terminal_work_package_ids))
     |> Enum.reduce_while(:ok, &resolve_active_blocker(repo, owner_id, &1, &2))
     |> case do
       :ok -> {:cont, :ok}
@@ -393,11 +399,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository do
     end
   end
 
-  defp terminal_cleanup_blocker?(%{active: true, blocked_item: %{kind: "work_package", id: target_id}}, _owner_id, terminal_work_package_id),
-    do: target_id == terminal_work_package_id
+  defp terminal_cleanup_blocker?(%{active: true, blocked_item: %{kind: "work_package", id: target_id}}, _owner_id, terminal_work_package_ids),
+    do: MapSet.member?(terminal_work_package_ids, target_id)
 
-  defp terminal_cleanup_blocker?(blocker, owner_id, terminal_work_package_id),
-    do: blocker.active and owner_id == terminal_work_package_id
+  defp terminal_cleanup_blocker?(blocker, owner_id, terminal_work_package_ids),
+    do: blocker.active and MapSet.member?(terminal_work_package_ids, owner_id)
 
   defp resolve_active_blocker(repo, work_package_id, blocker, :ok) do
     case PlanningRepository.append_progress_event(repo, %{

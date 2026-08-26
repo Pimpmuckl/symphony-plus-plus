@@ -343,12 +343,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
       set: [status: "closed", updated_at: now]
     )
 
-    Enum.reduce_while(work_packages, :ok, fn work_package, :ok ->
-      case WorkPackageRepository.clear_terminal_attention(repo, work_package) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
+    WorkPackageRepository.clear_terminal_attention(repo, work_packages)
   end
 
   defp clear_terminal_work_package_attention(repo, work_packages, deliveries_by_slice_id) do
@@ -357,12 +352,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkRequests.Completion do
       work_package.status in @terminal_work_package_statuses or
         terminal_delivery?(Map.get(deliveries_by_slice_id, work_package.id))
     end)
-    |> Enum.reduce_while(:ok, fn work_package, :ok ->
-      case WorkPackageRepository.clear_terminal_attention(repo, work_package) do
-        :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
+    |> then(&WorkPackageRepository.clear_terminal_attention(repo, &1))
   end
 
   defp operator_completed?(%WorkRequest{completed_at: %DateTime{}, completion_source: @operator_completion_source}), do: true

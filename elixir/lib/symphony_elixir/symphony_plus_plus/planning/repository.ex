@@ -322,6 +322,20 @@ defmodule SymphonyElixir.SymphonyPlusPlus.Planning.Repository do
     end)
   end
 
+  @spec list_progress_events(repo(), [String.t()]) :: {:ok, [ProgressEvent.t()]} | {:error, error()}
+  def list_progress_events(_repo, []), do: {:ok, []}
+
+  def list_progress_events(repo, work_package_ids) when is_atom(repo) and is_list(work_package_ids) do
+    work_package_ids = Enum.uniq(work_package_ids)
+
+    safe_all(repo, fn ->
+      from(progress_event in ProgressEvent,
+        where: progress_event.work_package_id in ^work_package_ids,
+        order_by: [asc: progress_event.work_package_id, asc: progress_event.sequence, asc: progress_event.id]
+      )
+    end)
+  end
+
   @spec list_progress_events_for_blockers_targeting_work_package(repo(), String.t()) ::
           {:ok, [ProgressEvent.t()]} | {:error, error()}
   def list_progress_events_for_blockers_targeting_work_package(repo, work_package_id)
