@@ -2250,9 +2250,77 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
-  test "Herdr reads the existing WorkRequest detail contract over direct loopback", %{repo: repo} do
+  test "Herdr reads the complete execution graph and current worker sessions over direct loopback", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-HERDR-DETAIL", status: "ready_for_slicing")
+      assert {:ok, group} = ProductTree.create_node(repo, %{id: "group-herdr", work_request_id: work_request.id, title: "Delivery"})
+
+      active =
+        create_work_package!(repo,
+          id: "WP-HERDR-ACTIVE",
+          work_request_id: work_request.id,
+          product_tree_node_id: group.id,
+          status: "implementing"
+        )
+
+      downstream =
+        create_work_package!(repo,
+          id: "WP-HERDR-DOWNSTREAM",
+          work_request_id: work_request.id,
+          product_tree_node_id: group.id,
+          status: "planned"
+        )
+
+      stale =
+        create_work_package!(repo,
+          id: "WP-HERDR-STALE",
+          work_request_id: work_request.id,
+          status: "implementing"
+        )
+
+      terminal =
+        create_work_package!(repo,
+          id: "WP-HERDR-TERMINAL-RUN",
+          work_request_id: work_request.id,
+          status: "implementing"
+        )
+
+      assert {:ok, _edge} =
+               ProductTree.create_dependency_edge(repo, %{
+                 work_request_id: work_request.id,
+                 source_kind: "work_package",
+                 source_id: active.id,
+                 target_kind: "work_package",
+                 target_id: downstream.id,
+                 kind: "depends_on",
+                 reason: "Herdr graph fixture"
+               })
+
+      assert {:ok, _active_run} =
+               AgentRunRepository.start_run(repo, %{
+                 work_package_id: active.id,
+                 status: "running",
+                 session_id: "codex-current-session"
+               })
+
+      append_blocker_event!(repo, active.id, "herdr-blocker", true, summary: "Needs operator attention")
+
+      assert {:ok, _stale_run} =
+               AgentRunRepository.start_run(repo, %{
+                 work_package_id: stale.id,
+                 status: "running",
+                 session_id: "codex-stale-session",
+                 last_seen_at: DateTime.add(DateTime.utc_now(:microsecond), -600, :second)
+               })
+
+      assert {:ok, terminal_run} =
+               AgentRunRepository.start_run(repo, %{
+                 work_package_id: terminal.id,
+                 status: "running",
+                 session_id: "codex-terminal-session"
+               })
+
+      assert {:ok, _terminal_run} = AgentRunRepository.mark_completed(repo, terminal_run.id, "done")
 
       conn =
         build_conn()
@@ -2260,7 +2328,21 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
         |> Map.put(:remote_ip, {127, 0, 0, 1})
         |> get("/api/v1/sympp/herdr/work-requests/#{work_request.id}")
 
-      assert get_in(json_response(conn, 200), ["work_request", "id"]) == work_request.id
+      payload = json_response(conn, 200)
+      assert get_in(payload, ["work_request", "id"]) == work_request.id
+
+      assert Enum.sort(payload["execution_graph"]["work_package_ids"]) ==
+               Enum.sort([active.id, downstream.id, stale.id, terminal.id])
+
+      assert Enum.any?(payload["execution_graph"]["effective_edges"], fn edge ->
+               edge["prerequisite_work_package_id"] == downstream.id and edge["dependent_work_package_id"] == active.id
+             end)
+
+      assert payload["worker_sessions"] == [
+               %{"work_package_id" => active.id, "agent_session_id" => "codex-current-session"}
+             ]
+
+      assert payload["attention_keys"] == ["group:#{group.id}", "work_package:#{active.id}"]
 
       forwarded =
         build_conn()

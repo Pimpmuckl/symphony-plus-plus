@@ -33,6 +33,17 @@ $herdrBindingJson = '{"role":"architect","work_request_id":"wr-test","show_inspe
 $herdrBindingEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($herdrBindingJson)).TrimEnd("=").Replace("+", "-").Replace("/", "_")
 $herdrBinding = ConvertFrom-SymppHerdrBinding $herdrBindingEncoded
 Assert-True ($herdrBinding.role -eq "architect" -and $herdrBinding.work_request_id -eq "wr-test" -and $herdrBinding.show_inspector) "PowerShell bridge must decode the shared Herdr binding header"
+$script:SymppHerdrInspectorProcess = [pscustomobject]@{ HasExited = $true; ExitCode = 0 }
+$script:SymppHerdrInspectorInflightRevision = 1
+$script:SymppHerdrInspectorRevision = 2
+$script:SymppHerdrInspectorPending = $true
+$script:SymppHerdrProcess = [pscustomobject]@{}
+Update-SymppHerdrInspectorProcess
+Assert-True $script:SymppHerdrInspectorPending "A completed inspector sync must retain a newer pending binding revision"
+$script:SymppHerdrProcess = $null
+$script:SymppHerdrInspectorRevision = 0
+$script:SymppHerdrInspectorInflightRevision = 0
+$script:SymppHerdrInspectorPending = $false
 & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "herdr-binding-tests.js")
 $herdrNodeExitCode = $LASTEXITCODE
 Assert-True ($herdrNodeExitCode -eq 0) "Node bridge must translate Herdr binding metadata"

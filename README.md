@@ -71,6 +71,8 @@ The launcher records the actual URLs here:
   and close delivery cleanly.
 - Dashboard: scan active work, blockers, PRs, reviews, and runtime status from
   one local page.
+- Herdr execution inspector: keep the active architect or coordinator frontier
+  beside its agent pane without changing Herdr itself.
 - Marketplace runtime: installed sessions use the marketplace cache and
   runtime artifacts instead of compiling from a developer checkout.
 
