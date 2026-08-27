@@ -27,6 +27,19 @@ let livenessServer = null;
 let livenessPipe = null;
 let livenessToken = null;
 let preparationChild = null;
+let herdrBinding = null;
+let herdrBackend = null;
+let herdrMetadataChild = null;
+let herdrMetadataOwned = false;
+let herdrMetadataPending = null;
+let herdrRefresh = null;
+let herdrReportedAt = 0;
+
+const HERDR_METADATA_SOURCE = "symphony-plus-plus";
+const HERDR_METADATA_COMMAND_TIMEOUT_MS = 5000;
+const HERDR_METADATA_TTL_MS = 150000;
+const HERDR_METADATA_REFRESH_MS = 60000;
+const HERDR_METADATA_TOKENS = ["sympp_role", "sympp_work_request_id", "sympp_work_package_id", "sympp_show_inspector", "sympp_endpoint"];
 
 function trace(event) {
   const dir = process.env.SYMPP_LAUNCHER_TRACE_DIR;
@@ -39,6 +52,142 @@ function trace(event) {
 
 function diagnostic(message) {
   process.stderr.write(`${message}\n`);
+}
+
+function herdrAvailable() {
+  return process.env.HERDR_ENV === "1" && Boolean(process.env.HERDR_PANE_ID);
+}
+
+function decodeHerdrBinding(value) {
+  if (!value) return undefined;
+  if (value === "clear") return null;
+  const padding = "=".repeat((4 - value.length % 4) % 4);
+  return JSON.parse(Buffer.from(value.replace(/-/g, "+").replace(/_/g, "/") + padding, "base64").toString("utf8"));
+}
+
+function runHerdrMetadata(args) {
+  if (!herdrAvailable()) return;
+  herdrMetadataPending = args;
+  startHerdrMetadata();
+}
+
+function startHerdrMetadata() {
+  if (herdrMetadataChild || !herdrMetadataPending || !herdrAvailable()) return;
+  const args = herdrMetadataPending;
+  herdrMetadataPending = null;
+  const commands = process.platform === "win32" ? ["herdr.exe", "herdr.cmd"] : ["herdr"];
+  const commandArgs = ["pane", "report-metadata", process.env.HERDR_PANE_ID, "--source", HERDR_METADATA_SOURCE, ...args];
+  const launch = (index) => {
+    if (index >= commands.length) return startHerdrMetadata();
+    let child;
+    try {
+      child = spawn(commands[index], commandArgs, { stdio: "ignore", windowsHide: true });
+    } catch (_) {
+      return launch(index + 1);
+    }
+    herdrMetadataChild = child;
+    let finished = false;
+    const finish = (retry) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      if (herdrMetadataChild !== child) return;
+      herdrMetadataChild = null;
+      if (retry) launch(index + 1);
+      else startHerdrMetadata();
+    };
+    const timeout = setTimeout(() => {
+      try { child.kill(); } catch (_) { }
+      finish(false);
+    }, HERDR_METADATA_COMMAND_TIMEOUT_MS);
+    timeout.unref();
+    child.once("error", () => finish(true));
+    child.once("exit", () => finish(false));
+    child.unref();
+  };
+  launch(0);
+}
+
+function herdrMetadataArgs(binding, backend) {
+  const values = {
+    sympp_role: binding.role,
+    sympp_work_request_id: binding.work_request_id,
+    sympp_work_package_id: binding.work_package_id,
+    sympp_show_inspector: String(binding.show_inspector === true),
+    sympp_endpoint: trimOrigin(backend),
+  };
+  const args = ["--ttl-ms", String(HERDR_METADATA_TTL_MS)];
+  for (const name of HERDR_METADATA_TOKENS) {
+    if (values[name]) args.push("--token", `${name}=${values[name]}`);
+    else args.push("--clear-token", name);
+  }
+  return args;
+}
+
+function reportHerdrBinding(force = false) {
+  if (!herdrBinding || !herdrBackend || !herdrAvailable()) return;
+  if (!force && Date.now() - herdrReportedAt < HERDR_METADATA_REFRESH_MS) return;
+  herdrMetadataOwned = true;
+  runHerdrMetadata(herdrMetadataArgs(herdrBinding, herdrBackend));
+  herdrReportedAt = Date.now();
+}
+
+function clearHerdrBinding() {
+  const owned = herdrMetadataOwned;
+  herdrBinding = null;
+  herdrBackend = null;
+  herdrMetadataOwned = false;
+  herdrReportedAt = 0;
+  herdrMetadataPending = null;
+  if (herdrRefresh) clearInterval(herdrRefresh);
+  herdrRefresh = null;
+  if (!owned) return;
+  const args = [];
+  for (const name of HERDR_METADATA_TOKENS) args.push("--clear-token", name);
+  runHerdrMetadata(args);
+}
+
+async function clearHerdrBindingAndDrain() {
+  if (herdrMetadataOwned) {
+    herdrMetadataPending = null;
+    const previousChild = herdrMetadataChild;
+    herdrMetadataChild = null;
+    if (previousChild) {
+      try { previousChild.kill(); } catch (_) { }
+    }
+  }
+  clearHerdrBinding();
+  const deadline = Date.now() + HERDR_METADATA_COMMAND_TIMEOUT_MS + 1000;
+  while ((herdrMetadataChild || herdrMetadataPending) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  herdrMetadataPending = null;
+  if (herdrMetadataChild) {
+    const child = herdrMetadataChild;
+    herdrMetadataChild = null;
+    try { child.kill(); } catch (_) { }
+  }
+}
+
+function updateHerdrBinding(response, backend) {
+  let next;
+  try { next = decodeHerdrBinding(response && response.headers && response.headers["sympp-herdr-binding"]); } catch (_) { return; }
+  if (next === undefined) return;
+  if (next === null) return clearHerdrBinding();
+  const changed = JSON.stringify(next) !== JSON.stringify(herdrBinding) || trimOrigin(backend) !== herdrBackend;
+  herdrBinding = next;
+  herdrBackend = trimOrigin(backend);
+  reportHerdrBinding(changed);
+  if (!herdrRefresh) {
+    herdrRefresh = setInterval(() => reportHerdrBinding(), HERDR_METADATA_REFRESH_MS);
+    herdrRefresh.unref();
+  }
+}
+
+function updateHerdrBackend(backend) {
+  if (!herdrBinding) return;
+  herdrBackend = trimOrigin(backend);
+  reportHerdrBinding(true);
 }
 
 function resolveHome() {
@@ -743,6 +892,7 @@ async function bridge(identity, state, runtimeFile) {
     if (replacementLease !== localLease) { try { fs.unlinkSync(localLease); } catch (_) { } }
     localLease = replacementLease;
     current = next;
+    updateHerdrBackend(next.identity.backend);
     cleanupScript = nextCleanupScript;
     attached = true;
     sessionId = null;
@@ -879,6 +1029,7 @@ async function bridge(identity, state, runtimeFile) {
           }
         }
       }
+      updateHerdrBinding(response, current.identity.backend);
       if (!response.ok) {
         process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: parsed ? parsed.id : null, error: { code: -32000, message: "Symphony++ HTTP MCP bridge request failed.", data: { detail: response.error } } })}\n`);
         continue;
@@ -900,6 +1051,7 @@ async function bridge(identity, state, runtimeFile) {
     if (attached) await clientLease(current.mcpUrl, clientId, "detach", false);
     closeGenerationWatchers();
     if (cleanupAllowed && cleanupScript) cleanupLastDetach(runtimeFile, current.identity.runtimeKey, cleanupScript);
+    await clearHerdrBindingAndDrain();
     closeLivenessProbe();
   }
 }
@@ -989,5 +1141,5 @@ if (require.main === module) {
     process.exit(1);
   });
 } else {
-  module.exports = { generationFromMarker, generationKey, resolveStateIdentity };
+  module.exports = { decodeHerdrBinding, generationFromMarker, generationKey, herdrMetadataArgs, resolveStateIdentity };
 }

@@ -7,7 +7,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
   current-alias, explicit reconnect, or browser auth semantics.
   """
 
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, FailedCall, HTTPStateStore, Server, Session, SessionRecovery}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, FailedCall, HerdrBinding, HTTPStateStore}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Server, Session, SessionRecovery}
 
   @assignment_resource "sympp://assignment/current"
   @work_package_resource_prefix "sympp://work-packages/"
@@ -22,11 +23,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
     @moduledoc false
 
     @enforce_keys [:response, :state_key, :status]
-    defstruct [:response, :state_key, :status]
+    defstruct [:herdr_binding, :response, :state_key, :status]
 
     @type status :: :ok | :no_response | :error
     @type t :: %__MODULE__{
             response: map() | [map()] | nil,
+            herdr_binding: map() | :clear | nil,
             state_key: String.t() | nil,
             status: status()
           }
@@ -168,7 +170,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
       :stored ->
         %Server{} = updated_server = maybe_updated_server
         SessionRecovery.remember(config, client_key, state_key, payload, updated_server, response)
-        {:ok, result(response, state_key)}
+        {:ok, result(response, state_key, HerdrBinding.response_binding(payload, response, updated_server))}
 
       :skipped ->
         {:ok, result(response, nil)}
@@ -190,8 +192,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
   defp missing_state?(%Server{initialized: false, session: nil}), do: true
   defp missing_state?(%Server{}), do: false
 
-  defp result(response, state_key) do
-    %Result{response: response, state_key: state_key, status: response_status(response)}
+  defp result(response, state_key, herdr_binding \\ nil) do
+    %Result{response: response, state_key: state_key, status: response_status(response), herdr_binding: herdr_binding}
   end
 
   defp response_status(nil), do: :no_response
