@@ -449,6 +449,157 @@ function Write-McpResponseLine([string]$Content) {
   }
 }
 
+$script:SymppHerdrMetadataSource = "symphony-plus-plus"
+$script:SymppHerdrMetadataCommandTimeoutMs = 5000
+$script:SymppHerdrMetadataTtlMs = 150000
+$script:SymppHerdrMetadataRefreshMs = 60000
+$script:SymppHerdrMetadataTokens = @("sympp_role", "sympp_work_request_id", "sympp_work_package_id", "sympp_show_inspector", "sympp_endpoint")
+$script:SymppHerdrBinding = $null
+$script:SymppHerdrBackend = $null
+$script:SymppHerdrMetadataOwned = $false
+$script:SymppHerdrReportedAtMs = 0
+$script:SymppHerdrProcess = $null
+$script:SymppHerdrProcessStartedAtMs = 0
+$script:SymppHerdrPendingArguments = $null
+
+function Test-SymppHerdrAvailable {
+  return $env:HERDR_ENV -eq "1" -and -not [string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)
+}
+
+function Stop-SymppHerdrMetadataProcess {
+  if ($null -eq $script:SymppHerdrProcess) { return }
+  try { if (-not $script:SymppHerdrProcess.HasExited) { Stop-Process -Id $script:SymppHerdrProcess.Id -Force } } catch {}
+  try { $script:SymppHerdrProcess.Dispose() } catch {}
+  $script:SymppHerdrProcess = $null
+  $script:SymppHerdrProcessStartedAtMs = 0
+}
+
+function Start-SymppHerdrMetadataProcess([string]$FilePath, [string[]]$Arguments) {
+  $command = Get-StartProcessCommand $FilePath $Arguments
+  $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $command.file
+  $startInfo.UseShellExecute = $false
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $startInfo.CreateNoWindow = $true
+
+  $argumentListProperty = $startInfo.GetType().GetProperty("ArgumentList")
+  if ($null -ne $argumentListProperty) {
+    foreach ($argument in @($command.args)) { [void]$startInfo.ArgumentList.Add([string]$argument) }
+  } else {
+    $startInfo.Arguments = Join-ProcessArgumentList @($command.args)
+  }
+
+  $process = [System.Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  [void]$process.Start()
+  [void]$process.StandardOutput.ReadToEndAsync()
+  [void]$process.StandardError.ReadToEndAsync()
+  return $process
+}
+
+function Update-SymppHerdrMetadataProcess {
+  $now = Get-McpNowMs
+  if ($null -ne $script:SymppHerdrProcess) {
+    if ($script:SymppHerdrProcess.HasExited) { Stop-SymppHerdrMetadataProcess }
+    elseif (($now - $script:SymppHerdrProcessStartedAtMs) -ge $script:SymppHerdrMetadataCommandTimeoutMs) { Stop-SymppHerdrMetadataProcess }
+    else { return }
+  }
+  if ($null -eq $script:SymppHerdrPendingArguments -or -not (Test-SymppHerdrAvailable)) { return }
+
+  $arguments = @($script:SymppHerdrPendingArguments)
+  $script:SymppHerdrPendingArguments = $null
+  try {
+    $herdr = Get-Command herdr -ErrorAction Stop
+    $script:SymppHerdrProcess = Start-SymppHerdrMetadataProcess $herdr.Source (@("pane", "report-metadata", $env:HERDR_PANE_ID, "--source", $script:SymppHerdrMetadataSource) + $arguments)
+    $script:SymppHerdrProcessStartedAtMs = $now
+  } catch {
+  }
+}
+
+function Invoke-SymppHerdrMetadata([string[]]$Arguments) {
+  if (-not (Test-SymppHerdrAvailable)) { return }
+  $script:SymppHerdrPendingArguments = @($Arguments)
+  Update-SymppHerdrMetadataProcess
+}
+
+function Complete-SymppHerdrMetadataProcess {
+  $deadline = (Get-McpNowMs) + $script:SymppHerdrMetadataCommandTimeoutMs
+  while (($null -ne $script:SymppHerdrProcess -or $null -ne $script:SymppHerdrPendingArguments) -and (Get-McpNowMs) -lt $deadline) {
+    Update-SymppHerdrMetadataProcess
+    if ($null -ne $script:SymppHerdrProcess -or $null -ne $script:SymppHerdrPendingArguments) { Start-Sleep -Milliseconds 25 }
+  }
+  $script:SymppHerdrPendingArguments = $null
+  Stop-SymppHerdrMetadataProcess
+}
+
+function ConvertFrom-SymppHerdrBinding([string]$Value) {
+  if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+  $base64 = $Value.Replace("-", "+").Replace("_", "/")
+  while (($base64.Length % 4) -ne 0) { $base64 += "=" }
+  $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($base64))
+  return $json | ConvertFrom-Json
+}
+
+function Publish-SymppHerdrBinding([bool]$Force = $false) {
+  if ($null -eq $script:SymppHerdrBinding -or [string]::IsNullOrWhiteSpace($script:SymppHerdrBackend) -or -not (Test-SymppHerdrAvailable)) { return }
+  $now = Get-McpNowMs
+  if (-not $Force -and ($now - $script:SymppHerdrReportedAtMs) -lt $script:SymppHerdrMetadataRefreshMs) { return }
+
+  $values = @{
+    sympp_role = [string]$script:SymppHerdrBinding.role
+    sympp_work_request_id = [string]$script:SymppHerdrBinding.work_request_id
+    sympp_work_package_id = [string]$script:SymppHerdrBinding.work_package_id
+    sympp_show_inspector = if ($script:SymppHerdrBinding.show_inspector -eq $true) { "true" } else { "false" }
+    sympp_endpoint = $script:SymppHerdrBackend
+  }
+  $arguments = @("--ttl-ms", [string]$script:SymppHerdrMetadataTtlMs)
+  foreach ($name in $script:SymppHerdrMetadataTokens) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$values[$name])) { $arguments += @("--token", "$name=$($values[$name])") }
+    else { $arguments += @("--clear-token", $name) }
+  }
+  Invoke-SymppHerdrMetadata $arguments
+  $script:SymppHerdrMetadataOwned = $true
+  $script:SymppHerdrReportedAtMs = $now
+}
+
+function Clear-SymppHerdrBinding {
+  $owned = $script:SymppHerdrMetadataOwned
+  $script:SymppHerdrBinding = $null
+  $script:SymppHerdrBackend = $null
+  $script:SymppHerdrMetadataOwned = $false
+  $script:SymppHerdrReportedAtMs = 0
+  if (-not $owned) { return }
+  $script:SymppHerdrPendingArguments = $null
+  Stop-SymppHerdrMetadataProcess
+  $arguments = @()
+  foreach ($name in $script:SymppHerdrMetadataTokens) { $arguments += @("--clear-token", $name) }
+  Invoke-SymppHerdrMetadata $arguments
+}
+
+function Update-SymppHerdrBinding($Response, [string]$McpUrl) {
+  $header = Get-ResponseHeaderValue $Response.headers "Sympp-Herdr-Binding"
+  if ([string]::IsNullOrWhiteSpace($header)) { return }
+  if ([System.StringComparer]::OrdinalIgnoreCase.Equals($header, "clear")) { Clear-SymppHerdrBinding; return }
+  try {
+    $nextBinding = ConvertFrom-SymppHerdrBinding $header
+    $nextBackend = ([Uri]$McpUrl).GetLeftPart([UriPartial]::Authority)
+    $changed = ($null -eq $script:SymppHerdrBinding) -or
+      -not [System.StringComparer]::Ordinal.Equals(($script:SymppHerdrBinding | ConvertTo-Json -Compress), ($nextBinding | ConvertTo-Json -Compress)) -or
+      -not [System.StringComparer]::OrdinalIgnoreCase.Equals($script:SymppHerdrBackend, $nextBackend)
+    $script:SymppHerdrBinding = $nextBinding
+    $script:SymppHerdrBackend = $nextBackend
+    Publish-SymppHerdrBinding $changed
+  } catch {
+  }
+}
+
+function Update-SymppHerdrBackend([string]$McpUrl) {
+  if ($null -eq $script:SymppHerdrBinding) { return }
+  $script:SymppHerdrBackend = ([Uri]$McpUrl).GetLeftPart([UriPartial]::Authority)
+  Publish-SymppHerdrBinding $true
+}
+
 function New-McpClientLeaseId {
   return "bridge-$PID-$([guid]::NewGuid().ToString('N'))"
 }
@@ -640,20 +791,33 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
   $lease = Invoke-McpClientLease $McpUrl $ClientId "attach" $true
   $heartbeatIntervalMs = Resolve-McpClientHeartbeatIntervalMs $HeartbeatIntervalSec $lease
   $lastHeartbeatMs = Get-McpNowMs
+  $script:SymppHerdrBinding = $null
+  $script:SymppHerdrBackend = $null
+  $script:SymppHerdrMetadataOwned = $false
+  $script:SymppHerdrReportedAtMs = 0
+  $script:SymppHerdrProcess = $null
+  $script:SymppHerdrProcessStartedAtMs = 0
+  $script:SymppHerdrPendingArguments = $null
   try {
     $stdinReadState = New-McpStdinReadState $stdinReader
     while ($true) {
-      $stdinLine = Receive-McpStdinLine $stdinReadState $heartbeatIntervalMs
+      $metadataWaitMs = if ($null -ne $script:SymppHerdrProcess -or $null -ne $script:SymppHerdrPendingArguments) { $script:SymppHerdrMetadataCommandTimeoutMs } else { $script:SymppHerdrMetadataRefreshMs }
+      $stdinLine = Receive-McpStdinLine $stdinReadState ([Math]::Min($heartbeatIntervalMs, $metadataWaitMs))
+      Update-SymppHerdrMetadataProcess
       if (-not $stdinLine.ready) {
-        $heartbeat = Invoke-McpClientLease $McpUrl $ClientId "heartbeat"
-        if ($null -eq $heartbeat -and -not (Test-LoopbackHttpTcpOpen $McpUrl)) {
-          $recovered = Invoke-McpBackendRecovery $Recover $McpUrl $ClientId $HeartbeatIntervalSec $stdinReadState
-          if ($null -ne $recovered) {
-            $McpUrl = $recovered.mcp_url; $heartbeatIntervalMs = $recovered.heartbeat_interval_ms
-            $sessionId = $null; $protocolVersion = $null; $needsInitialize = $true
+        Publish-SymppHerdrBinding
+        if (((Get-McpNowMs) - $lastHeartbeatMs) -ge $heartbeatIntervalMs) {
+          $heartbeat = Invoke-McpClientLease $McpUrl $ClientId "heartbeat"
+          if ($null -eq $heartbeat -and -not (Test-LoopbackHttpTcpOpen $McpUrl)) {
+            $recovered = Invoke-McpBackendRecovery $Recover $McpUrl $ClientId $HeartbeatIntervalSec $stdinReadState
+            if ($null -ne $recovered) {
+              $McpUrl = $recovered.mcp_url; $heartbeatIntervalMs = $recovered.heartbeat_interval_ms
+              Update-SymppHerdrBackend $McpUrl
+              $sessionId = $null; $protocolVersion = $null; $needsInitialize = $true
+            }
           }
+          $lastHeartbeatMs = Get-McpNowMs
         }
-        $lastHeartbeatMs = Get-McpNowMs
         continue
       }
 
@@ -681,6 +845,7 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
           continue
         }
         $McpUrl = $recovered.mcp_url; $heartbeatIntervalMs = $recovered.heartbeat_interval_ms
+        Update-SymppHerdrBackend $McpUrl
         $sessionId = $null; $protocolVersion = $null; $needsInitialize = $true
       }
       if ($needsInitialize -and [string]::IsNullOrWhiteSpace($requestProtocolVersion)) {
@@ -704,6 +869,7 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
           if ($null -ne $recovered) {
             $McpUrl = $recovered.mcp_url
             $heartbeatIntervalMs = $recovered.heartbeat_interval_ms
+            Update-SymppHerdrBackend $McpUrl
           }
         }
         $bridgeInitialize = Invoke-McpBridgeInitialize $McpUrl $TimeoutSec $ClientId $heartbeatIntervalMs
@@ -725,6 +891,7 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
         $recovered = Invoke-McpBackendRecovery $Recover $McpUrl $ClientId $HeartbeatIntervalSec $stdinReadState $true
         if ($null -ne $recovered) {
           $McpUrl = $recovered.mcp_url; $heartbeatIntervalMs = $recovered.heartbeat_interval_ms
+          Update-SymppHerdrBackend $McpUrl
           $sessionId = $null; $protocolVersion = $null; $needsInitialize = $true
           if (-not $requestMayHaveReachedBackend -or -not (Test-McpToolCall $line)) {
             if (-not [string]::IsNullOrWhiteSpace($requestProtocolVersion)) {
@@ -748,6 +915,7 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
         Write-JsonRpcErrorLine (Get-RequestIdForError $line) -32001 "Symphony++ tool call outcome is indeterminate." @{ reason = "backend_lost_after_request_started"; replayed = $false }
         continue
       }
+      Update-SymppHerdrBinding $response $McpUrl
       if (-not $response.ok) {
         Write-JsonRpcErrorLine (Get-RequestIdForError $line) -32000 "Symphony++ HTTP MCP bridge request failed." @{
           statusCode = $response.statusCode
@@ -775,6 +943,8 @@ function Invoke-HttpMcpBridge([string]$McpUrl, [int]$TimeoutSec, [string]$Client
       $stdinReader.Dispose()
     }
     Invoke-McpClientLease $McpUrl $ClientId "detach" | Out-Null
+    Clear-SymppHerdrBinding
+    Complete-SymppHerdrMetadataProcess
   }
 }
 

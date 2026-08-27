@@ -2250,6 +2250,29 @@ defmodule SymphonyElixir.SymphonyPlusPlus.DashboardApiTest do
     end)
   end
 
+  test "Herdr reads the existing WorkRequest detail contract over direct loopback", %{repo: repo} do
+    with_local_operator_endpoint(fn ->
+      work_request = create_work_request!(repo, id: "WR-HERDR-DETAIL", status: "ready_for_slicing")
+
+      conn =
+        build_conn()
+        |> Map.put(:host, "localhost")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> get("/api/v1/sympp/herdr/work-requests/#{work_request.id}")
+
+      assert get_in(json_response(conn, 200), ["work_request", "id"]) == work_request.id
+
+      forwarded =
+        build_conn()
+        |> Map.put(:host, "localhost")
+        |> Map.put(:remote_ip, {127, 0, 0, 1})
+        |> put_req_header("x-forwarded-for", "127.0.0.1")
+        |> get("/api/v1/sympp/herdr/work-requests/#{work_request.id}")
+
+      assert %{"error" => %{"code" => "unauthorized"}} = json_response(forwarded, 401)
+    end)
+  end
+
   test "ordinary local dashboard load can mutate directly", %{repo: repo} do
     with_local_operator_endpoint(fn ->
       work_request = create_work_request!(repo, id: "WR-LOCAL-ORDINARY-MUTATION", status: "ready_for_slicing")

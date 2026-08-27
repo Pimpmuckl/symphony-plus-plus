@@ -2,13 +2,15 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
   @moduledoc false
 
   alias Plug.Conn
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{ClientLeases, Config, FailedCall, Health, HTTPStateStore, HTTPTransport}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{ClientLeases, Config, FailedCall, Health, HerdrBinding}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{HTTPStateStore, HTTPTransport}
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixirWeb.Endpoint
   alias SymphonyElixirWeb.SymppDashboardApi.Runtime
 
   @client_key "__sympp_mcp_local_http_client__"
   @session_header "mcp-session-id"
+  @herdr_binding_header "sympp-herdr-binding"
   @max_body_bytes 1_000_000
   @forwarded_headers ["forwarded", "x-real-ip"]
 
@@ -189,6 +191,7 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
   defp send_transport_result(conn, %HTTPTransport.Result{status: :no_response} = result, _request_state_key) do
     conn
     |> maybe_put_session_header(result.state_key)
+    |> maybe_put_herdr_binding_header(result.herdr_binding)
     |> Conn.send_resp(202, "")
     |> Conn.halt()
   end
@@ -198,11 +201,18 @@ defmodule SymphonyElixirWeb.MCPHTTPPlug do
 
     conn
     |> maybe_put_session_header(result.state_key)
+    |> maybe_put_herdr_binding_header(result.herdr_binding)
     |> send_json(status, result.response)
   end
 
   defp maybe_put_session_header(conn, nil), do: conn
   defp maybe_put_session_header(conn, state_key), do: Conn.put_resp_header(conn, @session_header, state_key)
+
+  defp maybe_put_herdr_binding_header(conn, nil), do: conn
+
+  defp maybe_put_herdr_binding_header(conn, binding) do
+    Conn.put_resp_header(conn, @herdr_binding_header, HerdrBinding.encode(binding))
+  end
 
   defp send_method_not_allowed(conn) do
     conn

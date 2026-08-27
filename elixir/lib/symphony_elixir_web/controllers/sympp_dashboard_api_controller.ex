@@ -31,6 +31,9 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
     local_operator_request?(conn) and same_origin_browser_request?(conn)
   end
 
+  @spec herdr_consumer?(Conn.t()) :: boolean()
+  def herdr_consumer?(%Conn{} = conn), do: local_operator_request?(conn)
+
   defp local_operator_request?(%Conn{} = conn) do
     loopback_request?(conn.remote_ip) and local_host?(conn.host) and direct_local_request?(conn)
   end
@@ -201,6 +204,46 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
         stream_dashboard_events(conn)
       after
         OperatorDashboardOpener.dashboard_disconnected()
+      end
+    else
+      false -> error_response(conn, :unauthorized)
+      {:error, reason} -> error_response(conn, reason)
+    end
+  end
+
+  @spec herdr_work_request_detail(Conn.t(), map()) :: Conn.t()
+  def herdr_work_request_detail(conn, %{"work_request_id" => work_request_id}) do
+    if herdr_consumer?(conn) do
+      Runtime.with_dashboard_repo(&herdr_work_request_detail_response(&1, conn, work_request_id))
+      |> case do
+        {:error, reason} -> error_response(conn, reason)
+        %Conn{} = conn -> conn
+      end
+    else
+      error_response(conn, :unauthorized)
+    end
+  end
+
+  defp herdr_work_request_detail_response(repo, conn, work_request_id) do
+    with {:ok, payload} <- LocalOperatorDashboard.operator_work_request_detail_payload(repo, work_request_id) do
+      json(conn, payload)
+    end
+  end
+
+  @spec herdr_events(Conn.t(), map()) :: Conn.t()
+  def herdr_events(conn, _params) do
+    with true <- herdr_consumer?(conn),
+         :ok <- DashboardPubSub.subscribe() do
+      conn =
+        conn
+        |> Conn.put_resp_header("cache-control", "no-cache")
+        |> Conn.put_resp_header("connection", "keep-alive")
+        |> Conn.put_resp_content_type("text/event-stream")
+        |> Conn.send_chunked(200)
+
+      case Conn.chunk(conn, "event: ready\ndata: {}\n\n") do
+        {:ok, conn} -> stream_herdr_events(conn)
+        {:error, _reason} -> conn
       end
     else
       false -> error_response(conn, :unauthorized)
@@ -608,6 +651,22 @@ defmodule SymphonyElixirWeb.SymppDashboardApiController do
       30_000 ->
         case Conn.chunk(conn, ": keep-alive\n\n") do
           {:ok, conn} -> stream_dashboard_events(conn)
+          {:error, _reason} -> conn
+        end
+    end
+  end
+
+  defp stream_herdr_events(conn) do
+    receive do
+      :operator_dashboard_changed ->
+        case Conn.chunk(conn, "event: invalidated\ndata: {}\n\n") do
+          {:ok, conn} -> stream_herdr_events(conn)
+          {:error, _reason} -> conn
+        end
+    after
+      30_000 ->
+        case Conn.chunk(conn, ": keep-alive\n\n") do
+          {:ok, conn} -> stream_herdr_events(conn)
           {:error, _reason} -> conn
         end
     end

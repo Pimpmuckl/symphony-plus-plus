@@ -14,6 +14,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     ClientLeases,
     Config,
     FailedCall,
+    HerdrBinding,
     HTTPStateStore,
     Session,
     SessionBinding,
@@ -343,6 +344,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     assert [^session_id] = get_resp_header(claim, "mcp-session-id")
     assert get_in(json_response(claim, 200), ["result", "structuredContent", "assignment", "work_package_id"]) == work_package.id
+
+    work_package_id = work_package.id
+
+    assert %{
+             "role" => "worker",
+             "work_package_id" => ^work_package_id,
+             "show_inspector" => false
+           } = herdr_binding(claim)
+
     refute inspect(json_response(claim, 200)) =~ minted.work_key.secret
 
     tools = post_json(tools_list_request("worker-tools"), [{"mcp-session-id", session_id}])
@@ -404,6 +414,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert get_in(json_response(claim, 200), ["result", "structuredContent", "assignment", "grant_role"]) == "architect"
     assert get_in(json_response(claim, 200), ["result", "structuredContent", "assignment", "work_package_id"]) == handoff.anchor_package.id
 
+    work_request_id = work_request.id
+    anchor_package_id = handoff.anchor_package.id
+
+    assert %{
+             "role" => "architect",
+             "work_request_id" => ^work_request_id,
+             "work_package_id" => ^anchor_package_id,
+             "show_inspector" => true
+           } = herdr_binding(claim)
+
     tools = post_json(tools_list_request("architect-tools"), [{"mcp-session-id", session_id}])
     tool_names = tool_names(json_response(tools, 200))
 
@@ -421,6 +441,132 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       )
 
     assert get_in(json_response(read, 200), ["result", "structuredContent", "work_request", "id"]) == work_request.id
+    assert herdr_binding(read)["work_request_id"] == work_request.id
+
+    release =
+      post_json(
+        tool_call_request("release-architect", "release_current_assignment", %{"reason" => "test complete"}),
+        [{"mcp-session-id", session_id}]
+      )
+
+    assert get_resp_header(release, "sympp-herdr-binding") == ["clear"]
+  end
+
+  test "failed assignment release keeps the active Herdr binding" do
+    response = %{
+      "jsonrpc" => "2.0",
+      "id" => "release",
+      "result" => %{
+        "structuredContent" => %{
+          "action" => "release_current_assignment",
+          "binding_cleared" => false
+        }
+      }
+    }
+
+    binding =
+      HerdrBinding.response_binding(
+        tool_call_request("release", "release_current_assignment", %{"reason" => "done"}),
+        response,
+        %Server{config: nil, session: claimed_session()}
+      )
+
+    assert binding["role"] == "worker"
+    assert binding["work_package_id"] == "SYMPP-MCP-HTTP"
+    assert binding["show_inspector"] == false
+  end
+
+  test "batch assignment release clears the Herdr binding" do
+    payload = [tool_call_request("release", "release_current_assignment", %{"reason" => "done"})]
+
+    response = [
+      %{
+        "jsonrpc" => "2.0",
+        "id" => "release",
+        "result" => %{
+          "structuredContent" => %{
+            "action" => "release_current_assignment",
+            "binding_cleared" => true
+          }
+        }
+      }
+    ]
+
+    assert HerdrBinding.response_binding(payload, response, %Server{config: nil}) == :clear
+  end
+
+  test "assignment release notifications clear the Herdr binding from final server state" do
+    notification = %{
+      "jsonrpc" => "2.0",
+      "method" => "tools/call",
+      "params" => %{"name" => "release_current_assignment", "arguments" => %{"reason" => "done"}}
+    }
+
+    assert HerdrBinding.response_binding(notification, nil, %Server{config: nil}) == :clear
+    assert HerdrBinding.response_binding(notification, nil, %Server{config: nil, session: claimed_session()}) == nil
+  end
+
+  test "bound batch metadata ignores unrelated WorkRequest calls" do
+    payload = [
+      tool_call_request("read", "read_work_request", %{"work_request_id" => "WR-UNRELATED"}),
+      tool_call_request("claim", "claim_local_assignment", %{"work_package_id" => "SYMPP-MCP-HTTP"})
+    ]
+
+    response = [
+      %{"jsonrpc" => "2.0", "id" => "read", "result" => %{"structuredContent" => %{"work_request_id" => "WR-UNRELATED"}}},
+      %{"jsonrpc" => "2.0", "id" => "claim", "result" => %{"structuredContent" => %{"status" => "claimed"}}}
+    ]
+
+    binding = HerdrBinding.response_binding(payload, response, %Server{config: nil, session: claimed_session()})
+
+    refute Map.has_key?(binding, "work_request_id")
+    assert binding["work_package_id"] == "SYMPP-MCP-HTTP"
+  end
+
+  test "stale assignment errors clear the Herdr binding" do
+    response = %{
+      "jsonrpc" => "2.0",
+      "id" => "progress",
+      "error" => %{"code" => -32_001, "message" => "Unauthorized"}
+    }
+
+    server = %Server{config: nil, session_refresh_required: true, stale_assignment_role: "worker"}
+
+    assert HerdrBinding.response_binding(tool_call_request("progress", "append_progress", %{}), response, server) == :clear
+  end
+
+  test "POST /mcp reports the latest successful unbound WorkRequest action as coordinator context" do
+    assert {:ok, work_request} =
+             WorkRequestRepository.create(
+               Repo,
+               work_request_attrs(%{id: "WR-HTTP-HERDR-COORDINATOR", status: "ready_for_slicing"})
+             )
+
+    init = post_json(initialize_request("coordinator-init"))
+    [session_id] = get_resp_header(init, "mcp-session-id")
+
+    read =
+      post_json(
+        tool_call_request("coordinator-read", "read_work_request", %{"work_request_id" => work_request.id}),
+        [{"mcp-session-id", session_id}]
+      )
+
+    assert get_in(json_response(read, 200), ["result", "structuredContent", "work_request", "id"]) == work_request.id
+
+    assert herdr_binding(read) == %{
+             "role" => "coordinator",
+             "show_inspector" => true,
+             "work_request_id" => work_request.id
+           }
+
+    failed =
+      post_json(
+        tool_call_request("coordinator-failed", "read_work_request", %{"work_request_id" => "missing"}),
+        [{"mcp-session-id", session_id}]
+      )
+
+    assert get_in(json_response(failed, 200), ["error"]) != nil
+    assert get_resp_header(failed, "sympp-herdr-binding") == []
   end
 
   test "POST /mcp rehydrates claimed local worker session after backend state reset" do
@@ -784,6 +930,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert assignment_payload["assignment"] == nil
     assert get_in(assignment_payload, ["binding", "state"]) == "stale"
     assert get_in(assignment_payload, ["recovery", "tools"]) == ["claim_local_assignment"]
+    assert get_resp_header(assignment_tool, "sympp-herdr-binding") == ["clear"]
 
     progress =
       post_json(
@@ -1334,6 +1481,18 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   defp resource_payload(payload) do
     payload
     |> get_in(["result", "contents", Access.at(0), "text"])
+    |> Jason.decode!()
+  end
+
+  defp herdr_binding(conn) do
+    [encoded] = get_resp_header(conn, "sympp-herdr-binding")
+    padding = String.duplicate("=", rem(4 - rem(byte_size(encoded), 4), 4))
+
+    encoded
+    |> String.replace("-", "+")
+    |> String.replace("_", "/")
+    |> Kernel.<>(padding)
+    |> Base.decode64!()
     |> Jason.decode!()
   end
 

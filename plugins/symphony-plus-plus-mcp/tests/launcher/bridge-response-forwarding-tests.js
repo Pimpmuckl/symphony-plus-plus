@@ -152,6 +152,7 @@ async function main() {
   bridge.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "test.forward", arguments: {} } })}\n`);
   await responsePromise;
   assert.equal(forwardSessions.at(-1), "recovered-session");
+
 }
 
 function readResponse(id) {

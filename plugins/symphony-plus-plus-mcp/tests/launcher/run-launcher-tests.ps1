@@ -29,6 +29,13 @@ $betaPath = Join-Path $repoRoot "scripts/sympp-beta.ps1"
 . $runtimePath
 . $helperPath
 . $processRuntimePath
+$herdrBindingJson = '{"role":"architect","work_request_id":"wr-test","show_inspector":true}'
+$herdrBindingEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($herdrBindingJson)).TrimEnd("=").Replace("+", "-").Replace("/", "_")
+$herdrBinding = ConvertFrom-SymppHerdrBinding $herdrBindingEncoded
+Assert-True ($herdrBinding.role -eq "architect" -and $herdrBinding.work_request_id -eq "wr-test" -and $herdrBinding.show_inspector) "PowerShell bridge must decode the shared Herdr binding header"
+& (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "herdr-binding-tests.js")
+$herdrNodeExitCode = $LASTEXITCODE
+Assert-True ($herdrNodeExitCode -eq 0) "Node bridge must translate Herdr binding metadata"
 $faultedRead = [System.Threading.Tasks.TaskCompletionSource[string]]::new()
 $faultedRead.SetException([System.IO.IOException]::new("test read failure"))
 $faultedState = [pscustomobject]@{ pending_task = $faultedRead.Task; buffered_lines = [System.Collections.Generic.Queue[string]]::new(); eof = $false }
