@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-19T20:52:02.3729646Z",
+  "generatedAt": "2026-08-27T16:30:44.0148821Z",
   "title": "Design System: Symphony++",
   "extensions": {
     "colorMeta": {
@@ -53,7 +53,8 @@
     ],
     "motion": [
       { "name": "state-fast", "value": "150ms ease-out", "purpose": "Hover, focus, and direct control feedback." },
-      { "name": "topology-snap", "value": "220ms cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Group expansion and execution-graph geometry changes." }
+      { "name": "topology-snap", "value": "220ms cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Group expansion and execution-graph geometry changes." },
+      { "name": "work-request-reveal", "value": "space -> group -> expanse", "purpose": "Reveal a selected WorkRequest without moving the camera or losing stable board geometry." }
     ],
     "breakpoints": [
       { "name": "desktop-graph", "value": "768px" }
@@ -102,7 +103,7 @@
   ],
   "narrative": {
     "northStar": "The Live Control Room",
-    "overview": "Symphony++ is a calm operational surface for supervising live agent work. It is information-dense without becoming visually loud: inactive structure recedes, active work carries motion, and meaningful state changes are visible immediately. The interface rejects nested-card labyrinths, oversized execution records, beige neutral states, and decorative workflow graphics. Geometry must stay stable while status changes.",
+    "overview": "Symphony++ is a calm operational surface for supervising live agent work. It is information-dense without becoming visually loud: inactive structure recedes, active work carries motion, and meaningful state changes are visible immediately. The interface rejects nested-card labyrinths, oversized execution records, beige neutral states, and decorative workflow graphics. Geometry must stay stable while status changes. Complex work may reveal more structure, but the operator's mental map always wins.",
     "keyCharacteristics": ["Compact, state-first information hierarchy.", "Cool neutral surfaces with restrained semantic signals.", "Stable spatial organization from overview to detail.", "Motion only for activity, topology changes, and direct feedback.", "Familiar product controls with explicit keyboard and focus behavior."],
     "rules": [
       { "name": "The Operational Signal Rule", "body": "Semantic color describes current state; it is never decoration.", "section": "colors" },
@@ -110,7 +111,7 @@
       { "name": "The Hierarchy Before Size Rule", "body": "Weight, alignment, and spacing establish importance before larger text does.", "section": "typography" },
       { "name": "The No Lift Rule", "body": "Hover, focus, and selection never move cards. Use outline, border, shadow, or shine instead.", "section": "elevation" }
     ],
-    "dos": ["Do keep title, lifecycle state, progress, and PR presence as the primary execution-card content.", "Do preserve dependency ranks and stable geometry during lifecycle updates and group expansion.", "Do route dependencies right-to-left through reserved gutters, corridors, and outer buses without shared segments.", "Do use shine and animated dashes only for genuinely active state.", "Do preserve keyboard focus, reduced motion, and non-color state labels."],
+    "dos": ["Do keep title, lifecycle state, progress, and PR presence as the primary execution-card content.", "Do preserve stable geometry during lifecycle updates and group expansion.", "Do route dependencies around cards through explicit gutters and corridors.", "Do use shine and animated dashes only for genuinely active state.", "Do preserve keyboard focus, reduced motion, and non-color state labels."],
     "donts": ["Don't create nested-card labyrinths that make hierarchy harder to read.", "Don't use oversized execution cards filled with bookkeeping details.", "Don't use beige, cream, parchment, or tan for neutral, planned, or waiting states.", "Don't draw decorative workflow lines that cross cards, overlap unpredictably, or imply false sequencing.", "Don't elevate internal execution records above product-facing work.", "Don't encode guardrails and lifecycle copy that make ordinary recovery harder than the work itself.", "Don't move cards on hover, focus, selection, or status change."]
   }
 }
