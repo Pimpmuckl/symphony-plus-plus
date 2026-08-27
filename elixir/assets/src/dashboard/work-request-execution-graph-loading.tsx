@@ -1,7 +1,8 @@
 import { useCallback, useMemo } from "react";
 
 import type { ActiveBlockingEdge, GuidanceItem, WorkPackageCard, WorkRequestDetail } from "@/types/dashboard";
-import { workRequestExecutionFrontierProjection, workRequestExecutionGraphModel, type FocusFrontierVariant } from "./execution-graph/adapter";
+import { workRequestExecutionGraphModel } from "./execution-graph/adapter";
+import { executionFrontierProjection, type ExecutionFrontierVariant as FocusFrontierVariant } from "./execution-graph/frontier";
 import { WorkRequestExecutionGraph } from "./work-request-execution-graph";
 import type { CardDetailSelect } from "./runtime";
 import type { ContextPathPart } from "./workstream-context-path";
@@ -44,7 +45,7 @@ export default function WorkRequestExecutionGraphLoading({
   }, [activeBlockingEdges, detail, guidanceItems, packageById]);
   const fullModel = useMemo(() => workRequestExecutionGraphModel(detail, { includeHistorical: true }), [detail]);
   const projection = useMemo(() => viewMode === "frontier"
-    ? workRequestExecutionFrontierProjection(fullModel, new Set(attentionTargets.keys()), frontierVariant)
+    ? executionFrontierProjection(fullModel, new Set(attentionTargets.keys()), frontierVariant)
     : { expandedGroupIds: undefined, model: fullModel }, [attentionTargets, frontierVariant, fullModel, viewMode]);
   const selectWorkPackage = useCallback((workPackageId: string) => {
     const slice = slicesById.get(workPackageId);
@@ -58,5 +59,5 @@ export default function WorkRequestExecutionGraphLoading({
     onSelectAttention(target);
   }, [attentionTargets, onSelectAttention]);
 
-  return <WorkRequestExecutionGraph key={`${viewMode}:${frontierVariant}`} attentionByEntity={attentionTargets} initialExpandedGroupIds={projection.expandedGroupIds} model={projection.model} now={now} onSelectAttention={selectAttention} onSelectWorkPackage={selectWorkPackage} contextPath={requestPath} wrapRootRanks={viewMode !== "frontier"} />;
+  return <WorkRequestExecutionGraph key={`${viewMode}:${frontierVariant}`} attentionByEntity={attentionTargets} initialExpandedGroupIds={projection.expandedGroupIds ? new Set(projection.expandedGroupIds) : undefined} model={projection.model} now={now} onSelectAttention={selectAttention} onSelectWorkPackage={selectWorkPackage} contextPath={requestPath} wrapRootRanks={viewMode !== "frontier"} />;
 }
