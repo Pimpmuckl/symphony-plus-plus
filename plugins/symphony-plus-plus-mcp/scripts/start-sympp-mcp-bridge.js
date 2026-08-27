@@ -32,14 +32,18 @@ let herdrBackend = null;
 let herdrMetadataChild = null;
 let herdrMetadataOwned = false;
 let herdrMetadataPending = null;
+let herdrInspectorChild = null;
 let herdrRefresh = null;
 let herdrReportedAt = 0;
+let herdrInspectorPending = false;
+let herdrInspectorRevision = 0;
 
 const HERDR_METADATA_SOURCE = "symphony-plus-plus";
 const HERDR_METADATA_COMMAND_TIMEOUT_MS = 5000;
 const HERDR_METADATA_TTL_MS = 150000;
 const HERDR_METADATA_REFRESH_MS = 60000;
 const HERDR_METADATA_TOKENS = ["sympp_role", "sympp_work_request_id", "sympp_work_package_id", "sympp_show_inspector", "sympp_endpoint"];
+const HERDR_INSPECTOR_PLUGIN = "symphony-plus-plus.execution-inspector";
 
 function trace(event) {
   const dir = process.env.SYMPP_LAUNCHER_TRACE_DIR;
@@ -78,7 +82,7 @@ function startHerdrMetadata() {
   const commands = process.platform === "win32" ? ["herdr.exe", "herdr.cmd"] : ["herdr"];
   const commandArgs = ["pane", "report-metadata", process.env.HERDR_PANE_ID, "--source", HERDR_METADATA_SOURCE, ...args];
   const launch = (index) => {
-    if (index >= commands.length) return startHerdrMetadata();
+    if (index >= commands.length) return;
     let child;
     try {
       child = spawn(commands[index], commandArgs, { stdio: "ignore", windowsHide: true });
@@ -87,22 +91,74 @@ function startHerdrMetadata() {
     }
     herdrMetadataChild = child;
     let finished = false;
-    const finish = (retry) => {
+    const finish = (retry, succeeded = false) => {
       if (finished) return;
       finished = true;
       clearTimeout(timeout);
       if (herdrMetadataChild !== child) return;
       herdrMetadataChild = null;
       if (retry) launch(index + 1);
-      else startHerdrMetadata();
+      else if (succeeded) {
+        startHerdrMetadata();
+        if (herdrInspectorPending) {
+          if (!herdrMetadataChild && !herdrMetadataPending) {
+            startHerdrInspectorSync();
+          }
+        }
+      }
+    };
+    const timeout = setTimeout(() => {
+      try { child.kill(); } catch (_) { }
+      finish(true);
+    }, HERDR_METADATA_COMMAND_TIMEOUT_MS);
+    timeout.unref();
+    child.once("error", () => finish(true));
+    child.once("exit", (code) => finish(code !== 0, code === 0));
+    child.unref();
+  };
+  launch(0);
+}
+
+function startHerdrInspectorSync() {
+  if (herdrInspectorChild) return;
+  const revision = herdrInspectorRevision;
+  const commands = process.platform === "win32" ? ["herdr.exe", "herdr.cmd"] : ["herdr"];
+  const launch = (index) => {
+    if (index >= commands.length) {
+      herdrInspectorPending = true;
+      return;
+    }
+    let child;
+    try {
+      child = spawn(commands[index], ["plugin", "action", "invoke", "sync", "--plugin", HERDR_INSPECTOR_PLUGIN], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } catch (_) {
+      return launch(index + 1);
+    }
+    herdrInspectorChild = child;
+    let finished = false;
+    const finish = (succeeded) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      if (herdrInspectorChild !== child) return;
+      herdrInspectorChild = null;
+      if (!succeeded) {
+        launch(index + 1);
+        return;
+      }
+      if (revision === herdrInspectorRevision) herdrInspectorPending = false;
+      if (herdrInspectorPending && !herdrMetadataChild && !herdrMetadataPending) startHerdrInspectorSync();
     };
     const timeout = setTimeout(() => {
       try { child.kill(); } catch (_) { }
       finish(false);
     }, HERDR_METADATA_COMMAND_TIMEOUT_MS);
     timeout.unref();
-    child.once("error", () => finish(true));
-    child.once("exit", () => finish(false));
+    child.once("error", () => finish(false));
+    child.once("exit", (code) => finish(code === 0));
     child.unref();
   };
   launch(0);
@@ -138,6 +194,13 @@ function clearHerdrBinding() {
   herdrBackend = null;
   herdrMetadataOwned = false;
   herdrReportedAt = 0;
+  herdrInspectorPending = false;
+  herdrInspectorRevision += 1;
+  if (herdrInspectorChild) {
+    const child = herdrInspectorChild;
+    herdrInspectorChild = null;
+    try { child.kill(); } catch (_) { }
+  }
   herdrMetadataPending = null;
   if (herdrRefresh) clearInterval(herdrRefresh);
   herdrRefresh = null;
@@ -177,6 +240,10 @@ function updateHerdrBinding(response, backend) {
   const changed = JSON.stringify(next) !== JSON.stringify(herdrBinding) || trimOrigin(backend) !== herdrBackend;
   herdrBinding = next;
   herdrBackend = trimOrigin(backend);
+  if (changed) {
+    herdrInspectorPending = true;
+    herdrInspectorRevision += 1;
+  }
   reportHerdrBinding(changed);
   if (!herdrRefresh) {
     herdrRefresh = setInterval(() => reportHerdrBinding(), HERDR_METADATA_REFRESH_MS);

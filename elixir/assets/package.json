@@ -6,6 +6,7 @@
   "scripts": {
     "browser:smoke": "node scripts/browser-smoke.mjs",
     "build": "npm run typecheck && node scripts/clean-vite-output.mjs && vite build",
+    "build:herdr": "vite build --config vite.herdr.config.ts",
     "dev": "vite",
     "lint": "eslint . --max-warnings 0",
     "quality": "npm run typecheck && npm run lint",

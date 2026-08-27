@@ -2,7 +2,14 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   @moduledoc false
 
   alias SymphonyElixir.SymphonyPlusPlus.Dashboard
-  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{CommentProjection, Sanitizer, WorkRequestCards}
+
+  alias SymphonyElixir.SymphonyPlusPlus.Dashboard.{
+    CommentProjection,
+    OperationalProjection,
+    Sanitizer,
+    WorkRequestCards
+  }
+
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
@@ -277,6 +284,75 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
          payload
        end}
     end
+  end
+
+  @spec herdr_work_request_detail_payload(module(), String.t()) :: {:ok, map()} | {:error, term()}
+  def herdr_work_request_detail_payload(repo, work_request_id) when is_binary(work_request_id) do
+    with {:ok, payload} <- operator_work_request_detail_payload(repo, work_request_id),
+         {:ok, [board_detail]} <- Dashboard.work_request_board_details(repo, [work_request_id]),
+         {:ok, work_packages} <- WorkRequestRepository.list_work_packages(repo, work_request_id),
+         {:ok, contexts} <- Dashboard.work_package_work_package_contexts(repo, work_packages) do
+      graph = get_in(board_detail, [:product_tree, :execution_graph])
+
+      {:ok,
+       payload
+       |> Map.put(:work_packages, board_detail.work_packages)
+       |> Map.put(:product_tree, board_detail.product_tree)
+       |> Map.put(:execution_graph, graph)
+       |> Map.put(:attention_keys, herdr_attention_keys(board_detail))
+       |> Map.put(:worker_sessions, herdr_worker_sessions(work_packages, contexts))}
+    end
+  end
+
+  defp herdr_attention_keys(board_detail) do
+    package_keys =
+      board_detail.work_packages
+      |> Enum.filter(&((get_in(&1, [:operational_state, :attention_items]) || []) != []))
+      |> MapSet.new(&"work_package:#{&1.id}")
+
+    package_ids = MapSet.new(package_keys, &String.replace_prefix(&1, "work_package:", ""))
+
+    nodes = board_detail.product_tree.nodes
+    groups_by_id = Map.new(nodes, &{&1.id, &1})
+
+    group_ids =
+      nodes
+      |> Enum.filter(fn node -> Enum.any?(node.work_package_ids || [], &MapSet.member?(package_ids, &1)) end)
+      |> Enum.reduce(MapSet.new(), fn node, ids -> put_herdr_group_ancestry(ids, node.id, groups_by_id) end)
+
+    group_keys = MapSet.new(group_ids, &"group:#{&1}")
+
+    package_keys
+    |> MapSet.union(group_keys)
+    |> Enum.sort()
+  end
+
+  defp put_herdr_group_ancestry(ids, nil, _groups_by_id), do: ids
+
+  defp put_herdr_group_ancestry(ids, group_id, groups_by_id) do
+    if MapSet.member?(ids, group_id) do
+      ids
+    else
+      node = Map.get(groups_by_id, group_id)
+      put_herdr_group_ancestry(MapSet.put(ids, group_id), node && node.parent_id, groups_by_id)
+    end
+  end
+
+  defp herdr_worker_sessions(work_packages, contexts) do
+    work_packages
+    |> Enum.flat_map(fn work_package ->
+      contexts
+      |> Map.get(work_package.id, %{})
+      |> Map.get(:agent_runs, [])
+      |> OperationalProjection.latest_active_agent_run()
+      |> case do
+        %{session_id: session_id} when is_binary(session_id) and session_id != "" ->
+          [%{work_package_id: work_package.id, agent_session_id: session_id}]
+
+        _run ->
+          []
+      end
+    end)
   end
 
   defp operator_selected_work_package(repo, work_request_id, opts) do

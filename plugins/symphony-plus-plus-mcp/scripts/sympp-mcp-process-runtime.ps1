@@ -461,6 +461,13 @@ $script:SymppHerdrReportedAtMs = 0
 $script:SymppHerdrProcess = $null
 $script:SymppHerdrProcessStartedAtMs = 0
 $script:SymppHerdrPendingArguments = $null
+$script:SymppHerdrInflightArguments = $null
+$script:SymppHerdrInspectorPending = $false
+$script:SymppHerdrInspectorPlugin = "symphony-plus-plus.execution-inspector"
+$script:SymppHerdrInspectorProcess = $null
+$script:SymppHerdrInspectorStartedAtMs = 0
+$script:SymppHerdrInspectorRevision = 0
+$script:SymppHerdrInspectorInflightRevision = 0
 
 function Test-SymppHerdrAvailable {
   return $env:HERDR_ENV -eq "1" -and -not [string]::IsNullOrWhiteSpace($env:HERDR_PANE_ID)
@@ -500,9 +507,28 @@ function Start-SymppHerdrMetadataProcess([string]$FilePath, [string[]]$Arguments
 
 function Update-SymppHerdrMetadataProcess {
   $now = Get-McpNowMs
+  Update-SymppHerdrInspectorProcess
   if ($null -ne $script:SymppHerdrProcess) {
-    if ($script:SymppHerdrProcess.HasExited) { Stop-SymppHerdrMetadataProcess }
-    elseif (($now - $script:SymppHerdrProcessStartedAtMs) -ge $script:SymppHerdrMetadataCommandTimeoutMs) { Stop-SymppHerdrMetadataProcess }
+    if ($script:SymppHerdrProcess.HasExited) {
+      $succeeded = $script:SymppHerdrProcess.ExitCode -eq 0
+      $inflight = $script:SymppHerdrInflightArguments
+      Stop-SymppHerdrMetadataProcess
+      $script:SymppHerdrInflightArguments = $null
+      if (-not $succeeded) {
+        if ($null -eq $script:SymppHerdrPendingArguments) { $script:SymppHerdrPendingArguments = $inflight }
+        return
+      }
+      if ($null -eq $script:SymppHerdrPendingArguments -and $script:SymppHerdrInspectorPending) {
+        Start-SymppHerdrInspectorSync
+      }
+    }
+    elseif (($now - $script:SymppHerdrProcessStartedAtMs) -ge $script:SymppHerdrMetadataCommandTimeoutMs) {
+      $inflight = $script:SymppHerdrInflightArguments
+      Stop-SymppHerdrMetadataProcess
+      $script:SymppHerdrInflightArguments = $null
+      if ($null -eq $script:SymppHerdrPendingArguments) { $script:SymppHerdrPendingArguments = $inflight }
+      return
+    }
     else { return }
   }
   if ($null -eq $script:SymppHerdrPendingArguments -or -not (Test-SymppHerdrAvailable)) { return }
@@ -512,8 +538,47 @@ function Update-SymppHerdrMetadataProcess {
   try {
     $herdr = Get-Command herdr -ErrorAction Stop
     $script:SymppHerdrProcess = Start-SymppHerdrMetadataProcess $herdr.Source (@("pane", "report-metadata", $env:HERDR_PANE_ID, "--source", $script:SymppHerdrMetadataSource) + $arguments)
+    $script:SymppHerdrInflightArguments = $arguments
     $script:SymppHerdrProcessStartedAtMs = $now
   } catch {
+  }
+}
+
+function Start-SymppHerdrInspectorSync {
+  if ($null -ne $script:SymppHerdrInspectorProcess) { return }
+  try {
+    $herdr = Get-Command herdr -ErrorAction Stop
+    $script:SymppHerdrInspectorProcess = Start-SymppHerdrMetadataProcess $herdr.Source @("plugin", "action", "invoke", "sync", "--plugin", $script:SymppHerdrInspectorPlugin)
+    $script:SymppHerdrInspectorStartedAtMs = Get-McpNowMs
+    $script:SymppHerdrInspectorInflightRevision = $script:SymppHerdrInspectorRevision
+  } catch {
+    $script:SymppHerdrInspectorPending = $true
+  }
+}
+
+function Stop-SymppHerdrInspectorProcess {
+  if ($null -eq $script:SymppHerdrInspectorProcess) { return }
+  try { if (-not $script:SymppHerdrInspectorProcess.HasExited) { Stop-Process -Id $script:SymppHerdrInspectorProcess.Id -Force } } catch {}
+  try { $script:SymppHerdrInspectorProcess.Dispose() } catch {}
+  $script:SymppHerdrInspectorProcess = $null
+  $script:SymppHerdrInspectorStartedAtMs = 0
+  $script:SymppHerdrInspectorInflightRevision = 0
+}
+
+function Update-SymppHerdrInspectorProcess {
+  if ($null -eq $script:SymppHerdrInspectorProcess) { return }
+  if ($script:SymppHerdrInspectorProcess.HasExited) {
+    $succeeded = $script:SymppHerdrInspectorProcess.ExitCode -eq 0
+    $inflightRevision = $script:SymppHerdrInspectorInflightRevision
+    Stop-SymppHerdrInspectorProcess
+    $script:SymppHerdrInspectorPending = -not $succeeded -or $inflightRevision -ne $script:SymppHerdrInspectorRevision
+    if ($succeeded -and $script:SymppHerdrInspectorPending -and $null -eq $script:SymppHerdrProcess -and $null -eq $script:SymppHerdrPendingArguments) {
+      Start-SymppHerdrInspectorSync
+    }
+  }
+  elseif (((Get-McpNowMs) - $script:SymppHerdrInspectorStartedAtMs) -ge $script:SymppHerdrMetadataCommandTimeoutMs) {
+    Stop-SymppHerdrInspectorProcess
+    $script:SymppHerdrInspectorPending = $true
   }
 }
 
@@ -531,6 +596,8 @@ function Complete-SymppHerdrMetadataProcess {
   }
   $script:SymppHerdrPendingArguments = $null
   Stop-SymppHerdrMetadataProcess
+  $script:SymppHerdrInflightArguments = $null
+  Stop-SymppHerdrInspectorProcess
 }
 
 function ConvertFrom-SymppHerdrBinding([string]$Value) {
@@ -569,9 +636,13 @@ function Clear-SymppHerdrBinding {
   $script:SymppHerdrBackend = $null
   $script:SymppHerdrMetadataOwned = $false
   $script:SymppHerdrReportedAtMs = 0
+  $script:SymppHerdrInspectorPending = $false
+  $script:SymppHerdrInspectorRevision += 1
+  Stop-SymppHerdrInspectorProcess
   if (-not $owned) { return }
   $script:SymppHerdrPendingArguments = $null
   Stop-SymppHerdrMetadataProcess
+  $script:SymppHerdrInflightArguments = $null
   $arguments = @()
   foreach ($name in $script:SymppHerdrMetadataTokens) { $arguments += @("--clear-token", $name) }
   Invoke-SymppHerdrMetadata $arguments
@@ -589,6 +660,10 @@ function Update-SymppHerdrBinding($Response, [string]$McpUrl) {
       -not [System.StringComparer]::OrdinalIgnoreCase.Equals($script:SymppHerdrBackend, $nextBackend)
     $script:SymppHerdrBinding = $nextBinding
     $script:SymppHerdrBackend = $nextBackend
+    if ($changed) {
+      $script:SymppHerdrInspectorPending = $true
+      $script:SymppHerdrInspectorRevision += 1
+    }
     Publish-SymppHerdrBinding $changed
   } catch {
   }

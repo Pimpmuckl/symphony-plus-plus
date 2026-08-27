@@ -1,0 +1,43 @@
+id = "symphony-plus-plus.execution-inspector"
+name = "Symphony++ Execution Inspector"
+version = "0.1.0"
+min_herdr_version = "0.7.5"
+description = "A compact Symphony++ execution view beside bound architect and coordinator panes."
+platforms = ["linux", "macos", "windows"]
+
+[[build]]
+command = ["npm", "--prefix", "elixir/assets", "ci"]
+
+[[build]]
+command = ["npm", "--prefix", "elixir/assets", "run", "build:herdr"]
+
+[[startup]]
+command = ["node", "plugins/symphony-plus-plus-mcp/herdr/dist/sympp-herdr.mjs"]
+
+[[actions]]
+id = "sync"
+title = "Sync execution inspector"
+contexts = ["global"]
+command = ["node", "plugins/symphony-plus-plus-mcp/herdr/dist/sympp-herdr.mjs"]
+
+[[events]]
+on = "pane.focused"
+command = ["node", "plugins/symphony-plus-plus-mcp/herdr/dist/sympp-herdr.mjs"]
+
+[[events]]
+on = "pane.closed"
+command = ["node", "plugins/symphony-plus-plus-mcp/herdr/dist/sympp-herdr.mjs"]
+
+[[events]]
+on = "pane.exited"
+command = ["node", "plugins/symphony-plus-plus-mcp/herdr/dist/sympp-herdr.mjs"]
+
+[[events]]
+on = "tab.closed"
+command = ["node", "plugins/symphony-plus-plus-mcp/herdr/dist/sympp-herdr.mjs"]
+
+[[panes]]
+id = "execution-inspector"
+title = "Symphony++"
+placement = "split"
+command = ["node", "plugins/symphony-plus-plus-mcp/herdr/dist/sympp-herdr.mjs"]

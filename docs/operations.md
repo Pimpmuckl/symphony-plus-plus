@@ -16,6 +16,24 @@ On Windows, read the active dashboard URL with:
 The installed MCP companion starts or reuses the local backend and serves the
 packaged dashboard from the same runtime.
 
+### Herdr Execution Inspector
+
+Install the optional Herdr plugin from the repository root:
+
+```powershell
+herdr plugin install Pimpmuckl/symphony-plus-plus --ref main --yes
+```
+
+When a Herdr tab contains a bound Symphony++ architect or coordinator, one
+execution inspector opens to its right. It follows that tab's focused bound
+agent and stays compact for a trivial WorkRequest. Larger or branching work
+uses the same frontier projection as the dashboard.
+
+- `Up`/`Down` or `k`/`j`: select a WorkPackage.
+- `Enter`: focus the one live Codex pane whose session exactly owns it.
+- `p`: pin or unpin the current WorkRequest.
+- `q`: close the inspector. It stays closed until the binding changes.
+
 ## Choose A Flow
 
 | Need | Entry point |
