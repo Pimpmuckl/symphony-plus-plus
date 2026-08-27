@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { WorkRequestDetail } from "@/types/dashboard";
-import { workRequestExecutionFrontierProjection, workRequestExecutionGraphModel } from "./adapter";
-import type { WorkRequestExecutionGraphModel } from "./model";
+import { workRequestExecutionGraphModel } from "./adapter";
 
 describe("execution graph adapter", () => {
   it("maps dependency intent and lifecycle signals without replacing them with effective edges", () => {
@@ -34,38 +33,4 @@ describe("execution graph adapter", () => {
     expect(all.work_packages.map((item) => item.id)).toEqual(["wp-active", "wp-old"]);
   });
 
-  it("projects four graph-only frontier scopes around the same live seed", () => {
-    const graph: WorkRequestExecutionGraphModel = {
-      groups: [{ id: "history" }, { id: "causes" }, { id: "current" }, { id: "future" }, { id: "side" }, { id: "ready" }],
-      work_packages: [
-        { id: "done", group_id: "history", status: "merged" },
-        { id: "far-cause", group_id: "causes", status: "planned" },
-        { id: "near-cause", group_id: "causes", status: "planned" },
-        { id: "active", group_id: "current", status: "implementing", worker_signal: { status: "active" } },
-        { id: "next", group_id: "future", status: "planned" },
-        { id: "deep", group_id: "future", status: "planned" },
-        { id: "farther", group_id: "future", status: "planned" },
-        { id: "other", group_id: "side", status: "planned" },
-        { id: "gated", group_id: "future", status: "planned" },
-        { id: "ready", group_id: "ready", status: "planned" },
-      ],
-      effective_edges: [
-        { prerequisite_work_package_id: "done", dependent_work_package_id: "active" },
-        { prerequisite_work_package_id: "far-cause", dependent_work_package_id: "near-cause" },
-        { prerequisite_work_package_id: "near-cause", dependent_work_package_id: "active" },
-        { prerequisite_work_package_id: "active", dependent_work_package_id: "next" },
-        { prerequisite_work_package_id: "next", dependent_work_package_id: "deep" },
-        { prerequisite_work_package_id: "deep", dependent_work_package_id: "farther" },
-        { prerequisite_work_package_id: "active", dependent_work_package_id: "gated" },
-        { prerequisite_work_package_id: "other", dependent_work_package_id: "gated" },
-      ],
-    };
-    const oneRing = workRequestExecutionFrontierProjection(graph, new Set(), "horizon-1");
-    const forward = workRequestExecutionFrontierProjection(graph, new Set(), "forward-2");
-
-    expect(oneRing.model.work_packages.map((pkg) => pkg.id)).toEqual(["done", "near-cause", "active", "next", "gated"]);
-    expect(forward.model.work_packages.map((pkg) => pkg.id)).toEqual(["done", "near-cause", "active", "next", "deep", "gated"]);
-    expect([...oneRing.expandedGroupIds]).toEqual(["current"]);
-    expect([...forward.expandedGroupIds]).toEqual(["current"]);
-  });
 });

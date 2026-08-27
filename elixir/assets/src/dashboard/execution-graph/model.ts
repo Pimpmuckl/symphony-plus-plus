@@ -1,7 +1,6 @@
 import { isFinishedBoardStatus } from "@/lib/operational-state";
 import { layoutGroupChildren, projectGroupDependencies } from "./group-layout";
 import { entityRect, layoutRootEntities, orderWithinRanks } from "./layout";
-
 export type DependencyPathState = "satisfied" | "active" | "waiting" | "blocked";
 export type GraphOrientation = "desktop" | "mobile";
 export type GraphEntityKind = "group" | "work_package";
@@ -53,6 +52,7 @@ export type WorkRequestExecutionGraphModel = {
   work_packages: Array<ExecutionGraphWorkPackageRef & ExecutionGraphWorkPackageSignals>;
   dependency_intents?: ExecutionGraphDependencyIntent[];
   effective_edges?: ExecutionGraphEffectiveEdge[];
+  topological_order?: string[];
   cycles?: string[][];
 };
 export type ExecutionGraphWorkPackageSignals = {

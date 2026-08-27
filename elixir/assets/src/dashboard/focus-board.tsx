@@ -5,7 +5,7 @@ import { flushSync } from "react-dom";
 
 import { dashboardPrefersReducedMotion } from "@/components/dashboard/motion-utils";
 import { buildFocusBoardItems, requestHasExecutionBoard, scrollFocusLane, type FocusBoardItem } from "./focus-board-data";
-import type { FocusFrontierVariant } from "./execution-graph/adapter";
+import type { ExecutionFrontierVariant as FocusFrontierVariant } from "./execution-graph/frontier";
 import { repoDisplayName, repoIdentityKey } from "./dashboard-persistence";
 import type { CardDetailSelect, DashboardUpdateAnimations } from "./runtime";
 import { requestActionableAttentionCounts, type AttentionJumpTarget, type AttentionSelect } from "./workstream-attention";
