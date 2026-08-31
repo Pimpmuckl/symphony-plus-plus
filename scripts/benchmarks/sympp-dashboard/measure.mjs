@@ -69,7 +69,9 @@ async function measureSample(browser) {
   const largeRequest = focusBoard.locator('[data-request-id="WR-FIXTURE-KRAKEN-SCALE"]');
   const expandStartedAt = performance.now();
   await largeRequest.locator(".v3-request-main").click();
-  const largeGraph = page.locator('.focus-board[data-focus-request-id="WR-FIXTURE-KRAKEN-SCALE"] .focus-board__workbench .execution-graph');
+  const workbench = page.locator('.focus-board[data-focus-request-id="WR-FIXTURE-KRAKEN-SCALE"] .focus-board__workbench');
+  await workbench.getByRole("button", { name: "Full map", exact: true }).click();
+  const largeGraph = workbench.locator('.execution-graph');
   await largeGraph.locator(".execution-graph__card").first().waitFor({ state: "visible" });
   await paint(page);
   const expandLargeGraphMs = performance.now() - expandStartedAt;

@@ -557,6 +557,19 @@ function prepareCleanupScript(identity) {
   }
 }
 
+function cleanupSourcesChanged(identity, script) {
+  try {
+    const marketplaceScripts = path.join(identity.sourceRoot, "plugins", path.basename(path.dirname(identity.pluginRoot)), "scripts");
+    return fs.readdirSync(__dirname).filter((name) => name.toLowerCase().endsWith(".ps1")).some((name) => {
+      const stagedHash = sha256(fs.readFileSync(path.join(path.dirname(script), name)));
+      return sha256(fs.readFileSync(path.join(__dirname, name))) !== stagedHash ||
+        sha256(fs.readFileSync(path.join(marketplaceScripts, name))) !== stagedHash;
+    });
+  } catch (_) {
+    return false;
+  }
+}
+
 async function generationValidAtAttachment(identity) {
   if (!generationValidForAttachment(identity)) return false;
   const pluginRoot = identity.pluginRoot;
@@ -1021,15 +1034,10 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_generation");
       return false;
     }
-    cleanupScript = prepareCleanupScript(identity);
-    if (cleanupScript === CLEANUP_SOURCE_CHANGED) {
+    if (cleanupSourcesChanged(identity, cleanupScript)) {
+      trace("warm_miss_generation");
       cleanupAllowed = false;
-      cleanupScript = null;
       throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
-    }
-    if (!cleanupScript) {
-      trace("warm_miss_cleanup");
-      return false;
     }
     let attachedResponse = preflight.attachedResponse;
     if (!attachedResponse) {
