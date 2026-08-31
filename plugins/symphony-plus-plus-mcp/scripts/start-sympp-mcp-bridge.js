@@ -1021,6 +1021,16 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_generation");
       return false;
     }
+    cleanupScript = prepareCleanupScript(identity);
+    if (cleanupScript === CLEANUP_SOURCE_CHANGED) {
+      cleanupAllowed = false;
+      cleanupScript = null;
+      throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
+    }
+    if (!cleanupScript) {
+      trace("warm_miss_cleanup");
+      return false;
+    }
     let attachedResponse = preflight.attachedResponse;
     if (!attachedResponse) {
       try {
