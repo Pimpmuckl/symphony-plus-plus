@@ -566,7 +566,7 @@ function cleanupSourcesChanged(identity, script) {
         sha256(fs.readFileSync(path.join(marketplaceScripts, name))) !== stagedHash;
     });
   } catch (_) {
-    return false;
+    return null;
   }
 }
 
@@ -1034,7 +1034,12 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_generation");
       return false;
     }
-    if (cleanupSourcesChanged(identity, cleanupScript)) {
+    const cleanupChanged = cleanupSourcesChanged(identity, cleanupScript);
+    if (cleanupChanged === null) {
+      trace("warm_miss_cleanup");
+      return false;
+    }
+    if (cleanupChanged) {
       trace("warm_miss_generation");
       cleanupAllowed = false;
       throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
