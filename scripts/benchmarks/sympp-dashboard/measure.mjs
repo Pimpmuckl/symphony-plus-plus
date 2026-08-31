@@ -36,8 +36,8 @@ async function measureSample(browser) {
   const context = await browser.newContext({ reducedMotion: "reduce", viewport: { width: 1440, height: 1000 } });
   await context.addInitScript(() => {
     localStorage.setItem("symphony-plus-plus.dashboard.ui-state.v1", JSON.stringify({
-      focusBoardSections: { active: true, attention: true, next: true, recent: true, waiting: true },
       showWelcomeToast: false,
+      useFocusBoard: true,
     }));
   });
 
@@ -68,14 +68,16 @@ async function measureSample(browser) {
 
   const largeRequest = focusBoard.locator('[data-request-id="WR-FIXTURE-KRAKEN-SCALE"]');
   const expandStartedAt = performance.now();
-  await largeRequest.getByRole("button", { name: /^Expand / }).click();
-  const largeGraph = page.locator('.focus-board[data-focus-request-id="WR-FIXTURE-KRAKEN-SCALE"][data-focus-phase="focused"] .execution-graph');
+  await largeRequest.locator(".v3-request-main").click();
+  const workbench = page.locator('.focus-board[data-focus-request-id="WR-FIXTURE-KRAKEN-SCALE"] .focus-board__workbench');
+  await workbench.getByRole("button", { name: "Full map", exact: true }).click();
+  const largeGraph = workbench.locator('.execution-graph');
   await largeGraph.locator(".execution-graph__card").first().waitFor({ state: "visible" });
   await paint(page);
   const expandLargeGraphMs = performance.now() - expandStartedAt;
 
   const collapseStartedAt = performance.now();
-  await focusBoard.locator('[data-request-id="WR-FIXTURE-KRAKEN-SCALE"]').getByRole("button", { name: /^Collapse / }).click();
+  await largeRequest.locator(".v3-request-main").click();
   await page.locator('.focus-board[data-focus-request-id="WR-FIXTURE-KRAKEN-SCALE"]').waitFor({ state: "detached" });
   await paint(page);
   const collapseLargeGraphMs = performance.now() - collapseStartedAt;

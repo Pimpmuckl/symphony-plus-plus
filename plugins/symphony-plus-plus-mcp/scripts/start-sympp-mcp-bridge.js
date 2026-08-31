@@ -557,6 +557,22 @@ function prepareCleanupScript(identity) {
   }
 }
 
+function cleanupSourcesChanged(identity, script) {
+  try {
+    const marketplaceScripts = path.join(identity.sourceRoot, "plugins", path.basename(path.dirname(identity.pluginRoot)), "scripts");
+    const directories = [__dirname, marketplaceScripts, path.dirname(script)];
+    const fileSets = directories.map((directory) => fs.readdirSync(directory).filter((name) => name.toLowerCase().endsWith(".ps1")).sort());
+    if (fileSets.some((names) => names.join("\n") !== fileSets[0].join("\n"))) return true;
+    return fileSets[0].some((name) => {
+      const stagedHash = sha256(fs.readFileSync(path.join(path.dirname(script), name)));
+      return sha256(fs.readFileSync(path.join(__dirname, name))) !== stagedHash ||
+        sha256(fs.readFileSync(path.join(marketplaceScripts, name))) !== stagedHash;
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
 async function generationValidAtAttachment(identity) {
   if (!generationValidForAttachment(identity)) return false;
   const pluginRoot = identity.pluginRoot;
@@ -949,6 +965,17 @@ async function bridge(identity, state, runtimeFile) {
         error.symppFatal = true;
         throw error;
       }
+      const nextCleanupChanged = cleanupSourcesChanged(next.identity, nextCleanupScript);
+      if (nextCleanupChanged !== false) {
+        const error = new Error(nextCleanupChanged
+          ? "Installed Symphony++ cleanup scripts changed during backend recovery."
+          : "Symphony++ cleanup scripts were unavailable during backend recovery.");
+        if (nextCleanupChanged) {
+          cleanupAllowed = false;
+          error.symppFatal = true;
+        }
+        throw error;
+      }
     } catch (error) {
       const reusedLease = attached && current.identity.epoch === next.identity.epoch && current.identity.runtimeKey === next.identity.runtimeKey;
       if (replacementAttached && !reusedLease) await clientLease(next.mcpUrl, clientId, "detach", false);
@@ -1020,6 +1047,16 @@ async function bridge(identity, state, runtimeFile) {
     if (!await generationValidAtAttachment(identity)) {
       trace("warm_miss_generation");
       return false;
+    }
+    const cleanupChanged = cleanupSourcesChanged(identity, cleanupScript);
+    if (cleanupChanged === null) {
+      trace("warm_miss_cleanup");
+      return false;
+    }
+    if (cleanupChanged) {
+      trace("warm_miss_generation");
+      cleanupAllowed = false;
+      throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
     }
     let attachedResponse = preflight.attachedResponse;
     if (!attachedResponse) {
