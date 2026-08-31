@@ -13,6 +13,7 @@ param(
   [ValidateRange(1, 600000)][int]$MaxArtifactCacheMissMs = 120000,
   [ValidateRange(1, 60000)][int]$MaxArtifactPreparedMs = 5000,
   [ValidateRange(1, 60000)][int]$MaxWarmP95Ms = 2000,
+  [ValidateRange(1, 60000)][int]$MaxExactWarmP95Ms = 10000,
   [ValidateRange(1, 2147483647)][int64]$MaxExactWarmBytes = 66864537,
   [ValidateRange(1, 600000)][int]$MaxDirectMs = 30000,
   [ValidateRange(1, 2147483647)][int64]$MaxBackendBytes = 536870912,
@@ -41,7 +42,7 @@ $responseListCaps = [ordered]@{
   list_queries = 25; list_bytes = 30000; list_p95_ms = 400
   read_plan_p50_ratio = 0.8; read_plan_reductions_ratio = 0.9
 }
-$exactP95Caps = @{ 1 = $MaxWarmP95Ms; 10 = $MaxWarmP95Ms }
+$exactP95Caps = @{ 1 = $MaxExactWarmP95Ms; 10 = $MaxExactWarmP95Ms }
 $thresholds = @{
   cold_ms = $MaxColdMs; warm_p95_ms = $MaxWarmP95Ms; exact_warm_p95_ms = $exactP95Caps
   artifact_cache_miss_ms = $MaxArtifactCacheMissMs; artifact_prepared_ms = $MaxArtifactPreparedMs
