@@ -560,7 +560,10 @@ function prepareCleanupScript(identity) {
 function cleanupSourcesChanged(identity, script) {
   try {
     const marketplaceScripts = path.join(identity.sourceRoot, "plugins", path.basename(path.dirname(identity.pluginRoot)), "scripts");
-    return fs.readdirSync(__dirname).filter((name) => name.toLowerCase().endsWith(".ps1")).some((name) => {
+    const directories = [__dirname, marketplaceScripts, path.dirname(script)];
+    const fileSets = directories.map((directory) => fs.readdirSync(directory).filter((name) => name.toLowerCase().endsWith(".ps1")).sort());
+    if (fileSets.some((names) => names.join("\n") !== fileSets[0].join("\n"))) return true;
+    return fileSets[0].some((name) => {
       const stagedHash = sha256(fs.readFileSync(path.join(path.dirname(script), name)));
       return sha256(fs.readFileSync(path.join(__dirname, name))) !== stagedHash ||
         sha256(fs.readFileSync(path.join(marketplaceScripts, name))) !== stagedHash;
@@ -959,6 +962,15 @@ async function bridge(identity, state, runtimeFile) {
       if (!nextCleanupScript) throw new Error("Symphony++ cleanup scripts were unavailable during backend recovery.");
       if (!await generationValidAtAttachment(next.identity)) {
         const error = new Error("Installed Symphony++ generation changed during backend recovery.");
+        error.symppFatal = true;
+        throw error;
+      }
+      const nextCleanupChanged = cleanupSourcesChanged(next.identity, nextCleanupScript);
+      if (nextCleanupChanged !== false) {
+        const error = new Error(nextCleanupChanged
+          ? "Installed Symphony++ cleanup scripts changed during backend recovery."
+          : "Symphony++ cleanup scripts were unavailable during backend recovery.");
+        if (nextCleanupChanged) cleanupAllowed = false;
         error.symppFatal = true;
         throw error;
       }
