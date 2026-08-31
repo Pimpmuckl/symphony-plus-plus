@@ -970,8 +970,10 @@ async function bridge(identity, state, runtimeFile) {
         const error = new Error(nextCleanupChanged
           ? "Installed Symphony++ cleanup scripts changed during backend recovery."
           : "Symphony++ cleanup scripts were unavailable during backend recovery.");
-        if (nextCleanupChanged) cleanupAllowed = false;
-        error.symppFatal = true;
+        if (nextCleanupChanged) {
+          cleanupAllowed = false;
+          error.symppFatal = true;
+        }
         throw error;
       }
     } catch (error) {
