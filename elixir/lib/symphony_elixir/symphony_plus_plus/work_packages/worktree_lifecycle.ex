@@ -40,7 +40,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
           stage: String.t(),
           rule: String.t(),
           recorded_worktree_path: String.t(),
-          resolved_worktree_path: String.t()
+          resolved_worktree_path: String.t(),
+          reason: String.t(),
+          failed_path: String.t()
         }
   @type error ::
           Repository.error()
@@ -514,6 +516,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
          {:ok, work_package} <- persist_cleanup_proof(repo, work_package, worktree_path, repo_root, opts),
          opts <- cleanup_removal_context_opts(opts, work_package, worktree_path, repo_root),
          :ok <- git(repo_root, ["worktree", "remove", "--force", worktree_path], opts),
+         :ok <- remove_proven_residue(work_package, worktree_path),
          :ok <- git(repo_root, ["worktree", "prune"], opts),
          {:ok, updated_work_package} <- persist_cleanup_state(repo, work_package, cleared_worktree_attrs(), opts) do
       {:ok, result(updated_work_package, "cleaned", worktree_path, nil, nil, repo_root)}
@@ -541,29 +544,88 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeLifecycle do
   end
 
   defp remove_proven_residue(work_package, worktree_path) do
-    case File.rm_rf(worktree_path) do
-      {:ok, _removed} ->
+    case remove_residue(worktree_path) do
+      :ok ->
         :ok
 
       {:error, _reason, failed_path} ->
         _ = File.chmod(failed_path, 0o700)
 
-        case File.rm_rf(worktree_path) do
-          {:ok, _removed} ->
-            :ok
-
-          {:error, _reason, _failed_path} ->
-            {:error, {:worktree_cleanup_failed, cleanup_failure(work_package, worktree_path)}}
+        with :ok <- remove_residue_symlinks(worktree_path),
+             :ok <- remove_residue(worktree_path) do
+          :ok
+        else
+          {:error, reason, failed_path} ->
+            {:error, {:worktree_cleanup_failed, cleanup_failure(work_package, worktree_path, reason, failed_path)}}
         end
     end
   end
 
-  defp cleanup_failure(work_package, worktree_path) do
+  defp remove_residue(worktree_path) do
+    case File.rm_rf(worktree_path) do
+      {:ok, _removed} ->
+        case File.lstat(worktree_path) do
+          {:error, :enoent} -> :ok
+          {:ok, _stat} -> {:error, :eexist, worktree_path}
+          {:error, reason} -> {:error, reason, worktree_path}
+        end
+
+      {:error, reason, failed_path} ->
+        {:error, reason, failed_path}
+    end
+  end
+
+  defp remove_residue_symlinks(path) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :symlink}} ->
+        remove_residue_symlink(path)
+
+      {:ok, %File.Stat{type: :directory}} ->
+        case File.ls(path) do
+          {:ok, entries} -> remove_residue_symlink_entries(path, entries)
+          {:error, reason} -> {:error, reason, path}
+        end
+
+      {:ok, _stat} ->
+        :ok
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason, path}
+    end
+  end
+
+  defp remove_residue_symlink(path) do
+    case File.rmdir(path) do
+      :ok -> :ok
+      {:error, :enoent} -> :ok
+      {:error, _reason} -> normalize_remove_result(File.rm(path), path)
+    end
+  end
+
+  defp remove_residue_symlink_entries(path, entries) do
+    Enum.reduce_while(entries, :ok, fn entry, :ok ->
+      case remove_residue_symlinks(Path.join(path, entry)) do
+        :ok -> {:cont, :ok}
+        {:error, _reason, _failed_path} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp normalize_remove_result(:ok, _path), do: :ok
+  defp normalize_remove_result({:error, :enoent}, _path), do: :ok
+  defp normalize_remove_result({:error, reason}, path), do: {:error, reason, path}
+
+  defp cleanup_failure(work_package, worktree_path, reason, failed_path) do
     %{
       stage: "residue_removal",
       rule: "durable_preflight_proof",
       recorded_worktree_path: sanitize_path(work_package.worktree_path),
-      resolved_worktree_path: sanitize_path(worktree_path)
+      resolved_worktree_path: sanitize_path(worktree_path),
+      reason: reason |> inspect() |> Redactor.redact_text() |> String.slice(0, 1_000),
+      failed_path: sanitize_path(failed_path)
     }
   end
 
