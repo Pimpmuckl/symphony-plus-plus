@@ -154,7 +154,71 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeLifecycleCompatTest do
     assert cleaned_package.worktree_cleanup_proof == nil
   end
 
-  defp partial_remove_git(worktree_path) do
+  test "cleanup removes residue after Git reports successful worktree removal", %{repo: repo} do
+    fixture = TestSupport.git_repo_fixture!("main", prefix: "sympp-worktree-residue")
+    codex_home = Path.join(fixture.root, "codex-home")
+
+    assert {:ok, package} =
+             Repository.create(repo, WorkPackageFactory.attrs(id: "SYMPP-WT-RESIDUE", kind: "mcp", base_branch: "main"))
+
+    assert {:ok, prepared} =
+             WorktreeLifecycle.prepare(
+               repo,
+               package.id,
+               %{"repo_root" => fixture.repo_root, "base_branch" => "main", "branch" => "feat/residue-remove"},
+               codex_home: codex_home
+             )
+
+    residue = Path.join([prepared.worktree_path, "node_modules", "residue"])
+    File.mkdir_p!(residue)
+
+    preserved_target =
+      if match?({:win32, _name}, :os.type()) do
+        target = Path.join(fixture.root, "broken-junction-target")
+        preserved_target = Path.join(fixture.root, "preserved-junction-target")
+        File.mkdir_p!(target)
+        File.mkdir_p!(preserved_target)
+        File.write!(Path.join(preserved_target, "sentinel"), "keep")
+        junction = Path.join(residue, "broken")
+        preserved_junction = Path.join(residue, "preserved")
+        script = Path.join(fixture.root, "junction.ps1")
+        File.write!(script, "param($Path, $Target)\nNew-Item -ItemType Junction -Path $Path -Target $Target | Out-Null\n")
+
+        {_output, 0} =
+          System.cmd("powershell.exe", ["-NoProfile", "-File", script, "-Path", junction, "-Target", target], stderr_to_stdout: true)
+
+        {_output, 0} =
+          System.cmd("powershell.exe", ["-NoProfile", "-File", script, "-Path", preserved_junction, "-Target", preserved_target], stderr_to_stdout: true)
+
+        File.rmdir!(target)
+
+        on_exit(fn ->
+          for path <- [junction, preserved_junction], match?({:ok, %File.Stat{type: :symlink}}, File.lstat(path)), do: File.rmdir(path)
+        end)
+
+        preserved_target
+      else
+        File.write!(Path.join(residue, "leftover"), "ignored")
+        nil
+      end
+
+    assert {:ok, cleaned} =
+             WorktreeLifecycle.cleanup(repo, package.id,
+               codex_home: codex_home,
+               git: partial_remove_git(prepared.worktree_path, 0)
+             )
+
+    assert cleaned.status == "cleaned"
+    refute File.exists?(prepared.worktree_path)
+    if preserved_target, do: assert(File.read!(Path.join(preserved_target, "sentinel")) == "keep")
+
+    assert {:ok, cleaned_package} = Repository.get(repo, package.id)
+    assert cleaned_package.worktree_path == nil
+    assert cleaned_package.worktree_target_repo_root == nil
+    assert cleaned_package.worktree_cleanup_proof == nil
+  end
+
+  defp partial_remove_git(worktree_path, status \\ 255) do
     git = System.find_executable("git") || flunk("git executable is required")
 
     fn repo_root, args ->
@@ -162,7 +226,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorktreeLifecycleCompatTest do
         ["worktree", "remove", "--force", ^worktree_path] ->
           File.rm!(Path.join(worktree_path, ".git"))
           {_output, 0} = System.cmd(git, ["-C", repo_root, "worktree", "prune"], stderr_to_stdout: true)
-          {"simulated Windows partial worktree removal\n", 255}
+          {"simulated Windows partial worktree removal\n", status}
 
         _args ->
           System.cmd(git, ["-C", repo_root | args], stderr_to_stdout: true)
