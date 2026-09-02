@@ -6,6 +6,7 @@
 - Keep each worker branch scoped to its assigned package and ignore sibling worktrees or branches.
 - Use PR titles in the form `[SYMPP-...] <title>`.
 - Fill `.github/pull_request_template.md` concretely, including acceptance evidence, tests run, and any blocked validation.
+- If Review Suite is installed, run it only in `fast` mode.
 - Do not implement dependent packages or adjacent cleanup unless the architecture agent explicitly expands scope.
 - A WorkRequest is the product-facing unit. Optional Groups organize larger
   plans, while canonical WorkPackages carry bounded worker execution and audit
