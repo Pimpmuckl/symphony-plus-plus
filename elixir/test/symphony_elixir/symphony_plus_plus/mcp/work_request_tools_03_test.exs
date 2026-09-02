@@ -290,6 +290,42 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
     assert {:ok, []} = WorkRequestRepository.list_work_packages(repo, work_request.id)
   end
 
+  test "slice_work_request advances a fully clarified human-info request", %{repo: repo} do
+    {anchor, session, _grant} =
+      create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-CLARIFIED-SLICE", [
+        "write:work_request"
+      ])
+
+    work_request =
+      create_work_request!(repo,
+        id: "WR-MCP-WR-CLARIFIED-SLICE",
+        repo: anchor.repo,
+        base_branch: anchor.base_branch,
+        status: "human_info_needed"
+      )
+
+    grant_work_request_scope!(repo, session, work_request.id)
+
+    response =
+      mcp_tool(repo, session, "slice_work_request", %{
+        "work_request_id" => work_request.id,
+        "work_packages" => [
+          %{
+            "title" => "Implement clarified scope",
+            "goal" => "Proceed without a manual status reset.",
+            "kind" => "mcp",
+            "acceptance_criteria" => ["The clarified request is sliced."],
+            "validation_steps" => ["mix test"],
+            "stop_conditions" => []
+          }
+        ]
+      })
+
+    assert get_in(response, ["result", "structuredContent", "status", "work_request_status"]) == "sliced"
+    assert [_work_package_id] = get_in(response, ["result", "structuredContent", "work_package_ids"])
+    assert {:ok, %{status: "sliced"}} = WorkRequestRepository.get(repo, work_request.id)
+  end
+
   test "slice_work_request rejects incomplete WorkPackage contracts after authorization", %{repo: repo} do
     {anchor, session, _grant} =
       create_phase_architect_session(repo, "SYMPP-ARCHITECT-WR-SLICE-CONTRACT", [

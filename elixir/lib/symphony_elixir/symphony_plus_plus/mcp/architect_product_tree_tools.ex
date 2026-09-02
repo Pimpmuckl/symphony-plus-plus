@@ -162,7 +162,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
          :ok <- require_work_package_batch(work_packages),
          {:ok, work_request, _filters, scope} <-
            WorkRequestScope.authorized_work_request_scope(config.repo, session, work_request_id, :work_package_create, tool),
-         :ok <- require_work_package_authoring_status(work_request),
+         :ok <- require_work_package_slicing_status(work_request),
          :ok <- require_complete_work_package_contracts(work_packages),
          {:ok, {result, detail}} <-
            mutate_product_tree_with_projection(
@@ -448,6 +448,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
 
   defp require_work_package_authoring_status(%WorkRequest{} = work_request),
     do: require_work_package_authoring_status(work_request, nil)
+
+  defp require_work_package_slicing_status(%WorkRequest{archived_at: nil, completion_source: source, status: status})
+       when source != "operator" and
+              status in ["ready_for_clarification", "clarifying", "human_info_needed"],
+       do: :ok
+
+  defp require_work_package_slicing_status(work_request),
+    do: require_work_package_authoring_status(work_request)
 
   defp require_work_package_authoring_status(%WorkRequest{archived_at: %DateTime{}}, revision),
     do: {:error, {:work_request_terminal, "archived", revision}}
