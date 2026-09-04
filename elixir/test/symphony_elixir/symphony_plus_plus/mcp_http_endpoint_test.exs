@@ -130,8 +130,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     end
   end
 
-  test "POST /mcp initialize returns JSON and Mcp-Session-Id" do
-    conn = post_json(initialize_request("init"))
+  test "POST /mcp initialize returns without SQLite recovery work" do
+    {conn, queries} = capture_queries(fn -> post_json(initialize_request("init")) end)
 
     assert %{"jsonrpc" => "2.0", "id" => "init", "result" => %{"serverInfo" => %{"name" => "symphony-plus-plus"}}} =
              json_response(conn, 200)
@@ -139,6 +139,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     assert [session_id] = get_resp_header(conn, "mcp-session-id")
     assert session_id =~ ~r/^[!-~]+$/
     assert get_resp_header(conn, "access-control-allow-origin") == []
+    assert queries == []
+    refute Repo.get(SessionBinding, SessionBinding.binding_id(@client_key, session_id))
   end
 
   test "GET /mcp/readiness is loopback-only and creates no MCP state" do
@@ -864,27 +866,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
 
     assert get_in(json_response(delivery_board, 200), ["result", "structuredContent", "work_request", "id"]) == work_request.id
     assert [%ClaimLease{id: ^claim_lease_id, actor_display_name: "local-architect-http-rehydrate"}] = active_claim_leases(handoff.anchor_package.id)
-  end
-
-  test "POST /mcp unclaimed sessions fall back to clear claim_required errors after state reset" do
-    unclaimed_init = post_json(initialize_request("unclaimed-init"))
-    [unclaimed_session_id] = get_resp_header(unclaimed_init, "mcp-session-id")
-
-    reset_mcp_runtime_state()
-
-    preclaim_progress =
-      post_json(
-        tool_call_request("unclaimed-progress", "append_progress", %{
-          "summary" => "Should not write",
-          "idempotency_key" => "unclaimed-progress"
-        }),
-        [{"mcp-session-id", unclaimed_session_id}]
-      )
-
-    assert get_in(json_response(preclaim_progress, 200), ["error", "data", "reason"]) == "claim_required"
-
-    preclaim_tools = post_json(tools_list_request("unclaimed-tools"), [{"mcp-session-id", unclaimed_session_id}])
-    assert "claim_local_assignment" in tool_names(json_response(preclaim_tools, 200))
   end
 
   test "POST /mcp claimed worker follow-ups fail closed after grant revocation" do

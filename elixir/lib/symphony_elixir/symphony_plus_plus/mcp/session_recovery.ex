@@ -21,15 +21,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
   @spec remember(Config.t(), String.t(), String.t(), term(), Server.t(), term()) :: :ok
   def remember(%Config{mode: :http, repo: repo} = config, client_key, state_key, payload, %Server{} = server, response)
       when is_atom(repo) and is_binary(client_key) and is_binary(state_key) do
-    case Repository.ensure_migrated(repo) do
-      :ok ->
-        result = persist_action(config, repo, remember_action(config, client_key, state_key, payload, server, response))
+    with action when action != :skip <- remember_action(config, client_key, state_key, payload, server, response),
+         :ok <- Repository.ensure_migrated(repo) do
+      result = persist_action(config, repo, action)
 
-        maybe_cleanup_stale(config, repo)
-        result
-
-      _error ->
-        :ok
+      maybe_cleanup_stale(config, repo)
+      result
+    else
+      _skipped_or_unavailable -> :ok
     end
   rescue
     _error -> :ok
@@ -45,8 +44,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
   defp persist_action(config, repo, {:touch, id, now}) do
     HTTPStateStore.persist_recovery_if_due(config, id, @heartbeat_ms, fn -> touch(repo, id, now) end)
   end
-
-  defp persist_action(_config, _repo, :skip), do: :ok
 
   @spec rehydrate(Config.t(), String.t(), String.t()) :: {:ok, Server.t()} | :not_found
   def rehydrate(%Config{mode: :http, repo: repo} = config, client_key, state_key)
@@ -86,16 +83,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
   end
 
   defp remember_action(_config, client_key, state_key, payload, %Server{initialized: true, session: nil} = server, response) do
-    cond do
-      initialize_request?(payload) ->
-        remember_unbound_initialized(client_key, state_key, nil)
-
-      release_current_assignment_success?(payload, response, server) ->
-        remember_unbound_initialized(client_key, state_key, @release_current_assignment_tool)
-
-      true ->
-        {:touch, SessionBinding.binding_id(client_key, state_key), now()}
-    end
+    if release_current_assignment_success?(payload, response, server),
+      do: remember_unbound_initialized(client_key, state_key, @release_current_assignment_tool),
+      else: :skip
   end
 
   defp remember_action(config, client_key, state_key, payload, %Server{initialized: true, session: %Session{} = session} = server, response) do
@@ -136,11 +126,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
          })}
 
       _error ->
-        if tool_name in @local_claim_tools do
-          remember_unbound_initialized(client_key, state_key, tool_name)
-        else
-          remember_nonrecoverable_claim(client_key, state_key, session, tool_name)
-        end
+        remember_unbound_initialized(client_key, state_key, tool_name)
     end
   end
 
@@ -451,9 +437,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.SessionRecovery do
       "actor_display_name" => binding.actor_display_name
     }
   end
-
-  defp initialize_request?(%{"method" => "initialize"}), do: true
-  defp initialize_request?(_payload), do: false
 
   defp claim_tool_name(payloads, responses, %Session{} = session) when is_list(payloads) do
     candidates = Enum.map(payloads, &{&1, response_for_payload(&1, responses)})
