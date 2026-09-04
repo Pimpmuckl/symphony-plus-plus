@@ -181,7 +181,7 @@ async function main() {
     assert.equal(counts.board, 0, "MCP startup must not render the dashboard");
     assert.equal(counts.earlyLease, 1, "the health leader must hold the backend while all other clients wait for shared readiness");
     assert.equal(counts.attach, clients, "every bridge must attach exactly once");
-    assert.equal(counts.initialize, clients, "every client must complete a real MCP initialize");
+    assert.equal(counts.initialize, clients, "every client must complete a bridge initialize round trip against the fixture backend");
     const localLeases = fs.existsSync(path.join(symppHome, "runtime", "codex-plugin-leases"))
       ? fs.readdirSync(path.join(symppHome, "runtime", "codex-plugin-leases")).filter((name) => /^bridge-.*\.json$/.test(name))
       : [];

@@ -73,7 +73,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       |> Keyword.merge(server: false, secret_key_base: String.duplicate("s", 64), sympp_repo: Repo)
     )
 
-    start_supervised!({Repo, database: database_path, pool_size: 1})
+    repo_opts = [database: database_path, pool_size: 1, queue_target: 30_000, queue_interval: 30_000, timeout: 30_000]
+    start_supervised!({Repo, repo_opts})
     if Process.whereis(Endpoint) == nil, do: start_supervised!({Endpoint, []})
 
     assert :ok = WorkPackageRepository.migrate(Repo)
@@ -130,17 +131,63 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     end
   end
 
-  test "POST /mcp initialize returns without SQLite recovery work" do
-    {conn, queries} = capture_queries(fn -> post_json(initialize_request("init")) end)
+  test "200 concurrent unbound MCP startups stay independent of SQLite" do
+    parent = self()
+    task_supervisor = start_supervised!(Task.Supervisor)
 
-    assert %{"jsonrpc" => "2.0", "id" => "init", "result" => %{"serverInfo" => %{"name" => "symphony-plus-plus"}}} =
-             json_response(conn, 200)
+    repo_holder =
+      Task.Supervisor.async_nolink(task_supervisor, fn ->
+        Repo.transaction(
+          fn ->
+            send(parent, {:repo_held, self()})
+            receive do: (:release_repo -> :ok)
+          end,
+          timeout: :infinity
+        )
+      end)
 
-    assert [session_id] = get_resp_header(conn, "mcp-session-id")
-    assert session_id =~ ~r/^[!-~]+$/
-    assert get_resp_header(conn, "access-control-allow-origin") == []
-    assert queries == []
-    refute Repo.get(SessionBinding, SessionBinding.binding_id(@client_key, session_id))
+    assert_receive {:repo_held, repo_holder_pid}, 5_000
+
+    tasks =
+      Enum.map(1..200, fn index ->
+        Task.Supervisor.async_nolink(task_supervisor, fn ->
+          send(parent, {:startup_ready, self()})
+          receive do: (:start -> unbound_startup_handshake(index))
+        end)
+      end)
+
+    Enum.each(tasks, fn task ->
+      pid = task.pid
+      assert_receive {:startup_ready, ^pid}, 5_000
+    end)
+
+    session_ids =
+      try do
+        {results, query_count} =
+          count_queries(fn ->
+            Enum.each(tasks, &send(&1.pid, :start))
+            Task.yield_many(tasks, 5_000)
+          end)
+
+        session_ids =
+          Enum.map(results, fn
+            {_task, {:ok, session_id}} -> session_id
+            {_task, nil} -> flunk("MCP startup cohort timed out")
+            {_task, {:exit, reason}} -> flunk("MCP startup task exited: #{inspect(reason)}")
+          end)
+
+        assert length(session_ids) == 200
+        assert length(Enum.uniq(session_ids)) == 200
+        assert query_count == 0
+        session_ids
+      after
+        Enum.each(tasks, &Task.shutdown(&1, :brutal_kill))
+        send(repo_holder_pid, :release_repo)
+        assert {:ok, :ok} = Task.await(repo_holder, 5_000)
+      end
+
+    binding_ids = Enum.map(session_ids, &SessionBinding.binding_id(@client_key, &1))
+    assert Repo.aggregate(from(binding in SessionBinding, where: binding.id in ^binding_ids), :count) == 0
   end
 
   test "GET /mcp/readiness is loopback-only and creates no MCP state" do
@@ -1074,7 +1121,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       notification = post_json(notification_request(), [{"mcp-session-id", session_id}])
       repo_backed = post_json(tool_call_request("repo-backed", "solo_list", %{}), [{"mcp-session-id", session_id}])
       repo_backed_notification = post_json(tool_call_notification("solo_list", %{}), [{"mcp-session-id", session_id}])
-      repo_backed_resource = post_json(resources_list_request("resources"), [{"mcp-session-id", session_id}])
+      resources = post_json(resources_list_request("resources"), [{"mcp-session-id", session_id}])
       health = post_json(tool_call_request("health", "sympp.health", %{}), [{"mcp-session-id", session_id}])
 
       version_resource =
@@ -1092,7 +1139,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
       assert response(notification, 202) == ""
       assert json_response(repo_backed, 503) == json_rpc_error("repo-backed", -32_000, "Server error", "ledger_unavailable")
       assert json_response(repo_backed_notification, 503) == json_rpc_error(nil, -32_000, "Server error", "ledger_unavailable")
-      assert json_response(repo_backed_resource, 503) == json_rpc_error("resources", -32_000, "Server error", "ledger_unavailable")
+      assert resource_uris(json_response(resources, 200)) == ["sympp://health/version"]
       assert get_in(json_response(health, 200), ["result", "structuredContent", "mode"]) == "http"
       assert get_in(json_response(version_resource, 200), ["result", "contents", Access.at(0), "uri"]) == "sympp://health/version"
       assert json_response(protected_resource, 503) == json_rpc_error("protected", -32_000, "Server error", "ledger_unavailable")
@@ -1371,6 +1418,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
     end
   end
 
+  defp count_queries(fun) do
+    handler_id = {__MODULE__, self(), System.unique_integer([:positive])}
+    event = Repo.config()[:telemetry_prefix] ++ [:query]
+    counter = :atomics.new(1, [])
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn _event, _measurements, _metadata, counter -> :atomics.add(counter, 1, 1) end,
+        counter
+      )
+
+    try do
+      {fun.(), :atomics.get(counter, 1)}
+    after
+      :telemetry.detach(handler_id)
+    end
+  end
+
   defp drain_queries(handler_id, queries) do
     receive do
       {^handler_id, query} -> drain_queries(handler_id, [query | queries])
@@ -1417,6 +1484,26 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPEndpointTest do
   defp resources_list_request(id), do: %{"jsonrpc" => "2.0", "id" => id, "method" => "resources/list", "params" => %{}}
   defp resources_read_request(id, uri), do: %{"jsonrpc" => "2.0", "id" => id, "method" => "resources/read", "params" => %{"uri" => uri}}
   defp notification_request, do: %{"jsonrpc" => "2.0", "method" => "notifications/initialized", "params" => %{}}
+
+  defp unbound_startup_handshake(index) do
+    init = post_json(initialize_request("init-#{index}"))
+
+    assert %{"result" => %{"serverInfo" => %{"name" => "symphony-plus-plus"}}} = json_response(init, 200)
+    assert [session_id] = get_resp_header(init, "mcp-session-id")
+    assert session_id =~ ~r/^[!-~]+$/
+
+    if index == 1 do
+      headers = [{"mcp-session-id", session_id}]
+      assert post_json(notification_request(), headers) |> response(202) == ""
+      assert "sympp.health" in (post_json(tools_list_request("tools"), headers) |> json_response(200) |> tool_names())
+
+      assert post_json(resources_list_request("resources"), headers) |> json_response(200) |> resource_uris() == [
+               "sympp://health/version"
+             ]
+    end
+
+    session_id
+  end
 
   defp tool_call_request(id, name, arguments) do
     %{"jsonrpc" => "2.0", "id" => id, "method" => "tools/call", "params" => %{"name" => name, "arguments" => arguments}}

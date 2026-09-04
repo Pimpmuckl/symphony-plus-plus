@@ -522,12 +522,12 @@ $nodeBurstJson = & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $P
 $nodeExitCode = $LASTEXITCODE
 Assert-True ($nodeExitCode -eq 0) "Node bridge burst test must pass"
 $nodeBurst = $nodeBurstJson | ConvertFrom-Json
-Assert-True ($nodeBurst.clients -eq 200 -and $nodeBurst.board -eq 0 -and $nodeBurst.earlyLease -eq 1 -and $nodeBurst.initialize -eq 200) "200 concurrent production Node bridges must initialize with one health-leader lease and no dashboard traffic"
+Assert-True ($nodeBurst.clients -eq 200 -and $nodeBurst.board -eq 0 -and $nodeBurst.earlyLease -eq 1 -and $nodeBurst.initialize -eq 200) "200 concurrent production Node bridges must initialize against the fixture backend with one health-leader lease and no dashboard traffic"
 $coldSmokeJson = & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "cold-start-singleton-smoke.js")
 $coldExitCode = $LASTEXITCODE
 Assert-True ($coldExitCode -eq 0) "Installed cold-herd, leader-death, and rotating-owner suite must pass"
 $coldSmoke = $coldSmokeJson | ConvertFrom-Json
-Assert-True ((@($coldSmoke.matrix.clients) -join ",") -eq "30,100,200" -and @($coldSmoke.matrix | Where-Object { $_.manifest -ne 1 -or $_.artifact -ne 1 -or $_.backends -ne 1 -or $_.listeners -ne 0 }).Count -eq 0) "30/100/200 shipped-command matrices must preserve singleton cold work and release the backend listener after the final client"
+Assert-True ((@($coldSmoke.matrix.clients) -join ",") -eq "30,100,200" -and @($coldSmoke.matrix | Where-Object { $_.manifest -ne 1 -or $_.artifact -ne 1 -or $_.backends -ne 1 -or $_.listeners -ne 0 }).Count -eq 0) "30/100/200 shipped-command fixture matrices must preserve singleton cold work and release the backend listener after the final client"
 Assert-True ($coldSmoke.powershell_5_1 -and $coldSmoke.pwsh -and $coldSmoke.cleanup -and @($coldSmoke.leader_death).Count -eq 4) "Cold-herd coverage must prove both PowerShell shells, cleanup, and all leader-death phases"
 Assert-True (@($coldSmoke.recovery).Count -eq 11 -and @($coldSmoke.recovery | Where-Object { $_.mode -notin "shutdown_during_recovery", "powershell_fallback_recovery", "powershell_fallback_initialize_retry" -and ($_.backends -ne 2 -or $_.pids -ne 2 -or $_.listeners -ne 0 -or $_.recovery_leaders -ne 1) }).Count -eq 0) "Node and PowerShell fallback recovery must each elect exactly one replacement backend and still reach zero listeners"
 Assert-True (@($coldSmoke.recovery | Where-Object { $_.mode -like "*ambiguous_tool" -and $_.mutations -eq 1 }).Count -eq 2 -and @($coldSmoke.recovery | Where-Object { $_.mode -notin "shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery", "powershell_fallback_recovery", "powershell_fallback_initialize_retry" -and $_.tools_list -le $_.clients }).Count -eq 0) "Recovered adapters that issue tools/list must rebind it and never replay the ambiguous mutating tool call"
