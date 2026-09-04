@@ -416,7 +416,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
          claim <- hydrate_local_architect_assignment_claim(work_request, claim),
          {:ok, anchor} <- require_local_architect_handoff_anchor(config, work_request, claim, callbacks),
          :ok <- validate_local_architect_assignment_scope(work_request, anchor, claim),
-         {:ok, lease, lease_action} <- ensure_local_architect_assignment_claim_lease(config.repo, anchor, claim) do
+         {:ok, claim, lease, lease_action} <- ensure_local_architect_assignment_claim_lease(config.repo, anchor, claim) do
       case claim_local_architect_assignment_session(config.repo, anchor, claim, lease_action) do
         {:ok, result, new_session, grant_action} ->
           finalize_local_architect_assignment_rebind(config.repo, server, session, claim, lease, lease_action, {result, new_session, grant_action}, callbacks)
@@ -484,7 +484,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
          phase_id: phase_id,
          mode: local_claim_transport_mode(server),
          caller_id: caller_id,
-         claimed_by: claimed_by
+         claimed_by: claimed_by,
+         claimed_by_explicit?: Map.has_key?(arguments, "claimed_by")
        }}
     end
   end
@@ -631,13 +632,40 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.LocalAssignmentClaims do
   defp require_architect_handoff_anchor_kind(%WorkPackage{}), do: {:error, :architect_anchor_scope_mismatch}
 
   defp ensure_local_architect_assignment_claim_lease(repo, %WorkPackage{} = anchor, claim) do
-    LocalClaimLeases.ensure(
-      repo,
-      anchor.id,
-      LocalClaimLeases.architect_actor(claim),
-      @local_assignment_claim_stale_after_ms,
-      "local_architect_assignment_claim_stale"
-    )
+    case ensure_requested_local_architect_assignment_claim_lease(repo, anchor, claim) do
+      {:error, :claim_lease_active_for_other_actor} when not claim.claimed_by_explicit? ->
+        reconnect_active_local_architect_assignment(repo, anchor, claim)
+
+      result ->
+        result
+    end
+  end
+
+  defp ensure_requested_local_architect_assignment_claim_lease(repo, %WorkPackage{} = anchor, claim) do
+    case LocalClaimLeases.ensure(
+           repo,
+           anchor.id,
+           LocalClaimLeases.architect_actor(claim),
+           @local_assignment_claim_stale_after_ms,
+           "local_architect_assignment_claim_stale"
+         ) do
+      {:ok, lease, lease_action} -> {:ok, claim, lease, lease_action}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp reconnect_active_local_architect_assignment(repo, %WorkPackage{} = anchor, claim) do
+    case ClaimLeaseService.current_for_work_package(repo, anchor.id) do
+      {:ok, %ClaimLease{} = lease} ->
+        case ClaimLeaseService.heartbeat(repo, lease.id, stale_after_ms: @local_assignment_claim_stale_after_ms) do
+          {:ok, renewed} -> {:ok, %{claim | claimed_by: renewed.actor_display_name}, renewed, :heartbeat}
+          {:error, :claim_stale} -> ensure_requested_local_architect_assignment_claim_lease(repo, anchor, claim)
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp claim_local_architect_assignment_session(repo, %WorkPackage{} = anchor, claim, lease_action) do
