@@ -490,14 +490,14 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
     assert server.session.assignment.work_package_id == handoff.anchor_package.id
   end
 
-  test "claim_local_architect_assignment keeps active same-anchor owners protected when owner labels differ", %{repo: repo} do
+  test "claim_local_architect_assignment reconnects an active same-anchor assignment without its owner label", %{repo: repo} do
     work_request =
       create_work_request!(repo,
         id: "WR-MCP-LOCAL-ARCHITECT-ACTIVE-BOUND",
         status: "ready_for_clarification"
       )
 
-    assert {:ok, _handoff} =
+    assert {:ok, handoff} =
              ArchitectHandoff.create_or_replay(repo, work_request.id,
                local_operator?: true,
                handoff_opts: handoff_opts(repo)
@@ -525,15 +525,34 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport03Test do
           "method" => "tools/call",
           "params" => %{
             "name" => "claim_local_architect_assignment",
-            "arguments" => %{"work_request_id" => work_request.id, "claimed_by" => "architect-after-reboot"}
+            "arguments" => %{"work_request_id" => work_request.id}
           }
         },
-        claimed_server
+        local_mcp_server(local_mcp_config(repo), "local-architect-active-reclaim-state")
       )
 
-    assert get_in(response, ["error", "data", "reason"]) == "claim_lease_active_for_other_actor"
+    assert get_in(response, ["result", "structuredContent", "assignment", "claimed_by"]) == "architect-before-reboot"
+    assert get_in(response, ["result", "structuredContent", "local_claim", "claim_lease_action"]) == "heartbeat"
     assert server.session.assignment.grant_role == "architect"
-    assert server.session.assignment.claimed_by == "architect-before-reboot"
+
+    assert {:ok, current_lease} = ClaimLeaseService.current_for_work_package(repo, handoff.anchor_package.id)
+    assert current_lease.id == claimed_server.session.claim_lease_id
+
+    {explicit_response, _explicit_server} =
+      Server.handle_state(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "local-architect-active-explicit-owner",
+          "method" => "tools/call",
+          "params" => %{
+            "name" => "claim_local_architect_assignment",
+            "arguments" => %{"work_request_id" => work_request.id, "claimed_by" => "another-architect"}
+          }
+        },
+        local_mcp_server(local_mcp_config(repo), "local-architect-active-explicit-owner-state")
+      )
+
+    assert get_in(explicit_response, ["error", "data", "reason"]) == "claim_lease_active_for_other_actor"
   end
 
   test "claim_local_architect_assignment can read trusted same-repo WorkRequests without widening writes", %{repo: repo} do
