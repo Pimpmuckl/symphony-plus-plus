@@ -3,7 +3,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.AccessGrant
+  alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.{AccessGrant, Assignment}
   alias SymphonyElixir.SymphonyPlusPlus.AccessGrants.Service, as: AccessGrantService
 
   alias SymphonyElixir.SymphonyPlusPlus.MCP.{
@@ -361,16 +361,84 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPTransportMinimalTest do
     assert get_in(health.response, ["result", "structuredContent", "status"]) == "ok"
     refute_receive {:live_handle_called, ^ref}
 
-    resources = resources_list_request("resources")
+    assert {:ok, resources} =
+             HTTPTransport.handle(config, resources_list_request("resources"),
+               client_key: "client-a",
+               state_key: init.state_key,
+               live_handle: live_handle
+             )
 
-    assert {:error, :ledger_unavailable, ^resources} =
-             HTTPTransport.handle(config, resources,
+    assert get_in(resources.response, ["result", "resources", Access.at(0), "uri"]) == "sympp://health/version"
+    refute_receive {:live_handle_called, ^ref}
+
+    repo_backed = tool_call_request("repo-backed", "solo_list", %{})
+
+    assert {:error, :ledger_unavailable, ^repo_backed} =
+             HTTPTransport.handle(config, repo_backed,
                client_key: "client-a",
                state_key: init.state_key,
                live_handle: live_handle
              )
 
     assert_receive {:live_handle_called, ^ref}
+  end
+
+  test "resources/list routes from the locked session state", %{config: config} do
+    {:ok, init} = HTTPTransport.handle(config, initialize_request("init"), client_key: "client-a")
+    parent = self()
+
+    holder =
+      Task.async(fn ->
+        HTTPStateStore.update_with_status(
+          config,
+          "client-a",
+          init.state_key,
+          default_server_fun(config, init.state_key),
+          fn server ->
+            send(parent, {:holding_unbound_state, self()})
+
+            receive do
+              :bind_session ->
+                assignment =
+                  %Assignment{
+                    grant_id: "grant-a",
+                    work_package_id: "package-a",
+                    display_key: "package-a",
+                    grant_role: "worker",
+                    capabilities: [],
+                    claimed_at: DateTime.utc_now(),
+                    claimed_by: "worker-a"
+                  }
+
+                {:bound, %{server | session: Session.new(assignment)}}
+            end
+          end
+        )
+      end)
+
+    assert_receive {:holding_unbound_state, holder_pid}
+    resources = resources_list_request("resources")
+
+    live_handle = fn _payload, _client_key, _state_key ->
+      send(parent, :live_handle_called)
+      {:error, :repo_unavailable}
+    end
+
+    request =
+      Task.async(fn ->
+        HTTPTransport.handle(config, resources,
+          client_key: "client-a",
+          state_key: init.state_key,
+          live_handle: live_handle
+        )
+      end)
+
+    wait_for_queued_lock(config, "client-a", init.state_key, 1)
+    send(holder_pid, :bind_session)
+
+    assert Task.await(holder) == {:bound, :stored}
+    assert {:error, :ledger_unavailable, ^resources} = Task.await(request)
+    assert_receive :live_handle_called
   end
 
   test "a second client cannot reuse initialized state from a state key", %{config: config} do

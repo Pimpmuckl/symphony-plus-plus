@@ -7,9 +7,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
 
   @ttl_ms 86_400_000
 
-  @type update_status :: :stored | :dropped | :skipped
+  @type update_status :: :stored | :dropped | :skipped | :bypassed
   @type default_fun :: (-> Server.t())
-  @type update_fun :: (Server.t() -> {term(), Server.t()})
+  @type update_fun :: (Server.t() -> {term(), Server.t()} | {:bypass, term()})
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -44,8 +44,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore do
 
     with_lock(key, fn ->
       server = get_by_key(key) || default_fun.()
-      {reply, %Server{} = updated_server} = update_fun.(server)
-      {reply, put_by_key_if_current(key, write_ref, updated_server)}
+
+      case update_fun.(server) do
+        {:bypass, reply} -> {{reply, server}, :bypassed}
+        {reply, %Server{} = updated_server} -> {reply, put_by_key_if_current(key, write_ref, updated_server)}
+      end
     end)
   end
 

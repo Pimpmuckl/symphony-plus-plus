@@ -97,12 +97,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
 
   defp handle_payload(%Config{} = config, payload, client_key, state_key, live_handle) do
     case HTTPStateStore.get(config, client_key, state_key) do
-      %Server{} = server ->
-        if repo_backed_followup?(payload, server) and is_function(live_handle, 3) do
-          handle_with_live_repo(payload, client_key, state_key, live_handle)
-        else
-          process_existing_state(config, payload, client_key, state_key)
-        end
+      %Server{} ->
+        process_existing_state(config, payload, client_key, state_key, live_handle)
 
       nil ->
         handle_missing_state(config, payload, client_key, state_key, live_handle)
@@ -143,40 +139,53 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
   defp process_new_initialize(%Config{} = config, payload, client_key) do
     state_key = new_state_key()
 
-    process_state(config, payload, client_key, state_key, true, fn ->
+    process_state(config, payload, client_key, state_key, true, nil, fn ->
       Server.new(config, state_key: state_key, local_daemon_trusted: config.local_daemon_trusted)
     end)
   end
 
-  defp process_existing_state(%Config{} = config, payload, client_key, state_key) do
-    process_state(config, payload, client_key, state_key, false, fn ->
+  defp process_existing_state(%Config{} = config, payload, client_key, state_key, live_handle \\ nil) do
+    process_state(config, payload, client_key, state_key, false, live_handle, fn ->
       Server.new(config, state_key: state_key, local_daemon_trusted: config.local_daemon_trusted)
     end)
   end
 
-  defp process_state(%Config{} = config, payload, client_key, state_key, allow_new_state?, default_fun) do
+  defp process_state(%Config{} = config, payload, client_key, state_key, allow_new_state?, live_handle, default_fun) do
     {{response, maybe_updated_server}, status} =
       HTTPStateStore.update_with_status(config, client_key, state_key, default_fun, fn %Server{} = server ->
-        if missing_state?(server) and not allow_new_state? do
-          # Keep the fallback server non-persistable so raced missing state keys stay absent.
-          {{state_update_lost_error(payload), server}, server}
-        else
-          {response, %Server{} = updated_server} = Server.handle_response_state(payload, server)
-          {{response, updated_server}, updated_server}
-        end
+        update_server(payload, allow_new_state?, live_handle, server)
       end)
 
-    case status do
-      :stored ->
-        %Server{} = updated_server = maybe_updated_server
-        SessionRecovery.remember(config, client_key, state_key, payload, updated_server, response)
-        {:ok, result(response, state_key, HerdrBinding.response_binding(payload, response, updated_server))}
+    if response == :live_repo do
+      handle_with_live_repo(payload, client_key, state_key, live_handle)
+    else
+      case status do
+        :stored ->
+          %Server{} = updated_server = maybe_updated_server
+          SessionRecovery.remember(config, client_key, state_key, payload, updated_server, response)
+          {:ok, result(response, state_key, HerdrBinding.response_binding(payload, response, updated_server))}
 
-      :skipped ->
-        {:ok, result(response, nil)}
+        :skipped ->
+          {:ok, result(response, nil)}
 
-      :dropped ->
-        {:ok, result(state_update_lost_error(payload), nil)}
+        :dropped ->
+          {:ok, result(state_update_lost_error(payload), nil)}
+      end
+    end
+  end
+
+  defp update_server(payload, allow_new_state?, live_handle, %Server{} = server) do
+    cond do
+      missing_state?(server) and not allow_new_state? ->
+        # Keep the fallback server non-persistable so raced missing state keys stay absent.
+        {{state_update_lost_error(payload), server}, server}
+
+      repo_backed_followup?(payload, server) and is_function(live_handle, 3) ->
+        {:bypass, :live_repo}
+
+      true ->
+        {response, %Server{} = updated_server} = Server.handle_response_state(payload, server)
+        {{response, updated_server}, updated_server}
     end
   end
 
@@ -211,6 +220,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.HTTPTransport do
   defp initialize_request?(_payload), do: false
 
   defp repo_backed_followup?(%{"method" => "tools/list"}, %Server{session: %Session{}}), do: true
+  defp repo_backed_followup?(%{"method" => "resources/list"}, %Server{session: nil}), do: false
   defp repo_backed_followup?(payload, %Server{}), do: repo_backed_followup?(payload)
 
   defp repo_backed_followup?(%{"method" => "resources/list"}), do: true

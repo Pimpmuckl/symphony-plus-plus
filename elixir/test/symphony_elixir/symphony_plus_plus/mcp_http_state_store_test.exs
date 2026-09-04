@@ -321,6 +321,55 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPHTTPStateStoreTest do
     assert %Server{state_key: "fresh-put"} = HTTPStateStore.get(config, "client", "state")
   end
 
+  test "bypassed updates do not supersede queued writes" do
+    config = config("bypassed-write-order")
+    parent = self()
+
+    assert :ok = HTTPStateStore.put(config, "client", "state", initialized_server(config, "initial"))
+
+    holder =
+      Task.async(fn ->
+        HTTPStateStore.update_with_status(config, "client", "state", default_server_fun(config, "state"), fn server ->
+          send(parent, {:holding_bypassed_write_order, self()})
+
+          receive do
+            :release_bypassed_write_order -> :ok
+          after
+            1_000 -> raise "timed out waiting to release bypassed write order"
+          end
+
+          {:held, %{server | state_key: "held-update"}}
+        end)
+      end)
+
+    assert_receive {:holding_bypassed_write_order, holder_pid}
+
+    pending =
+      Task.async(fn ->
+        HTTPStateStore.update_with_status(config, "client", "state", default_server_fun(config, "state"), fn server ->
+          {:pending, %{server | state_key: "pending-update"}}
+        end)
+      end)
+
+    wait_for_queued_lock(config, "client", "state", 1)
+
+    bypass =
+      Task.async(fn ->
+        HTTPStateStore.update_with_status(config, "client", "state", default_server_fun(config, "state"), fn _server ->
+          {:bypass, :route}
+        end)
+      end)
+
+    wait_for_queued_lock(config, "client", "state", 2)
+    reverse_queued_lock(config, "client", "state")
+    send(holder_pid, :release_bypassed_write_order)
+
+    assert Task.await(holder) == {:held, :stored}
+    assert {{:route, %Server{state_key: "held-update"}}, :bypassed} = Task.await(bypass)
+    assert Task.await(pending) == {:pending, :stored}
+    assert %Server{state_key: "pending-update"} = HTTPStateStore.get(config, "client", "state")
+  end
+
   test "alias publication cannot be overwritten by an in-flight stale alias update" do
     config = config("alias-publish-race")
     parent = self()

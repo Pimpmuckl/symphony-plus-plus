@@ -26,7 +26,7 @@ jobs:
         working-directory: elixir
         run: mix deps.get --check-locked
 
-      - name: Run the real 100-client gate
+      - name: Run the Windows MCP performance gate
         shell: pwsh
         run: |
           $outputDirectory = Join-Path $env:RUNNER_TEMP "sympp-mcp-performance-gate"
