@@ -24,7 +24,7 @@ $expectedFailures = @(
   "claim_contention.integrity",
   "response_list.read_plan_encoding", "response_list.read_plan_structured", "response_list.read_plan_p50",
   "response_list.read_plan_reductions", "response_list.list_queries", "response_list.list_bound", "response_list.list_p95",
-  "exact.node.p95_ms", "exact.node.live_100", "exact.node.private_bytes", "exact.node.warm_resolution",
+  "exact.node.p95_ms", "exact.node.live_100", "exact.node.lifecycle_boundary", "exact.node.lifecycle_ms", "exact.node.private_bytes", "exact.node.warm_resolution",
   "exact.node.cold_resolution", "exact.node.lock_recovery", "exact.node.lifecycle_race", "exact.node.recovery_integrity", "exact.fallback.functional", "cleanup"
 ) + @("full", "worker", "architect", "coordinator", "solo" | ForEach-Object { "profiles.$_.tools"; "profiles.$_.bytes" }) +
   @("claim", "read", "progress" | ForEach-Object { "results.$_.bytes" })

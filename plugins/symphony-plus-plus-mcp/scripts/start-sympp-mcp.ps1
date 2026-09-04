@@ -1628,10 +1628,12 @@ function Get-ManagedListenerPid([string]$Role, [int]$Port) {
 }
 
 function Stop-ManagedServersIfUnused([string]$RuntimeFile, [string]$RuntimeKey) {
+  Write-SymppLauncherTrace "last_detach_cleanup_requested"
   $lock = Enter-FileLock (Resolve-StartupLockFile $RuntimeFile) 30
   try {
     $activeLeases = @(Get-ActiveBridgeLeases $RuntimeFile)
     if ((Test-ActiveLegacyBridgeLease $activeLeases) -or (Test-ActiveBridgeLeaseForRuntimeKey $activeLeases $RuntimeKey)) {
+      Write-SymppLauncherTrace "last_detach_cleanup_preserved_active_runtime"
       return
     }
 
@@ -1643,10 +1645,13 @@ function Stop-ManagedServersIfUnused([string]$RuntimeFile, [string]$RuntimeKey) 
     $stateKey = Get-RuntimeStateKey $state
     $activeLeases = @(Get-ActiveBridgeLeases $RuntimeFile)
     if ((Test-ActiveLegacyBridgeLease $activeLeases) -or (Test-ActiveBridgeLeaseForRuntimeKey $activeLeases $RuntimeKey)) {
+      Write-SymppLauncherTrace "last_detach_cleanup_preserved_active_runtime"
       return
     }
     if ([System.StringComparer]::OrdinalIgnoreCase.Equals($stateKey, $RuntimeKey)) {
-      [void](Stop-CurrentManagedRuntimeStateEntries $state $activeLeases)
+      if (Stop-CurrentManagedRuntimeStateEntries $state $activeLeases) {
+        Write-SymppLauncherTrace "last_detach_cleanup_stopped_runtime"
+      }
     }
     $supersededStates = Stop-SupersededRuntimeStatesIfUnused $RuntimeFile (Get-SupersededRuntimeStates $state)
     Set-SupersededRuntimeStates $state $supersededStates

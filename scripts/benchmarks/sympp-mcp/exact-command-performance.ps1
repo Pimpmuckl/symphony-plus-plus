@@ -10,6 +10,7 @@ param(
   [ValidateRange(60, 1800)][int]$ArtifactPreparationTimeoutSec = 600,
   [ValidateSet("NodePresent", "NodeMissing")][string]$LauncherMode = "NodePresent",
   [switch]$SkipMutationCheck,
+  [switch]$SkipLifecycleBarrier,
   [switch]$Help
 )
 
@@ -69,10 +70,24 @@ function Write-BenchmarkProgress([string]$Message) {
 function Get-TraceCounts {
   $counts = @{}
   foreach ($line in @(Get-ChildItem -LiteralPath $traceDir -Filter "*.log" -File -ErrorAction SilentlyContinue | ForEach-Object { Get-Content -LiteralPath $_.FullName })) {
-    $name = ([string]$line).Trim()
+    $name = (([string]$line).Trim() -split "`t", 2)[0]
     if ($name) { $counts[$name] = 1 + [int]$counts[$name] }
   }
   return $counts
+}
+
+function Get-TraceDetails([string]$Event, [long]$SinceMs = 0) {
+  return @(Get-ChildItem -LiteralPath $traceDir -Filter "*.log" -File -ErrorAction SilentlyContinue | ForEach-Object {
+      foreach ($line in @(Get-Content -LiteralPath $_.FullName)) {
+        $parts = ([string]$line).Trim() -split "`t", 2
+        if ($parts[0] -eq $Event -and $parts.Count -eq 2) {
+          try {
+            $record = $parts[1] | ConvertFrom-Json
+            if ([long]$record.at_ms -ge $SinceMs) { $record }
+          } catch { }
+        }
+      }
+    })
 }
 
 function Get-TraceFileOffsets {
@@ -83,7 +98,7 @@ function Get-TraceFileOffsets {
   return $offsets
 }
 
-function Test-NewTraceEvent($ExistingOffsets, [string]$Event) {
+function Test-NewTraceEvent($ExistingOffsets, [string]$Event, [string]$ClientId = "") {
   foreach ($file in @(Get-ChildItem -LiteralPath $traceDir -Filter "*.log" -File -ErrorAction SilentlyContinue)) {
     $offset = if ($ExistingOffsets.ContainsKey($file.FullName)) { [long]$ExistingOffsets[$file.FullName] } else { 0L }
     if ($file.Length -le $offset) { continue }
@@ -95,7 +110,14 @@ function Test-NewTraceEvent($ExistingOffsets, [string]$Event) {
     } finally {
       $stream.Dispose()
     }
-    if (@($appended -split "`r?`n") -contains $Event) { return $true }
+    foreach ($line in @($appended -split "`r?`n")) {
+      $parts = $line -split "`t", 2
+      if ($parts[0] -ne $Event) { continue }
+      if ([string]::IsNullOrWhiteSpace($ClientId)) { return $true }
+      if ($parts.Count -eq 2) {
+        try { if ([string](($parts[1] | ConvertFrom-Json).test_client) -eq $ClientId) { return $true } } catch { }
+      }
+    }
   }
   return $false
 }
@@ -178,12 +200,21 @@ function Prepare-ExactArtifact([hashtable]$Environment) {
   return ConvertFrom-ArtifactPhaseTiming $stderr $watch.Elapsed.TotalMilliseconds
 }
 
-function Start-ExactClient([hashtable]$Environment) {
+function Start-ExactClient([hashtable]$Environment, $Barrier = $null) {
   $config = Get-Content -LiteralPath (Join-Path $pluginRoot ".mcp.json") -Raw | ConvertFrom-Json
   $server = $config.symphony_plus_plus
   $info = [System.Diagnostics.ProcessStartInfo]::new()
-  $info.FileName = [string]$server.command
-  foreach ($arg in @($server.args)) { [void]$info.ArgumentList.Add([string]$arg) }
+  if ($Barrier) {
+    $readyFile = Join-Path $Barrier.ready_dir "$([guid]::NewGuid().ToString('N')).ready"
+    $info.FileName = (Get-Command node.exe -ErrorAction Stop).Source
+    foreach ($arg in @(
+        (Join-Path $PSScriptRoot "exact-command-start-barrier.js"), $readyFile, $Barrier.release_file,
+        $pluginRoot, [string]$server.command
+      ) + @($server.args)) { [void]$info.ArgumentList.Add([string]$arg) }
+  } else {
+    $info.FileName = [string]$server.command
+    foreach ($arg in @($server.args)) { [void]$info.ArgumentList.Add([string]$arg) }
+  }
   $info.WorkingDirectory = $pluginRoot
   $info.UseShellExecute = $false
   $info.CreateNoWindow = $true
@@ -193,6 +224,8 @@ function Start-ExactClient([hashtable]$Environment) {
   Set-SanitizedEnvironment $info $Environment
   $process = [System.Diagnostics.Process]::new()
   $process.StartInfo = $info
+  $benchmarkClientId = [guid]::NewGuid().ToString("N")
+  $info.Environment["SYMPP_BENCH_CLIENT_ID"] = $benchmarkClientId
   $watch = [System.Diagnostics.Stopwatch]::StartNew()
   if (-not $process.Start()) { throw "Exact shipped MCP command failed to start." }
   $process.StandardInput.AutoFlush = $true
@@ -204,9 +237,23 @@ function Start-ExactClient([hashtable]$Environment) {
     stderr_task = $process.StandardError.ReadToEndAsync()
     ready = $false
     elapsed_ms = 0.0
+    barrier_ready_file = $(if ($Barrier) { $readyFile } else { $null })
+    benchmark_client_id = $benchmarkClientId
   }
   $clients.Add($client)
   return $client
+}
+
+function Release-ExactStartBarrier([object[]]$Cohort, $Barrier, [int]$TimeoutSec) {
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
+  while (@($Cohort | Where-Object { -not (Test-Path -LiteralPath $_.barrier_ready_file -PathType Leaf) }).Count -gt 0) {
+    $failed = @($Cohort | Where-Object { $_.process.HasExited })
+    if ($failed.Count) { throw "Exact-command start-barrier client exited before release: $($failed[0].stderr_task.GetAwaiter().GetResult().Trim())" }
+    if ([DateTime]::UtcNow -ge $deadline) { throw "Timed out waiting for exact-command start barrier." }
+    Start-Sleep -Milliseconds 5
+  }
+  foreach ($client in $Cohort) { $client.watch.Restart() }
+  New-Item -ItemType File -Path $Barrier.release_file -Force | Out-Null
 }
 
 function Wait-ClientsReady([object[]]$Cohort, [int]$TimeoutSec) {
@@ -278,7 +325,7 @@ function Stop-ExactClient($Client) {
   Stop-ExactClients @($Client)
 }
 
-function Get-ProcessTreeMetrics([object[]]$Cohort, [int]$ExcludedPid) {
+function Get-ProcessTreeMetrics([object[]]$Cohort, [int]$ExcludedPid, [bool]$IncludeClientDetails = $true) {
   $rows = @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name)
   $children = @{}
   foreach ($row in $rows) {
@@ -314,21 +361,34 @@ function Get-ProcessTreeMetrics([object[]]$Cohort, [int]$ExcludedPid) {
     min_processes_per_client = Get-Percentile $counts 0.0
     median_processes_per_client = Get-Percentile $counts 0.50
     node_clients = @($detail | Where-Object { [string]($_.names -join ",") -match "(^|,)node:" }).Count
-    clients = @($detail)
+    clients = $(if ($IncludeClientDetails) { @($detail) } else { @() })
   }
 }
 
-function Invoke-Cohort([int]$Count, [hashtable]$Environment, [int]$BackendPid) {
+function Invoke-Cohort([int]$Count, [hashtable]$Environment, [int]$BackendPid, [switch]$StartBarrier) {
+  $cohortWatch = [System.Diagnostics.Stopwatch]::StartNew()
   $gitBefore = Get-GitInvocationCount
   $traceBefore = Get-TraceCounts
+  $startedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
   $cohort = [System.Collections.Generic.List[object]]::new()
-  for ($offset = 0; $offset -lt $Count; $offset += $startupBurst) {
-    $batchCount = [Math]::Min($startupBurst, $Count - $offset)
-    $batch = @(foreach ($index in 1..$batchCount) { Start-ExactClient $Environment })
-    Wait-ClientsReady $batch $StartupTimeoutSec
-    foreach ($client in $batch) { $cohort.Add($client) }
+  if ($StartBarrier) {
+    $barrier = [pscustomobject]@{
+      ready_dir = Join-Path $tempRoot "barrier-$([guid]::NewGuid().ToString('N'))"
+      release_file = Join-Path $tempRoot "barrier-$([guid]::NewGuid().ToString('N')).release"
+    }
+    New-Item -ItemType Directory -Path $barrier.ready_dir -Force | Out-Null
+    foreach ($index in 1..$Count) { $cohort.Add((Start-ExactClient $Environment $barrier)) }
+    Release-ExactStartBarrier @($cohort) $barrier $StartupTimeoutSec
+    Wait-ClientsReady @($cohort) $StartupTimeoutSec
+  } else {
+    for ($offset = 0; $offset -lt $Count; $offset += $startupBurst) {
+      $batchCount = [Math]::Min($startupBurst, $Count - $offset)
+      $batch = @(foreach ($index in 1..$batchCount) { Start-ExactClient $Environment })
+      Wait-ClientsReady $batch $StartupTimeoutSec
+      foreach ($client in $batch) { $cohort.Add($client) }
+    }
   }
-  $tree = Get-ProcessTreeMetrics $cohort $BackendPid
+  $tree = Get-ProcessTreeMetrics $cohort $BackendPid (-not $StartBarrier)
   $samples = @($cohort.elapsed_ms | Sort-Object)
   $leasePeak = Get-LeaseCount
   $gitAfter = Get-GitInvocationCount
@@ -338,28 +398,65 @@ function Invoke-Cohort([int]$Count, [hashtable]$Environment, [int]$BackendPid) {
   if ($LauncherMode -eq "NodePresent" -and
       ([int]$traceDelta["node_bridge_selected"] -ne $Count -or
        [int]$traceDelta["generation_attach_handles_released"] -ne $Count -or
-       [int]$traceDelta["generation_attach_full_validation"] -ne $Count)) {
+       [int]$traceDelta["generation_attach_initial_validation"] -ne $Count)) {
     throw "Node warm cohort did not validate identity and release generation watchers before attachment."
   }
+  $initialValidations = @(Get-TraceDetails "generation_attach_initial_validation" $startedAtMs)
+  if ($LauncherMode -eq "NodePresent" -and @($initialValidations | Where-Object { -not $_.valid -or [double]$_.elapsed_ms -lt 100 -or [double]$_.overlap_ms -le 0 }).Count -gt 0) {
+    throw "Node warm cohort weakened the two-observation generation settle."
+  }
+  if ([int]$traceDelta["backend_recovery_ready"] -ne 0 -or
+      @((Get-TraceDetails "backend_recovery_decision" $startedAtMs) | Where-Object { $_.action -ne "lease_repair" }).Count -gt 0) {
+    throw "Warm cohort performed an unclassified or avoidable full runtime adoption."
+  }
+  $serverLeasePeak = [int](($((Get-TraceDetails "client_lease_attach_ok" $startedAtMs).active_clients) | Measure-Object -Maximum).Maximum)
   Stop-ExactClients @($cohort)
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
   while ((Get-LeaseCount) -gt 1 -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
+  $cohortWatch.Stop()
+  $traceAfterDetach = Get-TraceCounts
+  $traceDeltaAfterDetach = @{}
+  foreach ($name in @($traceAfterDetach.Keys + $traceBefore.Keys | Select-Object -Unique)) { $traceDeltaAfterDetach[$name] = [int]$traceAfterDetach[$name] - [int]$traceBefore[$name] }
+  if ($LauncherMode -eq "NodePresent" -and
+      ([int]$traceDeltaAfterDetach["client_lease_attach_ok"] -ne $Count -or [int]$traceDeltaAfterDetach["client_lease_detach_ok"] -ne $Count)) {
+    throw "Node warm cohort server lease lifecycle mismatch."
+  }
   return [pscustomobject]@{
     clients = $Count
-    startup_burst = [Math]::Min($startupBurst, $Count)
+    startup_burst = $(if ($StartBarrier) { $Count } else { [Math]::Min($startupBurst, $Count) })
+    start_barrier = [bool]$StartBarrier
+    completion_ms = [Math]::Round($cohortWatch.Elapsed.TotalMilliseconds, 2)
     p50_initialize_ms = [Math]::Round((Get-Percentile $samples 0.50), 2)
     p95_initialize_ms = [Math]::Round((Get-Percentile $samples 0.95), 2)
     max_initialize_ms = [Math]::Round((Get-Percentile $samples 1.0), 2)
     process_tree = $tree
     leases_peak = $leasePeak
     leases_after = Get-LeaseCount
+    server_leases_peak = $serverLeasePeak
     git_invocations = $gitAfter - $gitBefore
-    trace = $traceDelta
+    trace = $traceDeltaAfterDetach
   }
 }
 
 function Test-Dashboard([string]$Url) {
   try { return (Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 10).StatusCode -eq 200 } catch { return $false }
+}
+
+function Get-RuntimeIdentitySnapshot {
+  $state = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json
+  return [pscustomobject]@{
+    backend_pid = [int]$state.backend.pid
+    backend_epoch = [string]$state.publication.backend.process_start_time_utc_ticks
+    runtime_key = [string]$state.runtime_key
+    generation_key = [string]$state.publication.generation_key
+  }
+}
+
+function Test-SameRuntimeIdentity($Expected, $Actual) {
+  return $Expected.backend_pid -eq $Actual.backend_pid -and
+    $Expected.backend_epoch -eq $Actual.backend_epoch -and
+    $Expected.runtime_key -ceq $Actual.runtime_key -and
+    $Expected.generation_key -ceq $Actual.generation_key
 }
 
 function Limit-DiagnosticText([string]$Text, [int]$MaximumLength) {
@@ -483,6 +580,9 @@ exit /b %ERRORLEVEL%
     SYMPP_BENCH_GIT_LOG_DIR = $gitLogDir
     SYMPP_INTEGRITY_MARKER = Join-Path $tempRoot "unsafe-cleanup-ran"
     HOME = Join-Path $tempRoot "profile"
+    USERPROFILE = Join-Path $tempRoot "profile"
+    HOMEDRIVE = [System.IO.Path]::GetPathRoot($tempRoot).TrimEnd("\")
+    HOMEPATH = (Join-Path $tempRoot "profile").Substring([System.IO.Path]::GetPathRoot($tempRoot).Length - 1)
     PATH = (Join-Path $tempRoot "shim") + ";" + $effectivePath
   }
 
@@ -492,6 +592,11 @@ exit /b %ERRORLEVEL%
   $cold = Start-ExactClient $environment
   Wait-ClientsReady @($cold) $StartupTimeoutSec
   $runtimeState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json
+  $databasePath = Join-Path $environment.USERPROFILE ".agents/splusplus/symphony_plus_plus.sqlite3"
+  if (-not (Test-Path -LiteralPath $databasePath -PathType Leaf) -or
+      -not ([System.IO.Path]::GetFullPath($databasePath)).StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Exact artifact runtime did not use its isolated Windows home ledger."
+  }
   if ([string]$runtimeState.runtime_mode -ne "artifact" -or [string]$runtimeState.frontend.status -ne "artifact_static") { throw "Cold exact command did not start the artifact dashboard runtime." }
   if (-not (Test-Dashboard ([string]$runtimeState.frontend.url))) { throw "Artifact dashboard was not healthy." }
   $owners = @(Get-ListenerPids $backendPort)
@@ -519,13 +624,44 @@ exit /b %ERRORLEVEL%
   foreach ($repeat in 1..$Repeats) {
     foreach ($count in $cohortValues) {
       Write-BenchmarkProgress "Measuring exact-command warm cohort repeat=$repeat clients=$count..."
+      $identityBefore = Get-RuntimeIdentitySnapshot
       $cohort = Invoke-Cohort $count $environment $backend.Id
       if ($cohort.leases_peak -ne ($count + 1) -or $cohort.leases_after -ne 1) { throw "Warm cohort lease lifecycle mismatch." }
       $currentOwners = @(Get-ListenerPids $backendPort)
       if ($currentOwners.Count -ne 1 -or [int]$currentOwners[0] -ne $backend.Id) { throw "Warm cohort changed singleton identity." }
+      $identityAfter = Get-RuntimeIdentitySnapshot
+      if (-not (Test-SameRuntimeIdentity $identityBefore $identityAfter)) { throw "Warm cohort changed the backend epoch, runtime key, or installed generation." }
+      if ($LauncherMode -eq "NodePresent" -and [int]$cohort.trace["last_detach_cleanup_requested"] -ne 0) {
+        throw "Node warm cohort entered last-detach cleanup while the anchor remained live."
+      }
+      if ($LauncherMode -eq "NodeMissing" -and
+          ([int]$cohort.trace["last_detach_cleanup_stopped_runtime"] -ne 0 -or
+           [int]$cohort.trace["last_detach_cleanup_preserved_active_runtime"] -ne $count)) {
+        throw "PowerShell fallback cleanup did not preserve the anchored runtime."
+      }
       $cohort | Add-Member -NotePropertyName repeat -NotePropertyValue $repeat
       $warmResults.Add($cohort)
     }
+  }
+
+  $lifecycleBarrier = [pscustomobject]@{ checked = $false }
+  if ($LauncherMode -eq "NodePresent" -and -not $SkipLifecycleBarrier) {
+    Write-BenchmarkProgress "Running exact-command 200-client simultaneous lifecycle barrier..."
+    $identityBefore = Get-RuntimeIdentitySnapshot
+    $lifecycleBarrier = Invoke-Cohort 200 $environment $backend.Id -StartBarrier
+    if ($lifecycleBarrier.leases_peak -ne 201 -or $lifecycleBarrier.leases_after -ne 1 -or $lifecycleBarrier.server_leases_peak -ne 201) {
+      throw "Lifecycle barrier lease boundary mismatch."
+    }
+    Start-Sleep -Milliseconds 1500
+    $identityAfter = Get-RuntimeIdentitySnapshot
+    $currentOwners = @(Get-ListenerPids $backendPort)
+    $identityUnchanged = Test-SameRuntimeIdentity $identityBefore $identityAfter
+    $anchorProtected = $currentOwners.Count -eq 1 -and [int]$currentOwners[0] -eq $backend.Id -and
+      [int]$lifecycleBarrier.trace["last_detach_cleanup_requested"] -eq 0
+    if (-not $identityUnchanged -or -not $anchorProtected) { throw "Lifecycle barrier changed or shut down the anchored artifact runtime." }
+    $lifecycleBarrier | Add-Member -NotePropertyName checked -NotePropertyValue $true
+    $lifecycleBarrier | Add-Member -NotePropertyName identity_unchanged -NotePropertyValue $identityUnchanged
+    $lifecycleBarrier | Add-Member -NotePropertyName anchor_protected -NotePropertyValue $anchorProtected
   }
 
   $cacheRelease = [pscustomobject]@{ checked = $false; moved = $null; cleanup_completed = $null }
@@ -642,11 +778,11 @@ exit /b %ERRORLEVEL%
       $scanTraceOffsets = Get-TraceFileOffsets
       $scanClient = Start-ExactClient $environment
       $deadline = [DateTime]::UtcNow.AddSeconds(60)
-      while (-not (Test-NewTraceEvent $scanTraceOffsets "generation_scan_complete") -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
-      if (-not (Test-NewTraceEvent $scanTraceOffsets "generation_scan_complete")) { throw "Mutation race did not observe an in-progress generation scan." }
+      while (-not (Test-NewTraceEvent $scanTraceOffsets "generation_scan_complete" $scanClient.benchmark_client_id) -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+      if (-not (Test-NewTraceEvent $scanTraceOffsets "generation_scan_complete" $scanClient.benchmark_client_id)) { throw "Mutation race did not observe an in-progress generation scan." }
       [System.IO.File]::AppendAllText($mutationFile, "`n# transient benchmark mutation")
-      while (-not (Test-NewTraceEvent $scanTraceOffsets "generation_watch_invalidated") -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
-      if (-not (Test-NewTraceEvent $scanTraceOffsets "generation_watch_invalidated")) { throw "Installed payload mutation was not observed by the generation watcher." }
+      while (-not (Test-NewTraceEvent $scanTraceOffsets "generation_watch_invalidated" $scanClient.benchmark_client_id) -and -not $scanClient.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+      if (-not (Test-NewTraceEvent $scanTraceOffsets "generation_watch_invalidated" $scanClient.benchmark_client_id)) { throw "Installed payload mutation was not observed by the generation watcher." }
       [System.IO.File]::WriteAllBytes($mutationFile, $originalBytes)
       [System.IO.File]::SetLastWriteTimeUtc($mutationFile, $originalWriteTime)
       Wait-ClientsReady @($scanClient) $StartupTimeoutSec
@@ -656,6 +792,7 @@ exit /b %ERRORLEVEL%
       if (-not $mutation.scan_race_detected) { throw "Installed payload mutation during generation scan was not retried or rejected safely." }
     }
     $attachRejectionBefore = [int](Get-TraceCounts)["warm_miss_generation"]
+    Remove-Item -LiteralPath $environment.SYMPP_INTEGRITY_MARKER -Force -ErrorAction SilentlyContinue
     $attachTraceOffsets = Get-TraceFileOffsets
     $mutationStream = $null
     if ($LauncherMode -eq "NodePresent") {
@@ -665,8 +802,8 @@ exit /b %ERRORLEVEL%
       $mutated = Start-ExactClient $environment
       $deadline = [DateTime]::UtcNow.AddSeconds(60)
       if ($LauncherMode -eq "NodePresent") {
-        while (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved") -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
-        if (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved")) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
+        while (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved" $mutated.benchmark_client_id) -and -not $mutated.process.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 5 }
+        if (-not (Test-NewTraceEvent $attachTraceOffsets "generation_identity_resolved" $mutated.benchmark_client_id)) { throw "Mutation race did not reach the generation-pinned attachment boundary." }
         $mutationBytes = [System.Text.UTF8Encoding]::new($false).GetBytes('Set-Content -LiteralPath $env:SYMPP_INTEGRITY_MARKER -Value invoked')
         $mutationStream.Position = 0
         $mutationStream.SetLength(0)
@@ -678,7 +815,7 @@ exit /b %ERRORLEVEL%
     } finally {
       if ($null -ne $mutationStream) { $mutationStream.Dispose() }
     }
-    while (-not $mutated.process.HasExited -and -not $mutated.line_task.IsCompleted -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
+    while ((-not $mutated.process.HasExited -or -not $mutated.line_task.IsCompleted) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
     $mutation.shortcut_rejected = $mutated.process.HasExited -and
       $mutated.line_task.IsCompleted -and
       [string]::IsNullOrWhiteSpace([string]$mutated.line_task.GetAwaiter().GetResult())
@@ -687,7 +824,9 @@ exit /b %ERRORLEVEL%
     $mutation.unsafe_cleanup_skipped = -not (Test-Path -LiteralPath $environment.SYMPP_INTEGRITY_MARKER)
     if ($LauncherMode -ne "NodePresent") { $mutation.scan_race_detected = $true }
     Stop-ExactClient $mutated
-    if (-not $mutation.shortcut_rejected -or -not $mutation.attach_race_rejected -or -not $mutation.unsafe_cleanup_skipped) { throw "Installed payload mutation at the attachment boundary was not rejected safely before warm attach." }
+    if (-not $mutation.shortcut_rejected -or -not $mutation.attach_race_rejected -or -not $mutation.unsafe_cleanup_skipped) {
+      throw "Installed payload mutation at the attachment boundary was not rejected safely before warm attach: shortcut=$($mutation.shortcut_rejected) attach=$($mutation.attach_race_rejected) cleanup=$($mutation.unsafe_cleanup_skipped)."
+    }
   }
 
   $result = [pscustomobject]@{
@@ -696,8 +835,10 @@ exit /b %ERRORLEVEL%
     command = "cmd.exe /d /s /c scripts\start-sympp-mcp.cmd"
     backend_port = $backendPort
     artifact = [pscustomobject]@{ cache_miss = $artifactCacheMiss; prepared_cache = $artifactPreparedCache }
+    isolation = [pscustomobject]@{ database = $databasePath; verified = $true }
     cold = $coldMetrics
     warm = @($warmResults)
+    lifecycle_barrier = $lifecycleBarrier
     cache_release = $cacheRelease
     lock_recovery = $lockRecovery
     lifecycle_race = $lifecycleRace
