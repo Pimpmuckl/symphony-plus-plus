@@ -45,11 +45,12 @@ const HERDR_METADATA_REFRESH_MS = 60000;
 const HERDR_METADATA_TOKENS = ["sympp_role", "sympp_work_request_id", "sympp_work_package_id", "sympp_show_inspector", "sympp_endpoint"];
 const HERDR_INSPECTOR_PLUGIN = "symphony-plus-plus.execution-inspector";
 
-function trace(event) {
+function trace(event, fields) {
   const dir = process.env.SYMPP_LAUNCHER_TRACE_DIR;
   if (!dir) return;
   try {
-    fs.appendFileSync(path.join(dir, `${process.pid}.log`), `${event}\n`);
+    const record = { at_ms: Date.now(), pid: process.pid, test_client: process.env.SYMPP_BENCH_CLIENT_ID || null, ...(fields || {}) };
+    fs.appendFileSync(path.join(dir, `${process.pid}.log`), `${event}\t${JSON.stringify(record)}\n`);
   } catch (_) {
   }
 }
@@ -548,8 +549,27 @@ function prepareCleanupScript(identity) {
     if (!fs.existsSync(script)) return null;
     const markerTemp = `${markerFile}.${process.pid}.tmp`;
     fs.writeFileSync(markerTemp, `${JSON.stringify({ generation_key: identity.generationKey, files: fileStamps() })}\n`);
-    try { fs.unlinkSync(markerFile); } catch (_) { }
-    fs.renameSync(markerTemp, markerFile);
+    let published = false;
+    for (let attempt = 0; attempt < 3 && !published; attempt += 1) {
+      try {
+        fs.renameSync(markerTemp, markerFile);
+        published = true;
+      } catch (error) {
+        if (!["EACCES", "EEXIST", "EPERM"].includes(error.code)) throw error;
+        const concurrent = readJson(markerFile);
+        if (concurrent && concurrent.generation_key === identity.generationKey && generationStillValid(identity) &&
+            JSON.stringify(concurrent.files) === JSON.stringify(fileStamps())) {
+          try { fs.unlinkSync(markerTemp); } catch (_) { }
+          trace("cleanup_scripts_cached");
+          return script;
+        }
+        try { fs.unlinkSync(markerFile); } catch (_) { }
+      }
+    }
+    if (!published) {
+      try { fs.unlinkSync(markerTemp); } catch (_) { }
+      return null;
+    }
     trace("cleanup_scripts_staged");
     return script;
   } catch (_) {
@@ -573,15 +593,37 @@ function cleanupSourcesChanged(identity, script) {
   }
 }
 
-async function generationValidAtAttachment(identity) {
-  if (!generationValidForAttachment(identity)) return false;
-  const pluginRoot = identity.pluginRoot;
-  const sourceRoot = identity.sourceRoot;
-  const generation = generationKey(pluginRoot, sourceRoot);
-  await new Promise((resolve) => setTimeout(resolve, GENERATION_SETTLE_MS));
-  const confirmed = generationKey(pluginRoot, sourceRoot);
-  const valid = generationValidForAttachment(identity) && generation === identity.generationKey && confirmed === identity.generationKey;
-  trace("generation_attach_full_validation");
+function beginGenerationAttachmentValidation(identity) {
+  if (!generationValidForAttachment(identity)) return null;
+  const token = {
+    startedAt: performance.now(),
+    generation: generationKey(identity.pluginRoot, identity.sourceRoot),
+    identity,
+    watchVersion: generationWatchVersion,
+  };
+  return token;
+}
+
+async function finishGenerationAttachmentValidation(token, identity, phase) {
+  if (!token) return false;
+  let elapsed = performance.now() - token.startedAt;
+  const overlapMs = Math.min(GENERATION_SETTLE_MS, elapsed);
+  while (elapsed < GENERATION_SETTLE_MS) {
+    await new Promise((resolve) => setTimeout(resolve, Math.ceil(GENERATION_SETTLE_MS - elapsed)));
+    elapsed = performance.now() - token.startedAt;
+  }
+  const confirmed = generationKey(identity.pluginRoot, identity.sourceRoot);
+  const sameIdentity = runtimeIdentityChanges(token.identity, identity).length === 0;
+  const attachmentValid = generationValidForAttachment(identity);
+  const valid = sameIdentity && token.watchVersion === generationWatchVersion &&
+    attachmentValid && token.generation === identity.generationKey && confirmed === identity.generationKey;
+  trace(`generation_attach_${phase}_validation`, {
+    elapsed_ms: Math.round(elapsed * 100) / 100,
+    overlap_ms: Math.round(overlapMs * 100) / 100,
+    valid,
+    watcher_unchanged: token.watchVersion === generationWatchVersion,
+    generation: identity.generationKey.slice(0, 12),
+  });
   return valid;
 }
 
@@ -607,6 +649,21 @@ function configuredPortMatches(name, origin) {
 
 function runtimeKey(backend, dashboard, contract) {
   return `contract=${contract.toLowerCase()};backend=${trimOrigin(backend).toLowerCase()};dashboard=${dashboard ? trimOrigin(dashboard).toLowerCase() : "none"}`;
+}
+
+function runtimeIdentityChanges(previous, next) {
+  const fields = ["revision", "generationKey", "contract", "runtimeKey", "epoch", "backend", "dashboard"];
+  return fields.filter((field) => String(previous[field] || "").toLowerCase() !== String(next[field] || "").toLowerCase());
+}
+
+function tracedRuntimeIdentity(identity) {
+  return {
+    revision: identity.revision.slice(0, 12),
+    generation: identity.generationKey.slice(0, 12),
+    contract: identity.contract.slice(0, 12),
+    runtime_key: sha256(identity.runtimeKey).slice(0, 12),
+    epoch: identity.epoch,
+  };
 }
 
 function resolveStateIdentity(state, pluginRoot, cachedIdentity) {
@@ -798,8 +855,11 @@ async function clientLease(mcpUrl, clientId, action, required) {
   try {
     const response = await request(`${trimOrigin(mcpUrl)}/client-lease`, "POST", JSON.stringify({ client_id: clientId, action }), { "Content-Type": "application/json" }, required ? HEALTH_PROBE_TIMEOUT_MS : 2000);
     if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status}`);
-    return response.body ? JSON.parse(response.body) : {};
+    const result = response.body ? JSON.parse(response.body) : {};
+    if (action !== "heartbeat") trace(`client_lease_${action}_ok`, { active_clients: Number(result.active_client_count) || 0 });
+    return result;
   } catch (error) {
+    trace(`client_lease_${action}_failed`, { error_code: String(error && error.code || "unknown") });
     if (required) throw error;
     return null;
   }
@@ -932,17 +992,21 @@ async function bridge(identity, state, runtimeFile) {
     const interval = stale > 1000 ? Math.min(requested, Math.max(1000, stale - Math.min(60000, Math.max(1000, Math.floor(stale / 10))))) : requested;
     heartbeat = setInterval(() => {
       clientLease(current.mcpUrl, clientId, "heartbeat", false).then((response) => {
-        if (!response && !closing && current.state.backend.managed === true) recover().catch((error) => {
-          if (error.symppFatal) {
-            fatalRecoveryError = error;
-            if (input) input.close();
-          } else diagnostic(`Symphony++ backend recovery failed: ${error.message}`);
-        });
+        if (!response && !closing && current.state.backend.managed === true) {
+          trace("backend_recovery_trigger", { source: "heartbeat", session_present: Boolean(sessionId) });
+          recover("heartbeat").catch((error) => {
+            if (error.symppFatal) {
+              fatalRecoveryError = error;
+              if (input) input.close();
+            } else diagnostic(`Symphony++ backend recovery failed: ${error.message}`);
+          });
+        }
       });
     }, interval);
   };
   const adopt = async (runtime) => {
     const next = { ...runtime, mcpUrl: `${runtime.identity.backend}/mcp` };
+    const generationValidation = beginGenerationAttachmentValidation(next.identity);
     const replacementLease = next.identity.runtimeKey.toLowerCase() === current.identity.runtimeKey.toLowerCase()
       ? localLease
       : createLocalLease(runtimeFile, next.state, next.identity);
@@ -960,7 +1024,7 @@ async function bridge(identity, state, runtimeFile) {
         throw error;
       }
       if (!nextCleanupScript) throw new Error("Symphony++ cleanup scripts were unavailable during backend recovery.");
-      if (!await generationValidAtAttachment(next.identity)) {
+      if (!await finishGenerationAttachmentValidation(generationValidation, next.identity, "recovery")) {
         const error = new Error("Installed Symphony++ generation changed during backend recovery.");
         error.symppFatal = true;
         throw error;
@@ -992,15 +1056,35 @@ async function bridge(identity, state, runtimeFile) {
     sessionId = null;
     scheduleHeartbeat(attachedResponse);
     closeGenerationWatchers();
-    trace("backend_recovery_ready");
+    trace("backend_recovery_ready", { action: "full_adopt" });
   };
-  const recover = () => {
+  const recover = (source) => {
     if (!recoveryPromise) {
       recoveryPromise = (async () => {
         const runtime = await resolveHealthyRuntime(runtimeFile, pluginRoot, () => closing);
         if (!runtime) throw new Error("No healthy managed Symphony++ backend was elected.");
-        if (runtime.identity.epoch !== current.identity.epoch || runtime.identity.runtimeKey !== current.identity.runtimeKey || !sessionId) await adopt(runtime);
-        else closeGenerationWatchers();
+        const changedFields = runtimeIdentityChanges(current.identity, runtime.identity);
+        const identityChanged = changedFields.length > 0;
+        const action = identityChanged ? "full_adopt" : "lease_repair";
+        trace("backend_recovery_decision", {
+          action,
+          source,
+          reason: identityChanged ? "runtime_identity_changed" : (sessionId ? "lease_uncertain" : "session_absent"),
+          changed_fields: changedFields,
+          session_present: Boolean(sessionId),
+          session_action: identityChanged ? "reset" : (sessionId ? "preserve" : "caller_reinitialize"),
+          previous_identity: tracedRuntimeIdentity(current.identity),
+          next_identity: tracedRuntimeIdentity(runtime.identity),
+        });
+        if (identityChanged) {
+          await adopt(runtime);
+        } else {
+          const attachedResponse = await clientLease(current.mcpUrl, clientId, "attach", true);
+          attached = true;
+          scheduleHeartbeat(attachedResponse);
+          closeGenerationWatchers();
+          trace("backend_lease_repaired", { source, session_present: Boolean(sessionId) });
+        }
       })().finally(() => { recoveryPromise = null; });
     }
     return recoveryPromise;
@@ -1018,8 +1102,10 @@ async function bridge(identity, state, runtimeFile) {
   try {
     trace("generation_attach_preflight");
     if (!generationValidForAttachment(identity)) return false;
+    const generationValidation = beginGenerationAttachmentValidation(identity);
     cleanupScript = prepareCleanupScript(identity);
     if (cleanupScript === CLEANUP_SOURCE_CHANGED) {
+      trace("warm_miss_generation");
       cleanupAllowed = false;
       cleanupScript = null;
       throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
@@ -1044,7 +1130,17 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_health");
       return false;
     }
-    if (!await generationValidAtAttachment(identity)) {
+    let attachedResponse = preflight.attachedResponse;
+    if (!attachedResponse) {
+      try {
+        attachedResponse = await clientLease(current.mcpUrl, clientId, "attach", true);
+        attached = true;
+      } catch (_) {
+        trace("warm_miss_backend");
+        return false;
+      }
+    }
+    if (!await finishGenerationAttachmentValidation(generationValidation, identity, "initial")) {
       trace("warm_miss_generation");
       return false;
     }
@@ -1057,16 +1153,6 @@ async function bridge(identity, state, runtimeFile) {
       trace("warm_miss_generation");
       cleanupAllowed = false;
       throw new Error("Installed Symphony++ cleanup scripts changed during bridge attachment.");
-    }
-    let attachedResponse = preflight.attachedResponse;
-    if (!attachedResponse) {
-      try {
-        attachedResponse = await clientLease(current.mcpUrl, clientId, "attach", true);
-        attached = true;
-      } catch (_) {
-        trace("warm_miss_backend");
-        return false;
-      }
     }
     if (!generationValidForAttachment(identity)) return false;
     closeGenerationWatchers();
@@ -1108,7 +1194,8 @@ async function bridge(identity, state, runtimeFile) {
       if (!response.ok && !Number.isInteger(response.status) && current.state.backend.managed === true) {
         const ambiguousToolCall = requestStarted && parsed && parsed.method === "tools/call" && response.mayHaveReachedBackend !== false;
         let recovered = false;
-        try { await recover(); recovered = true; } catch (error) {
+        trace("backend_recovery_trigger", { source: "request_transport", session_present: Boolean(sessionId), request_started: requestStarted });
+        try { await recover("request_transport"); recovered = true; } catch (error) {
           if (error.symppFatal) throw error;
           response.error = `${response.error} Recovery failed: ${error.message}`;
         }

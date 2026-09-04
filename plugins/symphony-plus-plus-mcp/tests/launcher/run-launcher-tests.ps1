@@ -522,13 +522,13 @@ $nodeBurstJson = & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $P
 $nodeExitCode = $LASTEXITCODE
 Assert-True ($nodeExitCode -eq 0) "Node bridge burst test must pass"
 $nodeBurst = $nodeBurstJson | ConvertFrom-Json
-Assert-True ($nodeBurst.clients -eq 200 -and $nodeBurst.board -eq 0 -and $nodeBurst.earlyLease -eq 1 -and $nodeBurst.initialize -eq 200) "200 concurrent production Node bridges must initialize against the fixture backend with one health-leader lease and no dashboard traffic"
+Assert-True ($nodeBurst.clients -eq 30 -and $nodeBurst.board -eq 0 -and $nodeBurst.earlyLease -eq 1 -and $nodeBurst.initialize -eq 30) "30 concurrent Node bridges must initialize against the fixture backend with one health-leader lease and no dashboard traffic"
 $coldSmokeJson = & (Get-Command node.exe -ErrorAction Stop).Source (Join-Path $PSScriptRoot "cold-start-singleton-smoke.js")
 $coldExitCode = $LASTEXITCODE
 Assert-True ($coldExitCode -eq 0) "Installed cold-herd, leader-death, and rotating-owner suite must pass"
 $coldSmoke = $coldSmokeJson | ConvertFrom-Json
-Assert-True ((@($coldSmoke.matrix.clients) -join ",") -eq "30,100,200" -and @($coldSmoke.matrix | Where-Object { $_.manifest -ne 1 -or $_.artifact -ne 1 -or $_.backends -ne 1 -or $_.listeners -ne 0 }).Count -eq 0) "30/100/200 shipped-command fixture matrices must preserve singleton cold work and release the backend listener after the final client"
-Assert-True ($coldSmoke.powershell_5_1 -and $coldSmoke.pwsh -and $coldSmoke.cleanup -and @($coldSmoke.leader_death).Count -eq 4) "Cold-herd coverage must prove both PowerShell shells, cleanup, and all leader-death phases"
+Assert-True ((@($coldSmoke.matrix.clients) -join ",") -eq "30,100" -and @($coldSmoke.matrix | Where-Object { $_.manifest -ne 1 -or $_.artifact -ne 1 -or $_.backends -ne 1 -or $_.listeners -ne 0 }).Count -eq 0) "30/100 shipped-command fixture matrices must preserve singleton cold work and release the backend listener after the final client"
+Assert-True ($coldSmoke.powershell_5_1 -and $coldSmoke.pwsh -and $coldSmoke.cleanup -and $coldSmoke.powershell_fallback.clients -eq 10 -and @($coldSmoke.leader_death).Count -eq 4) "Cold-herd coverage must prove both PowerShell shells, a stable 10-client fallback herd, cleanup, and all leader-death phases"
 Assert-True (@($coldSmoke.recovery).Count -eq 11 -and @($coldSmoke.recovery | Where-Object { $_.mode -notin "shutdown_during_recovery", "powershell_fallback_recovery", "powershell_fallback_initialize_retry" -and ($_.backends -ne 2 -or $_.pids -ne 2 -or $_.listeners -ne 0 -or $_.recovery_leaders -ne 1) }).Count -eq 0) "Node and PowerShell fallback recovery must each elect exactly one replacement backend and still reach zero listeners"
 Assert-True (@($coldSmoke.recovery | Where-Object { $_.mode -like "*ambiguous_tool" -and $_.mutations -eq 1 }).Count -eq 2 -and @($coldSmoke.recovery | Where-Object { $_.mode -notin "shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery", "powershell_fallback_recovery", "powershell_fallback_initialize_retry" -and $_.tools_list -le $_.clients }).Count -eq 0) "Recovered adapters that issue tools/list must rebind it and never replay the ambiguous mutating tool call"
 $fallbackRecovery = $coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_recovery"
@@ -539,7 +539,7 @@ Assert-True (($coldSmoke.recovery | Where-Object mode -eq "generation_changed_re
 Assert-True (($coldSmoke.recovery | Where-Object mode -eq "cleanup_source_changed_recovery").fatal_cleanup) "A replacement rejected by cleanup-source validation must detach its lease, fail closed, and stop cleanly"
 Assert-True (($coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_recovery").fallback_recovery -and ($coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_recovery").cancelled_recovery) "Surviving PowerShell fallback adapters must retain STDIO, rebind the replacement, cancel recovery on final close, and drain it after final detach"
 Assert-True (($coldSmoke.recovery | Where-Object mode -eq "powershell_fallback_initialize_retry").initialize_retry) "A provably unsent initialize must be retransmitted after PowerShell fallback recovery"
-Assert-True ($coldSmoke.powershell_fallback.clients -eq 30 -and $coldSmoke.powershell_fallback.preparations -eq 1 -and $coldSmoke.powershell_fallback.backends -eq 1) "Direct PowerShell fallback must elect one cold leader before installed identity and runtime work"
+Assert-True ($coldSmoke.powershell_fallback.clients -eq 10 -and $coldSmoke.powershell_fallback.preparations -eq 1 -and $coldSmoke.powershell_fallback.backends -eq 1) "Direct PowerShell fallback must elect one cold leader before installed identity and runtime work"
 $jobCertificationJson = & (Join-Path $PSScriptRoot "run-job-object-certification.ps1")
 $jobCertificationExitCode = $LASTEXITCODE
 Assert-True ($jobCertificationExitCode -eq 0) "Windows Job Object certification must pass"

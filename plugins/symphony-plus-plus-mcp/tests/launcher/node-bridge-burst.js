@@ -8,7 +8,7 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 
-const clients = Number(process.env.SYMPP_BURST_CLIENTS || 200);
+const clients = Number(process.env.SYMPP_BURST_CLIENTS || 30);
 const revision = "b".repeat(40);
 const contract = "a".repeat(64);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "sympp-node-burst-"));

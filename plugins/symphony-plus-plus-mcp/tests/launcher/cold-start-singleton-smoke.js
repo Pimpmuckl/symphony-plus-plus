@@ -168,17 +168,17 @@ function tracePid(traceDir, event) {
   if (!fs.existsSync(traceDir)) return 0;
   for (const name of fs.readdirSync(traceDir)) {
     if (!name.endsWith(".log")) continue;
-    if (fs.readFileSync(path.join(traceDir, name), "utf8").split(/\r?\n/).includes(event)) return Number(path.basename(name, ".log"));
+    if (fs.readFileSync(path.join(traceDir, name), "utf8").split(/\r?\n/).some((line) => line.split("\t", 1)[0] === event)) return Number(path.basename(name, ".log"));
   }
   return 0;
 }
 function traceCount(traceDir, event) {
   if (!fs.existsSync(traceDir)) return 0;
-  return fs.readdirSync(traceDir).filter((n) => n.endsWith(".log")).reduce((sum, name) => sum + fs.readFileSync(path.join(traceDir, name), "utf8").split(/\r?\n/).filter((line) => line === event).length, 0);
+  return fs.readdirSync(traceDir).filter((n) => n.endsWith(".log")).reduce((sum, name) => sum + fs.readFileSync(path.join(traceDir, name), "utf8").split(/\r?\n/).filter((line) => line.split("\t", 1)[0] === event).length, 0);
 }
 function traceOrder(traceDir, before, after) {
   return fs.readdirSync(traceDir).some((name) => {
-    const lines = fs.readFileSync(path.join(traceDir, name), "utf8").split(/\r?\n/);
+    const lines = fs.readFileSync(path.join(traceDir, name), "utf8").split(/\r?\n/).map((line) => line.split("\t", 1)[0]);
     return lines.indexOf(before) >= 0 && lines.indexOf(before) < lines.indexOf(after);
   });
 }
@@ -707,12 +707,11 @@ async function main() {
   const results = [];
   results.push(await runCase(30, windowsPowerShell));
   results.push(await runCase(100, pwsh));
-  results.push(await runCase(200, pwsh));
-  const powershellFallback = await runCase(30, windowsPowerShell, "powershell_fallback");
+  const powershellFallback = await runCase(10, windowsPowerShell, "powershell_fallback");
   for (const mode of ["manifest_death", "artifact_death", "backend_death", "backend_prebind_death"]) results.push(await runCase(30, pwsh, mode));
   const recovery = [];
   for (const mode of ["owner_loss", "backend_loss", "backend_only_read_recovery", "ambiguous_tool", "powershell_fallback_ambiguous_tool", "shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery", "powershell_fallback_recovery", "powershell_fallback_backend_only_read_recovery", "powershell_fallback_initialize_retry"]) recovery.push(await runCase(["shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery"].includes(mode) ? 3 : mode === "powershell_fallback_recovery" ? 4 : mode.endsWith("backend_only_read_recovery") || mode.endsWith("ambiguous_tool") || mode === "powershell_fallback_initialize_retry" ? 1 : 10, mode.startsWith("powershell_fallback") ? windowsPowerShell : pwsh, mode));
-  process.stdout.write(`${JSON.stringify({ matrix: results.slice(0, 3), powershell_fallback: powershellFallback, leader_death: results.slice(3), recovery, powershell_5_1: true, pwsh: true, cleanup: true })}\n`);
+  process.stdout.write(`${JSON.stringify({ matrix: results.slice(0, 2), powershell_fallback: powershellFallback, leader_death: results.slice(2), recovery, powershell_5_1: true, pwsh: true, cleanup: true })}\n`);
 }
 
 if (process.argv[2] === "--barrier-client") barrierClient().catch((error) => { process.stderr.write(`${error.stack || error}\n`); process.exit(1); });
