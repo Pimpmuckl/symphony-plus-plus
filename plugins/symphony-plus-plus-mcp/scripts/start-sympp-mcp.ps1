@@ -726,10 +726,14 @@ function Get-SymppBackendHealth([string]$BackendUrl, [bool]$RequireDashboardRead
     return New-SymppBackendHealth $false $null "missing_url" $false
   }
 
-  $tcpOpen = Test-LoopbackHttpTcpOpen $BackendUrl
-  $readinessUrl = $BackendUrl.TrimEnd("/") + "/mcp/readiness"
-
+  $tcpOpen = $false
   try {
+    $uri = [System.Uri]::new($BackendUrl)
+    if ($uri.IsLoopback -and [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners().Port -notcontains $uri.Port) {
+      return New-SymppBackendHealth $false $null "readiness_failed" $false
+    }
+    $tcpOpen = Test-LoopbackHttpTcpOpen $BackendUrl
+    $readinessUrl = $BackendUrl.TrimEnd("/") + "/mcp/readiness"
     $response = Invoke-WebRequest -Uri $readinessUrl -Method Get -Headers @{ Accept = "application/json" } -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
     $payload = [string]$response.Content | ConvertFrom-Json
     $status = if ($payload.PSObject.Properties["status"]) { [string]$payload.status } else { $null }
