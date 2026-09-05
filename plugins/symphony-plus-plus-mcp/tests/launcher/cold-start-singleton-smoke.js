@@ -795,6 +795,7 @@ async function probePeer() {
 }
 
 async function checkResponsiveOwnerProbe() {
+  const bridge = require(path.join(pluginRoot, "scripts/start-sympp-mcp-bridge.js"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sympp-probe-"));
   const pipe = `\\\\.\\pipe\\sympp-test-${crypto.randomUUID()}`;
   let waitingSocket;
@@ -807,6 +808,7 @@ async function checkResponsiveOwnerProbe() {
   const closed = new Promise((resolve) => child.once("exit", resolve));
   let peer;
   let socket;
+  let pendingSocket;
   try {
     peer = await new Promise((resolve) => child.once("message", resolve));
     const file = path.join(root, "owner.lock");
@@ -824,6 +826,9 @@ async function checkResponsiveOwnerProbe() {
       probe.once("error", reject);
     });
     assert.equal(response, peer.owner_token);
+    const pendingConnection = new Promise((resolve) => { waitingSocket = resolve; });
+    const pendingOwner = bridge.livenessMatches(child.pid, pipe, "expected");
+    pendingSocket = await pendingConnection;
     const replacement = { ...readJson(file), lock_id: "replacement" };
     writeJson(file, replacement);
     const done = new Promise((resolve) => child.once("message", resolve));
@@ -831,7 +836,8 @@ async function checkResponsiveOwnerProbe() {
     assert.deepEqual(await done, { done: true });
     assert.deepEqual(readJson(file), replacement, "A completed old probe must not remove a replacement lock");
     assert.equal(await closed, 0);
-    const bridge = require(path.join(pluginRoot, "scripts/start-sympp-mcp-bridge.js"));
+    assert.equal(await pendingOwner, false, "An owner that dies during a pending probe must not suppress final cleanup");
+    pendingSocket.destroy();
     assert.equal(await bridge.livenessMatches(child.pid, peer.owner_pipe, peer.owner_token), false, "A dead owner must be reclaimable");
     assert.equal(await bridge.livenessMatches(process.ppid, pipe + "-missing", "expected"), false);
     server.removeAllListeners("connection");
@@ -843,6 +849,7 @@ async function checkResponsiveOwnerProbe() {
     assert.equal(await bridge.livenessMatches(process.ppid, pipe, "expected"), true, "An unresponsive live owner must not lose its lock");
   } finally {
     socket?.destroy();
+    pendingSocket?.destroy();
     if (child.exitCode === null) { child.kill(); await closed; }
     await new Promise((resolve) => server.close(resolve));
     await removeTree(root);

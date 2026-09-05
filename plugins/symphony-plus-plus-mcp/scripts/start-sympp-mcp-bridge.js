@@ -325,7 +325,7 @@ async function livenessMatches(pid, pipe, token) {
   return new Promise((resolve) => {
     const socket = net.createConnection(pipe);
     let response = "";
-    const finish = (alive) => { socket.destroy(); resolve(alive); };
+    const finish = (alive) => { socket.destroy(); resolve(alive && processAlive(pid)); };
     socket.setEncoding("utf8");
     // A busy owner remains authoritative; its stalled probe must not stall ours.
     socket.setTimeout(1000, () => finish(true));
