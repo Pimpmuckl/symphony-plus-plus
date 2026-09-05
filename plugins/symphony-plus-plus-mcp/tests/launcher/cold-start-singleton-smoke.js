@@ -782,17 +782,16 @@ async function probePeer() {
   const ownFile = process.argv[3];
   const ownLock = await bridge.tryAcquireProcessLock(ownFile);
   process.send(readJson(ownFile));
-  process.once("message", async ({ lockFile }) => {
-    try {
-      const result = await bridge.tryAcquireProcessLock(lockFile);
-      assert.equal(result, null);
-      process.send({ done: true });
-    } finally {
-      bridge.releaseProcessLock(ownFile, ownLock);
-      bridge.closeLivenessProbe();
-      process.disconnect();
-    }
-  });
+  try {
+    const [{ lockFile }] = await once(process, "message");
+    const result = await bridge.tryAcquireProcessLock(lockFile);
+    assert.equal(result, null);
+    process.send({ done: true });
+  } finally {
+    bridge.releaseProcessLock(ownFile, ownLock);
+    bridge.closeLivenessProbe();
+    process.disconnect();
+  }
 }
 
 async function checkResponsiveOwnerProbe() {
@@ -803,16 +802,17 @@ async function checkResponsiveOwnerProbe() {
   const accepted = once(server, "connection");
   await new Promise((resolve) => server.listen(pipe, resolve));
   const child = spawn(process.execPath, [__filename, "--probe-peer", path.join(root, "child.lock")], { stdio: ["ignore", "ignore", "inherit", "ipc"], windowsHide: true });
-  const closed = new Promise((resolve) => child.once("exit", resolve));
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  const fromPeer = (promise) => Promise.race([promise, closed.then((code) => { throw new Error(`Probe peer exited before replying: ${code}`); })]);
   let peer;
   let socket;
   let pendingSocket;
   try {
-    peer = await new Promise((resolve) => child.once("message", resolve));
+    [peer] = await fromPeer(once(child, "message"));
     const file = path.join(root, "owner.lock");
     writeJson(file, { lock_id: "original", owner_pid: process.pid, owner_pipe: pipe, owner_token: "expected" });
     child.send({ lockFile: file });
-    [socket] = await accepted;
+    [socket] = await fromPeer(accepted);
     // The child is waiting on us. It must still answer its own ownership pipe.
     const response = await new Promise((resolve, reject) => {
       const probe = net.createConnection(peer.owner_pipe);
@@ -826,12 +826,12 @@ async function checkResponsiveOwnerProbe() {
     assert.equal(response, peer.owner_token);
     const pendingConnection = once(server, "connection");
     const pendingOwner = bridge.livenessMatches(child.pid, pipe, "expected");
-    [pendingSocket] = await pendingConnection;
+    [pendingSocket] = await fromPeer(pendingConnection);
     const replacement = { ...readJson(file), lock_id: "replacement" };
     writeJson(file, replacement);
-    const done = new Promise((resolve) => child.once("message", resolve));
+    const done = fromPeer(once(child, "message"));
     socket.end("wrong-token");
-    assert.deepEqual(await done, { done: true });
+    assert.deepEqual((await done)[0], { done: true });
     assert.deepEqual(readJson(file), replacement, "A completed old probe must not remove a replacement lock");
     assert.equal(await closed, 0);
     assert.equal(await pendingOwner, false, "An owner that dies during a pending probe must not suppress final cleanup");
