@@ -64,12 +64,16 @@ function Write-Diagnostic([string]$Message) {
   [Console]::Error.WriteLine($Message)
 }
 
+function Test-SymppReleaseWrapperCommandLine([string]$CommandLine) {
+  return $CommandLine -match '(?i)^(?:"[^"]*cmd\.exe"|[^\s"]*cmd\.exe)\s+/d\s+/s\s+/c\s+call\s+runtime\\bin\\symphony_elixir\.bat\s+start\s*$'
+}
+
 function Test-SymppBackendCommandLine([string]$CommandLine) {
   if ([string]::IsNullOrWhiteSpace($CommandLine)) {
     return $false
   }
 
-  if ($CommandLine -match "(?i)\bsympp\.cockpit\b") {
+  if ($CommandLine -match "(?i)\bsympp\.cockpit\b" -or (Test-SymppReleaseWrapperCommandLine $CommandLine)) {
     return $true
   }
 
@@ -1123,7 +1127,8 @@ function Resolve-SymppPendingBackendProcess($State) {
       $created = [DateTimeOffset]$_.CreationDate
       $commandLine = [string]$_.CommandLine
       $created -ge $publishedAt.AddSeconds(-1) -and (Test-SymppBackendCommandLine $commandLine) -and
-        ($commandLine.Replace("/", "\").IndexOf($runtimeRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        ((Test-SymppReleaseWrapperCommandLine $commandLine) -or
+         $commandLine.Replace("/", "\").IndexOf($runtimeRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
          (Test-ManagedRuntimePortCommandLine "backend" $commandLine $backendPort))
     })
   if ($matches.Count -ne 1) { return $null }
@@ -1157,8 +1162,11 @@ function Test-SymppStartingBackendOwned($State, $InstalledIdentity, $Controls) {
   $commandLine = Get-ProcessCommandLine $backendPid
   if (-not (Test-SymppBackendCommandLine $commandLine)) { return $false }
   $runtimeRoot = [string]$State.publication.backend.runtime_root
+  # The relative release wrapper has no root in its command line. Its published
+  # PID and birth time (or the dead leader's child lineage above) establish ownership.
   return -not [string]::IsNullOrWhiteSpace($runtimeRoot) -and
-    ($commandLine.Replace("/", "\").IndexOf(([System.IO.Path]::GetFullPath($runtimeRoot)).Replace("/", "\"), [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+    ((Test-SymppReleaseWrapperCommandLine $commandLine) -or
+     $commandLine.Replace("/", "\").IndexOf(([System.IO.Path]::GetFullPath($runtimeRoot)).Replace("/", "\"), [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
      (Test-ManagedRuntimePortCommandLine "backend" $commandLine ([int]$State.publication.backend.port)))
 }
 
@@ -1710,7 +1718,11 @@ function Stop-LoggedProcess($Launch) {
     return
   }
 
-  Stop-Process -Id $Launch.process.Id -Force -ErrorAction SilentlyContinue
+  if (Test-SymppWindowsPlatform) {
+    & taskkill.exe /PID $Launch.process.Id /T /F 2>$null | Out-Null
+  } else {
+    Stop-Process -Id $Launch.process.Id -Force -ErrorAction SilentlyContinue
+  }
   try {
     [void]$Launch.process.WaitForExit(5000)
   } catch {
@@ -2328,6 +2340,7 @@ function Invoke-PreparedRuntimeStart([string]$RuntimeFile, [string]$PluginRoot) 
         @(Get-TcpPortOwners ([int]$state.backend.port)).Count -gt 0) { return $false }
     $artifact = $prepared.runtime
     $dashboardRelative = ([string]$artifact.dashboard_root).Substring(([string]$artifact.root).Length).TrimStart([char[]]"\/")
+    if ([string]::IsNullOrWhiteSpace($dashboardRelative)) { $dashboardRelative = "." }
     if (-not (Test-SymppArtifactCacheReady $artifact.root $artifact.entrypoint_relative $artifact.sha256 $dashboardRelative $artifact.dashboard_fingerprint) -or
         -not (Test-Path -LiteralPath (Join-Path $artifact.root "runtime/bin/symphony_elixir.bat") -PathType Leaf)) { return $false }
     $artifact.workflow = $prepared.workflow

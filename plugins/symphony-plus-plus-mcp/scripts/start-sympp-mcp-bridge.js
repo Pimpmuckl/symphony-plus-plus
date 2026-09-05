@@ -962,7 +962,7 @@ async function resolveHealthyRuntime(runtimeFile, pluginRoot, cancelled) {
         releaseProcessLock(lockFile, lock);
       }
     } else {
-      await new Promise((resolve) => setTimeout(resolve, 100 + Math.floor(Math.random() * 201)));
+      await waitForRuntimePublication(runtimeFile);
     }
   }
   return null;
@@ -1288,16 +1288,27 @@ async function prepareColdRuntime() {
   }
 }
 
+function waitForRuntimePublication(runtimeFile) {
+  return new Promise((resolve) => {
+    let watcher;
+    const done = () => { clearTimeout(timer); if (watcher) watcher.close(); resolve(); };
+    const timer = setTimeout(done, 100 + Math.floor(Math.random() * 201));
+    try {
+      watcher = fs.watch(path.dirname(runtimeFile), (_event, filename) => {
+        if (!filename || String(filename) === path.basename(runtimeFile)) done();
+      });
+      watcher.on("error", done);
+    } catch (_) { /* The timer still covers missing directories and missed events. */ }
+  });
+}
+
 async function resolveColdRuntime(runtimeFile, pluginRoot) {
-  // Establish file watches while the backend boots. Recheck identity at publication.
-  const generationReady = resolveCachedIdentity(pluginRoot).catch(() => null);
   const lockFile = `${runtimeFile}.cold.lock`;
   const configuredSeconds = Number(process.env.SYMPP_COLD_START_TIMEOUT_SEC || 300);
   const deadline = Date.now() + (Number.isFinite(configuredSeconds) ? Math.max(30, Math.min(330, configuredSeconds)) : 300) * 1000;
   while (Date.now() < deadline) {
     const state = readJson(runtimeFile);
     if (state && (state.backend?.managed !== true || processAlive(Number(state.backend.pid))) && (!state.publication || state.publication.status === "ready")) {
-      await generationReady;
       const cachedIdentity = await resolveCachedIdentity(pluginRoot);
       const identity = resolveStateIdentity(state, pluginRoot, cachedIdentity);
       if (identity) return { state, identity };
@@ -1308,7 +1319,6 @@ async function resolveColdRuntime(runtimeFile, pluginRoot) {
         const confirmed = readJson(runtimeFile);
         let confirmedIdentity = null;
         if (confirmed && (confirmed.backend?.managed !== true || processAlive(Number(confirmed.backend.pid))) && (!confirmed.publication || confirmed.publication.status === "ready")) {
-          await generationReady;
           confirmedIdentity = resolveStateIdentity(confirmed, pluginRoot, await resolveCachedIdentity(pluginRoot));
         }
         if (!confirmedIdentity) await prepareColdRuntime();
@@ -1316,7 +1326,7 @@ async function resolveColdRuntime(runtimeFile, pluginRoot) {
         releaseProcessLock(lockFile, lock);
       }
     } else {
-      await new Promise((resolve) => setTimeout(resolve, 100 + Math.floor(Math.random() * 201)));
+      await waitForRuntimePublication(runtimeFile);
     }
   }
   return null;

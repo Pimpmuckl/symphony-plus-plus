@@ -767,6 +767,11 @@ exit /b %ERRORLEVEL%
       clients = $ColdClients
       all_ready_ms = [Math]::Round($preparedElapsed, 2)
       trace = $preparedTrace
+      phases = @(foreach ($event in @("powershell_entry", "prepared_runtime_start", "backend_start_begin", "backend_start_end", "runtime_ready_published", "node_bridge_selected")) {
+        foreach ($record in @(Get-TraceDetails $event ([DateTimeOffset]$preparedStartedAt).ToUnixTimeMilliseconds())) {
+          [pscustomobject]@{ event = $event; elapsed_ms = $record.at_ms - ([DateTimeOffset]$preparedStartedAt).ToUnixTimeMilliseconds() }
+        }
+      })
     }
     Write-BenchmarkProgress "Prepared cold: $ColdClients clients initialized and listed tools in $($preparedCold.all_ready_ms) ms."
     if ([int]$preparedTrace["prepared_runtime_start"] -ne 1 -or [int]$preparedTrace["manifest_fetch_begin"] -ne 0) {

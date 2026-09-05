@@ -236,7 +236,7 @@ function Get-ArtifactBackendCommand($ArtifactRuntime, $Plan, [string]$DashboardO
       $environment["PHX_SERVER"] = "true"
       return [pscustomobject]@{
         file = "cmd.exe"
-        args = @("/d", "/s", "/c", "call", $releaseEntrypoint, "start")
+        args = @("/d", "/s", "/c", "call", "runtime\bin\symphony_elixir.bat", "start")
         working_directory = [string]$ArtifactRuntime.root
         environment = $environment
         prepared_release = [pscustomobject]@{

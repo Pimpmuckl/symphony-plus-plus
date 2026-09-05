@@ -68,7 +68,7 @@ foreach ($name in @(
     "Get-McpContractFingerprintFromMarketplaceSource", "Resolve-LocalMcpContractFingerprint",
     "New-RuntimeKey", "Get-RuntimeStateKey", "Get-PortFromOrigin", "Test-EndpointMatches", "Test-BackendShouldShutdownOnIdle",
     "Test-PortSelectionAllowsReuse", "Test-BackendContractMatches", "Test-BackendLaunchCompatible",
-    "Test-RuntimeStateExternalLoopback", "Test-RuntimeEntryEndpointMatches", "Test-SymppBackendCommandLine", "Get-ProcessCommandLine", "New-SymppPublicationControls", "Test-SymppPublicationControlsMatch",
+    "Test-RuntimeStateExternalLoopback", "Test-RuntimeEntryEndpointMatches", "Test-SymppReleaseWrapperCommandLine", "Test-SymppBackendCommandLine", "Get-ProcessCommandLine", "New-SymppPublicationControls", "Test-SymppPublicationControlsMatch",
     "Test-SymppPublishedRuntimeReadyLocally", "Resolve-SymppPendingBackendProcess", "Test-SymppStartingBackendOwned", "New-ReusedBackendPlan", "New-ReusedDashboardPlan",
     "Resolve-LocalWarmAttachIdentity", "Resolve-FastAttachRuntimePlan", "Resolve-DashboardPlan", "Set-SymppSourceRevisionEnvironment"
   )) {
@@ -277,7 +277,7 @@ $nodeExitCode = $LASTEXITCODE
 Assert-True ($nodeExitCode -eq 0) "Node bridge response forwarding test must pass"
 $artifactCommandTemp = Join-Path $PSScriptRoot (".artifact-command-" + [guid]::NewGuid().ToString("N"))
 try {
-  $artifactRoot = Join-Path $artifactCommandTemp "artifact&command"
+  $artifactRoot = Join-Path $artifactCommandTemp "artifact & command%TEMP%"
   $releaseEntrypoint = Join-Path $artifactRoot "runtime/bin/symphony_elixir.bat"
   New-Item -ItemType Directory -Path (Split-Path -Parent $releaseEntrypoint) -Force | Out-Null
   Set-Content -LiteralPath $releaseEntrypoint -Value "@exit /b 23" -Encoding ascii

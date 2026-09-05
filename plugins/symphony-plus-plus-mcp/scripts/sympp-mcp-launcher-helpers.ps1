@@ -570,7 +570,7 @@ function ConvertTo-ProcessArgument([string]$Argument) {
     return '""'
   }
 
-  if ($Argument -notmatch '[\s"&|<>^()]') {
+  if ($Argument -notmatch '[\s"]') {
     return $Argument
   }
 

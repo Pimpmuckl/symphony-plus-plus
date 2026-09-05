@@ -103,7 +103,7 @@ function backendFixture() {
     ' send(res,404,{error:"not found"});',
     '});',
     'server.on("connection",socket=>{if(!failAfterProbeArmed)return;failAfterProbeArmed=false;socket.on("close",()=>{server.close();server.closeAllConnections?.();setTimeout(()=>process.exit(0),10);});});',
-    'fs.mkdirSync(path.dirname(ledger),{recursive:true});fs.writeFileSync(ledger,"fixture");function listen(){if(bindRelease&&!fs.existsSync(bindRelease))return setTimeout(listen,25);server.listen(port,"127.0.0.1",save);}listen();'
+    'fs.mkdirSync(path.dirname(ledger),{recursive:true});fs.writeFileSync(ledger,"fixture");save();function listen(){if(bindRelease&&!fs.existsSync(bindRelease))return setTimeout(listen,25);server.listen(port,"127.0.0.1",save);}listen();'
   ].join("\n");
 }
 
@@ -480,6 +480,18 @@ async function runCase(clientCount, shell, mode = "normal") {
       fs.rmSync(backendState);
       if (mode === "backend_death") fs.rmSync(releaseFile);
       if (mode === "backend_prebind_death") fs.rmSync(bindReleaseFile);
+      if (mode === "timeout") {
+        fs.rmSync(bindReleaseFile);
+        const launch = spawn(shell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(installedRoot, "scripts", "start-sympp-mcp.ps1"), "-TryPreparedRuntime"], { env: { ...environment, SYMPP_BACKEND_STARTUP_TIMEOUT_SEC: "3" }, windowsHide: true, stdio: "ignore" });
+        const exited = new Promise((resolve) => launch.on("exit", resolve));
+        const starting = await waitFor(() => { const value = readJson(runtimeFile); return value?.publication?.status === "starting" && value.backend?.pid && value; }, "Timed launch did not publish its wrapper.");
+        backendPid = await waitFor(() => readJson(backendState)?.pid, "Timed launch did not start its backend child.");
+        assert.notEqual(await exited, 0, "A pre-bind timeout must fail startup.");
+        assert.equal(processAlive(backendPid), false, "Startup timeout orphaned its backend child.");
+        assert.equal(processAlive(Number(starting.backend.pid)), false);
+        assert.ok(await portAvailable(backendPort));
+        return { mode: "prepared_timeout", processes_after: 0, listeners: 0 };
+      }
     }
 
     let readyResolve;
@@ -754,7 +766,7 @@ async function main() {
   const powershellFallback = await runCase(10, windowsPowerShell, "powershell_fallback");
   for (const mode of ["manifest_death", "artifact_death", "backend_death", "backend_prebind_death"]) results.push(await runCase(30, pwsh, mode));
   const recovery = [];
-  for (const mode of ["prepared_normal", "prepared_backend_death", "prepared_backend_prebind_death"]) results.push(await runCase(5, windowsPowerShell, mode));
+  for (const mode of ["prepared_normal", "prepared_backend_death", "prepared_backend_prebind_death", "prepared_timeout"]) results.push(await runCase(5, windowsPowerShell, mode));
   for (const mode of ["owner_loss", "backend_loss", "backend_only_read_recovery", "ambiguous_tool", "powershell_fallback_ambiguous_tool", "shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery", "powershell_fallback_recovery", "powershell_fallback_backend_only_read_recovery", "powershell_fallback_initialize_retry"]) recovery.push(await runCase(["shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery"].includes(mode) ? 3 : mode === "powershell_fallback_recovery" ? 4 : mode.endsWith("backend_only_read_recovery") || mode.endsWith("ambiguous_tool") || mode === "powershell_fallback_initialize_retry" ? 1 : 10, mode.startsWith("powershell_fallback") ? windowsPowerShell : pwsh, mode));
   process.stdout.write(`${JSON.stringify({ matrix: results.slice(0, 2), powershell_fallback: powershellFallback, leader_death: results.slice(2), recovery, powershell_5_1: true, pwsh: true, cleanup: true })}\n`);
 }
