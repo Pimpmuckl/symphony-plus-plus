@@ -17,7 +17,6 @@ const EXTERNAL_HEALTH_CACHE_TTL_MS = 2000;
 const HEALTH_PROBE_TIMEOUT_MS = 10000;
 const HEALTH_COALESCE_TIMEOUT_MS = 30000;
 const CLEANUP_SOURCE_CHANGED = Symbol("cleanup_source_changed");
-const synchronousWait = new Int32Array(new SharedArrayBuffer(4));
 const agent = new http.Agent({ keepAlive: true });
 const generationWatchers = [];
 let generationWatchReady = false;
@@ -306,7 +305,10 @@ function ensureLivenessProbe() {
   livenessPipe = `\\\\.\\pipe\\sympp-mcp-${process.pid}-${crypto.randomUUID().replace(/-/g, "")}`;
   livenessToken = crypto.randomBytes(32).toString("hex");
   return new Promise((resolve, reject) => {
-    const server = net.createServer((socket) => socket.end(livenessToken));
+    const server = net.createServer((socket) => {
+      socket.on("error", () => {}); // Probes can time out or exit before the reply.
+      socket.end(livenessToken);
+    });
     const failed = (error) => { try { server.close(); } catch (_) { } reject(error); };
     server.once("error", failed);
     server.listen(livenessPipe, () => {
@@ -317,16 +319,20 @@ function ensureLivenessProbe() {
   });
 }
 
-function livenessMatches(pid, pipe, token) {
+async function livenessMatches(pid, pipe, token) {
   if (!pipe || !token || !processAlive(pid)) return false;
   if (Number(pid) === process.pid) return pipe === livenessPipe && token === livenessToken;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    try { return fs.readFileSync(pipe, "utf8") === token; } catch (error) {
-      if (["ENOENT", "ENXIO"].includes(error.code)) return false;
-      if (attempt < 4) Atomics.wait(synchronousWait, 0, 0, 10);
-    }
-  }
-  return true;
+  return new Promise((resolve) => {
+    const socket = net.createConnection(pipe);
+    let response = "";
+    const finish = (alive) => { socket.destroy(); resolve(alive); };
+    socket.setEncoding("utf8");
+    // A busy owner remains authoritative; its stalled probe must not stall ours.
+    socket.setTimeout(1000, () => finish(true));
+    socket.on("data", (chunk) => { response += chunk; });
+    socket.once("end", () => finish(response === token));
+    socket.once("error", (error) => finish(!["ENOENT", "ENXIO", "ECONNREFUSED"].includes(error.code)));
+  });
 }
 
 function closeLivenessProbe() {
@@ -336,7 +342,7 @@ function closeLivenessProbe() {
   livenessToken = null;
 }
 
-function tryAcquireProcessLock(lockFile) {
+async function tryAcquireProcessLock(lockFile) {
   fs.mkdirSync(path.dirname(lockFile), { recursive: true });
   try {
     const fd = fs.openSync(lockFile, "wx");
@@ -349,11 +355,19 @@ function tryAcquireProcessLock(lockFile) {
     if (error.code !== "EEXIST") throw error;
     const owner = readJson(lockFile);
     const ownerValid = owner && owner.lock_id && owner.owner_pipe && owner.owner_token && Number(owner.owner_pid) > 0;
-    let reclaim = ownerValid && !livenessMatches(owner.owner_pid, owner.owner_pipe, owner.owner_token);
+    let reclaim = ownerValid && !await livenessMatches(owner.owner_pid, owner.owner_pipe, owner.owner_token);
+    let staleStamp;
     if (!ownerValid) {
-      try { reclaim = Date.now() - fs.statSync(lockFile).mtimeMs > 5000; } catch (_) { reclaim = true; }
+      try { staleStamp = fs.statSync(lockFile); reclaim = Date.now() - staleStamp.mtimeMs > 5000; } catch (_) { return null; }
     }
-    if (reclaim) { try { fs.unlinkSync(lockFile); trace("abandoned_lock_reclaimed"); } catch (_) { } }
+    if (reclaim) {
+      try {
+        const current = readJson(lockFile);
+        const sameOwner = ownerValid ? current?.lock_id === owner.lock_id :
+          !current?.lock_id && fs.statSync(lockFile).mtimeMs === staleStamp.mtimeMs;
+        if (sameOwner) { fs.unlinkSync(lockFile); trace("abandoned_lock_reclaimed"); }
+      } catch (_) { }
+    }
     return null;
   }
 }
@@ -420,7 +434,7 @@ async function coalescedGenerationKey(pluginRoot, sourceRoot, markerFile) {
   const lockFile = `${markerFile}.lock`;
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
-    const lock = tryAcquireProcessLock(lockFile);
+    const lock = await tryAcquireProcessLock(lockFile);
     if (lock !== null) {
       try {
         watchVersion = generationWatchVersion;
@@ -817,7 +831,7 @@ async function ensureRuntimeHealth(runtimeFile, state, identity, clientId) {
   if (healthCacheMatches(readJson(cacheFile), state, identity)) return { healthy: true, attachedResponse: null };
   const deadline = Date.now() + HEALTH_COALESCE_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const lock = tryAcquireProcessLock(lockFile);
+    const lock = await tryAcquireProcessLock(lockFile);
     if (lock !== null) {
       let attachedResponse = null;
       try {
@@ -892,7 +906,7 @@ function createLocalLease(runtimeFile, state, identity) {
   return file;
 }
 
-function sameRuntimeNodeLeaseExists(runtimeFile, key) {
+async function sameRuntimeNodeLeaseExists(runtimeFile, key) {
   const directory = leaseDirectory(runtimeFile);
   let files;
   try { files = fs.readdirSync(directory).filter((name) => /^bridge-.*\.json$/.test(name)); } catch (_) { return false; }
@@ -900,7 +914,7 @@ function sameRuntimeNodeLeaseExists(runtimeFile, key) {
     const file = path.join(directory, name);
     const lease = readJson(file);
     if (!lease || !lease.process_liveness_pipe || !lease.process_liveness_token) continue;
-    const active = livenessMatches(lease.pid, lease.process_liveness_pipe, lease.process_liveness_token);
+    const active = await livenessMatches(lease.pid, lease.process_liveness_pipe, lease.process_liveness_token);
     if (!active) {
       try { fs.unlinkSync(file); } catch (_) { }
     } else if (String(lease.runtime_key || "").toLowerCase() === key.toLowerCase()) return true;
@@ -908,8 +922,8 @@ function sameRuntimeNodeLeaseExists(runtimeFile, key) {
   return false;
 }
 
-function cleanupLastDetach(runtimeFile, key, cleanupScript) {
-  if (sameRuntimeNodeLeaseExists(runtimeFile, key)) return;
+async function cleanupLastDetach(runtimeFile, key, cleanupScript) {
+  if (await sameRuntimeNodeLeaseExists(runtimeFile, key)) return;
   const script = cleanupScript || path.join(__dirname, "start-sympp-mcp.ps1");
   const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-CleanupRuntimeKey", key];
   let result = spawnSync("pwsh.exe", args, { stdio: ["ignore", "ignore", "inherit"] });
@@ -945,7 +959,7 @@ async function resolveHealthyRuntime(runtimeFile, pluginRoot, cancelled) {
       if (state.backend.managed !== true) return null;
     }
     if (cancelled()) return null;
-    const lock = tryAcquireProcessLock(lockFile);
+    const lock = await tryAcquireProcessLock(lockFile);
     if (lock) {
       try {
         const confirmed = readJson(runtimeFile);
@@ -1244,7 +1258,7 @@ async function bridge(identity, state, runtimeFile) {
     if (localLease) { try { fs.unlinkSync(localLease); } catch (_) { } }
     if (attached) await clientLease(current.mcpUrl, clientId, "detach", false);
     closeGenerationWatchers();
-    if (cleanupAllowed && cleanupScript) cleanupLastDetach(runtimeFile, current.identity.runtimeKey, cleanupScript);
+    if (cleanupAllowed && cleanupScript) await cleanupLastDetach(runtimeFile, current.identity.runtimeKey, cleanupScript);
     await clearHerdrBindingAndDrain();
     closeLivenessProbe();
   }
@@ -1329,7 +1343,7 @@ async function resolveColdRuntime(runtimeFile, pluginRoot) {
       const identity = resolveStateIdentity(state, pluginRoot, cachedIdentity);
       if (identity) return { state, identity };
     }
-    const lock = tryAcquireProcessLock(lockFile);
+    const lock = await tryAcquireProcessLock(lockFile);
     if (lock) {
       try {
         const confirmed = readJson(runtimeFile);
@@ -1371,5 +1385,5 @@ if (require.main === module) {
     process.exit(1);
   });
 } else {
-  module.exports = { decodeHerdrBinding, generationFromMarker, generationKey, herdrMetadataArgs, resolveStateIdentity };
+  module.exports = { ensureLivenessProbe, closeLivenessProbe, tryAcquireProcessLock, releaseProcessLock, livenessMatches, decodeHerdrBinding, generationFromMarker, generationKey, herdrMetadataArgs, resolveStateIdentity };
 }

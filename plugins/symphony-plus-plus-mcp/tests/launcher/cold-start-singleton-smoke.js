@@ -774,7 +774,86 @@ async function runCase(clientCount, shell, mode = "normal") {
   }
 }
 
+
+async function probePeer() {
+  const bridge = require(path.join(pluginRoot, "scripts/start-sympp-mcp-bridge.js"));
+  await bridge.ensureLivenessProbe();
+  const ownFile = process.argv[3];
+  const ownLock = await bridge.tryAcquireProcessLock(ownFile);
+  process.send(readJson(ownFile));
+  process.once("message", async ({ lockFile }) => {
+    try {
+      const result = await bridge.tryAcquireProcessLock(lockFile);
+      assert.equal(result, null);
+      process.send({ done: true });
+    } finally {
+      bridge.releaseProcessLock(ownFile, ownLock);
+      bridge.closeLivenessProbe();
+      process.disconnect();
+    }
+  });
+}
+
+async function checkResponsiveOwnerProbe() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sympp-probe-"));
+  const pipe = `\\\\.\\pipe\\sympp-test-${crypto.randomUUID()}`;
+  let waitingSocket;
+  const accepted = new Promise((resolve) => {
+    waitingSocket = resolve;
+  });
+  const server = net.createServer((socket) => waitingSocket(socket));
+  await new Promise((resolve) => server.listen(pipe, resolve));
+  const child = spawn(process.execPath, [__filename, "--probe-peer", path.join(root, "child.lock")], { stdio: ["ignore", "ignore", "inherit", "ipc"], windowsHide: true });
+  const closed = new Promise((resolve) => child.once("exit", resolve));
+  let peer;
+  let socket;
+  try {
+    peer = await new Promise((resolve) => child.once("message", resolve));
+    const file = path.join(root, "owner.lock");
+    writeJson(file, { lock_id: "original", owner_pid: process.pid, owner_pipe: pipe, owner_token: "expected" });
+    child.send({ lockFile: file });
+    socket = await accepted;
+    // The child is waiting on us. It must still answer its own ownership pipe.
+    const response = await new Promise((resolve, reject) => {
+      const probe = net.createConnection(peer.owner_pipe);
+      let body = "";
+      probe.setEncoding("utf8");
+      probe.setTimeout(1000, () => probe.destroy(new Error("A pending peer probe blocked this owner's liveness server")));
+      probe.on("data", (chunk) => { body += chunk; });
+      probe.once("end", () => resolve(body));
+      probe.once("error", reject);
+    });
+    assert.equal(response, peer.owner_token);
+    const replacement = { ...readJson(file), lock_id: "replacement" };
+    writeJson(file, replacement);
+    const done = new Promise((resolve) => child.once("message", resolve));
+    socket.end("wrong-token");
+    assert.deepEqual(await done, { done: true });
+    assert.deepEqual(readJson(file), replacement, "A completed old probe must not remove a replacement lock");
+    assert.equal(await closed, 0);
+    const bridge = require(path.join(pluginRoot, "scripts/start-sympp-mcp-bridge.js"));
+    assert.equal(await bridge.livenessMatches(child.pid, peer.owner_pipe, peer.owner_token), false, "A dead owner must be reclaimable");
+    assert.equal(await bridge.livenessMatches(process.ppid, pipe + "-missing", "expected"), false);
+    server.removeAllListeners("connection");
+    server.on("connection", (connection) => connection.end("expected"));
+    assert.equal(await bridge.livenessMatches(process.ppid, pipe, "wrong"), false, "A wrong token must not retain a stale owner");
+    assert.equal(await bridge.livenessMatches(process.ppid, pipe, "expected"), true);
+    server.removeAllListeners("connection");
+    server.on("connection", (connection) => { socket = connection; });
+    assert.equal(await bridge.livenessMatches(process.ppid, pipe, "expected"), true, "An unresponsive live owner must not lose its lock");
+  } finally {
+    socket?.destroy();
+    if (child.exitCode === null) { child.kill(); await closed; }
+    await new Promise((resolve) => server.close(resolve));
+    await removeTree(root);
+  }
+}
+
 async function main() {
+  if (!process.env.SYMPP_COLD_ONLY || process.env.SYMPP_COLD_ONLY === "liveness") {
+    await checkResponsiveOwnerProbe();
+    if (process.env.SYMPP_COLD_ONLY === "liveness") { console.log("Owner probes stay responsive and preserve replacement locks"); return; }
+  }
   const pwsh = spawnSync("where.exe", ["pwsh.exe"], { encoding: "utf8" }).stdout.trim().split(/\r?\n/)[0];
   const windowsPowerShell = spawnSync("where.exe", ["powershell.exe"], { encoding: "utf8" }).stdout.trim().split(/\r?\n/)[0];
   assert.ok(pwsh && windowsPowerShell, "Both pwsh and Windows PowerShell 5.1 are required.");
@@ -799,5 +878,6 @@ async function main() {
   process.stdout.write(`${JSON.stringify({ matrix: results.slice(0, 2), powershell_fallback: powershellFallback, leader_death: results.slice(2), recovery, powershell_5_1: true, pwsh: true, cleanup: true })}\n`);
 }
 
-if (process.argv[2] === "--barrier-client") barrierClient().catch((error) => { process.stderr.write(`${error.stack || error}\n`); process.exit(1); });
+if (process.argv[2] === "--probe-peer") probePeer().catch((error) => { console.error(error); process.exit(1); });
+else if (process.argv[2] === "--barrier-client") barrierClient().catch((error) => { process.stderr.write(`${error.stack || error}\n`); process.exit(1); });
 else main().catch((error) => { process.stderr.write(`${error.stack || error}\n`); process.exit(1); });
