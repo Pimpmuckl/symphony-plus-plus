@@ -14,7 +14,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   @shortdoc "Starts the local Symphony++ operator cockpit"
   @default_host "127.0.0.1"
   @default_port 19_998
-  @retention_interval_ms 30_000
+  @retention_interval_ms 30 * 60_000
   @board_path "/sympp/board"
   @open_dashboard_override_config_key :sympp_open_dashboard_override
   @open_dashboard_env "SYMPP_OPEN_DASHBOARD"

@@ -9,7 +9,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Retention do
   alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service, as: SoloSessionService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
 
-  @interval_ms 30_000
+  @interval_ms 30 * 60_000
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
