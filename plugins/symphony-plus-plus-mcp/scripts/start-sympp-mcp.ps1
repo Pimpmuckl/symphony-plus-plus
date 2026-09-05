@@ -1632,6 +1632,12 @@ function Stop-CurrentManagedRuntimeStateEntries($State, $ActiveLeases) {
 
 function Get-ManagedListenerPid([string]$Role, [int]$Port) {
   foreach ($owner in @(Get-TcpPortOwners $Port)) {
+    if ($Role -eq "backend" -and (Test-SymppWindowsPlatform)) {
+      try {
+        $executable = (Get-Process -Id ([int]$owner.pid) -ErrorAction Stop).Path
+        if (Test-SymppBackendCommandLine $executable) { return [int]$owner.pid }
+      } catch { }
+    }
     $commandLine = Get-ProcessCommandLine ([int]$owner.pid)
     if (Test-ManagedRuntimeCommandLine $Role $commandLine) {
       return [int]$owner.pid

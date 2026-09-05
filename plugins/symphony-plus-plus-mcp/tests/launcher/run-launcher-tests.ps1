@@ -165,6 +165,8 @@ $plan = Resolve-FastAttachRuntimePlan $state $state.backend.source_revision $fin
 Assert-True ($null -ne $plan -and -not $plan.dashboard_plan.managed) "Artifact-static runtime should produce an unmanaged-dashboard fallback plan"
 Assert-True (Test-BackendShouldShutdownOnIdle $state.backend $state.frontend) "Managed backends without a managed dashboard must shut down on idle in source and artifact modes"
 Assert-True (Test-SymppBackendCommandLine 'cmd.exe /c C:\cache\artifacts\mcp\windows-x86_64\abc\runtime\start-runtime.cmd') "Supported artifact command wrappers must remain recoverable before binding"
+Assert-True (Test-SymppBackendCommandLine 'C:\cache\artifacts\mcp\windows-x86_64\abc\runtime\erts-16.0\bin\erl.exe') "A packaged Erlang executable identifies the artifact listener without command-line discovery"
+Assert-True (-not (Test-SymppBackendCommandLine 'C:\Program Files\Erlang\erts-16.0\bin\erl.exe')) "A foreign Erlang executable must not identify a managed artifact listener"
 $sourceState = [pscustomobject]@{ runtime_kind = "managed"; backend = [pscustomobject]@{ url = "http://127.0.0.1:20000" } }
 $reusedSourcePlan = [pscustomobject]@{ reused = $true; should_start = $false; url = "http://127.0.0.1:20000" }
 Assert-True (-not (Test-ArtifactBackendProvidesDashboard $sourceState $reusedSourcePlan "source")) "Reused source backends must not be promoted to artifact mode"
