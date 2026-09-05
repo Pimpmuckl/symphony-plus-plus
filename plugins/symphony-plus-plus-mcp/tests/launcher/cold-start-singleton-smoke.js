@@ -453,6 +453,13 @@ async function runCase(clientCount, shell, mode = "normal") {
 
     if (prepared) {
       delete environment.SYMPP_AUTOSTART_FRONTEND;
+      if (mode === "pwsh_only") {
+        delete environment.SYMPP_POWERSHELL;
+        const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === "path");
+        environment[pathKey] = environment[pathKey].split(";").filter((entry) => !/WindowsPowerShell/i.test(entry)).join(";");
+        const missing = spawnSync("powershell.exe", ["-NoProfile", "-Command", "exit 0"], { env: environment, windowsHide: true });
+        assert.equal(missing.error?.code, "ENOENT", "The fixture must exclude Windows PowerShell from PATH.");
+      }
       const seedBarrier = path.join(root, "seed.go");
       fs.writeFileSync(seedBarrier, "go");
       const seed = startClient(seedBarrier, path.join(installedRoot, "scripts", "start-sympp-mcp.cmd"), environment, clients, [], { count: 0, target: 1, startedAt: Date.now(), resolve() {} });
@@ -732,11 +739,11 @@ async function runCase(clientCount, shell, mode = "normal") {
     assert.equal(backend.active_leases, 0);
     assert.equal(fs.readdirSync(path.join(symppHome, "runtime", "codex-plugin-leases"), { withFileTypes: true }).filter((entry) => entry.isFile()).length, 0);
     // Full adoption resolves dashboard inputs again when frontend autostart is enabled.
-    assert.equal(channel.counts.manifest_successes, mode === "artifact_death" || recoveryMode || (prepared && mode.endsWith("_death")) ? 2 : 1);
+    assert.equal(channel.counts.manifest_successes, mode === "artifact_death" || recoveryMode || (prepared && mode.endsWith("_death")) || mode === "pwsh_only" ? 2 : 1);
     assert.equal(channel.counts.archive_successes, 1);
     assert.equal(traceCount(traceDir, "artifact_prepare_end"), 1);
     assert.equal(traceCount(traceDir, "runtime_ready_published"), (recoveryMode ? 2 : 1) + (prepared ? 1 : 0));
-    if (prepared) assert.equal(traceCount(traceDir, "prepared_runtime_start"), 1);
+    if (prepared) assert.equal(traceCount(traceDir, "prepared_runtime_start"), mode === "pwsh_only" ? 0 : 1);
     const recoveryLeaders = recoveryMode && mode.startsWith("powershell_fallback") ? traceCount(traceDir, "runtime_ready_published") - 1 : traceCount(traceDir, "backend_recovery_leader");
     assert.equal(recoveryLeaders, recoveryMode ? 1 : 0);
     if (recoveryMode) {
@@ -787,7 +794,7 @@ async function main() {
   const powershellFallback = await runCase(10, windowsPowerShell, "powershell_fallback");
   for (const mode of ["manifest_death", "artifact_death", "backend_death", "backend_prebind_death"]) results.push(await runCase(30, pwsh, mode));
   const recovery = [];
-  for (const mode of ["prepared_normal", "prepared_root_dashboard", "prepared_backend_death", "prepared_backend_prebind_death", "prepared_timeout"]) results.push(await runCase(5, windowsPowerShell, mode));
+  for (const mode of ["prepared_normal", "prepared_root_dashboard", "prepared_backend_death", "prepared_backend_prebind_death", "prepared_timeout", "prepared_pwsh_only"]) results.push(await runCase(5, windowsPowerShell, mode));
   for (const mode of ["owner_loss", "backend_loss", "backend_only_read_recovery", "ambiguous_tool", "powershell_fallback_ambiguous_tool", "shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery", "powershell_fallback_recovery", "powershell_fallback_backend_only_read_recovery", "powershell_fallback_initialize_retry"]) recovery.push(await runCase(["shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery"].includes(mode) ? 3 : mode === "powershell_fallback_recovery" ? 4 : mode.endsWith("backend_only_read_recovery") || mode.endsWith("ambiguous_tool") || mode === "powershell_fallback_initialize_retry" ? 1 : 10, mode.startsWith("powershell_fallback") ? windowsPowerShell : pwsh, mode));
   process.stdout.write(`${JSON.stringify({ matrix: results.slice(0, 2), powershell_fallback: powershellFallback, leader_death: results.slice(2), recovery, powershell_5_1: true, pwsh: true, cleanup: true })}\n`);
 }
