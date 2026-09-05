@@ -29,6 +29,7 @@ $betaPath = Join-Path $repoRoot "scripts/sympp-beta.ps1"
 . $runtimePath
 . $helperPath
 . $processRuntimePath
+& (Join-Path $PSScriptRoot "port-selection-tests.ps1")
 $herdrBindingJson = '{"role":"architect","work_request_id":"wr-test","show_inspector":true}'
 $herdrBindingEncoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($herdrBindingJson)).TrimEnd("=").Replace("+", "-").Replace("/", "_")
 $herdrBinding = ConvertFrom-SymppHerdrBinding $herdrBindingEncoded

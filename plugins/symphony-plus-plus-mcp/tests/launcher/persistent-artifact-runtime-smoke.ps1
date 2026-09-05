@@ -233,7 +233,7 @@ server.listen(port,"127.0.0.1");
   $backendProcessId = $secondWave.backend_pid
   $backendStartTicks = $secondWave.backend_start_ticks
   if ($backendProcessId -eq $firstBackendProcessId) { throw "Later installed command wave reused backend pid=$backendProcessId." }
-  if ($secondWave.backend_port -in @(19998, 19999)) { throw "Implicit installed launch forced reserved port $($secondWave.backend_port)." }
+  if ($secondWave.backend_port -lt 19998 -or $secondWave.backend_port -gt 20198) { throw "Implicit installed launch did not use the preferred port range; got $($secondWave.backend_port)." }
   $artifactCacheRoot = [System.IO.Path]::GetFullPath((Join-Path $sourceEnvironment.SYMPP_HOME "artifacts/mcp"))
   if ($secondWave.runtime_mode -ne "artifact" -or -not ([System.IO.Path]::GetFullPath($secondWave.artifact_root).StartsWith($artifactCacheRoot, [StringComparison]::OrdinalIgnoreCase))) {
     throw "Later installed command wave was not artifact-backed."
@@ -255,7 +255,7 @@ server.listen(port,"127.0.0.1");
 
   [pscustomobject]@{
     installed_waves = 2; initialize_and_tools_list = 3; installed_pids_distinct = $true
-    implicit_backend_port_dynamic = $true
+    implicit_backend_port_default = 19998
     artifact_last_detach_stopped = $true; listeners_closed = $true
     source_last_detach_stopped = $true; isolated_runtime_ledger_ports = $true
   } | ConvertTo-Json -Compress

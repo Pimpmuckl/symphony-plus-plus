@@ -49,8 +49,8 @@ home is
 if that home is unavailable, Symphony++ falls back under a temp/relative
 `.agents/splusplus` root. Pass
 `--port 0` for dynamic-port manual tests, or `--port <n>` for a different
-explicit port. The bundled opt-in plugin chooses an available backend port by
-default, uses `19999` only for the separate source/Vite dashboard, and records
+explicit port. The bundled opt-in plugin prefers backend port `19998`, tries
+higher available ports on collisions, uses `19999` for the separate source/Vite dashboard, and records
 the actual runtime in
 `$HOME/.agents/splusplus/runtime/codex-plugin.json` unless
 `SYMPP_RUNTIME_FILE` overrides it. Set `SYMPP_BACKEND_PORT` only to prefer a
