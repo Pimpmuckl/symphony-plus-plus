@@ -7,7 +7,8 @@ function Write-SymppLauncherTrace([string]$Event) {
   }
 
   try {
-    [System.IO.File]::AppendAllText((Join-Path $traceDir "$PID.log"), "$Event`n")
+    $record = @{ at_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); pid = $PID; test_client = $env:SYMPP_BENCH_CLIENT_ID } | ConvertTo-Json -Compress
+    [System.IO.File]::AppendAllText((Join-Path $traceDir "$PID.log"), "$Event`t$record`n")
   } catch {
   }
 }

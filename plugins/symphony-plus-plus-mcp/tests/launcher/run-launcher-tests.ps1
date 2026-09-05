@@ -77,6 +77,30 @@ foreach ($name in @(
 foreach ($name in @("Get-SymppArtifactDirectoryFingerprint", "Test-SymppArtifactDashboardReady", "Remove-SymppArtifactExtractionStaging", "Expand-SymppArtifactArchive", "Test-ArtifactBackendProvidesDashboard", "Resolve-LaunchArtifactSelection")) {
   Import-ScriptFunction $artifactRuntimePath $name
 }
+foreach ($name in @("New-SymppBackendHealth", "Test-LoopbackHttpTcpOpen", "Get-SymppBackendHealth")) {
+  Import-ScriptFunction $scriptPath $name
+}
+$script:healthHttpAttempted = $false
+function Invoke-WebRequest { $script:healthHttpAttempted = $true; throw "HTTP probe observed" }
+try {
+  Assert-True (-not (Get-SymppBackendHealth 'http://[').healthy) "A malformed persisted URL must remain an unhealthy probe instead of terminating startup"
+  foreach ($address in @([Net.IPAddress]::Loopback, [Net.IPAddress]::IPv6Loopback)) {
+    $listener = [Net.Sockets.TcpListener]::new($address, 0)
+    try {
+      $listener.Start()
+      $origin = "http://$($listener.LocalEndpoint)"
+      foreach ($liveOrigin in @($origin, "http://localhost:$($listener.LocalEndpoint.Port)")) {
+        $script:healthHttpAttempted = $false
+        $null = Get-SymppBackendHealth $liveOrigin
+        Assert-True $script:healthHttpAttempted "A listening IPv4, IPv6, or localhost port must still receive an HTTP health probe"
+      }
+    } finally { $listener.Stop() }
+    $script:healthHttpAttempted = $false
+    $closedHealth = Get-SymppBackendHealth $origin
+    Assert-True (-not $closedHealth.healthy -and -not $closedHealth.tcp_open) "A closed listener must be unhealthy"
+    Assert-True (-not $script:healthHttpAttempted) "A closed listener must skip the redundant HTTP connection timeout"
+  }
+} finally { Remove-Item Function:Invoke-WebRequest }
 foreach ($name in @("Get-PathIdentity", "Test-SamePath", "Test-SameDatabasePath", "Test-PathInside", "Resolve-BetaConfiguration", "Invoke-BetaGit", "Invoke-BetaGitNullPaths", "Get-BetaGitWorktrees", "Assert-BetaWorktreeIdentity", "Initialize-BetaWorktree", "Assert-BetaPackageSource", "Get-BetaEnvironment", "Invoke-WithBetaEnvironment", "Get-BetaCodexArguments", "Assert-BetaRuntimeIdentity", "Test-BetaRuntimeProcessRunning")) {
   Import-ScriptFunction $betaPath $name
 }

@@ -5,6 +5,7 @@ Measures the shipped Symphony++ MCP command against a disposable marketplace ins
 [CmdletBinding()]
 param(
   [string]$Cohorts = "1,10,100",
+  [ValidateRange(1, 100)][int]$ColdClients = 1,
   [ValidateRange(1, 10)][int]$Repeats = 1,
   [ValidateRange(30, 900)][int]$StartupTimeoutSec = 300,
   [ValidateRange(60, 1800)][int]$ArtifactPreparationTimeoutSec = 600,
@@ -237,6 +238,8 @@ function Start-ExactClient([hashtable]$Environment, $Barrier = $null) {
     stderr_task = $process.StandardError.ReadToEndAsync()
     ready = $false
     elapsed_ms = 0.0
+    tools_watch = $null
+    tools_ready_ms = 0.0
     barrier_ready_file = $(if ($Barrier) { $readyFile } else { $null })
     benchmark_client_id = $benchmarkClientId
   }
@@ -244,7 +247,7 @@ function Start-ExactClient([hashtable]$Environment, $Barrier = $null) {
   return $client
 }
 
-function Release-ExactStartBarrier([object[]]$Cohort, $Barrier, [int]$TimeoutSec) {
+function Release-ExactStartBarrier([object[]]$Cohort, $Barrier, [int]$TimeoutSec, $Watch = $null) {
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
   while (@($Cohort | Where-Object { -not (Test-Path -LiteralPath $_.barrier_ready_file -PathType Leaf) }).Count -gt 0) {
     $failed = @($Cohort | Where-Object { $_.process.HasExited })
@@ -253,7 +256,10 @@ function Release-ExactStartBarrier([object[]]$Cohort, $Barrier, [int]$TimeoutSec
     Start-Sleep -Milliseconds 5
   }
   foreach ($client in $Cohort) { $client.watch.Restart() }
+  if ($Watch) { $Watch.Restart() }
+  $releasedAt = [DateTime]::UtcNow
   New-Item -ItemType File -Path $Barrier.release_file -Force | Out-Null
+  return $releasedAt
 }
 
 function Wait-ClientsReady([object[]]$Cohort, [int]$TimeoutSec) {
@@ -378,7 +384,7 @@ function Invoke-Cohort([int]$Count, [hashtable]$Environment, [int]$BackendPid, [
     }
     New-Item -ItemType Directory -Path $barrier.ready_dir -Force | Out-Null
     foreach ($index in 1..$Count) { $cohort.Add((Start-ExactClient $Environment $barrier)) }
-    Release-ExactStartBarrier @($cohort) $barrier $StartupTimeoutSec
+    [void](Release-ExactStartBarrier @($cohort) $barrier $StartupTimeoutSec)
     Wait-ClientsReady @($cohort) $StartupTimeoutSec
   } else {
     for ($offset = 0; $offset -lt $Count; $offset += $startupBurst) {
@@ -526,6 +532,12 @@ if ($Help) { Get-Help $PSCommandPath -Detailed; exit 0 }
 if (-not (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)) { throw "Get-NetTCPConnection is required." }
 if (-not (Get-Command Get-CimInstance -ErrorAction SilentlyContinue)) { throw "Get-CimInstance is required." }
 
+$minWorkers = 0; $minIo = 0
+[System.Threading.ThreadPool]::GetMinThreads([ref]$minWorkers, [ref]$minIo)
+# Windows redirected pipes occupy workers even during ReadLineAsync/ReadToEndAsync.
+# Reserve both readers per live client so pool growth does not become startup latency.
+$peakClients = [Math]::Max($ColdClients, ($cohortValues | Measure-Object -Maximum).Maximum + 1)
+[void][System.Threading.ThreadPool]::SetMinThreads(2 * $peakClients + $minWorkers, $minIo)
 try {
   foreach ($path in @(
       $pluginRoot, (Join-Path $marketplaceRoot "elixir"),
@@ -589,8 +601,32 @@ exit /b %ERRORLEVEL%
   $artifactCacheMiss = Prepare-ExactArtifact $environment
   $artifactPreparedCache = Prepare-ExactArtifact $environment
   Write-BenchmarkProgress "Starting exact-command artifact cold client on port $backendPort..."
-  $cold = Start-ExactClient $environment
-  Wait-ClientsReady @($cold) $StartupTimeoutSec
+  $coldCohort = @()
+  $coldWatch = [System.Diagnostics.Stopwatch]::StartNew()
+  $coldStartedAt = [DateTime]::UtcNow
+  if ($ColdClients -gt 1) {
+    $coldBarrier = [pscustomobject]@{ ready_dir = Join-Path $tempRoot "cold-barrier"; release_file = Join-Path $tempRoot "cold.release" }
+    New-Item -ItemType Directory -Path $coldBarrier.ready_dir -Force | Out-Null
+    $coldCohort = @(foreach ($index in 1..$ColdClients) { Start-ExactClient $environment $coldBarrier })
+    $coldStartedAt = Release-ExactStartBarrier $coldCohort $coldBarrier $StartupTimeoutSec $coldWatch
+  } else { $coldCohort = @(Start-ExactClient $environment) }
+  $cold = $coldCohort[0]
+  Wait-ClientsReady $coldCohort $StartupTimeoutSec
+  Write-BenchmarkProgress "Cold initialize: p95=$([Math]::Round((Get-Percentile @($coldCohort.elapsed_ms) 0.95), 2)) ms max=$([Math]::Round(($coldCohort.elapsed_ms | Measure-Object -Maximum).Maximum, 2)) ms."
+  foreach ($client in $coldCohort) {
+    $client.tools_watch = [System.Diagnostics.Stopwatch]::StartNew()
+    $client.process.StandardInput.WriteLine('{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
+    $client.line_task = $client.process.StandardOutput.ReadLineAsync()
+  }
+  foreach ($client in $coldCohort) {
+    if (-not $client.line_task.Wait($StartupTimeoutSec * 1000)) { throw "Cold cohort tools/list timed out." }
+    $client.tools_watch.Stop()
+    $client.tools_ready_ms = $coldWatch.Elapsed.TotalMilliseconds
+    $tools = $client.line_task.GetAwaiter().GetResult() | ConvertFrom-Json
+    if ($tools.error -or @($tools.result.tools).Count -eq 0) { throw "Cold cohort tools/list failed." }
+  }
+  $coldAllReadyMs = $coldWatch.Elapsed.TotalMilliseconds
+  Write-BenchmarkProgress "Cold cohort: $ColdClients clients initialized and listed tools in $([Math]::Round($coldAllReadyMs, 2)) ms."
   $runtimeState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json
   $databasePath = Join-Path $environment.USERPROFILE ".agents/splusplus/symphony_plus_plus.sqlite3"
   if (-not (Test-Path -LiteralPath $databasePath -PathType Leaf) -or
@@ -603,15 +639,24 @@ exit /b %ERRORLEVEL%
   if ($owners.Count -ne 1 -or [int]$owners[0] -ne [int]$runtimeState.backend.pid) { throw "Cold exact command did not own one backend singleton." }
   $backend = Get-Process -Id ([int]$runtimeState.backend.pid) -ErrorAction Stop
   $backendStartTicks = $backend.StartTime.ToUniversalTime().Ticks
-  $toolsListMs = Measure-ExactToolsList $cold $StartupTimeoutSec
-  $clientStartedAt = $cold.process.StartTime.ToUniversalTime()
+  $toolsListMs = $cold.tools_watch.Elapsed.TotalMilliseconds
+  $clientStartedAt = if ($ColdClients -gt 1) { $coldStartedAt } else { $cold.process.StartTime.ToUniversalTime() }
   $runtimeReadyAt = ([DateTimeOffset]$runtimeState.generated_at).UtcDateTime
   $coldMetrics = [pscustomobject]@{
+    clients = $ColdClients
+    all_ready_ms = [Math]::Round($coldAllReadyMs, 2)
     initialize_ms = [Math]::Round($cold.elapsed_ms, 2)
+    initialize_p95_ms = [Math]::Round((Get-Percentile @($coldCohort.elapsed_ms) 0.95), 2)
+    initialize_max_ms = [Math]::Round(($coldCohort.elapsed_ms | Measure-Object -Maximum).Maximum, 2)
     backend_process_started_ms = [Math]::Round(($backend.StartTime.ToUniversalTime() - $clientStartedAt).TotalMilliseconds, 2)
     runtime_state_ready_ms = [Math]::Round(($runtimeReadyAt - $clientStartedAt).TotalMilliseconds, 2)
     tools_list_ms = [Math]::Round($toolsListMs, 2)
-    tools_list_total_ms = [Math]::Round($cold.elapsed_ms + $toolsListMs, 2)
+    tools_list_total_ms = [Math]::Round($cold.tools_ready_ms, 2)
+    phases = @(foreach ($event in @("powershell_entry", "powershell_config_begin", "powershell_config_end", "cold_leader_acquired", "backend_plan_begin", "backend_plan_end", "runtime_starting_published", "manifest_fetch_begin", "manifest_fetch_end", "backend_start_begin", "backend_start_end", "runtime_ready_published", "node_bridge_selected")) {
+      foreach ($record in @(Get-TraceDetails $event ([DateTimeOffset]$clientStartedAt).ToUnixTimeMilliseconds())) {
+        [pscustomobject]@{ event = $event; elapsed_ms = $record.at_ms - ([DateTimeOffset]$clientStartedAt).ToUnixTimeMilliseconds() }
+      }
+    })
     backend_pid = $backend.Id
     backend_start_ticks = $backendStartTicks
     dashboard_healthy = $true
@@ -619,6 +664,8 @@ exit /b %ERRORLEVEL%
     trace = Get-TraceCounts
     git_invocations = Get-GitInvocationCount
   }
+
+  if ($ColdClients -gt 1) { Stop-ExactClients @($coldCohort | Select-Object -Skip 1) }
 
   $warmResults = [System.Collections.Generic.List[object]]::new()
   foreach ($repeat in 1..$Repeats) {
@@ -859,6 +906,7 @@ exit /b %ERRORLEVEL%
   [Console]::Error.WriteLine("trace: $((Get-TraceCounts | ConvertTo-Json -Compress)) git_invocations=$(Get-GitInvocationCount)")
   throw
 } finally {
+  [void][System.Threading.ThreadPool]::SetMinThreads($minWorkers, $minIo)
   Stop-ExactClients @($clients | Where-Object { $_.process })
   if ($probeFailure) {
     $clientDiagnostics = @($clients | ForEach-Object {
