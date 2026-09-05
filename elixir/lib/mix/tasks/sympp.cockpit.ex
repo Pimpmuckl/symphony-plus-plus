@@ -6,11 +6,9 @@ defmodule Mix.Tasks.Sympp.Cockpit do
   alias SymphonyElixir.HttpServer
   alias SymphonyElixir.SymphonyPlusPlus.MCP.Config, as: MCPConfig
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
-  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Retention
   alias SymphonyElixir.SymphonyPlusPlus.Repo
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service, as: SoloSessionService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixirWeb.Endpoint
 
   @shortdoc "Starts the local Symphony++ operator cockpit"
@@ -414,7 +412,7 @@ defmodule Mix.Tasks.Sympp.Cockpit do
 
   defp run_work_request_retention_pass do
     with {:ok, settings} <- OperatorSettingsRepository.get(Repo),
-         :ok <- run_operator_retention(settings) do
+         :ok <- Retention.run(Repo, settings) do
       :ok
     else
       {:error, reason} -> skip_operator_retention(reason)
@@ -433,21 +431,6 @@ defmodule Mix.Tasks.Sympp.Cockpit do
     case OperatorSettingsRepository.get(Repo) do
       {:ok, settings} -> settings.open_dashboard_on_boot
       _error -> true
-    end
-  end
-
-  defp run_operator_retention(settings) do
-    RetentionThrottle.run(Repo, settings, &run_operator_retention_pass(settings, &1))
-  end
-
-  defp run_operator_retention_pass(settings, now) do
-    with {:ok, _work_request_summary} <-
-           WorkRequestService.retention_pass(Repo,
-             archive_after_days: settings.work_request_archive_after_days,
-             delete_after_days: settings.solo_session_delete_after_days
-           ),
-         {:ok, _solo_summary} <- SoloSessionService.retention_pass(Repo, now) do
-      :ok
     end
   end
 
