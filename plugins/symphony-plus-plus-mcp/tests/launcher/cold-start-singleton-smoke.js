@@ -219,7 +219,7 @@ function startClient(barrier, launcher, environment, clients, latencies, readyTa
       }
     }
   });
-  client.result = new Promise((resolve) => child.on("exit", (code) => resolve({ code, stderr: client.stderr })));
+  client.result = new Promise((resolve) => child.on("close", (code) => { client.closed = true; resolve({ code, stderr: client.stderr }); }));
   return client;
 }
 
@@ -550,6 +550,15 @@ async function runCase(clientCount, shell, mode = "normal") {
     }
     const firstBackend = readJson(backendState);
     const firstOwnerPid = Number(readJson(runtimeFile)?.publication?.owner_adapter_pid || 0);
+    if (prepared && mode === "normal" && clients.length > 1) {
+      const ancestry = spawnSync(shell, ["-NoProfile", "-Command", `$ownerShell=(Get-CimInstance Win32_Process -Filter 'ProcessId=${firstOwnerPid}').ParentProcessId; (Get-CimInstance Win32_Process -Filter "ProcessId=$ownerShell").ParentProcessId`], { windowsHide: true, encoding: "utf8" });
+      const owner = clients.find((client) => client.child.pid === Number(ancestry.stdout.trim()));
+      assert.ok(owner, "Prepared backend owner did not belong to the client cohort.");
+      owner.child.stdin.end();
+      await waitFor(() => owner.closed, "Prepared backend retained its owner's MCP pipes after EOF.", 10000);
+      assert.equal((await owner.result).code, 0, owner.stderr);
+      assert.ok(processAlive(firstBackend.pid), "Owner EOF stopped a backend with other live clients.");
+    }
     const backendOnlyReadRecovery = mode.endsWith("backend_only_read_recovery");
     if (jobCertification) {
       const result = await certifyJobs({ clients, shell, runtimeFile, backendState, backendPort, traceDir, symppHome });

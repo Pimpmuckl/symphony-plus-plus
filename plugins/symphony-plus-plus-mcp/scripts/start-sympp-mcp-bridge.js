@@ -1252,10 +1252,23 @@ async function bridge(identity, state, runtimeFile) {
 
 function runPreparation(executable, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { env: { ...process.env, SYMPP_BACKEND_OWNER_PID: String(process.pid) }, stdio: ["ignore", "ignore", "inherit"], windowsHide: true });
+    // Windows PowerShell children inherit extra handles. Keep the MCP stderr
+    // pipe out of its process tree, and forward the complete diagnostic file on exit.
+    const stderrFile = `${resolveRuntimeFile()}.prepare-${process.pid}.log`;
+    const stderrFd = fs.openSync(stderrFile, "w");
+    let child;
+    try {
+      child = spawn(executable, args, { env: { ...process.env, SYMPP_BACKEND_OWNER_PID: String(process.pid) }, stdio: ["ignore", "ignore", stderrFd], windowsHide: true });
+    } finally { fs.closeSync(stderrFd); }
     preparationChild = child;
-    child.once("error", (error) => { if (preparationChild === child) preparationChild = null; reject(error); });
-    child.once("exit", (code) => { if (preparationChild === child) preparationChild = null; resolve(code ?? 1); });
+    const finish = (code, error) => {
+      if (preparationChild === child) preparationChild = null;
+      try { process.stderr.write(fs.readFileSync(stderrFile)); } catch (_) { }
+      try { fs.unlinkSync(stderrFile); } catch (_) { }
+      if (error) reject(error); else resolve(code ?? 1);
+    };
+    child.once("error", (error) => finish(null, error));
+    child.once("exit", (code) => finish(code));
   });
 }
 
