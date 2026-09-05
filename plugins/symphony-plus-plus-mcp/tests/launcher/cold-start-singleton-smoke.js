@@ -3,6 +3,7 @@
 const assert = require("assert/strict");
 const crypto = require("crypto");
 const fs = require("fs");
+const { once } = require("events");
 const http = require("http");
 const net = require("net");
 const os = require("os");
@@ -798,11 +799,8 @@ async function checkResponsiveOwnerProbe() {
   const bridge = require(path.join(pluginRoot, "scripts/start-sympp-mcp-bridge.js"));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sympp-probe-"));
   const pipe = `\\\\.\\pipe\\sympp-test-${crypto.randomUUID()}`;
-  let waitingSocket;
-  const accepted = new Promise((resolve) => {
-    waitingSocket = resolve;
-  });
-  const server = net.createServer((socket) => waitingSocket(socket));
+  const server = net.createServer();
+  const accepted = once(server, "connection");
   await new Promise((resolve) => server.listen(pipe, resolve));
   const child = spawn(process.execPath, [__filename, "--probe-peer", path.join(root, "child.lock")], { stdio: ["ignore", "ignore", "inherit", "ipc"], windowsHide: true });
   const closed = new Promise((resolve) => child.once("exit", resolve));
@@ -814,7 +812,7 @@ async function checkResponsiveOwnerProbe() {
     const file = path.join(root, "owner.lock");
     writeJson(file, { lock_id: "original", owner_pid: process.pid, owner_pipe: pipe, owner_token: "expected" });
     child.send({ lockFile: file });
-    socket = await accepted;
+    [socket] = await accepted;
     // The child is waiting on us. It must still answer its own ownership pipe.
     const response = await new Promise((resolve, reject) => {
       const probe = net.createConnection(peer.owner_pipe);
@@ -826,9 +824,9 @@ async function checkResponsiveOwnerProbe() {
       probe.once("error", reject);
     });
     assert.equal(response, peer.owner_token);
-    const pendingConnection = new Promise((resolve) => { waitingSocket = resolve; });
+    const pendingConnection = once(server, "connection");
     const pendingOwner = bridge.livenessMatches(child.pid, pipe, "expected");
-    pendingSocket = await pendingConnection;
+    [pendingSocket] = await pendingConnection;
     const replacement = { ...readJson(file), lock_id: "replacement" };
     writeJson(file, replacement);
     const done = new Promise((resolve) => child.once("message", resolve));
