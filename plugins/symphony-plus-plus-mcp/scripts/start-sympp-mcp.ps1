@@ -123,7 +123,7 @@ function Test-SymppBackendOwners([object[]]$Owners) {
     if ($null -ne $owner) {
       [void][int]::TryParse([string]$owner.pid, [ref]$processId)
     }
-    if ($processId -gt 0 -and (Test-SymppBackendCommandLine (Get-ProcessCommandLine $processId))) {
+    if ($processId -gt 0 -and (Test-SymppBackendCommandLine (Get-ProcessCommandIdentity $processId))) {
       return $true
     }
   }
@@ -1159,7 +1159,7 @@ function Test-SymppStartingBackendOwned($State, $InstalledIdentity, $Controls) {
     Write-SymppLauncherTrace "backend_pending_launch_recovered"
   }
   if (-not [System.StringComparer]::Ordinal.Equals([string]$State.publication.backend.process_start_time_utc_ticks, (Get-ProcessStartIdentity (Get-Process -Id $backendPid -ErrorAction SilentlyContinue)))) { return $false }
-  $commandLine = Get-ProcessCommandLine $backendPid
+  $commandLine = Get-ProcessCommandIdentity $backendPid
   if (-not (Test-SymppBackendCommandLine $commandLine)) { return $false }
   $runtimeRoot = [string]$State.publication.backend.runtime_root
   # The relative release wrapper has no root in its command line. Its published
@@ -1170,9 +1170,17 @@ function Test-SymppStartingBackendOwned($State, $InstalledIdentity, $Controls) {
      (Test-ManagedRuntimePortCommandLine "backend" $commandLine ([int]$State.publication.backend.port)))
 }
 
-function Get-ProcessCommandLine([int]$ProcessId) {
+function Get-ProcessCommandIdentity([int]$ProcessId) {
   if ($ProcessId -le 0) {
     return $null
+  }
+
+  # Discovery and shutdown must accept the same packaged process identity.
+  if (Test-SymppWindowsPlatform) {
+    try {
+      $executable = (Get-Process -Id $ProcessId -ErrorAction Stop).Path
+      if (Test-SymppBackendCommandLine $executable) { return $executable }
+    } catch { }
   }
 
   $cim = Get-Command Get-CimInstance -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -1248,7 +1256,7 @@ function Stop-ManagedRuntimeProcess([string]$Role, $ProcessIdValue, [int]$Port) 
     return $false
   }
 
-  $commandLine = Get-ProcessCommandLine $managedPid
+  $commandLine = Get-ProcessCommandIdentity $managedPid
   if ([string]::IsNullOrWhiteSpace($commandLine)) {
     Write-Diagnostic "Skipping $Role shutdown for pid=$managedPid because its command line could not be verified."
     return $false
@@ -1632,7 +1640,7 @@ function Stop-CurrentManagedRuntimeStateEntries($State, $ActiveLeases) {
 
 function Get-ManagedListenerPid([string]$Role, [int]$Port) {
   foreach ($owner in @(Get-TcpPortOwners $Port)) {
-    $commandLine = Get-ProcessCommandLine ([int]$owner.pid)
+    $commandLine = Get-ProcessCommandIdentity ([int]$owner.pid)
     if (Test-ManagedRuntimeCommandLine $Role $commandLine) {
       return [int]$owner.pid
     }
