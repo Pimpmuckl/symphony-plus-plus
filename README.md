@@ -39,7 +39,7 @@ home unless you intentionally want both skill prefixes visible.
 When the MCP companion starts, it launches or reuses the local Symphony++
 runtime.
 
-The launcher chooses an available loopback port. On Windows, read the active
+The launcher prefers loopback port `19998`, then tries higher available ports. On Windows, read the active
 dashboard URL with:
 
 ```powershell
