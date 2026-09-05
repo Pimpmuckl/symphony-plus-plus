@@ -6,7 +6,7 @@ in packaged skills and are not repeated here.
 ## Install And Open
 
 Install or update the marketplace package as described in the root
-[`README.md`](../README.md). The launcher chooses an available loopback port.
+[`README.md`](../README.md). The launcher prefers loopback port `19998`, then tries higher available ports.
 On Windows, read the active dashboard URL with:
 
 ```powershell
