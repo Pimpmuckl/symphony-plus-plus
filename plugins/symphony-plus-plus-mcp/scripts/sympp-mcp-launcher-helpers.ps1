@@ -705,25 +705,30 @@ function Get-TcpPortOwners([int]$Port) {
   $owners = [System.Collections.Generic.List[object]]::new()
   $seen = [System.Collections.Generic.HashSet[string]]::new()
 
-  if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
+  if ([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners().Port -notcontains $Port) {
+    return @()
+  }
+
+  # CIM listener discovery costs hundreds of milliseconds on each startup poll.
+  if (Get-Command netstat -ErrorAction SilentlyContinue) {
     try {
-      $connections = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop)
-      foreach ($connection in $connections) {
-        $processId = [int]$connection.OwningProcess
-        if ($processId -gt 0) {
-          Add-PortOwner $owners $seen $processId ([string]$connection.LocalAddress)
+      $escapedPort = [regex]::Escape([string]$Port)
+      foreach ($line in @(& netstat -ano 2>$null)) {
+        if ($line -match "^\s*TCP\s+(.+):$escapedPort\s+\S+\s+LISTENING\s+(\d+)\s*$") {
+          Add-PortOwner $owners $seen ([int]$matches[2]) $matches[1].Trim()
         }
       }
     } catch {
     }
   }
 
-  if ($owners.Count -eq 0 -and (Get-Command netstat -ErrorAction SilentlyContinue)) {
+  if ($owners.Count -eq 0 -and (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)) {
     try {
-      $escapedPort = [regex]::Escape([string]$Port)
-      foreach ($line in @(& netstat -ano -p tcp 2>$null)) {
-        if ($line -match "^\s*TCP\s+(.+):$escapedPort\s+\S+\s+LISTENING\s+(\d+)\s*$") {
-          Add-PortOwner $owners $seen ([int]$matches[2]) $matches[1].Trim()
+      $connections = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop)
+      foreach ($connection in $connections) {
+        $processId = [int]$connection.OwningProcess
+        if ($processId -gt 0) {
+          Add-PortOwner $owners $seen $processId ([string]$connection.LocalAddress)
         }
       }
     } catch {

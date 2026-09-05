@@ -88,7 +88,9 @@ try {
     $listener = [Net.Sockets.TcpListener]::new($address, 0)
     try {
       $listener.Start()
+      $listenerPort = $listener.LocalEndpoint.Port
       $origin = "http://$($listener.LocalEndpoint)"
+      Assert-True ($PID -in @(Get-TcpPortOwners $listenerPort).pid) "Listener discovery must find the real IPv4 and IPv6 owner"
       foreach ($liveOrigin in @($origin, "http://localhost:$($listener.LocalEndpoint.Port)")) {
         $script:healthHttpAttempted = $false
         $null = Get-SymppBackendHealth $liveOrigin
@@ -97,6 +99,7 @@ try {
     } finally { $listener.Stop() }
     $script:healthHttpAttempted = $false
     $closedHealth = Get-SymppBackendHealth $origin
+    Assert-True (@(Get-TcpPortOwners $listenerPort).Count -eq 0) "Closed ports must have no owners"
     Assert-True (-not $closedHealth.healthy -and -not $closedHealth.tcp_open) "A closed listener must be unhealthy"
     Assert-True (-not $script:healthHttpAttempted) "A closed listener must skip the redundant HTTP connection timeout"
   }
