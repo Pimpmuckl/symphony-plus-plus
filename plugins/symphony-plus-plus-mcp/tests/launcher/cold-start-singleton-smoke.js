@@ -107,13 +107,19 @@ function backendFixture() {
   ].join("\n");
 }
 
-function createArchive(root, shell, backendPort, backendState, releaseFile, bindReleaseFile, failAfterProbeFile, failReadFile, ledgerFile) {
+function createArchive(root, shell, backendPort, backendState, releaseFile, bindReleaseFile, failAfterProbeFile, failReadFile, ledgerFile, prepared = false) {
   const source = path.join(root, "artifact-source");
   const archive = path.join(root, "artifact.zip");
   fs.mkdirSync(path.join(source, "dashboard"), { recursive: true });
   fs.writeFileSync(path.join(source, "backend.js"), backendFixture());
   fs.writeFileSync(path.join(source, "start-runtime.cmd"), '@echo off\r\nnode "%~dp0backend.js" %*\r\n');
   fs.writeFileSync(path.join(source, "dashboard", "index.html"), "<title>Symphony++ Dashboard</title>");
+  const runtimeArgs = ["--port", "{port}", "--state", backendState, "--release", releaseFile, "--bind-release", bindReleaseFile, "--fail-after-probe", failAfterProbeFile, "--fail-read", failReadFile, "--contract", contract, "--revision", revision, "--ledger", ledgerFile, "--tools", Buffer.from(JSON.stringify(expectedTools)).toString("base64"), "start-runtime.ps1"];
+  if (prepared) {
+    fs.mkdirSync(path.join(source, "runtime", "bin"), { recursive: true });
+    fs.writeFileSync(path.join(source, "start-runtime.ps1"), 'throw "The default Windows release must launch through its BAT."');
+    fs.writeFileSync(path.join(source, "runtime", "bin", "symphony_elixir.bat"), `@echo off\r\nnode "%~dp0..\\..\\backend.js" ${runtimeArgs.map((arg) => `"${arg.replace("{port}", "%SYMPP_BACKEND_PORT%")}"`).join(" ")}\r\n`);
+  }
   const environment = { ...process.env, FIXTURE_SOURCE: source, FIXTURE_ARCHIVE: archive };
   const zipped = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem -LiteralPath $env:FIXTURE_SOURCE | Compress-Archive -DestinationPath $env:FIXTURE_ARCHIVE -Force"], { env: environment, windowsHide: true, encoding: "utf8" });
   assert.equal(zipped.status, 0, zipped.stderr);
@@ -122,7 +128,7 @@ function createArchive(root, shell, backendPort, backendState, releaseFile, bind
     archive,
     sha: sha256(fs.readFileSync(archive)),
     dashboardHash,
-    runtimeArgs: ["--port", "{port}", "--state", backendState, "--release", releaseFile, "--bind-release", bindReleaseFile, "--fail-after-probe", failAfterProbeFile, "--fail-read", failReadFile, "--contract", contract, "--revision", revision, "--ledger", ledgerFile, "--tools", Buffer.from(JSON.stringify(expectedTools)).toString("base64"), "start-runtime.ps1"],
+    runtimeArgs: prepared ? [] : runtimeArgs,
     backendPort,
   };
 }
@@ -385,6 +391,8 @@ function assertLockFree(shell, startupLock, artifactLock) {
 }
 
 async function runCase(clientCount, shell, mode = "normal") {
+  const prepared = mode.startsWith("prepared_");
+  if (prepared) mode = mode.slice("prepared_".length);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `sympp-cold-${mode}-`));
   const codexHome = path.join(root, "codex");
   const symppHome = path.join(root, "sympp");
@@ -416,16 +424,16 @@ async function runCase(clientCount, shell, mode = "normal") {
     fs.writeFileSync(path.join(sourceRoot, "elixir", "mix.exs"), "[]");
     writeJson(path.join(sourceRoot, ".codex-marketplace-install.json"), { revision });
     writeJson(path.join(sourceRoot, "elixir", "priv", "symphony_plus_plus", "mcp_contract.json"), { mcp_contract_fingerprint: contract });
-    if (mode !== "backend_death") fs.writeFileSync(releaseFile, "ready");
-    if (mode !== "backend_prebind_death") fs.writeFileSync(bindReleaseFile, "ready");
-    const artifact = createArchive(root, shell, backendPort, backendState, releaseFile, bindReleaseFile, failAfterProbeFile, failReadFile, ledgerFile);
+    if (prepared || mode !== "backend_death") fs.writeFileSync(releaseFile, "ready");
+    if (prepared || mode !== "backend_prebind_death") fs.writeFileSync(bindReleaseFile, "ready");
+    const artifact = createArchive(root, shell, backendPort, backendState, releaseFile, bindReleaseFile, failAfterProbeFile, failReadFile, ledgerFile, prepared);
     let resolvedManifest;
     channel = await createChannelServer(mode, () => JSON.stringify(resolvedManifest), artifact.archive);
     resolvedManifest = {
       schema_version: 1, source_revision: revision, plugin: { name: "symphony-plus-plus-mcp", version: "0.1.9" },
       launcher_contract: { mcp_contract_fingerprint: contract },
       artifacts: [{ platform: "windows-x86_64", source_revision: revision, mcp_contract_fingerprint: contract,
-        url: `${channel.origin}/artifact.zip`, sha256: artifact.sha, entrypoint: "start-runtime.cmd", runtime_args: artifact.runtimeArgs,
+        url: `${channel.origin}/artifact.zip`, sha256: artifact.sha, entrypoint: prepared ? "start-runtime.ps1" : "start-runtime.cmd", runtime_args: artifact.runtimeArgs,
         dashboard: { asset_root: "dashboard", fingerprint: artifact.dashboardHash } }],
     };
     const resolvedText = JSON.stringify(resolvedManifest);
@@ -439,6 +447,40 @@ async function runCase(clientCount, shell, mode = "normal") {
     if (mode.startsWith("powershell_fallback")) environment.SYMPP_NODE_BRIDGE = "0";
     for (const name of ["SYMPP_REPO_ROOT", "SYMPP_BACKEND_URL", "SYMPP_DASHBOARD_ORIGIN", "SYMPP_DATABASE", "SYMPP_SOURCE_FALLBACK", "SYMPP_ARTIFACT_RUNTIME"]) delete environment[name];
     fs.mkdirSync(environment.TEMP, { recursive: true });
+
+    if (prepared) {
+      delete environment.SYMPP_AUTOSTART_FRONTEND;
+      const seedBarrier = path.join(root, "seed.go");
+      fs.writeFileSync(seedBarrier, "go");
+      const seed = startClient(seedBarrier, path.join(installedRoot, "scripts", "start-sympp-mcp.cmd"), environment, clients, [], { count: 0, target: 1, startedAt: Date.now(), resolve() {} });
+      seed.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "prepare", version: "1" } } })}\n`);
+      await waitFor(() => seed.ready, "Preparation client did not initialize.");
+      seed.child.stdin.end();
+      assert.equal((await seed.result).code, 0, seed.stderr);
+      const stopped = await waitFor(() => { const value = readJson(runtimeFile); return value?.backend?.status === "stopped" && value; }, "Preparation backend did not stop.");
+      assert.equal(stopped.artifact.prepared_release?.kind, "windows_release_bat");
+      assert.ok(await portAvailable(backendPort));
+      if (mode === "normal") {
+        const original = fs.readFileSync(runtimeFile, "utf8");
+        for (const change of [
+          { env: { SYMPP_AUTOSTART_BACKEND: "0" } },
+          { env: { SYMPP_WORKFLOW_FILE: path.join(root, "changed-workflow.md") } },
+          { generation: "d".repeat(64) },
+        ]) {
+          if (change.generation) { stopped.publication.generation_key = change.generation; writeJson(runtimeFile, stopped); }
+          const before = fs.readFileSync(runtimeFile, "utf8");
+          const rejected = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(installedRoot, "scripts", "start-sympp-mcp.ps1"), "-TryPreparedRuntime"], { env: { ...environment, ...change.env }, windowsHide: true, encoding: "utf8" });
+          assert.equal(rejected.status, 42, rejected.stderr);
+          assert.equal(fs.readFileSync(runtimeFile, "utf8"), before, "Ineligible prepared launch changed runtime state.");
+          assert.ok(await portAvailable(backendPort));
+          fs.writeFileSync(runtimeFile, original);
+        }
+      }
+      clients.splice(clients.indexOf(seed), 1);
+      fs.rmSync(backendState);
+      if (mode === "backend_death") fs.rmSync(releaseFile);
+      if (mode === "backend_prebind_death") fs.rmSync(bindReleaseFile);
+    }
 
     let readyResolve;
     const readyTarget = { count: 0, target: clientCount, startedAt: 0, resolve: () => readyResolve() };
@@ -656,10 +698,12 @@ async function runCase(clientCount, shell, mode = "normal") {
     assert.equal(backend.lease_peak, clientCount);
     assert.equal(backend.active_leases, 0);
     assert.equal(fs.readdirSync(path.join(symppHome, "runtime", "codex-plugin-leases"), { withFileTypes: true }).filter((entry) => entry.isFile()).length, 0);
-    assert.equal(channel.counts.manifest_successes, mode === "artifact_death" || recoveryMode ? 2 : 1);
+    // Full adoption resolves dashboard inputs again when frontend autostart is enabled.
+    assert.equal(channel.counts.manifest_successes, mode === "artifact_death" || recoveryMode || (prepared && mode.endsWith("_death")) ? 2 : 1);
     assert.equal(channel.counts.archive_successes, 1);
     assert.equal(traceCount(traceDir, "artifact_prepare_end"), 1);
-    assert.equal(traceCount(traceDir, "runtime_ready_published"), recoveryMode ? 2 : 1);
+    assert.equal(traceCount(traceDir, "runtime_ready_published"), (recoveryMode ? 2 : 1) + (prepared ? 1 : 0));
+    if (prepared) assert.equal(traceCount(traceDir, "prepared_runtime_start"), 1);
     const recoveryLeaders = recoveryMode && mode.startsWith("powershell_fallback") ? traceCount(traceDir, "runtime_ready_published") - 1 : traceCount(traceDir, "backend_recovery_leader");
     assert.equal(recoveryLeaders, recoveryMode ? 1 : 0);
     if (recoveryMode) {
@@ -680,7 +724,7 @@ async function runCase(clientCount, shell, mode = "normal") {
     for (const directory of [symppHome, environment.TEMP]) if (fs.existsSync(directory)) for (const entry of fs.readdirSync(directory, { recursive: true })) if (/artifact\.zip\.tmp-|\.extracting-|codex-plugin\.json\.tmp-/.test(String(entry))) leftovers.push(entry);
     assert.deepEqual(leftovers, []);
     assert.ok(percentile(latencies, 0.95) < 60000 && Math.max(...latencies) < 90000);
-    return { mode, shell: path.basename(shell), clients: clientCount, p95_ms: percentile(latencies, 0.95), max_ms: Math.max(...latencies), manifest: channel.counts.manifest_successes, manifest_attempts: channel.counts.manifest_attempts, artifact: channel.counts.archive_successes, artifact_attempts: channel.counts.archive_attempts, preparations: traceCount(traceDir, "artifact_prepare_end"), backends: backend.starts, pids: recoveryMode ? 2 : 1, listeners: 0, initializes: backend.initialize, tools_list: backend.tools_list, mutations: backend.mutations, lease_peak: backend.lease_peak, leases_after: backend.active_leases, adopted: traceCount(traceDir, "backend_adopted"), recovery_leaders: recoveryLeaders };
+    return { mode, prepared, shell: path.basename(shell), clients: clientCount, p95_ms: percentile(latencies, 0.95), max_ms: Math.max(...latencies), manifest: channel.counts.manifest_successes, manifest_attempts: channel.counts.manifest_attempts, artifact: channel.counts.archive_successes, artifact_attempts: channel.counts.archive_attempts, preparations: traceCount(traceDir, "artifact_prepare_end"), backends: backend.starts, pids: recoveryMode ? 2 : 1, listeners: 0, initializes: backend.initialize, tools_list: backend.tools_list, mutations: backend.mutations, lease_peak: backend.lease_peak, leases_after: backend.active_leases, adopted: traceCount(traceDir, "backend_adopted"), recovery_leaders: recoveryLeaders };
   } finally {
     terminateTrees(clients.filter((client) => client.child.exitCode === null).map((client) => client.child.pid));
     if (!backendPid) backendPid = readJson(backendState)?.pid || 0;
@@ -710,6 +754,7 @@ async function main() {
   const powershellFallback = await runCase(10, windowsPowerShell, "powershell_fallback");
   for (const mode of ["manifest_death", "artifact_death", "backend_death", "backend_prebind_death"]) results.push(await runCase(30, pwsh, mode));
   const recovery = [];
+  for (const mode of ["prepared_normal", "prepared_backend_death", "prepared_backend_prebind_death"]) results.push(await runCase(5, windowsPowerShell, mode));
   for (const mode of ["owner_loss", "backend_loss", "backend_only_read_recovery", "ambiguous_tool", "powershell_fallback_ambiguous_tool", "shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery", "powershell_fallback_recovery", "powershell_fallback_backend_only_read_recovery", "powershell_fallback_initialize_retry"]) recovery.push(await runCase(["shutdown_during_recovery", "generation_changed_recovery", "cleanup_source_changed_recovery"].includes(mode) ? 3 : mode === "powershell_fallback_recovery" ? 4 : mode.endsWith("backend_only_read_recovery") || mode.endsWith("ambiguous_tool") || mode === "powershell_fallback_initialize_retry" ? 1 : 10, mode.startsWith("powershell_fallback") ? windowsPowerShell : pwsh, mode));
   process.stdout.write(`${JSON.stringify({ matrix: results.slice(0, 2), powershell_fallback: powershellFallback, leader_death: results.slice(2), recovery, powershell_5_1: true, pwsh: true, cleanup: true })}\n`);
 }

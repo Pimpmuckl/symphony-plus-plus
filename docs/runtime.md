@@ -13,6 +13,17 @@ source from the owning marketplace clone, selects a compatible packaged
 runtime artifact, starts or reuses the local backend, and attaches the MCP
 client bridge.
 
+After a clean last-client shutdown on Windows, the next session can restart the
+verified release directly. It reuses the artifact selected for the installed
+plugin generation and skips the channel manifest request. A marketplace
+generation change or changed launch settings returns to full preparation.
+The stable channel is checked during full preparation, not on every prepared
+restart. The first start after an upgrade still performs full preparation.
+
+The first client owns startup; other clients attach to that backend. The backend
+stops when the last client closes. No persistent service or Herdr launch step is
+required.
+
 The source checkout at `C:\Code\symphony-plus-plus` is a developer workspace.
 Its uncommitted files and source-root hints must not determine an installed
 session's runtime. Installed diagnostics must resolve the owning marketplace

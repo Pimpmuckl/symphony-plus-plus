@@ -297,6 +297,7 @@ function generationKey(pluginRoot, sourceRoot) {
 }
 
 function processAlive(pid) {
+  if (!Number.isInteger(Number(pid)) || Number(pid) <= 0) return false;
   try { process.kill(Number(pid), 0); return true; } catch (_) { return false; }
 }
 
@@ -1267,6 +1268,12 @@ function cancelPreparation() {
 
 async function prepareColdRuntime() {
   const configured = process.env.SYMPP_POWERSHELL;
+  const state = readJson(resolveRuntimeFile());
+  if (process.platform === "win32" && process.argv.length === 2 && state?.backend?.status === "stopped" && state?.artifact?.prepared_release) {
+    const code = await runPreparation(configured || "powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "start-sympp-mcp.ps1"), "-TryPreparedRuntime"]);
+    if (code === 0) return;
+    if (code !== 42) throw new Error(`Symphony++ prepared runtime startup failed with exit code ${code}.`);
+  }
   const candidates = configured ? [configured] : (process.platform === "win32" ? ["pwsh.exe", "powershell.exe"] : ["pwsh"]);
   const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "start-sympp-mcp.ps1"), "-PrepareRuntimeOnly", ...process.argv.slice(2)];
   for (const executable of candidates) {
@@ -1282,12 +1289,15 @@ async function prepareColdRuntime() {
 }
 
 async function resolveColdRuntime(runtimeFile, pluginRoot) {
+  // Establish file watches while the backend boots. Recheck identity at publication.
+  const generationReady = resolveCachedIdentity(pluginRoot).catch(() => null);
   const lockFile = `${runtimeFile}.cold.lock`;
   const configuredSeconds = Number(process.env.SYMPP_COLD_START_TIMEOUT_SEC || 300);
   const deadline = Date.now() + (Number.isFinite(configuredSeconds) ? Math.max(30, Math.min(330, configuredSeconds)) : 300) * 1000;
   while (Date.now() < deadline) {
     const state = readJson(runtimeFile);
-    if (state && (!state.publication || state.publication.status === "ready")) {
+    if (state && (state.backend?.managed !== true || processAlive(Number(state.backend.pid))) && (!state.publication || state.publication.status === "ready")) {
+      await generationReady;
       const cachedIdentity = await resolveCachedIdentity(pluginRoot);
       const identity = resolveStateIdentity(state, pluginRoot, cachedIdentity);
       if (identity) return { state, identity };
@@ -1297,7 +1307,8 @@ async function resolveColdRuntime(runtimeFile, pluginRoot) {
       try {
         const confirmed = readJson(runtimeFile);
         let confirmedIdentity = null;
-        if (confirmed && (!confirmed.publication || confirmed.publication.status === "ready")) {
+        if (confirmed && (confirmed.backend?.managed !== true || processAlive(Number(confirmed.backend.pid))) && (!confirmed.publication || confirmed.publication.status === "ready")) {
+          await generationReady;
           confirmedIdentity = resolveStateIdentity(confirmed, pluginRoot, await resolveCachedIdentity(pluginRoot));
         }
         if (!confirmedIdentity) await prepareColdRuntime();

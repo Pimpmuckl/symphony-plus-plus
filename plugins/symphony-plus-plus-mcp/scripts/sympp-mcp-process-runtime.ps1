@@ -236,9 +236,15 @@ function Get-ArtifactBackendCommand($ArtifactRuntime, $Plan, [string]$DashboardO
       $environment["PHX_SERVER"] = "true"
       return [pscustomobject]@{
         file = "cmd.exe"
-        args = @("/d", "/s", "/c", "call", "runtime\bin\symphony_elixir.bat", "start")
+        args = @("/d", "/s", "/c", "call", $releaseEntrypoint, "start")
         working_directory = [string]$ArtifactRuntime.root
         environment = $environment
+        prepared_release = [pscustomobject]@{
+          kind = "windows_release_bat"
+          runtime = $ArtifactRuntime
+          workflow = $workflow
+          configured_workflow = [string]$env:SYMPP_WORKFLOW_FILE
+        }
       }
     }
   }
@@ -322,6 +328,7 @@ function Start-Backend($Plan, [string]$DashboardOrigin, [string]$ElixirDir, [str
     stderr = $launch.stderr
     source_revision = if ($health.healthy) { $health.source_revision } else { $null }
     contract_fingerprint = if ($health.healthy) { $health.contract_fingerprint } else { $null }
+    prepared_release = $command.prepared_release
   }
 }
 

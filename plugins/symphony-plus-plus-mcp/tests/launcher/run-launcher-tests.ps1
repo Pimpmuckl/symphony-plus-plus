@@ -277,10 +277,10 @@ $nodeExitCode = $LASTEXITCODE
 Assert-True ($nodeExitCode -eq 0) "Node bridge response forwarding test must pass"
 $artifactCommandTemp = Join-Path $PSScriptRoot (".artifact-command-" + [guid]::NewGuid().ToString("N"))
 try {
-  $artifactRoot = Join-Path $artifactCommandTemp "artifact & command"
+  $artifactRoot = Join-Path $artifactCommandTemp "artifact&command"
   $releaseEntrypoint = Join-Path $artifactRoot "runtime/bin/symphony_elixir.bat"
   New-Item -ItemType Directory -Path (Split-Path -Parent $releaseEntrypoint) -Force | Out-Null
-  Set-Content -LiteralPath $releaseEntrypoint -Value "@exit /b 0" -Encoding ascii
+  Set-Content -LiteralPath $releaseEntrypoint -Value "@exit /b 23" -Encoding ascii
   $artifactRuntime = [pscustomobject]@{
     root = $artifactRoot
     entrypoint = Join-Path $artifactRoot "start-runtime.ps1"
@@ -289,7 +289,8 @@ try {
   }
   $artifactPlan = [pscustomobject]@{ port = 20000 }
   $artifactCommand = Get-ArtifactBackendCommand $artifactRuntime $artifactPlan $null $null (Join-Path $artifactCommandTemp "logs")
-  Assert-True ($artifactCommand.file -eq "cmd.exe" -and (@($artifactCommand.args) -join "|") -eq "/d|/s|/c|call|runtime\bin\symphony_elixir.bat|start") "Windows artifact startup must launch the release directly without reparsing the artifact root"
+  $releaseProcess = Start-Process $artifactCommand.file -ArgumentList (Join-ProcessArgumentList $artifactCommand.args) -WorkingDirectory $artifactCommand.working_directory -WindowStyle Hidden -Wait -PassThru
+  Assert-True ($releaseProcess.ExitCode -eq 23) "Windows release command must execute paths containing shell metacharacters"
   Assert-True ($artifactCommand.working_directory -eq $artifactRoot) "Direct artifact startup must preserve the artifact working directory"
   Assert-True ($artifactCommand.environment.SYMPP_RUNTIME_ARTIFACT_ACKNOWLEDGED -eq "1" -and $artifactCommand.environment.PHX_SERVER -eq "true") "Direct artifact startup must preserve release safety and server environment"
   Assert-True ((Test-Path -LiteralPath $artifactCommand.environment.RELEASE_TMP -PathType Container)) "Direct artifact startup must provide an isolated release temp directory"
