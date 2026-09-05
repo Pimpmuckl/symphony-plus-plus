@@ -68,7 +68,7 @@ foreach ($name in @(
     "Get-McpContractFingerprintFromMarketplaceSource", "Resolve-LocalMcpContractFingerprint",
     "New-RuntimeKey", "Get-RuntimeStateKey", "Get-PortFromOrigin", "Test-EndpointMatches", "Test-BackendShouldShutdownOnIdle",
     "Test-PortSelectionAllowsReuse", "Test-BackendContractMatches", "Test-BackendLaunchCompatible",
-    "Test-RuntimeStateExternalLoopback", "Test-RuntimeEntryEndpointMatches", "Test-SymppReleaseWrapperCommandLine", "Test-SymppBackendCommandLine", "Get-ProcessCommandLine", "New-SymppPublicationControls", "Test-SymppPublicationControlsMatch",
+    "Test-RuntimeStateExternalLoopback", "Test-RuntimeEntryEndpointMatches", "Test-SymppReleaseWrapperCommandLine", "Test-SymppBackendCommandLine", "Get-ProcessCommandIdentity", "New-SymppPublicationControls", "Test-SymppPublicationControlsMatch",
     "Test-SymppPublishedRuntimeReadyLocally", "Resolve-SymppPendingBackendProcess", "Test-SymppStartingBackendOwned", "New-ReusedBackendPlan", "New-ReusedDashboardPlan",
     "Resolve-LocalWarmAttachIdentity", "Resolve-FastAttachRuntimePlan", "Resolve-DashboardPlan", "Set-SymppSourceRevisionEnvironment"
   )) {
@@ -112,6 +112,28 @@ try { $gitOutput = @(Invoke-BetaGit $repoRoot @("fetch")) } finally { Remove-Ite
 Assert-True ($gitOutput -contains "ok") "Successful git stderr must not terminate the beta launcher"
 function Write-Diagnostic([string]$Message) { }
 function Write-CompatibleSourceMismatchDiagnostic { }
+
+& {
+  foreach ($name in @("Stop-ManagedRuntimeProcess", "Test-ManagedRuntimeCommandLine", "Test-ManagedRuntimePortCommandLine")) {
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$null, [ref]$null)
+    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
+    Invoke-Expression $fn.Extent.Text
+  }
+  $testPath = 'C:\cache\artifacts\mcp\windows-x86_64\abc\runtime\erts-16.0\bin\erl.exe'
+  function Test-SymppWindowsPlatform { $true }
+  function Get-CimInstance { throw 'CIM unavailable' }
+  function Get-Process { [pscustomobject]@{ Path = $testPath } }
+  function Test-ProcessOwnsTcpPort { $true }
+  function Stop-Process { param($Id, [switch]$Force) $script:nativeCleanupStoppedPid = $Id }
+  $script:nativeCleanupStoppedPid = 0
+  Assert-True (Stop-ManagedRuntimeProcess 'backend' 12345 19999) 'An artifact listener identified without CIM must still shut down'
+  Assert-True ($script:nativeCleanupStoppedPid -eq 12345) 'Cleanup must stop the identified listener'
+  $testPath = 'C:\Program Files\Erlang\erts-16.0\bin\erl.exe'
+  $script:nativeCleanupStoppedPid = 0
+  Assert-True (-not (Stop-ManagedRuntimeProcess 'backend' 12345 19999)) 'A foreign Erlang path must not authorize shutdown'
+  Assert-True ($script:nativeCleanupStoppedPid -eq 0) 'Foreign Erlang must remain running'
+}
+
 $pluginRoot = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp"
 $fingerprint = Resolve-LocalMcpContractFingerprint $pluginRoot
 Assert-True (-not [string]::IsNullOrWhiteSpace($fingerprint)) "Current local MCP contract must resolve without artifact metadata"
