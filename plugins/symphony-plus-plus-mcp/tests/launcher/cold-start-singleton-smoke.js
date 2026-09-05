@@ -3,6 +3,7 @@
 const assert = require("assert/strict");
 const crypto = require("crypto");
 const fs = require("fs");
+const { once } = require("events");
 const http = require("http");
 const net = require("net");
 const os = require("os");
@@ -774,7 +775,90 @@ async function runCase(clientCount, shell, mode = "normal") {
   }
 }
 
+
+async function probePeer() {
+  const bridge = require(path.join(pluginRoot, "scripts/start-sympp-mcp-bridge.js"));
+  await bridge.ensureLivenessProbe();
+  const ownFile = process.argv[3];
+  const ownLock = await bridge.tryAcquireProcessLock(ownFile);
+  process.send(readJson(ownFile));
+  try {
+    const [{ lockFile }] = await once(process, "message");
+    const result = await bridge.tryAcquireProcessLock(lockFile);
+    assert.equal(result, null);
+    process.send({ done: true });
+  } finally {
+    bridge.releaseProcessLock(ownFile, ownLock);
+    bridge.closeLivenessProbe();
+    process.disconnect();
+  }
+}
+
+async function checkResponsiveOwnerProbe() {
+  const bridge = require(path.join(pluginRoot, "scripts/start-sympp-mcp-bridge.js"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sympp-probe-"));
+  const pipe = `\\\\.\\pipe\\sympp-test-${crypto.randomUUID()}`;
+  const server = net.createServer();
+  const accepted = once(server, "connection");
+  await new Promise((resolve) => server.listen(pipe, resolve));
+  const child = spawn(process.execPath, [__filename, "--probe-peer", path.join(root, "child.lock")], { stdio: ["ignore", "ignore", "inherit", "ipc"], windowsHide: true });
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  const fromPeer = (promise) => Promise.race([promise, closed.then((code) => { throw new Error(`Probe peer exited before replying: ${code}`); })]);
+  let peer;
+  let socket;
+  let pendingSocket;
+  try {
+    [peer] = await fromPeer(once(child, "message"));
+    const file = path.join(root, "owner.lock");
+    writeJson(file, { lock_id: "original", owner_pid: process.pid, owner_pipe: pipe, owner_token: "expected" });
+    child.send({ lockFile: file });
+    [socket] = await fromPeer(accepted);
+    // The child is waiting on us. It must still answer its own ownership pipe.
+    const response = await new Promise((resolve, reject) => {
+      const probe = net.createConnection(peer.owner_pipe);
+      let body = "";
+      probe.setEncoding("utf8");
+      probe.setTimeout(1000, () => probe.destroy(new Error("A pending peer probe blocked this owner's liveness server")));
+      probe.on("data", (chunk) => { body += chunk; });
+      probe.once("end", () => resolve(body));
+      probe.once("error", reject);
+    });
+    assert.equal(response, peer.owner_token);
+    const pendingConnection = once(server, "connection");
+    const pendingOwner = bridge.livenessMatches(child.pid, pipe, "expected");
+    [pendingSocket] = await fromPeer(pendingConnection);
+    const replacement = { ...readJson(file), lock_id: "replacement" };
+    writeJson(file, replacement);
+    const done = fromPeer(once(child, "message"));
+    socket.end("wrong-token");
+    assert.deepEqual((await done)[0], { done: true });
+    assert.deepEqual(readJson(file), replacement, "A completed old probe must not remove a replacement lock");
+    assert.equal(await closed, 0);
+    assert.equal(await pendingOwner, false, "An owner that dies during a pending probe must not suppress final cleanup");
+    pendingSocket.destroy();
+    assert.equal(await bridge.livenessMatches(child.pid, peer.owner_pipe, peer.owner_token), false, "A dead owner must be reclaimable");
+    assert.equal(await bridge.livenessMatches(process.ppid, pipe + "-missing", "expected"), false);
+    server.removeAllListeners("connection");
+    server.on("connection", (connection) => connection.end("expected"));
+    assert.equal(await bridge.livenessMatches(process.ppid, pipe, "wrong"), false, "A wrong token must not retain a stale owner");
+    assert.equal(await bridge.livenessMatches(process.ppid, pipe, "expected"), true);
+    server.removeAllListeners("connection");
+    server.on("connection", (connection) => { socket = connection; });
+    assert.equal(await bridge.livenessMatches(process.ppid, pipe, "expected"), true, "An unresponsive live owner must not lose its lock");
+  } finally {
+    socket?.destroy();
+    pendingSocket?.destroy();
+    if (child.exitCode === null) { child.kill(); await closed; }
+    await new Promise((resolve) => server.close(resolve));
+    await removeTree(root);
+  }
+}
+
 async function main() {
+  if (!process.env.SYMPP_COLD_ONLY || process.env.SYMPP_COLD_ONLY === "liveness") {
+    await checkResponsiveOwnerProbe();
+    if (process.env.SYMPP_COLD_ONLY === "liveness") { console.log("Owner probes stay responsive and preserve replacement locks"); return; }
+  }
   const pwsh = spawnSync("where.exe", ["pwsh.exe"], { encoding: "utf8" }).stdout.trim().split(/\r?\n/)[0];
   const windowsPowerShell = spawnSync("where.exe", ["powershell.exe"], { encoding: "utf8" }).stdout.trim().split(/\r?\n/)[0];
   assert.ok(pwsh && windowsPowerShell, "Both pwsh and Windows PowerShell 5.1 are required.");
@@ -799,5 +883,6 @@ async function main() {
   process.stdout.write(`${JSON.stringify({ matrix: results.slice(0, 2), powershell_fallback: powershellFallback, leader_death: results.slice(2), recovery, powershell_5_1: true, pwsh: true, cleanup: true })}\n`);
 }
 
-if (process.argv[2] === "--barrier-client") barrierClient().catch((error) => { process.stderr.write(`${error.stack || error}\n`); process.exit(1); });
+if (process.argv[2] === "--probe-peer") probePeer().catch((error) => { console.error(error); process.exit(1); });
+else if (process.argv[2] === "--barrier-client") barrierClient().catch((error) => { process.stderr.write(`${error.stack || error}\n`); process.exit(1); });
 else main().catch((error) => { process.stderr.write(`${error.stack || error}\n`); process.exit(1); });
