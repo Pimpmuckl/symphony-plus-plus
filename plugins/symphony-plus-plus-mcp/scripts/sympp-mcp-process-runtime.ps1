@@ -232,6 +232,7 @@ function Get-ArtifactBackendCommand($ArtifactRuntime, $Plan, [string]$DashboardO
       $releaseTmp = Join-Path $runtimeLogRoot "release-tmp"
       New-Item -ItemType Directory -Force -Path $releaseTmp | Out-Null
       $environment["RELEASE_TMP"] = $releaseTmp
+      $environment["RELEASE_MODE"] = "interactive"
       $environment["PHX_SERVER"] = "true"
       return [pscustomobject]@{
         file = "cmd.exe"
@@ -286,17 +287,18 @@ function Start-Backend($Plan, [string]$DashboardOrigin, [string]$ElixirDir, [str
   }
   $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSec)
   $ready = $false
+  $listenerPid = $null
   while ([DateTimeOffset]::UtcNow -lt $deadline) {
-    $listenerPid = Get-ManagedListenerPid "backend" ([int]$Plan.port)
-    if ($listenerPid -and [int]$listenerPid -ne $reportedPid) {
-      $reportedPid = [int]$listenerPid
-      if ($OnStarted) {
-        $listenerProcess = Get-Process -Id $reportedPid -ErrorAction SilentlyContinue
-        & $OnStarted $reportedPid (Get-ProcessStartIdentity $listenerProcess)
+    $health = Get-SymppBackendHealth $Plan.url
+    if (-not $listenerPid) {
+      $listenerPid = Get-ManagedListenerPid "backend" ([int]$Plan.port)
+      if ($listenerPid -and [int]$listenerPid -ne $reportedPid -and $OnStarted) {
+        $listenerProcess = Get-Process -Id ([int]$listenerPid) -ErrorAction SilentlyContinue
+        & $OnStarted ([int]$listenerPid) (Get-ProcessStartIdentity $listenerProcess)
       }
     }
-    if (Test-HealthySymppBackend $Plan.url) { $ready = $true; break }
-    Start-Sleep -Milliseconds 250
+    if ($health.healthy) { $ready = $true; break }
+    Start-Sleep -Milliseconds 50
   }
   if (-not $ready) {
     $portOwners = @(Get-TcpPortOwners ([int]$Plan.port))
@@ -309,13 +311,11 @@ function Start-Backend($Plan, [string]$DashboardOrigin, [string]$ElixirDir, [str
     throw "Symphony++ backend did not become healthy at $($Plan.url) within $TimeoutSec seconds. $portDetail stderr_log=$($launch.stderr)"
   }
 
-  $health = Get-SymppBackendHealthWithRetry $Plan.url
   if (-not (Test-BackendContractMatches $health $ExpectedContractFingerprint)) {
     Stop-LoggedProcess $launch
     throw "Symphony++ backend at $($Plan.url) reported MCP contract fingerprint $(Format-McpContractFingerprintForDiagnostic $health.contract_fingerprint), expected $(Format-McpContractFingerprintForDiagnostic $ExpectedContractFingerprint). stderr_log=$($launch.stderr)"
   }
 
-  $listenerPid = Get-ManagedListenerPid "backend" ([int]$Plan.port)
   return [pscustomobject]@{
     pid = if ($listenerPid) { $listenerPid } else { $launch.process.Id }
     stdout = $launch.stdout
