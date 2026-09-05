@@ -19,6 +19,7 @@ defmodule SymphonyElixir.Application do
 
   use Application
 
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Retention
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorktreeCleanupQueue
 
@@ -61,6 +62,7 @@ defmodule SymphonyElixir.Application do
       [
         {Repo, Repo.child_options()},
         {WorktreeCleanupQueue, repo: Repo},
+        {Retention, repo: Repo},
         SymphonyElixir.SymphonyPlusPlus.MCP.HTTPStateStore,
         SymphonyElixir.SymphonyPlusPlus.MCP.ClientLeases,
         {SymphonyElixir.HttpServer, host: "127.0.0.1"}

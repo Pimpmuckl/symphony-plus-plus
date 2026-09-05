@@ -11,14 +11,12 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
   }
 
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Repository, as: OperatorSettingsRepository
-  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.RetentionThrottle
+  alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Retention
   alias SymphonyElixir.SymphonyPlusPlus.OperatorSettings.Settings, as: OperatorSettings
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.ReviewObservation
-  alias SymphonyElixir.SymphonyPlusPlus.SoloSessions.Service, as: SoloSessionService
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
-  alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Service, as: WorkRequestService
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.WorkRequest
 
   import Ecto.Query, only: [from: 2]
@@ -482,18 +480,7 @@ defmodule SymphonyElixirWeb.SymppDashboardAPI.LocalOperatorDashboard do
 
   @spec run_operator_retention(module(), OperatorSettings.t(), keyword()) :: :ok | {:error, term()}
   def run_operator_retention(repo, %OperatorSettings{} = settings, opts \\ []) do
-    RetentionThrottle.run(repo, settings, &run_operator_retention_pass(repo, settings, &1), opts)
-  end
-
-  defp run_operator_retention_pass(repo, %OperatorSettings{} = settings, now) do
-    with {:ok, _work_request_summary} <-
-           WorkRequestService.retention_pass(repo,
-             archive_after_days: settings.work_request_archive_after_days,
-             delete_after_days: settings.solo_session_delete_after_days
-           ),
-         {:ok, _solo_summary} <- SoloSessionService.retention_pass(repo, now) do
-      :ok
-    end
+    Retention.run(repo, settings, opts)
   end
 
   @spec archived_work_request_payload(WorkRequest.t()) :: map()
