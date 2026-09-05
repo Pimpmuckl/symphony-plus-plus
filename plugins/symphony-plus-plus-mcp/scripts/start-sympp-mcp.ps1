@@ -2343,13 +2343,14 @@ function Invoke-PreparedRuntimeStart([string]$RuntimeFile, [string]$PluginRoot) 
     if ([string]::IsNullOrWhiteSpace($dashboardRelative)) { $dashboardRelative = "." }
     if (-not (Test-SymppArtifactCacheReady $artifact.root $artifact.entrypoint_relative $artifact.sha256 $dashboardRelative $artifact.dashboard_fingerprint) -or
         -not (Test-Path -LiteralPath (Join-Path $artifact.root "runtime/bin/symphony_elixir.bat") -PathType Leaf)) { return $false }
-    $artifact.workflow = $prepared.workflow
+    $elixirDir = Join-Path $identity.source_root "elixir"
+    if ([string]$prepared.workflow -ine [string](Resolve-ArtifactWorkflowPath $artifact $elixirDir)) { return $false }
     $plan = $state.backend
     $plan.status = "starting"
     $plan.reused = $false
     $root = [string]$artifact.root
     $timeout = Get-EnvInteger "SYMPP_BACKEND_STARTUP_TIMEOUT_SEC" 60 1 600
-    Set-SymppSourceRevisionEnvironment ([string]$identity.revision)
+    Set-SymppSourceRevisionEnvironment ([string]$artifact.source_revision)
     [void](Set-SymppRuntimePublication $state "starting" $identity $controls $plan $root)
     Write-RuntimeState $RuntimeFile $state
     Write-SymppLauncherTrace "prepared_runtime_start"
@@ -2360,7 +2361,7 @@ function Invoke-PreparedRuntimeStart([string]$RuntimeFile, [string]$PluginRoot) 
       Write-RuntimeState $RuntimeFile $state
     }
     Write-SymppLauncherTrace "backend_start_begin"
-    $launch = Start-Backend $plan $null $null "direct" $null $null (Resolve-LogDir) $timeout $identity.contract_fingerprint $artifact $true $onStarted
+    $launch = Start-Backend $plan $null $elixirDir "direct" $null $null (Resolve-LogDir) $timeout $identity.contract_fingerprint $artifact $true $onStarted
     Write-SymppLauncherTrace "backend_start_end"
     if (-not (Test-HealthySymppDashboard $plan.url) -or -not (Test-SymppDashboardMcpProxyMatches $plan.url $identity.contract_fingerprint)) {
       [void](Stop-ManagedRuntimeEntry "backend" $plan)
