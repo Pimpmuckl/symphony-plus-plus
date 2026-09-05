@@ -14,6 +14,7 @@ $BoardPath = "/sympp/board"
 
 . (Join-Path $PSScriptRoot "sympp-launcher-runtime.ps1")
 . (Join-Path $PSScriptRoot "sympp-mcp-launcher-helpers.ps1")
+Write-SymppLauncherTrace "powershell_entry"
 . (Join-Path $PSScriptRoot "sympp-mcp-artifact-manifest.ps1")
 . (Join-Path $PSScriptRoot "sympp-mcp-artifact-channel.ps1")
 . (Join-Path $PSScriptRoot "sympp-mcp-artifact-runtime.ps1")
@@ -2319,6 +2320,7 @@ if ($CleanupPreparedRuntime) {
 }
 
 $pluginRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+Write-SymppLauncherTrace "powershell_config_begin"
 $runtimeFile = Resolve-RuntimeFile
 $bridgeMode = Get-EnvMode "SYMPP_MCP_BRIDGE_MODE" "http" @("http", "direct_stdio")
 if (-not $ValidateOnly -and -not $PrepareRuntimeOnly -and $bridgeMode -eq "http" -and [string]::IsNullOrWhiteSpace($env:SYMPP_REPO_ROOT)) {
@@ -2469,6 +2471,7 @@ $runtimeKey = $null
 $supersededStates = @()
 
 $startupLock = $null
+Write-SymppLauncherTrace "powershell_config_end"
 if ($installedHttpCold) {
   Start-SymppColdStartDeadline $coldStartTimeout
   $requireColdRepair = $false
@@ -2534,10 +2537,12 @@ try {
     }
   }
 
+  Write-SymppLauncherTrace "backend_plan_begin"
   $backendPlan = if ($recoveredBackendPlan) { $recoveredBackendPlan } else {
     $backendPortReleaseBudget = if ($installedHttpCold) { Get-SymppRemainingTimeoutSec $backendPortReleaseTimeout "backend port release" } else { $backendPortReleaseTimeout }
     Resolve-BackendPlan $backendPort $env:SYMPP_BACKEND_URL $runtimeState $backendPortReleaseBudget $expectedSourceRevision $expectedContractFingerprint $backendPortExplicit @($dashboardPort)
   }
+  Write-SymppLauncherTrace "backend_plan_end"
   if ($installedHttpCold -and -not $backendPlan.should_start -and $autostartFrontend -and [string]::IsNullOrWhiteSpace($env:SYMPP_DASHBOARD_ORIGIN)) {
     $runtimeInputs = Resolve-SymppLauncherRuntimeInputs $pluginRoot $bridgeMode $false $expectedContractFingerprint $expectedSourceRevision
     $artifactRuntimeAllowed = [bool]$runtimeInputs.artifact_runtime_allowed

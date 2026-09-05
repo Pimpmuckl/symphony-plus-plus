@@ -379,10 +379,10 @@ process.on("exit", closeLivenessProbe);
 function watchGeneration(paths, markerFile) {
   if (generationWatchers.length) return generationWatchReady;
   generationWatchStartedAtMs = performance.timeOrigin + performance.now();
-  const invalidate = () => {
+  const invalidate = (event, filename) => {
     generationWatchVersion += 1;
     try { fs.unlinkSync(markerFile); } catch (_) { }
-    trace("generation_watch_invalidated");
+    trace("generation_watch_invalidated", { event, filename: String(filename) });
   };
   for (const entry of paths) {
     try { generationWatchers.push(fs.watch(entry.path, { recursive: entry.recursive }, invalidate)); } catch (_) { closeGenerationWatchers(); generationWatchReady = false; return false; }
@@ -1166,6 +1166,7 @@ async function bridge(identity, state, runtimeFile) {
       if (!line.trim()) continue;
       let parsed = null;
       try { parsed = JSON.parse(line); } catch (_) { }
+      trace("mcp_request_begin", { method: parsed && parsed.method });
       const requestProtocol = parsed && parsed.method === "initialize" && parsed.params ? String(parsed.params.protocolVersion || "") : null;
       let response;
       let requestStarted = false;
@@ -1220,6 +1221,7 @@ async function bridge(identity, state, runtimeFile) {
           }
         }
       }
+      trace("mcp_request_end", { method: parsed && parsed.method });
       updateHerdrBinding(response, current.identity.backend);
       if (!response.ok) {
         process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: parsed ? parsed.id : null, error: { code: -32000, message: "Symphony++ HTTP MCP bridge request failed.", data: { detail: response.error } } })}\n`);

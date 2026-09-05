@@ -5,6 +5,7 @@ const { spawn } = require("child_process");
 
 const [readyFile, releaseFile, workingDirectory, command, ...args] = process.argv.slice(2);
 if (!readyFile || !releaseFile || !workingDirectory || !command) process.exit(2);
+process.chdir(process.env.SystemRoot || require("os").tmpdir());
 
 let child = null;
 const stopChild = () => {
