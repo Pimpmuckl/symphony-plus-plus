@@ -76,7 +76,9 @@ function Get-SymppArtifactDirectoryFingerprint([string]$Root) {
 
   $lines = New-Object System.Collections.Generic.List[string]
   $rootPrefix = ([System.IO.Path]::GetFullPath($Root)).TrimEnd("\", "/") + [System.IO.Path]::DirectorySeparatorChar
-  foreach ($file in @(Get-ChildItem -LiteralPath $Root -File -Recurse | Sort-Object FullName)) {
+  # Cache metadata is written after extraction and is not dashboard content.
+  $cacheMarker = [System.IO.Path]::GetFullPath((Join-Path $Root ".sympp-artifact.json"))
+  foreach ($file in @(Get-ChildItem -LiteralPath $Root -File -Recurse | Where-Object { $_.FullName -ne $cacheMarker } | Sort-Object FullName)) {
     $relativePath = ([System.IO.Path]::GetFullPath($file.FullName)).Substring($rootPrefix.Length).Replace("\", "/")
     $lines.Add("$relativePath $(Get-FileSha256 $file.FullName)")
   }

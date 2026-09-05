@@ -2,6 +2,7 @@ param(
   [switch]$Help,
   [switch]$ValidateOnly,
   [switch]$PrepareRuntimeOnly,
+  [switch]$TryPreparedRuntime,
   [switch]$CleanupPreparedRuntime,
   [string]$CleanupRuntimeKey
 )
@@ -63,12 +64,16 @@ function Write-Diagnostic([string]$Message) {
   [Console]::Error.WriteLine($Message)
 }
 
+function Test-SymppReleaseWrapperCommandLine([string]$CommandLine) {
+  return $CommandLine -match '(?i)^(?:"[^"]*cmd\.exe"|[^\s"]*cmd\.exe)\s+/d\s+/s\s+/c\s+call\s+runtime\\bin\\symphony_elixir\.bat\s+start\s*$'
+}
+
 function Test-SymppBackendCommandLine([string]$CommandLine) {
   if ([string]::IsNullOrWhiteSpace($CommandLine)) {
     return $false
   }
 
-  if ($CommandLine -match "(?i)\bsympp\.cockpit\b") {
+  if ($CommandLine -match "(?i)\bsympp\.cockpit\b" -or (Test-SymppReleaseWrapperCommandLine $CommandLine)) {
     return $true
   }
 
@@ -1122,7 +1127,8 @@ function Resolve-SymppPendingBackendProcess($State) {
       $created = [DateTimeOffset]$_.CreationDate
       $commandLine = [string]$_.CommandLine
       $created -ge $publishedAt.AddSeconds(-1) -and (Test-SymppBackendCommandLine $commandLine) -and
-        ($commandLine.Replace("/", "\").IndexOf($runtimeRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        ((Test-SymppReleaseWrapperCommandLine $commandLine) -or
+         $commandLine.Replace("/", "\").IndexOf($runtimeRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
          (Test-ManagedRuntimePortCommandLine "backend" $commandLine $backendPort))
     })
   if ($matches.Count -ne 1) { return $null }
@@ -1156,8 +1162,11 @@ function Test-SymppStartingBackendOwned($State, $InstalledIdentity, $Controls) {
   $commandLine = Get-ProcessCommandLine $backendPid
   if (-not (Test-SymppBackendCommandLine $commandLine)) { return $false }
   $runtimeRoot = [string]$State.publication.backend.runtime_root
+  # The relative release wrapper has no root in its command line. Its published
+  # PID and birth time (or the dead leader's child lineage above) establish ownership.
   return -not [string]::IsNullOrWhiteSpace($runtimeRoot) -and
-    ($commandLine.Replace("/", "\").IndexOf(([System.IO.Path]::GetFullPath($runtimeRoot)).Replace("/", "\"), [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+    ((Test-SymppReleaseWrapperCommandLine $commandLine) -or
+     $commandLine.Replace("/", "\").IndexOf(([System.IO.Path]::GetFullPath($runtimeRoot)).Replace("/", "\"), [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
      (Test-ManagedRuntimePortCommandLine "backend" $commandLine ([int]$State.publication.backend.port)))
 }
 
@@ -1709,7 +1718,11 @@ function Stop-LoggedProcess($Launch) {
     return
   }
 
-  Stop-Process -Id $Launch.process.Id -Force -ErrorAction SilentlyContinue
+  if (Test-SymppWindowsPlatform) {
+    & taskkill.exe /PID $Launch.process.Id /T /F 2>$null | Out-Null
+  } else {
+    Stop-Process -Id $Launch.process.Id -Force -ErrorAction SilentlyContinue
+  }
   try {
     [void]$Launch.process.WaitForExit(5000)
   } catch {
@@ -2298,6 +2311,86 @@ function Resolve-SymppLauncherRuntimeInputs([string]$PluginRoot, [string]$Bridge
   }
 }
 
+function Invoke-PreparedRuntimeStart([string]$RuntimeFile, [string]$PluginRoot) {
+  if (-not (Test-SymppWindowsPlatform) -or $env:SYMPP_REPO_ROOT -or $env:SYMPP_DATABASE -or
+      (Get-EnvMode "SYMPP_MCP_BRIDGE_MODE" "http" @("http", "direct_stdio")) -ne "http" -or
+      -not (Test-SymppInstalledMarketplacePluginRoot $PluginRoot)) { return $false }
+  foreach ($name in @("SYMPP_AUTOSTART_SERVERS", "SYMPP_AUTOSTART_BACKEND", "SYMPP_AUTOSTART_FRONTEND")) {
+    if (Test-EnvDisabled $name) { return $false }
+  }
+  $lock = Try-Enter-FileLock (Resolve-StartupLockFile $RuntimeFile)
+  if ($null -eq $lock) { return $false }
+  try {
+    $state = Read-RuntimeState $RuntimeFile
+    $prepared = $state.artifact.prepared_release
+    if ($null -eq $prepared -or [string]$prepared.kind -ne "windows_release_bat" -or
+        [string]$state.backend.status -ne "stopped" -or $state.backend.pid -or $state.backend.managed -ne $true -or
+        [string]$state.publication.status -ne "ready" -or [string]$state.frontend.status -ne "artifact_static" -or
+        @(Get-SupersededRuntimeStates $state).Count -gt 0 -or
+        [string]$prepared.configured_workflow -cne [string]$env:SYMPP_WORKFLOW_FILE) { return $false }
+    $controls = New-SymppPublicationControls (Get-EnvInteger "SYMPP_BACKEND_PORT" $DefaultBackendPort 0 65535) `
+      (Get-EnvInteger "SYMPP_DASHBOARD_PORT" $DefaultDashboardPort 0 65535) `
+      (-not [string]::IsNullOrWhiteSpace($env:SYMPP_BACKEND_PORT)) (-not [string]::IsNullOrWhiteSpace($env:SYMPP_DASHBOARD_PORT)) `
+      $env:SYMPP_BACKEND_URL $env:SYMPP_DASHBOARD_ORIGIN
+    $identity = Resolve-SymppInstalledMarketplaceIdentity $PluginRoot -ReadOnly
+    if ($null -eq $identity -or [string]$state.publication.generation_key -cne [string]$identity.generation_key -or
+        -not (Test-SymppPublicationControlsMatch $state.publication.controls $controls) -or
+        [string]$state.plugin_root -ine $PluginRoot -or
+        [string]$state.backend.contract_fingerprint -ine [string]$identity.contract_fingerprint -or
+        @(Get-TcpPortOwners ([int]$state.backend.port)).Count -gt 0) { return $false }
+    $artifact = $prepared.runtime
+    $dashboardRelative = ([string]$artifact.dashboard_root).Substring(([string]$artifact.root).Length).TrimStart([char[]]"\/")
+    if ([string]::IsNullOrWhiteSpace($dashboardRelative)) { $dashboardRelative = "." }
+    if (-not (Test-SymppArtifactCacheReady $artifact.root $artifact.entrypoint_relative $artifact.sha256 $dashboardRelative $artifact.dashboard_fingerprint) -or
+        -not (Test-Path -LiteralPath (Join-Path $artifact.root "runtime/bin/symphony_elixir.bat") -PathType Leaf)) { return $false }
+    $elixirDir = Join-Path $identity.source_root "elixir"
+    if ([string]$prepared.workflow -ine [string](Resolve-ArtifactWorkflowPath $artifact $elixirDir)) { return $false }
+    $plan = $state.backend
+    $plan.status = "starting"
+    $plan.reused = $false
+    $root = [string]$artifact.root
+    $timeout = Get-EnvInteger "SYMPP_BACKEND_STARTUP_TIMEOUT_SEC" 60 1 600
+    Set-SymppSourceRevisionEnvironment ([string]$artifact.source_revision)
+    [void](Set-SymppRuntimePublication $state "starting" $identity $controls $plan $root)
+    Write-RuntimeState $RuntimeFile $state
+    Write-SymppLauncherTrace "prepared_runtime_start"
+    $onStarted = {
+      param($StartedPid, $StartIdentity)
+      $plan.pid = $StartedPid
+      [void](Set-SymppRuntimePublication $state "starting" $identity $controls $plan $root $StartIdentity)
+      Write-RuntimeState $RuntimeFile $state
+    }
+    Write-SymppLauncherTrace "backend_start_begin"
+    $launch = Start-Backend $plan $null $elixirDir "direct" $null $null (Resolve-LogDir) $timeout $identity.contract_fingerprint $artifact $true $onStarted
+    Write-SymppLauncherTrace "backend_start_end"
+    if (-not (Test-HealthySymppDashboard $plan.url) -or -not (Test-SymppDashboardMcpProxyMatches $plan.url $identity.contract_fingerprint)) {
+      [void](Stop-ManagedRuntimeEntry "backend" $plan)
+      throw "artifact_dashboard_unavailable: prepared artifact dashboard is not healthy."
+    }
+    $plan.status = "started"; $plan.pid = $launch.pid
+    $plan.source_revision = $launch.source_revision; $plan.contract_fingerprint = $launch.contract_fingerprint
+    $plan.stdout_log = $launch.stdout; $plan.stderr_log = $launch.stderr
+    $state.generated_at = (Get-Date).ToString("o")
+    $startIdentity = Get-ProcessStartIdentity (Get-Process -Id ([int]$plan.pid) -ErrorAction Stop)
+    [void](Set-SymppRuntimePublication $state "ready" $identity $controls $plan $root $startIdentity)
+    Write-RuntimeState $RuntimeFile $state
+    Write-SymppLauncherTrace "runtime_ready_published"
+    return $true
+  } catch {
+    if ($state.publication.status -eq "starting" -and $state.publication.leader_pid -eq $PID) {
+      [void](Stop-ManagedRuntimeEntry "backend" $state.backend)
+    }
+    throw
+  } finally {
+    Exit-FileLock $lock
+  }
+}
+
+if ($TryPreparedRuntime) {
+  if (Invoke-PreparedRuntimeStart (Resolve-RuntimeFile) ([System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")))) { exit 0 }
+  exit 42
+}
+
 if ($Help) {
   Write-Usage
   exit 0
@@ -2686,6 +2779,7 @@ try {
         sha256 = $artifactRuntime.sha256
         platform = $artifactRuntime.platform
         manifest_path = $artifactRuntime.manifest_path
+        prepared_release = if ($backendLaunch -and $dashboardPlan.status -eq "artifact_static") { $backendLaunch.prepared_release } else { $null }
       }
     } elseif ($null -ne $runtimeState -and $null -ne $runtimeState.artifact) {
       $runtimeState.artifact

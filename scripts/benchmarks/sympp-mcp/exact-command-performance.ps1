@@ -20,7 +20,7 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "../../.."))
 $sourcePluginRoot = Join-Path $repoRoot "plugins/symphony-plus-plus-mcp"
 $revision = ([string](& git -C $repoRoot rev-parse HEAD)).Trim()
 $pluginVersion = [string]((Get-Content -LiteralPath (Join-Path $sourcePluginRoot ".codex-plugin/plugin.json") -Raw | ConvertFrom-Json).version)
-$ownedPrefix = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".exact-"))
+$ownedPrefix = [System.IO.Path]::GetFullPath((Join-Path ([System.IO.Path]::GetTempPath()) "sp-"))
 $tempRoot = $ownedPrefix + [guid]::NewGuid().ToString("N")
 $codexHome = Join-Path $tempRoot "codex"
 $marketplaceName = "benchmark"
@@ -714,6 +714,7 @@ exit /b %ERRORLEVEL%
   $cacheRelease = [pscustomobject]@{ checked = $false; moved = $null; cleanup_completed = $null }
   $lockRecovery = [pscustomobject]@{ checked = $false; reclaimed = $null }
   $lifecycleRace = [pscustomobject]@{ checked = $false; healthy = $null; backend_reused = $null }
+  $preparedCold = $null
   if ($LauncherMode -eq "NodePresent") {
     Write-BenchmarkProgress "Checking exact-command cache release..."
     $cacheRelease.checked = $true
@@ -739,8 +740,51 @@ exit /b %ERRORLEVEL%
       if ((Test-Path -LiteralPath $movedPluginRoot) -and -not (Test-Path -LiteralPath $pluginRoot)) { Move-Item -LiteralPath $movedPluginRoot -Destination $pluginRoot }
     }
     if (-not $cacheRelease.moved -or -not $cacheRelease.cleanup_completed) { throw "Retained Node bridge did not release the plugin cache while preserving last-detach cleanup." }
-    $cold = Start-ExactClient $environment
-    Wait-ClientsReady @($cold) $StartupTimeoutSec
+    if (@(Get-ListenerPids $backendPort).Count -ne 0) { throw "Prepared restart still has a backend listener." }
+    $preparedTraceBefore = Get-TraceCounts
+    $preparedBarrier = [pscustomobject]@{ ready_dir = Join-Path $tempRoot "prepared-barrier"; release_file = Join-Path $tempRoot "prepared.release" }
+    New-Item -ItemType Directory -Path $preparedBarrier.ready_dir -Force | Out-Null
+    $preparedClients = @(foreach ($index in 1..$ColdClients) { Start-ExactClient $environment $preparedBarrier })
+    $preparedWatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $preparedStartedAt = Release-ExactStartBarrier $preparedClients $preparedBarrier $StartupTimeoutSec $preparedWatch
+    Wait-ClientsReady $preparedClients $StartupTimeoutSec
+    foreach ($client in $preparedClients) {
+      $client.process.StandardInput.WriteLine('{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}')
+      $client.line_task = $client.process.StandardOutput.ReadLineAsync()
+    }
+    foreach ($client in $preparedClients) {
+      if (-not $client.line_task.Wait($StartupTimeoutSec * 1000)) { throw "Prepared cold tools/list timed out." }
+      $tools = $client.line_task.GetAwaiter().GetResult() | ConvertFrom-Json
+      if ($tools.error -or @($tools.result.tools).Count -eq 0) { throw "Prepared cold tools/list failed." }
+    }
+    $preparedElapsed = $preparedWatch.Elapsed.TotalMilliseconds
+    $preparedTraceAfter = Get-TraceCounts
+    $preparedTrace = @{}
+    foreach ($name in @($preparedTraceAfter.Keys + $preparedTraceBefore.Keys | Select-Object -Unique)) {
+      $preparedTrace[$name] = [int]$preparedTraceAfter[$name] - [int]$preparedTraceBefore[$name]
+    }
+    $preparedCold = [pscustomobject]@{
+      clients = $ColdClients
+      all_ready_ms = [Math]::Round($preparedElapsed, 2)
+      trace = $preparedTrace
+      phases = @(foreach ($event in @("powershell_entry", "prepared_runtime_start", "backend_start_begin", "backend_start_end", "runtime_ready_published", "node_bridge_selected")) {
+        foreach ($record in @(Get-TraceDetails $event ([DateTimeOffset]$preparedStartedAt).ToUnixTimeMilliseconds())) {
+          [pscustomobject]@{ event = $event; elapsed_ms = $record.at_ms - ([DateTimeOffset]$preparedStartedAt).ToUnixTimeMilliseconds() }
+        }
+      })
+    }
+    Write-BenchmarkProgress "Prepared cold: $ColdClients clients initialized and listed tools in $($preparedCold.all_ready_ms) ms."
+    if ([int]$preparedTrace["prepared_runtime_start"] -ne 1 -or [int]$preparedTrace["manifest_fetch_begin"] -ne 0) {
+      throw "Prepared restart did not reuse one verified release without fetching the manifest."
+    }
+    $preparedState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json
+    $preparedProcess = Get-Process -Id ([int]$preparedState.backend.pid) -ErrorAction Stop
+    $preparedOwners = @(Get-ListenerPids $backendPort)
+    if ($preparedOwners.Count -ne 1 -or [int]$preparedOwners[0] -ne $preparedProcess.Id -or
+        [string]$preparedState.publication.backend.process_start_time_utc_ticks -ne [string]$preparedProcess.StartTime.ToUniversalTime().Ticks -or
+        -not (Test-Dashboard ([string]$preparedState.frontend.url))) { throw "Prepared restart lost singleton identity or dashboard readiness." }
+    $cold = $preparedClients[0]
+    Stop-ExactClients @($preparedClients | Select-Object -Skip 1)
     $runtimeState = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json
     $backend = Get-Process -Id ([int]$runtimeState.backend.pid) -ErrorAction Stop
     $backendStartTicks = $backend.StartTime.ToUniversalTime().Ticks
@@ -884,6 +928,7 @@ exit /b %ERRORLEVEL%
     artifact = [pscustomobject]@{ cache_miss = $artifactCacheMiss; prepared_cache = $artifactPreparedCache }
     isolation = [pscustomobject]@{ database = $databasePath; verified = $true }
     cold = $coldMetrics
+    prepared_cold = $preparedCold
     warm = @($warmResults)
     lifecycle_barrier = $lifecycleBarrier
     cache_release = $cacheRelease

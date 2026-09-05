@@ -297,6 +297,7 @@ function generationKey(pluginRoot, sourceRoot) {
 }
 
 function processAlive(pid) {
+  if (!Number.isInteger(Number(pid)) || Number(pid) <= 0) return false;
   try { process.kill(Number(pid), 0); return true; } catch (_) { return false; }
 }
 
@@ -961,7 +962,7 @@ async function resolveHealthyRuntime(runtimeFile, pluginRoot, cancelled) {
         releaseProcessLock(lockFile, lock);
       }
     } else {
-      await new Promise((resolve) => setTimeout(resolve, 100 + Math.floor(Math.random() * 201)));
+      await waitForRuntimePublication(runtimeFile);
     }
   }
   return null;
@@ -1251,10 +1252,23 @@ async function bridge(identity, state, runtimeFile) {
 
 function runPreparation(executable, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { env: { ...process.env, SYMPP_BACKEND_OWNER_PID: String(process.pid) }, stdio: ["ignore", "ignore", "inherit"], windowsHide: true });
+    // Windows PowerShell children inherit extra handles. Keep the MCP stderr
+    // pipe out of its process tree, and forward the complete diagnostic file on exit.
+    const stderrFile = `${resolveRuntimeFile()}.prepare-${process.pid}.log`;
+    const stderrFd = fs.openSync(stderrFile, "w");
+    let child;
+    try {
+      child = spawn(executable, args, { env: { ...process.env, SYMPP_BACKEND_OWNER_PID: String(process.pid) }, stdio: ["ignore", "ignore", stderrFd], windowsHide: true });
+    } finally { fs.closeSync(stderrFd); }
     preparationChild = child;
-    child.once("error", (error) => { if (preparationChild === child) preparationChild = null; reject(error); });
-    child.once("exit", (code) => { if (preparationChild === child) preparationChild = null; resolve(code ?? 1); });
+    const finish = (code, error) => {
+      if (preparationChild === child) preparationChild = null;
+      try { process.stderr.write(fs.readFileSync(stderrFile)); } catch (_) { }
+      try { fs.unlinkSync(stderrFile); } catch (_) { }
+      if (error) reject(error); else resolve(code ?? 1);
+    };
+    child.once("error", (error) => finish(null, error));
+    child.once("exit", (code) => finish(code));
   });
 }
 
@@ -1267,6 +1281,15 @@ function cancelPreparation() {
 
 async function prepareColdRuntime() {
   const configured = process.env.SYMPP_POWERSHELL;
+  const state = readJson(resolveRuntimeFile());
+  if (process.platform === "win32" && process.argv.length === 2 && state?.backend?.status === "stopped" && state?.artifact?.prepared_release) {
+    const code = await runPreparation(configured || "powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "start-sympp-mcp.ps1"), "-TryPreparedRuntime"]).catch((error) => {
+      if (!configured && error.code === "ENOENT") return 42;
+      throw error;
+    });
+    if (code === 0) return;
+    if (code !== 42) throw new Error(`Symphony++ prepared runtime startup failed with exit code ${code}.`);
+  }
   const candidates = configured ? [configured] : (process.platform === "win32" ? ["pwsh.exe", "powershell.exe"] : ["pwsh"]);
   const args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "start-sympp-mcp.ps1"), "-PrepareRuntimeOnly", ...process.argv.slice(2)];
   for (const executable of candidates) {
@@ -1281,13 +1304,27 @@ async function prepareColdRuntime() {
   }
 }
 
+function waitForRuntimePublication(runtimeFile) {
+  return new Promise((resolve) => {
+    let watcher;
+    const done = () => { clearTimeout(timer); if (watcher) watcher.close(); resolve(); };
+    const timer = setTimeout(done, 100 + Math.floor(Math.random() * 201));
+    try {
+      watcher = fs.watch(path.dirname(runtimeFile), (_event, filename) => {
+        if (!filename || String(filename) === path.basename(runtimeFile)) done();
+      });
+      watcher.on("error", done);
+    } catch (_) { /* The timer still covers missing directories and missed events. */ }
+  });
+}
+
 async function resolveColdRuntime(runtimeFile, pluginRoot) {
   const lockFile = `${runtimeFile}.cold.lock`;
   const configuredSeconds = Number(process.env.SYMPP_COLD_START_TIMEOUT_SEC || 300);
   const deadline = Date.now() + (Number.isFinite(configuredSeconds) ? Math.max(30, Math.min(330, configuredSeconds)) : 300) * 1000;
   while (Date.now() < deadline) {
     const state = readJson(runtimeFile);
-    if (state && (!state.publication || state.publication.status === "ready")) {
+    if (state && (state.backend?.managed !== true || processAlive(Number(state.backend.pid))) && (!state.publication || state.publication.status === "ready")) {
       const cachedIdentity = await resolveCachedIdentity(pluginRoot);
       const identity = resolveStateIdentity(state, pluginRoot, cachedIdentity);
       if (identity) return { state, identity };
@@ -1297,7 +1334,7 @@ async function resolveColdRuntime(runtimeFile, pluginRoot) {
       try {
         const confirmed = readJson(runtimeFile);
         let confirmedIdentity = null;
-        if (confirmed && (!confirmed.publication || confirmed.publication.status === "ready")) {
+        if (confirmed && (confirmed.backend?.managed !== true || processAlive(Number(confirmed.backend.pid))) && (!confirmed.publication || confirmed.publication.status === "ready")) {
           confirmedIdentity = resolveStateIdentity(confirmed, pluginRoot, await resolveCachedIdentity(pluginRoot));
         }
         if (!confirmedIdentity) await prepareColdRuntime();
@@ -1305,7 +1342,7 @@ async function resolveColdRuntime(runtimeFile, pluginRoot) {
         releaseProcessLock(lockFile, lock);
       }
     } else {
-      await new Promise((resolve) => setTimeout(resolve, 100 + Math.floor(Math.random() * 201)));
+      await waitForRuntimePublication(runtimeFile);
     }
   }
   return null;
