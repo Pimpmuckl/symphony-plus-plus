@@ -11,7 +11,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
   alias SymphonyElixir.SymphonyPlusPlus.AgentRuns.Repository, as: AgentRunRepository
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.ClaimLease
   alias SymphonyElixir.SymphonyPlusPlus.ClaimLeases.Service, as: ClaimLeaseService
-  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Config, Session}
+  alias SymphonyElixir.SymphonyPlusPlus.MCP.{Auth, Config, Server, Session}
   alias SymphonyElixir.SymphonyPlusPlus.MCP.SessionBinding
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Phase
   alias SymphonyElixir.SymphonyPlusPlus.Phases.Repository, as: PhaseRepository
@@ -19,6 +19,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
   alias SymphonyElixir.SymphonyPlusPlus.Repo
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.Repository, as: WorkPackageRepository
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackage
+  alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageActivity
   alias SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDelivery
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.{ArchitectHandoff, WorkRequest}
   alias SymphonyElixir.SymphonyPlusPlus.WorkRequests.Repository, as: WorkRequestRepository
@@ -56,6 +57,76 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
     end
 
     :ok
+  end
+
+  test "another WorkRequest architect force-releases a reservation left after assignment release", %{repo: repo} do
+    {_work_request, _slice, package} = linked_slice!(repo, "active")
+    session = create_work_request_architect_session(repo, create_work_request!(repo, "other-architect"))
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    {claim, worker} = claim_worker(repo, package, "previous-worker")
+    assert get_in(claim, ["result", "structuredContent", "local_claim", "claim_lease_status"]) == "active"
+    old_session = worker.session
+    lease_id = get_in(claim, ["result", "structuredContent", "local_claim", "claim_lease_id"])
+    binding = insert_recoverable_session_binding!(repo, package.id, minted.grant.id, repo.get!(ClaimLease, lease_id))
+
+    {released, _worker} = Server.handle_response_state(tool_request("release_current_assignment", %{"reason" => "finished"}), worker)
+    assert get_in(released, ["result", "structuredContent", "binding_cleared"]) == true
+    {blocked, _replacement} = claim_worker(repo, package, "replacement-worker")
+    assert blocked["error"]
+    package_before_release = repo.get!(WorkPackage, package.id)
+
+    response = mcp_tool(repo, session, "force_release_work_package_claim", %{"work_package_id" => package.id, "reason" => "stale owner; bearer abcdefghijkl"})
+    payload = get_in(response, ["result", "structuredContent"])
+    assert payload["reset_worker_grant_ids"] == [minted.grant.id]
+    assert payload["released_claim_lease_ids"] == []
+    assert payload["cleared_session_bindings"] == 1
+    assert repo.get(SessionBinding, binding.id) == nil
+    assert {:error, _reason} = Auth.require_session(old_session, repo)
+    assert repo.get!(WorkPackage, package.id) == package_before_release
+    event = repo.get!(ProgressEvent, payload["audit_event"]["id"])
+    assert event.actor_id == session.assignment.claimed_by
+    assert event.access_grant_id == session.assignment.grant_id
+    refute inspect(payload) =~ "abcdefghijkl"
+    refute inspect(event) =~ minted.work_key.secret
+
+    {replacement, new_worker} = claim_worker(repo, package, "replacement-worker")
+    assert get_in(replacement, ["result", "structuredContent", "local_claim", "claimed_by"]) == "replacement-worker"
+    assert {:ok, _session} = Auth.require_session(new_worker.session, repo)
+    assert {:error, _reason} = Auth.require_session(old_session, repo)
+  end
+
+  test "force release projects a grant-only reservation as recycled", %{repo: repo} do
+    {work_request, _slice, package} = linked_slice!(repo, "active")
+    session = create_work_request_architect_session(repo, work_request)
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    assert {:ok, _assignment} = AccessGrantService.claim(repo, minted.work_key.secret, claimed_by: "key-worker")
+
+    response = mcp_tool(repo, session, "force_release_work_package_claim", %{"work_package_id" => package.id, "reason" => "replace key worker"})
+    assert get_in(response, ["result", "structuredContent", "released_claim_lease_ids"]) == []
+    runtime = WorkPackageActivity.context(repo, package.id).runtime_state
+    assert runtime.lifecycle_state == "recycled"
+    assert "worker_recycled" in runtime.reason_codes
+  end
+
+  test "force release clears paused claims and denies workers without changing their authority", %{repo: repo} do
+    {work_request, _slice, package} = linked_slice!(repo, "active")
+    session = create_work_request_architect_session(repo, work_request)
+    assert {:ok, minted} = AccessGrantService.mint_worker_grant(repo, package.id)
+    {claim, worker} = claim_worker(repo, package, "paused-worker")
+    lease_id = get_in(claim, ["result", "structuredContent", "local_claim", "claim_lease_id"])
+    args = %{"work_package_id" => package.id, "reason" => "replace paused worker"}
+    denied = mcp_tool(repo, worker.session, "force_release_work_package_claim", args)
+    assert denied["error"]
+    assert {:ok, _session} = Auth.require_session(worker.session, repo)
+    assert repo.get!(AccessGrant, minted.grant.id).claimed_by == "paused-worker"
+    assert {:ok, _lease} = ClaimLeaseService.pause(repo, lease_id, local_worker_actor("paused-worker"), reason: "paused")
+
+    response = mcp_tool(repo, session, "force_release_work_package_claim", args)
+    assert get_in(response, ["result", "structuredContent", "released_claim_lease_ids"]) == [lease_id]
+    assert repo.get!(ClaimLease, lease_id).status == "released"
+    assert {:error, _reason} = Auth.require_session(worker.session, repo)
+    {replacement, _worker} = claim_worker(repo, package, "replacement-worker")
+    assert get_in(replacement, ["result", "structuredContent", "local_claim", "claimed_by"]) == "replacement-worker"
   end
 
   test "architect recycles active work-package worker authority before superseded closeout", %{repo: repo} do
@@ -493,6 +564,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackageWorkerRevokeTest do
       session: session
     )
   end
+
+  defp claim_worker(repo, package, claimed_by) do
+    server = Server.new(Config.default(repo: repo, repo_root: test_repo_root()), initialized: true)
+
+    Server.handle_response_state(
+      tool_request("claim_local_assignment", %{"work_package_id" => package.id, "repo" => package.repo, "base_branch" => package.base_branch, "claimed_by" => claimed_by}),
+      server
+    )
+  end
+
+  defp tool_request(name, arguments), do: %{"jsonrpc" => "2.0", "id" => name, "method" => "tools/call", "params" => %{"name" => name, "arguments" => arguments}}
 
   defp test_repo_root do
     Path.expand("../../../..", __DIR__)

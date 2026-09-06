@@ -246,6 +246,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.SurfaceSpecs do
   defp architect_tool_description("list_comments"), do: "List comments attached to a scoped WorkRequest or WorkPackage."
   defp architect_tool_description("resolve_comment"), do: "Resolve a policy-scoped comment attached to a claimed WorkRequest descendant package surface."
   defp architect_tool_description("resolve_blocker"), do: "Resolve a blocker event for a policy-scoped descendant WorkPackage."
+
+  defp architect_tool_description("force_release_work_package_claim"),
+    do:
+      "Force-release a WorkPackage's worker claim, including active or paused leases and reservations left after release. Any authenticated architect may target any WorkRequest. Invalidates previous worker sessions and records an audit reason; leaves package status and delivery unchanged."
+
   defp architect_tool_description("read_delivery_board"), do: "Read the scoped WorkRequest delivery-board projection for visible work-package closeout without broad package visibility."
   defp architect_tool_description("attach_branch"), do: "Update canonical branch metadata for an explicit descendant WorkPackage."
   defp architect_tool_description("sync_pr"), do: "Fetch and reconcile the attached GitHub PR for an explicit descendant WorkPackage."

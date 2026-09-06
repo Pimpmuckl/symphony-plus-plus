@@ -130,6 +130,12 @@ the WorkRequest to its planned state; there is no separate approval or finish st
 
 ## Dispatch
 
+If a replacement worker is blocked by an old claim, call
+`force_release_work_package_claim` with `work_package_id` and `reason`, then
+retry `claim_local_assignment`. Any authenticated architect can release a
+worker claim across WorkRequests, including active or paused claims. The old
+worker loses session authority; package status and delivery evidence stay intact.
+
 Dispatch planned WorkPackages with `dispatch_work_package`. Dispatch uses the
 same effective graph shown by `read_plan` and rejects cycles or unmet
 dependencies with WorkPackage-id evidence.
