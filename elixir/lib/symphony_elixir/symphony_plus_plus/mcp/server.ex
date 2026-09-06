@@ -1211,7 +1211,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
               "sync_pr",
               "record_work_package_delivery",
               "cleanup_work_request_work_package_runtime",
-              "revoke_work_package_worker_key"
+              "revoke_work_package_worker_key",
+              "force_release_work_package_claim"
             ],
        do: ArchitectDeliveryTools.call(name, config, session, arguments)
 

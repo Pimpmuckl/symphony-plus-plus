@@ -35,6 +35,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCPCase do
     "cleanup_work_request_work_package_runtime",
     "record_work_package_delivery",
     "revoke_work_package_worker_key",
+    "force_release_work_package_claim",
     "list_guidance_requests",
     "read_guidance_request",
     "answer_guidance_request",

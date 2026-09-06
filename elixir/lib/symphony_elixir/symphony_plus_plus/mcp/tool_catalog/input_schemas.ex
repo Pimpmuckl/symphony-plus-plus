@@ -331,6 +331,16 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
     )
   end
 
+  def architect_tool_input_schema("force_release_work_package_claim") do
+    schema(
+      %{
+        "work_package_id" => described_string_schema("WorkPackage whose worker claim must be released, including outside the architect's current WorkRequest."),
+        "reason" => described_string_schema("Audit reason for force-releasing the worker claim.")
+      },
+      ["work_package_id", "reason"]
+    )
+  end
+
   def architect_tool_input_schema(tool) when tool in ["cleanup_work_request_work_package_runtime", "revoke_work_package_worker_key"],
     do: delivery_runtime_tool_input_schema(tool)
 

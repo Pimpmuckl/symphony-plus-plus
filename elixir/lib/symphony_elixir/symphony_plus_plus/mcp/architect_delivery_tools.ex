@@ -41,6 +41,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
     ToolArguments,
     ToolCatalog,
     ToolResult,
+    WorkPackageClaimRelease,
     WorkPackageWorkerRevoke,
     WorkRequestPayloads,
     WorkRequestScope,
@@ -296,6 +297,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
       {:error, reason} ->
         work_request_runtime_cleanup_error(reason)
+    end
+  end
+
+  def call("force_release_work_package_claim", %Config{} = config, session, arguments) do
+    with {:ok, live_session} <- architect_session(config.repo, session),
+         {:ok, arguments} <- validate_arguments(arguments, "force_release_work_package_claim"),
+         {:ok, work_package_id} <- required_argument(arguments, "work_package_id"),
+         {:ok, reason} <- required_argument(arguments, "reason"),
+         {:ok, payload} <-
+           run_architect_transaction(config.repo, fn ->
+             force_release_work_package_claim(config.repo, live_session, work_package_id, reason)
+           end) do
+      {:ok, ToolResult.tool_result(payload)}
+    else
+      {:tool_error, reason} -> {:error, -32_602, "Invalid params", %{"tool" => "force_release_work_package_claim", "reason" => reason}}
+      {:error, :not_found} -> not_found_error("force_release_work_package_claim")
+      {:error, reason} -> architect_error(reason, "force_release_work_package_claim")
     end
   end
 
@@ -943,6 +961,15 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectDeliveryTools do
 
   defp require_runtime_cleanup_delivery_state(%WorkPackage{}, %{"outcome" => "abandoned"}),
     do: {:tool_error, "work_package_not_abandonable"}
+
+  defp force_release_work_package_claim(repo, session, work_package_id, reason) do
+    with :ok <- lock_access_grant(repo, session.assignment.grant_id),
+         {:ok, current_session} <- architect_session(repo, session),
+         :ok <- lock_work_package(repo, work_package_id),
+         {:ok, work_package} <- WorkPackageRepository.get(repo, work_package_id) do
+      WorkPackageClaimRelease.release(repo, work_package, current_session.assignment, reason)
+    end
+  end
 
   defp revoke_work_package_worker_key_in_transaction(
          repo,
