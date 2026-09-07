@@ -258,7 +258,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools01Test do
               "repo" => "nextide/symphony-plus-plus",
               "base_branch" => "main",
               "title" => "Operator-created WorkRequest",
-              "human_description" => "Record supplied operator provenance.",
+              "description" => "Record supplied operator provenance.",
               "request_kind" => "investigation",
               "creator_kind" => "operator",
               "creator_name" => "JJ",

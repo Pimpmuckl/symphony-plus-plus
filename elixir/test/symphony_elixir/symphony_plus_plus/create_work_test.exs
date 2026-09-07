@@ -589,7 +589,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CreateWorkTest do
 
     context_text = get_in(context_response, ["result", "contents", Access.at(0), "text"])
     assert context_text =~ "Fix hotfix incident"
-    assert context_text =~ "- Parent: source: `Not recorded.`"
+    assert context_text =~ "parent_id: null"
 
     read_plan_response =
       MCPHarness.request(

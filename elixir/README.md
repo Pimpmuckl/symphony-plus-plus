@@ -7,6 +7,11 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 > Symphony Elixir is prototype software intended for evaluation only and is presented as-is.
 > We recommend implementing your own hardened version based on `SPEC.md`.
 
+Symphony++ worker MCP resources use one `text/vnd.toon` representation over both stdio and HTTP.
+Tool calls retain their JSON `structuredContent`; architect resources remain Markdown.
+`create_work_request` takes `description`, `creator_kind`, and `creator_name`; the former
+`human_description`, `created_by_kind`, and `created_by_name` argument aliases are removed.
+
 ## Screenshot
 
 ![Symphony Elixir screenshot](../.github/media/elixir-screenshot.png)

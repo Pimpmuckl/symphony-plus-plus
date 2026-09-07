@@ -83,11 +83,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
           Session.t() | nil | term(),
           String.t(),
           String.t(),
-          String.t(),
-          keyword()
+          String.t()
         ) ::
           {:ok, map()} | {:error, integer(), String.t(), map()}
-  def read_work_package_virtual_resource(repo, session, work_package_id, file_name, uri, opts \\ []) do
+  def read_work_package_virtual_resource(repo, session, work_package_id, file_name, uri) do
     resource_type = resource_type_for_virtual_file(file_name)
     action = action_for_virtual_file(file_name)
 
@@ -99,8 +98,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
         work_package_id,
         file_name,
         uri,
-        agent_text?: worker_session?(session),
-        canonical_agent_text?: Keyword.get(opts, :mode, :stdio) == :http or Keyword.get(opts, :surface_profile, :full) != :full
+        worker_session?(session)
       )
     else
       {:error, {:authorization_policy_denied, %Decision{} = decision}} -> MCPError.from_decision(decision, uri)
@@ -164,7 +162,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     work_package_id = Session.work_package_id(session)
 
     with {:ok, assignment_resources} <- listed_current_assignment_resource(session) do
-      {:ok, assignment_resources ++ work_package_resources(work_package_id)}
+      {:ok, assignment_resources ++ work_package_resources(work_package_id, @agent_text_mime_type)}
     end
   end
 
@@ -172,12 +170,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     {:ok, current_assignment_resource_specs()}
   end
 
-  defp work_package_resources(work_package_id) do
+  defp work_package_resources(work_package_id, mime_type \\ "text/markdown") do
     Enum.map(PlanningRenderer.virtual_files(), fn file_name ->
       %{
         "uri" => "sympp://work-packages/#{work_package_id}/#{file_name}",
         "name" => file_name,
-        "mimeType" => "text/markdown"
+        "mimeType" => mime_type
       }
     end)
   end
@@ -202,11 +200,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     ]
   end
 
-  defp read_virtual_resource(repo, work_package_id, file_name, uri, opts) do
+  defp read_virtual_resource(repo, work_package_id, file_name, uri, agent_text?) do
     with true <- file_name in PlanningRenderer.virtual_files(),
          {:ok, state} <- PlanningRepository.get_render_state(repo, work_package_id),
-         {:ok, markdown} <- PlanningRenderer.render_state(state, file_name),
-         {:ok, resource} <- virtual_resource_result(uri, markdown, state, file_name, opts) do
+         {:ok, resource} <- virtual_resource_result(uri, state, file_name, agent_text?) do
       {:ok, resource}
     else
       false -> {:error, -32_601, "Method not found", %{"resource" => uri, "reason" => "unknown_virtual_file"}}
@@ -214,20 +211,17 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     end
   end
 
-  defp virtual_resource_result(uri, markdown, state, file_name, opts) do
-    if Keyword.get(opts, :agent_text?, false) do
+  defp virtual_resource_result(uri, state, file_name, agent_text?) do
+    if agent_text? do
       with {:ok, toon} <- WorkerContext.encode_virtual_file(state, file_name, uri: uri) do
-        {:ok, agent_text_resource(uri, markdown, toon, Keyword.get(opts, :canonical_agent_text?, false))}
+        {:ok, Response.text_resource(uri, toon, @agent_text_mime_type)}
       end
     else
-      {:ok, Response.text_resource(uri, markdown, "text/markdown")}
+      with {:ok, markdown} <- PlanningRenderer.render_state(state, file_name) do
+        {:ok, Response.text_resource(uri, markdown, "text/markdown")}
+      end
     end
   end
-
-  defp agent_text_resource(uri, _markdown, toon, true), do: Response.text_resource(uri, toon, @agent_text_mime_type)
-
-  defp agent_text_resource(uri, markdown, toon, false),
-    do: Response.agent_text_resource(uri, markdown, toon, "text/markdown", @agent_text_mime_type)
 
   defp actor_for_package_resource(repo, %Session{} = session, resource_type, work_package_id) do
     with {:ok, target} <- PlanningService.package_resource_target(repo, work_package_id, resource_type) do
