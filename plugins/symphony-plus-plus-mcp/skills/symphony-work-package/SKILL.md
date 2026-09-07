@@ -5,8 +5,7 @@ description: Use when assigned a Symphony++ WorkPackage; claims the ledger-backe
 
 # Symphony++ Work Package
 
-Use this skill for an assigned Symphony++ WorkPackage. It is the MCP-backed
-WorkPackage state adapter, not the generic worker contract. Pair it with
+Use this MCP state adapter for assigned WorkPackages, paired with
 `symphony-plus-plus-mcp:symphony-worker`.
 
 The MCP server is the permission boundary and the WorkPackage is the worker
@@ -22,8 +21,6 @@ cross-slice target, successor relation, audit closeout, or concurrency guard.
 
 1. Use a dedicated S++ MCP-enabled session connected to the same ledger as
    dispatch.
-   The initial tool list contains only health, assignment introspection,
-   release, and the claim tools allowed by the configured profile.
 2. Call `get_current_assignment()`. An unbound or stale session returns
    `assignment: null` plus the profile-aware claim or reclaim action.
 3. Claim the package with `claim_local_assignment` using the WorkPackage id:
@@ -33,33 +30,35 @@ cross-slice target, successor relation, audit closeout, or concurrency guard.
 4. Call worker tools from the stable worker catalog that was advertised at
    initialization. Claims and releases change authorization and scope, not the
    tool catalog.
-5. Replay the same local claim after reconnects. The server heartbeats the
-   current lease, reclaims stale leases with audit evidence, and rejects paused
-   leases or another active owner. Reconnect does not rewrite lifecycle state.
-   Tell the supervising parent and stop instead of minting your own replacement.
-6. Call `get_current_assignment()` and treat that WorkPackage as authoritative.
-7. Read `sympp://work-packages/{id}/acceptance.md` with the other MCP-backed
-   package resources.
-8. Read current context before coding: `read_context()`,
-   acceptance/review/handoff resources, findings, and progress. Read the task
-   plan only when it contains useful package context.
-   `read_context()` includes the assigned package contract and binding, a
-   parent WorkRequest summary, direct dependencies, selected relevant
-   decisions, and the architect-owned completion step. It excludes siblings
-   and the WorkRequest-wide plan.
-9. Do not create local `task_plan.md`, `findings.md`, or `progress.md` files as
+5. Reuse the successful claim's `assignment` when it identifies the expected
+   WorkPackage; otherwise call `get_current_assignment()` before continuing.
+   Recheck binding after reconnect, denial, or conflicting identity. Replay the
+   same claim after reconnects: the server heartbeats/reclaims eligible stale
+   leases without rewriting lifecycle state. Paused leases, another active
+   owner, or scope mismatch require the parent/operator; stop, never mint a
+   replacement or bypass a denial.
+6. Call `read_context()`, which authorizes the live session and returns the
+   assigned contract/binding, parent summary, direct dependencies, selected
+   decisions, and architect-owned completion step; it excludes siblings and
+   the WorkRequest-wide plan. Reuse complete current assignment, acceptance,
+   validation, and review fields actually returned to you. Fetch missing or
+   truncated fields from their canonical package resources, including
+   `sympp://work-packages/{id}/acceptance.md` and `review.md`. A summary or
+   inaccessible `structuredContent` is not proof of the complete contract.
+7. Read handoff, findings, and progress before continuing, including on a first
+   local claim: it may inherit prior work. Context alone does not prove history
+   is empty. Preserve prior decisions and investigate relevant omitted history
+   before relying on an incomplete projection. Read the task plan only when it
+   adds useful execution context.
+8. Do not create local `task_plan.md`, `findings.md`, or `progress.md` files as
    the source of truth.
 
 ## Context Format
 
-S++ MCP resources may include compact TOON text alongside Markdown or JSON for
-agent-readable context. Use TOON only as presentation; MCP tool arguments remain
-JSON/schema-native, and tool `structuredContent` remains the canonical
-machine-readable response.
+TOON is presentation only. Send schema-native JSON arguments;
+`structuredContent` is the canonical machine-readable result.
 
 ## Work Loop
-
-Keep S++ current as the work changes:
 
 - When a task plan helps execution, use
   `update_task_plan({"expected_version": <read version>, "nodes": [...]})`.
@@ -82,13 +81,12 @@ Human-facing bodies, comments, findings, progress details, and
 guidance context are Markdown. Keep titles, ids, statuses, branch names, and
 other compact labels plain.
 
-When you need direction, ask the parent or architect through ordinary agent
-messaging or comments. State the decision, checked evidence, package impact,
-candidate answers if known, and the smallest answer that unblocks you. Treat
-architect escalation to `human_info_needed` as a blocker.
+Ask the parent/architect for direction via messaging or comments: include the
+decision, evidence, impact, and smallest useful answer/options. Architect
+escalation to `human_info_needed` is a blocker.
 
-Stay inside the assigned WorkPackage. Do not inspect or mutate siblings unless
-S++ explicitly gives scoped context.
+Stay inside the assignment; inspect siblings only through authorized scoped
+context.
 
 ## Branch, PR, Review
 
@@ -111,7 +109,8 @@ S++ explicitly gives scoped context.
   supplies them, and the parent title and goal only to explain intent. Pass the
   brief through Review Suite's ordinary `--review-brief` or structured input.
   Do not persist a duplicate goal or add a Review Suite-specific API.
-- A worker may commit `CONTINUE` only while the frozen WorkPackage contract is
+- Classify the provider's structured review result before handoff.
+  A worker may commit `CONTINUE` only while the frozen WorkPackage contract is
   unchanged. Return findings, contract ambiguity, `REPLAN`, or `RESLICE` to
   the architect. Do not create a replacement cycle or package.
 - If `review.md` says no review is required, do not invent one.
@@ -144,6 +143,6 @@ secret-bearing commands, grant verifiers, or claim lease internals.
 
 ## References
 
-- `references/worker_prompt.md`
-- `references/mcp_wiring.md`
-- `references/handoff.md`
+- When composing dispatch text: `references/worker_prompt.md`.
+- For MCP setup or connection repair: `references/mcp_wiring.md`.
+- When preparing the final evidence packet: `references/handoff.md`.

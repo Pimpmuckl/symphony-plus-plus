@@ -15,19 +15,19 @@ ledger-backed claims, scoped grants, delivery boards, or MCP merge gates, use
   for parent planning. Do not share that session with workers.
 - Scout repo context before slicing.
 - Identify outcome, base branch, acceptance, owned/forbidden areas, optional
-  validation and review context, risk, and line/PR-size budget.
+  validation and review context, risk, and any assigned size budget.
 - Resolve material ambiguity before dispatch.
 
 ## Slice
 
 - Prefer one PR-sized slice per worker.
-- Use fresh worktrees/branches when isolation or parallelism matters.
+- Use isolated worktrees/branches for implementation or conflicting parallel
+  work. Read-only scouts may use the existing checkout.
 - Give workers goal, scope, base/branch/worktree, acceptance, optional
-  validation, review, and stop-condition context, budget, and expected
+  validation, review, and stop-condition context, any assigned budget, and expected
   PR/evidence.
-- PR-size or line-budget guidance; add slice-specific PR-size or line-budget
-  constraints when the default boundary is not enough. These budgets should
-  always be used and split between implementation- and test work when possible.
+- Honor assigned budgets; otherwise keep one cohesive outcome and escalate
+  material scope growth or reviewability risk. Numerical budgets are optional.
 - For S++ WorkPackages, pass ledger claim metadata and local worktree scope.
   Do not prompt normal workers for work keys or private handoff secrets.
 - Use explorers for reconnaissance only.
@@ -37,11 +37,14 @@ ledger-backed claims, scoped grants, delivery boards, or MCP merge gates, use
 Worker prompts should include:
 
 - `symphony-plus-plus-mcp:symphony-worker`.
-- `symphony-plus-plus-mcp:symphony-solo-session`, unless the worker is assigned a
-  WorkPackage. Each worker uses its own session.
+- `symphony-plus-plus-mcp:symphony-solo-session` when durable task memory helps
+  and no WorkPackage is assigned. Each worker uses its own session; short
+  read-only scouts need no Solo ledger.
 - Task-specific scope, evidence, constraints, and deviations from the baseline
   worker contract.
-- Create a worktree for each worker agent to work in
+- For manual worktrees, use `C:\Code\.worktrees\<repo>\<feature>`. After
+  delivery or abandonment, remove only your clean worktree and run
+  `git worktree prune`. S++-managed worktrees use their own lifecycle.
 
 ## Supervise
 
