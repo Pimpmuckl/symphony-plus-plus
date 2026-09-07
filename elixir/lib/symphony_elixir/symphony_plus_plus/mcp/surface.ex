@@ -98,7 +98,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
         work_package_id,
         file_name,
         uri,
-        agent_text?: worker_session?(session)
+        worker_session?(session)
       )
     else
       {:error, {:authorization_policy_denied, %Decision{} = decision}} -> MCPError.from_decision(decision, uri)
@@ -200,10 +200,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     ]
   end
 
-  defp read_virtual_resource(repo, work_package_id, file_name, uri, opts) do
+  defp read_virtual_resource(repo, work_package_id, file_name, uri, agent_text?) do
     with true <- file_name in PlanningRenderer.virtual_files(),
          {:ok, state} <- PlanningRepository.get_render_state(repo, work_package_id),
-         {:ok, resource} <- virtual_resource_result(uri, state, file_name, opts) do
+         {:ok, resource} <- virtual_resource_result(uri, state, file_name, agent_text?) do
       {:ok, resource}
     else
       false -> {:error, -32_601, "Method not found", %{"resource" => uri, "reason" => "unknown_virtual_file"}}
@@ -211,8 +211,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Surface do
     end
   end
 
-  defp virtual_resource_result(uri, state, file_name, opts) do
-    if Keyword.get(opts, :agent_text?, false) do
+  defp virtual_resource_result(uri, state, file_name, agent_text?) do
+    if agent_text? do
       with {:ok, toon} <- WorkerContext.encode_virtual_file(state, file_name, uri: uri) do
         {:ok, Response.text_resource(uri, toon, @agent_text_mime_type)}
       end
