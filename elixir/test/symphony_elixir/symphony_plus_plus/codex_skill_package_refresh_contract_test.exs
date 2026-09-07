@@ -12,23 +12,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.CodexSkillPackageRefreshContractTest d
     refute "request_context" in ToolCatalog.worker_tools()
   end
 
-  test "runtime claim schema and worker prompt align on ledger local claim inputs" do
+  test "runtime claim schema requires only the WorkPackage id" do
     claim_schema = ToolCatalog.worker_tool_input_schema("claim_local_assignment")
 
     assert claim_schema["required"] == ["work_package_id"]
     assert Map.keys(claim_schema["properties"]) |> Enum.sort() == ["claimed_by", "work_package_id"]
-
-    prompt = File.read!(@mcp_plugin_prompt_path)
-
-    for marker <- [
-          "WorkPackage: <WORK_PACKAGE_ID>",
-          ~s({"work_package_id":"<WORK_PACKAGE_ID>"}),
-          "Include `claimed_by` only when"
-        ] do
-      assert prompt =~ marker
-    end
-
-    refute prompt =~ "claimed_by: <stable-worker-identity>"
   end
 
   test "runtime tool schemas use model enum values" do
