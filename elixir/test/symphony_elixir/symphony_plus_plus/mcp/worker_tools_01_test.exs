@@ -754,8 +754,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
       )
 
     acceptance_contents = get_in(acceptance_resource, ["result", "contents"])
-    assert Enum.map(acceptance_contents, & &1["mimeType"]) == ["text/markdown", "text/vnd.toon"]
-    acceptance_toon_resource = Enum.find(acceptance_contents, &(Map.get(&1, "mimeType") == "text/vnd.toon"))
+    assert [%{"mimeType" => "text/vnd.toon"} = acceptance_toon_resource] = acceptance_contents
+
+    resource_list =
+      MCPHarness.request(%{"jsonrpc" => "2.0", "id" => "resources", "method" => "resources/list"}, repo: repo, session: session)
+
+    listed_acceptance = Enum.find(get_in(resource_list, ["result", "resources"]), &(&1["uri"] == acceptance_toon_resource["uri"]))
+    assert listed_acceptance["mimeType"] == acceptance_toon_resource["mimeType"]
     assert acceptance_toon_resource["text"] =~ "acceptance[1]{source}:"
     assert acceptance_toon_resource["text"] =~ "Do not invent completion state"
     refute acceptance_toon_resource["text"] =~ "done"
@@ -775,8 +780,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
     assert [%{"mimeType" => "text/vnd.toon", "text" => http_acceptance_text}] =
              get_in(http_acceptance_resource, ["result", "contents"])
 
-    assert http_acceptance_text =~ "acceptance[1]{source}:"
-    assert http_acceptance_text =~ "Do not invent completion state"
+    assert http_acceptance_text == acceptance_toon_resource["text"]
 
     read_plan_response =
       MCPHarness.request(
@@ -843,10 +847,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
       )
 
     findings_contents = get_in(findings_resource, ["result", "contents"])
-    assert get_in(findings_contents, [Access.at(0), "mimeType"]) == "text/markdown"
-    assert get_in(findings_contents, [Access.at(0), "text"]) =~ "TOON visible"
-
-    findings_toon_resource = Enum.find(findings_contents, &(Map.get(&1, "mimeType") == "text/vnd.toon"))
+    assert [%{"mimeType" => "text/vnd.toon"} = findings_toon_resource] = findings_contents
     assert findings_toon_resource["text"] =~ "findings[1]"
     assert findings_toon_resource["text"] =~ "TOON visible"
 
@@ -901,10 +902,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkerTools01Test do
       )
 
     contents = get_in(progress_resource, ["result", "contents"])
-    assert get_in(contents, [Access.at(0), "mimeType"]) == "text/markdown"
-    assert get_in(contents, [Access.at(0), "text"]) =~ "Recorded TOON progress"
-
-    toon_resource = Enum.find(contents, &(Map.get(&1, "mimeType") == "text/vnd.toon"))
+    assert [%{"mimeType" => "text/vnd.toon"} = toon_resource] = contents
+    assert toon_resource["text"] =~ "Recorded TOON progress"
     assert toon_resource["text"] =~ "progress_events"
     assert toon_resource["text"] =~ "[REDACTED]"
     assert toon_resource["text"] =~ "key_count: 5"

@@ -469,7 +469,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ClaimSessionTransport01Test do
       )
 
     own_text = get_in(own_response, ["result", "contents", Access.at(0), "text"])
-    assert own_text =~ "Task Plan"
+    assert own_text =~ "file: task_plan.md"
     assert own_text =~ "SYMPP-P3-001"
 
     sibling_response =

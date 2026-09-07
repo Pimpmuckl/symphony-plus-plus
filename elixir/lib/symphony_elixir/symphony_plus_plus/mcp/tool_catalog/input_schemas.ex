@@ -22,7 +22,6 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "base_branch" => string_schema(),
         "title" => string_schema(),
         "description" => markdown_string_schema("WorkRequest human-facing description in Markdown."),
-        "human_description" => markdown_string_schema("Deprecated alias for description; human-facing Markdown."),
         "request_kind" => string_enum_schema(WorkRequest.work_types()),
         "workflow_mode" => string_enum_schema(WorkRequest.dispatch_shapes()),
         "repo_scopes" => %{
@@ -33,14 +32,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ToolCatalog.InputSchemas do
         "status" => string_enum_schema(WorkRequest.statuses()),
         "claimed_by" => string_schema(),
         "creator_kind" => string_enum_schema(WorkRequest.creator_kinds()),
-        "created_by_kind" => string_enum_schema(WorkRequest.creator_kinds()),
         "creator_name" => string_schema(),
-        "created_by_name" => string_schema(),
         "created_via" => string_schema()
       },
-      ["repo", "base_branch", "title", "request_kind"]
+      ["repo", "base_branch", "title", "request_kind", "description"]
     )
-    |> always_validate(%{"anyOf" => [%{"required" => ["description"]}, %{"required" => ["human_description"]}]})
   end
 
   @spec local_operator_tool_input_schema(tool_name()) :: input_schema()

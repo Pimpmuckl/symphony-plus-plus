@@ -177,16 +177,11 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ConnectionBootstrap02Test do
              "repo",
              "base_branch",
              "title",
-             "request_kind"
-           ]
-
-    assert get_in(trusted_local_tools_by_name, ["create_work_request", "inputSchema", "then", "anyOf"]) == [
-             %{"required" => ["description"]},
-             %{"required" => ["human_description"]}
+             "request_kind",
+             "description"
            ]
 
     assert get_in(trusted_local_tools_by_name, ["create_work_request", "inputSchema", "properties", "description", "description"]) =~ "Markdown"
-    assert get_in(trusted_local_tools_by_name, ["create_work_request", "inputSchema", "properties", "human_description", "description"]) =~ "Markdown"
     refute Map.has_key?(unbound_tools_by_name, "upsert_plan_node")
     refute Map.has_key?(unbound_tools_by_name, "move_plan_node")
     refute Map.has_key?(unbound_tools_by_name, "set_plan_node_completion")

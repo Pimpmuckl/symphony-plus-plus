@@ -674,10 +674,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
        }) do
     case Surface.work_package_resource_id(rest) do
       {:ok, work_package_id, file_name} ->
-        Surface.read_work_package_virtual_resource(config.repo, session, work_package_id, file_name, uri,
-          surface_profile: config.surface_profile,
-          mode: config.mode
-        )
+        Surface.read_work_package_virtual_resource(config.repo, session, work_package_id, file_name, uri)
 
       :error ->
         {:error, -32_602, "Invalid params", %{"resource" => uri, "reason" => "invalid_work_package_resource_uri"}}
@@ -959,13 +956,13 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
          {:ok, base_branch} <- required_argument(arguments, "base_branch"),
          {:ok, title} <- required_argument(arguments, "title"),
          {:ok, request_kind} <- required_argument(arguments, "request_kind"),
-         {:ok, description} <- create_work_request_description(arguments),
+         {:ok, description} <- required_argument(arguments, "description"),
          {:ok, workflow_mode} <- optional_string_argument(arguments, "workflow_mode", "architect_led_feature_branch"),
          {:ok, repo_scopes} <- optional_list_argument(arguments, "repo_scopes"),
          {:ok, constraints} <- optional_object_argument(arguments, "constraints"),
          {:ok, status} <- optional_string_argument(arguments, "status", "ready_for_clarification"),
-         {:ok, creator_kind} <- create_work_request_creator_kind(arguments),
-         {:ok, creator_name} <- create_work_request_creator_name(arguments, claimed_by),
+         {:ok, creator_kind} <- optional_string_argument(arguments, "creator_kind", "agent"),
+         {:ok, creator_name} <- optional_string_argument(arguments, "creator_name", claimed_by || "mcp-agent"),
          {:ok, created_via} <- optional_string_argument(arguments, "created_via", "mcp") do
       {:ok,
        %{
@@ -985,43 +982,8 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.Server do
     end
   end
 
-  defp create_work_request_description(arguments) do
-    result =
-      case optional_string_argument(arguments, "human_description") do
-        {:ok, nil} -> optional_string_argument(arguments, "description")
-        {:ok, description} -> {:ok, description}
-        {:tool_error, reason} -> {:tool_error, reason}
-      end
-
-    case result do
-      {:ok, nil} -> {:tool_error, "missing_description"}
-      other -> other
-    end
-  end
-
   defp create_work_request_requested_claimed_by(arguments) do
     optional_string_argument(arguments, "claimed_by")
-  end
-
-  defp create_work_request_creator_kind(arguments) do
-    case optional_string_argument(arguments, "creator_kind") do
-      {:ok, nil} -> optional_string_argument(arguments, "created_by_kind", "agent")
-      {:ok, kind} -> {:ok, kind}
-      {:tool_error, reason} -> {:tool_error, reason}
-    end
-  end
-
-  defp create_work_request_creator_name(arguments, claimed_by) do
-    case optional_string_argument(arguments, "creator_name") do
-      {:ok, nil} ->
-        case optional_string_argument(arguments, "created_by_name") do
-          {:ok, nil} -> {:ok, claimed_by || "mcp-agent"}
-          result -> result
-        end
-
-      result ->
-        result
-    end
   end
 
   defp create_work_request_handoff_payload(%__MODULE__{} = server, %WorkRequest{} = work_request, claimed_by) do
