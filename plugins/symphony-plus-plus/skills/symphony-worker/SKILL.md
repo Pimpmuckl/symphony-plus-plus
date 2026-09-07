@@ -19,9 +19,9 @@ PR-sized assignment.
      id.
      If that MCP adapter is unavailable, tell the supervising parent and stop;
      do not fall back to Solo.
-   - No WorkPackage: use
+   - No WorkPackage: when durable task memory helps, use
      `symphony-plus-plus:symphony-solo-session`.
-     Each worker uses its own session.
+     Each worker uses its own session; short read-only scouts need no Solo ledger.
 3. Implement only the assigned scope.
 4. Run required tests, static checks, CI/check status when present, Review
    Suite profile, and GitHub review when required.
@@ -38,8 +38,8 @@ PR-sized assignment.
 - Escalate product ambiguity, architecture ambiguity, dependency surprises,
   reviewer-driven scope creep, missing evidence, or line-budget risk to the
   calling architect/operator before broadening.
-- If no size budget is provided and the PR is becoming large, stop and ask for
-  a split/continue decision.
+- Honor assigned budgets. Otherwise keep one cohesive outcome and escalate
+  material scope growth or reviewability risk; no numerical budget is required.
 - Do not invent product behavior to satisfy a review.
 
 ## Review

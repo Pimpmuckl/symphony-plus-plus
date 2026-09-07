@@ -7,7 +7,13 @@ description: Use when assigned a Symphony++ WorkRequest, product-tree planning l
 
 Own product clarification, optional Group organization, WorkPackage planning, worker
 dispatch, guidance routing, and delivery closeout. Do not implement worker
-packages yourself.
+packages yourself. Workers own implementation, required validation/review,
+CI/static gates, and exact-head PR readiness; send findings back to the owner.
+Keep dispatch prompts task-specific; the worker skills supply the procedure.
+Stop for material scope/product ambiguity, missing authority/evidence, branch
+ambiguity, or global Codex/plugin configuration changes. Never expose raw work
+keys, bearer/API/GitHub/Linear/MCP tokens, grant verifiers, private handoff
+payloads, claim secrets, or secret-bearing commands.
 
 ## Start
 
@@ -17,11 +23,9 @@ packages yourself.
    local WorkRequest architect bootstrap is `claim_local_architect_assignment`
    with the WorkRequest id and optional non-secret `claimed_by`. Use
    `caller_id` only for the current runtime/thread identity. The claim can
-   recover stale handoff scope when the local ledger still proves one matching
-   WorkRequest, repo, base branch, anchor, and grant. If it returns
-   `phase_scope_not_available`, follow the returned `missing_evidence` and
-   `action`; if it returns `work_request_terminal`, ask the local operator to
-   restore the WorkRequest or start a new one.
+   recover stale handoff scope only with matching ledger evidence. For
+   `phase_scope_not_available` or `work_request_terminal`, follow
+   [bootstrap recovery](references/operations.md#bootstrap-recovery).
 2. For WorkRequest lanes, read `read_work_request(work_request_id)`,
    `read_plan(work_request_id, view?)`, and
    `list_guidance_requests(work_request_id?)` before planning WorkPackages or rearranging
@@ -29,14 +33,11 @@ packages yourself.
    `read:work_request` grant.
 3. If MCP/session/scope state is unavailable, record/report the blocker. Do not
    invent state.
-4. Never expose raw work keys, bearer/API/GitHub/Linear/MCP tokens, grant
-   verifiers, private handoff payloads, or secret-bearing commands.
 
 ## Context Format
 
-S++ MCP may include compact TOON resource text for agent-readable context. Treat
-that as presentation only: tool arguments remain JSON/schema-native, and
-`structuredContent` is the canonical machine-readable response shape.
+TOON is presentation only. Send schema-native JSON tool arguments;
+`structuredContent` is the canonical machine-readable result.
 
 ## Clarify
 
@@ -56,128 +57,69 @@ that as presentation only: tool arguments remain JSON/schema-native, and
 
 ## Plan WorkPackages
 
-For larger WorkRequests, use optional Groups to make product structure legible
-before or alongside WorkPackage planning. Groups may be nested however the
-product needs; they organize WorkPackages but have no lifecycle or completion step.
-Use `read_plan` instead of direct ledger queries when you
-need existing Group/package state; choose `groups_only` for the outline,
-`groups_with_work_package_refs` for id mapping, and `groups_with_work_packages`
-when package bodies are needed. The projection includes effective WorkPackage
-edges, cycle/topology evidence, and unmet dependencies.
+Groups optionally organize larger WorkRequests; they have no lifecycle or
+completion step. Use `read_plan`, not direct ledger queries: `groups_only`
+for outlines, `groups_with_work_package_refs` for ids, or
+`groups_with_work_packages` for bodies. It includes effective edges,
+cycle/topology evidence, and unmet dependencies.
 
-Design one PR-sized WorkPackage per worker unless the operator approves
-another shape. Error on the size of smaller PRs, if possible without major
-drawbacks. It is better to have smaller PRs that aren't stuck in reviews 
-than a larger one.
+Design one cohesive PR-sized WorkPackage per worker unless the operator
+approves another shape. Prefer smaller independently reviewable outcomes.
 
-Each WorkPackage needs:
+Each package needs a title/goal, explicit owned globs, provable acceptance,
+and relevant dependencies/decisions. `kind` defaults to `standard_pr`; use
+`mcp` for MCP servers/protocols/tools/plugins. Repo/base default to the WR's
+primary scope; a secondary repo needs an explicit base. Branch/forbidden globs
+may use safe empty defaults. Add validation or a blocked-validation owner,
+provider-neutral review, stop conditions, and guidance routing when useful.
+Honor assigned size budgets; numerical budgets are optional. Escalate material
+scope growth or reviewability risk.
 
-- Outcome-focused title and goal.
-- Owned globs. Keep this boundary explicit.
-- `kind` defaults to `standard_pr` for ordinary PR-backed work;
-  use `mcp` only for MCP servers, protocols, tools, or plugins.
-- Delivery repo and target base branch default to the selected WorkRequest's
-  primary repo scope. Pass the target base branch when selecting a secondary
-  delivery repo. Branch pattern and forbidden globs may be omitted when their
-  safe empty defaults are sufficient.
-- Acceptance criteria the worker can prove.
-- Validation commands or a blocked-validation owner when package-specific
-  guidance adds value.
-- Optional provider-agnostic review requirement.
-- PR-size or line-budget guidance; add package-specific PR-size or line-budget
-  constraints when the default boundary is not enough. These budgets should
-  always be used and split between implementation- and test work when possible.
-- Stop conditions when a concrete package risk needs them, plus guidance
-  routing.
-- Dependencies and recorded decisions needed to avoid scope drift.
+Use `upsert_dependency`/`delete_dependency` for ordering. Group endpoints expand
+to the backend's effective WorkPackage graph; do not maintain another graph.
 
-Express execution order with `upsert_dependency`. Either endpoint may be a
-WorkPackage or Group; the backend expands Group membership into the effective
-WorkPackage graph. Use `delete_dependency` to remove intent. Do not derive or
-store a second graph in prompts or planning notes.
-
-After claiming a WorkRequest, current-WR lifecycle tools may omit
-`work_request_id`: `slice_work_request`,
-`update_work_package`,
-`upsert_group`,
-`delete_group`,
-`upsert_dependency`,
-`delete_dependency`, and
-`skip_work_package`, plus delivery board/reconcile, work-package
-delivery closeout, runtime cleanup, worker-key revocation, and dispatch. Keep
-intentional sibling reads, status/question tools, durable decisions, and package
-tools explicit.
-
-`slice_work_request` atomically creates one or more planned canonical
-WorkPackages. The selected WorkRequest supplies the default primary delivery
-repo and target base branch. Pass the target base branch with a secondary
-  delivery repo. Package kind defaults to `standard_pr`; title, goal, owned
-  globs, and acceptance criteria remain explicit. Validation steps and stop
-  conditions are optional context.
-Assign `group_id` only when the WorkPackage belongs in a real Group; root-level
-WorkPackages need no synthetic wrapper Group.
-
-Use `update_work_package` with `expected_contract_revision` to edit a planned
-contract or move it between the WorkRequest root and an existing Group.
-
-Use `upsert_group` for create, rename, reparent, and reorder. `delete_group`
-ungroups its direct WorkPackages and child Groups into the deleted Group's
-parent and removes dependency intents that named it. Groups never need manual
-completion or blocker closeout.
-
-Skip stale or superseded planned WorkPackages. The atomic planning call advances
-the WorkRequest to its planned state; there is no separate approval or finish step.
+Use `slice_work_request` to create planned packages atomically; there is no
+separate approval/finish step. Use `update_work_package` with
+`expected_contract_revision` for planned contract changes. Root packages need
+no synthetic Group. Skip stale/superseded planned packages. For Group edits,
+secondary repo defaults, or omitted current-WR ids, read
+[planning operations](references/operations.md#planning-operations).
 
 ## Dispatch
 
-If a replacement worker is blocked by an old claim, call
-`force_release_work_package_claim` with `work_package_id` and `reason`, then
-retry `claim_local_assignment`. Any authenticated architect can release a
-worker claim across WorkRequests, including active or paused claims. The old
-worker loses session authority; package status and delivery evidence stay intact.
+For an old claim blocking a replacement worker, an authenticated architect
+may use `force_release_work_package_claim`; read
+[claim repair](references/operations.md#claim-repair) before releasing authority.
 
-Dispatch planned WorkPackages with `dispatch_work_package`. Dispatch uses the
-same effective graph shown by `read_plan` and rejects cycles or unmet
-dependencies with WorkPackage-id evidence.
-For normal work-package dispatch, worker bootstrap is ledger-backed:
-`worker_bootstrap.type=ledger_claim`, `mode=local_assignment`, and
-`claim.tool=claim_local_assignment`. Dispatch activates the same canonical
-WorkPackage row and atomically creates its worker grant, resources, and claim
-bootstrap. Then prepare or provide worker worktree scope before launch so the worker can
-pass `branch`, `worktree_path`, `caller_id`, and `claimed_by` without asking
-for secrets.
+Call `dispatch_work_package` for planned packages. It enforces the same graph
+as `read_plan`, rejecting cycles/unmet dependencies, and atomically activates
+the canonical row with worker grant/resources and ledger bootstrap:
+`type=ledger_claim`, `mode=local_assignment`, `claim.tool=claim_local_assignment`.
 
-Dispatch workers with `prepare_work_package_worktree`; pass the WorkPackage id
-and use the returned `worker_launch.workspace_path` as the worker cwd. Pass a
-concrete `branch` only to override the package-unique branch derived when the
-WorkPackage branch pattern is absent or templated.
-If prepare or cleanup returns `target_repo_root_required`, retry with the
-product checkout that owns the recorded worktree path.
+Prepare/provide worktree scope before launch. Use
+`prepare_work_package_worktree(work_package_id)` and its returned
+`worker_launch.workspace_path` as cwd. Override `branch` only when needed;
+absent/templated patterns derive a package-unique branch. Supply non-secret
+runtime identity/validation context when required. On `target_repo_root_required`
+from prepare/cleanup, retry with the product checkout owning the recorded path.
 
-Worker prompts must include:
+Worker prompts contain task-specific data only:
 
-- Preferred packaged setup: `symphony-plus-plus-mcp:symphony-worker` plus
+- `symphony-plus-plus-mcp:symphony-worker` plus
   `symphony-plus-plus-mcp:symphony-work-package`.
-- WorkPackage id, branch/base, scope, acceptance, optional validation, review,
-  and stop-condition context, plus line/PR-size budget.
-- The ledger claim payload or clear recovery/legacy bootstrap label. The normal
-  worker claim is WorkPackage-id-only; do not add repo, base, branch, or
-  worktree fields unless they are needed as validation context. Never include
-  raw secrets.
-- Relevant decisions/dependencies.
-- Instruction to ask the architect about product, architecture, dependency,
-  package-boundary, or reviewer-driven scope ambiguity.
-- Requirement to return a green merge-ready PR, or no-PR evidence when the
-  package is investigation/docs/read-only.
+- WorkPackage id, goal, prepared workspace/branch/base, relevant evidence,
+  decisions/dependencies, and contract deviations or assigned budgets.
+- Ledger claim payload or explicit recovery/legacy bootstrap label. Normal
+  claims use the WorkPackage id only; add runtime validation context only when
+  needed, never raw secrets.
+- Delivery owner and required PR/no-PR evidence. Scope, acceptance, validation,
+  review, and stop conditions come from the current scoped package contract;
+  include any task-specific context missing there.
 
-Keep prompts short. The default worker skill is the baseline playbook; the
-prompt only needs task-specific scope, evidence, constraints, and deviations.
-Do not reprint the full implementation/review/PR checklist unless the package
-deviates from the baseline worker contract.
-
-Workers own implementation, tests, any declared review, GitHub review when
-required, CI/static gates when present, and PR readiness. Do not take over
-their review loop; send important findings back to the worker.
+Use [the template](../symphony-work-package/references/worker_prompt.md);
+do not repeat the worker checklist. Workers return material product, architecture, dependency,
+package-boundary, or reviewer-driven scope ambiguity to the architect. Let the
+worker finish review convergence and delivery.
 
 ## Guidance
 
@@ -189,8 +131,7 @@ their review loop; send important findings back to the worker.
 
 ## Delivery Closeout
 
-Use `read_delivery_board` as the WR delivery board after dispatch.
-Decisions are rationale. Delivery closeout records lifecycle truth.
+After dispatch, use `read_delivery_board` for lifecycle evidence.
 
 For merged PR evidence, use `reconcile_work_request` first, then
 `reconcile_work_request(apply: true)` when the proposed repair matches the
@@ -199,17 +140,10 @@ PR URL or package facts. If you choose explicit PR closeout instead of
 `apply: true`, replay the dry-run result's `action` payload through
 `record_work_package_delivery`.
 
-Record other terminal outcomes with `record_work_package_delivery`:
-
-- `outcome: "pr_merged"`: `evidence` is
-  `{"pr_merged":{"pr_url":"...","pr_merged_at":"...","merge_commit_sha":"..."}}`.
-  `pr_number` and `pr_repository` are optional inside `pr_merged`.
-- `outcome: "completed_no_pr"`: `evidence` is
-  `{"completed_no_pr":{"no_pr_evidence":"..."}}`.
-- `outcome: "superseded"`: `evidence` is
-  `{"superseded":{"successor_work_package_id":"...","superseded_reason":"..."}}`.
-- `outcome: "abandoned"`: `evidence` is
-  `{"abandoned":{"abandoned_rationale":"..."}}`.
+For explicit `pr_merged`, `completed_no_pr`, `superseded`, or `abandoned`
+closeout payloads, read
+[terminal evidence](references/operations.md#terminal-evidence) and use
+`record_work_package_delivery`.
 
 Do not infer delivery from prose decisions or chat. A successful terminal
 closeout revokes live worker grants and releases
@@ -219,9 +153,3 @@ only to recycle runtime without terminal closeout or to clear recoverable worker
 MCP session bindings explicitly.
 If package evidence is missing or ambiguous, do not record WorkRequest delivery
 closeout; repair evidence first.
-
-## Stop
-
-Stop and ask/report when you hit unclear product intent, scope expansion,
-branch ambiguity, missing MCP/scope state, raw secret risk, global Codex/plugin
-config changes, or review feedback that implies new product behavior.

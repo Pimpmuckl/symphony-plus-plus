@@ -142,8 +142,9 @@ defmodule SymphonyElixir.SymphonyPlusPlus.WorkPackages.WorkPackageDispatch do
 
     Skills: `#{@mcp_worker_skill}` + `#{@mcp_work_package_skill}`.
     Start: call `claim_local_assignment` with #{claim_arguments}; stop on paused, owned, or scope failure.
-    Then call `get_current_assignment()`, read package resources, and update the task plan before coding.
-    Track progress, findings, blockers, validation, and review evidence. Stay inside this WorkPackage and never request or expose raw secrets.
+    Confirm the returned assignment and read scoped context/history per the WorkPackage skill; call `get_current_assignment()` if assignment evidence is missing or conflicting.
+    Read or update the task plan only when it adds useful execution context.
+    Record meaningful findings, progress, and validation; report blockers to the parent. Keep review evidence with its provider and handoff. Stay inside this WorkPackage and never request or expose raw secrets.
     """
     |> String.trim()
     |> Redactor.redact_text()
