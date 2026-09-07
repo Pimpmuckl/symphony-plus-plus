@@ -21,8 +21,6 @@ cross-slice target, successor relation, audit closeout, or concurrency guard.
 
 1. Use a dedicated S++ MCP-enabled session connected to the same ledger as
    dispatch.
-   The initial tool list contains only health, assignment introspection,
-   release, and the claim tools allowed by the configured profile.
 2. Call `get_current_assignment()`. An unbound or stale session returns
    `assignment: null` plus the profile-aware claim or reclaim action.
 3. Claim the package with `claim_local_assignment` using the WorkPackage id:
