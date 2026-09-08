@@ -23,21 +23,33 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherSourceDiscoveryTest do
       $powershell = (Get-Command pwsh).Source
       $env:SYMPP_RUNTIME_FILE = Join-Path $PSScriptRoot 'runtime.json'
       $env:SYMPP_REPO_ROOT = ''
-      New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot 'scripts') | Out-Null
-      Set-Content (Join-Path $PSScriptRoot 'scripts/start-sympp-mcp.ps1') ''
+      foreach ($version in @('1.0.0', '2.0.0')) {
+          New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot "$version/scripts") -Force | Out-Null
+          Set-Content (Join-Path $PSScriptRoot "$version/scripts/start-sympp-mcp.ps1") ''
+      }
 
       function codex {
+          if (($args -join ' ') -eq 'plugin list --marketplace symphony-plus-plus --json') {
+              $global:LASTEXITCODE = 0
+              return '{"installed":[{"name":"symphony-plus-plus-mcp","version":"2.0.0"}]}'
+          }
           if (-not $global:server.HasExited) { throw 'Upgrade ran before server shutdown' }
           if (($args -join ' ') -ne 'plugin marketplace upgrade symphony-plus-plus') { throw 'Wrong marketplace command' }
-          $opened = $null
-          try { $opened = [IO.File]::Open("$env:SYMPP_RUNTIME_FILE.cold.lock", 'Open', 'ReadWrite', 'None') }
-          catch [IO.IOException] { }
-          if ($opened) { $opened.Dispose(); throw 'Bridge recovery was not locked out' }
+          foreach ($path in @("$env:SYMPP_RUNTIME_FILE.cold.lock", (Join-Path $PSScriptRoot 'codex-plugin.lock'))) {
+              $opened = $null
+              try { $opened = [IO.File]::Open($path, 'Open', 'ReadWrite', 'None') }
+              catch [IO.IOException] { }
+              if ($opened) { $opened.Dispose(); throw 'Bridge recovery was not locked out' }
+          }
           $global:upgraded++
           $global:LASTEXITCODE = if ($global:scenario -eq 'upgrade-failure') { 1 } else { 0 }
       }
       function pwsh {
           if ($args -notcontains '-PrepareRuntimeOnly') { throw 'Wrong restart command' }
+          $version = if ($global:scenario -eq 'upgrade-failure') { '1.0.0' } else { '2.0.0' }
+          if ($args -notcontains (Join-Path $PSScriptRoot "$version\scripts\start-sympp-mcp.ps1")) { throw 'Wrong launcher version' }
+          $probe = [IO.File]::Open((Join-Path $PSScriptRoot 'codex-plugin.lock'), 'Open', 'ReadWrite', 'None')
+          $probe.Dispose()
           $global:restarted++
           $global:LASTEXITCODE = 0
       }
@@ -51,7 +63,7 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherSourceDiscoveryTest do
               $ticks = $global:server.StartTime.ToUniversalTime().Ticks.ToString()
               if ($global:scenario -eq 'wrong-identity') { $ticks = '0' }
               @{
-                  plugin_root = $PSScriptRoot
+                  plugin_root = Join-Path $PSScriptRoot '1.0.0'
                   backend = @{ pid = $global:server.Id; managed = $true; url = 'http://127.0.0.1:1' }
                   publication = @{ backend = @{
                       runtime_root = Split-Path $powershell

@@ -27,7 +27,10 @@ if (-not $PSCmdlet.ShouldProcess('S++', 'Stop server, upgrade marketplace, and r
 # Windows denies deletion while this handle is open, keeping bridge recovery out.
 $lockPath = "$runtimeFile.cold.lock"
 $lock = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+$startupLock = $null
 try {
+    $startupLockPath = Join-Path (Split-Path $runtimeFile) 'codex-plugin.lock'
+    $startupLock = [IO.File]::Open($startupLockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     if ($backend) {
         Write-Host 'Stopping S++...'
         $backend.Kill()
@@ -41,10 +44,20 @@ try {
         try {
             & codex plugin marketplace upgrade symphony-plus-plus
             if ($LASTEXITCODE -ne 0) { throw "Marketplace upgrade failed (exit $LASTEXITCODE)." }
+            $plugins = & codex plugin list --marketplace symphony-plus-plus --json | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the upgraded plugin.' }
+            $plugin = $plugins.installed | Where-Object name -EQ 'symphony-plus-plus-mcp' | Select-Object -First 1
+            if (-not $plugin.version) { throw 'The S++ MCP plugin is not installed.' }
+            $upgradedLauncher = Join-Path (Split-Path $state.plugin_root) "$($plugin.version)\scripts\start-sympp-mcp.ps1"
+            if (-not (Test-Path -LiteralPath $upgradedLauncher)) { throw "Upgraded launcher not found: $upgradedLauncher" }
+            $launcher = $upgradedLauncher
         } finally {
             Pop-Location
         }
     } finally {
+        # The installed launcher takes this lock itself; marketplace replacement is now finished.
+        $startupLock.Dispose()
+        $startupLock = $null
         Write-Host 'Starting S++...'
         & pwsh -NoProfile -NonInteractive -File $launcher -PrepareRuntimeOnly
         if ($LASTEXITCODE -ne 0) { throw "S++ startup failed (exit $LASTEXITCODE)." }
@@ -55,6 +68,7 @@ try {
     if ($health.status -ne 'ok') { throw 'S++ did not report healthy after restarting.' }
     Write-Host "S++ ready ($($health.source.revision)). Existing bridges can reconnect."
 } finally {
+    if ($startupLock) { $startupLock.Dispose() }
     $lock.Dispose()
     Remove-Item -LiteralPath $lockPath
 }
