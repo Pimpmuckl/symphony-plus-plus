@@ -526,9 +526,10 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.ArchitectProductTreeTools do
   defp mutate_product_tree_with_projection(repo, work_request_id, tool, created_by, mutation_fun) do
     run_architect_transaction(repo, fn ->
       with {:ok, result} <- mutation_fun.(),
-           {:ok, _revision} <- record_current_product_tree_revision(repo, work_request_id, tool, created_by),
-           {:ok, detail} <- Dashboard.work_request_detail(repo, work_request_id) do
-        {:ok, {result, detail}}
+           {:ok, detail} <- Dashboard.work_request_detail(repo, work_request_id),
+           {:ok, _revision} <- record_product_tree_revision(repo, work_request_id, tool, created_by, detail) do
+        product_tree = ProductTree.project(repo, work_request_id, detail.work_packages)
+        {:ok, {result, %{detail | product_tree: product_tree}}}
       end
     end)
   end
