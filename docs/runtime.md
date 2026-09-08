@@ -20,10 +20,13 @@ calls to stop the server, upgrade the marketplace, and start the server again:
 pwsh -File .\scripts\upgrade-spp.ps1
 ```
 
-Add `-WhatIf` to preview. Existing bridges reconnect after startup; sessions need
-a reload if the upgrade changes their tool definitions or bridge code. The script
-blocks automatic server recovery during the upgrade and attempts startup even
-if the upgrade fails. It uses the installed plugin, not the developer checkout.
+Add `-WhatIf` to preview. Existing bridges reconnect for same-version backend
+refreshes. For plugin-version upgrades, close S++ Codex sessions before running
+the command from a separate PowerShell terminal, then open fresh sessions. If
+unsure whether the upgrade changes the plugin version, use that shutdown flow.
+The script does not close or reload Codex sessions. It blocks automatic server
+recovery during the upgrade and attempts startup even if the upgrade fails.
+It uses the installed plugin, not the developer checkout.
 
 After a clean last-client shutdown on Windows, the next session can restart the
 verified release directly. It reuses the artifact selected for the installed

@@ -1,5 +1,6 @@
 # Run between S++ tool calls: pwsh -File .\scripts\upgrade-spp.ps1
 # Preview without restarting anything: add -WhatIf.
+# For plugin-version upgrades, close S++ sessions first and reopen them afterward.
 [CmdletBinding(SupportsShouldProcess)]
 param()
 
@@ -50,6 +51,7 @@ try {
             if (-not $plugin.version) { throw 'The S++ MCP plugin is not installed.' }
             $upgradedLauncher = Join-Path (Split-Path $state.plugin_root) "$($plugin.version)\scripts\start-sympp-mcp.ps1"
             if (-not (Test-Path -LiteralPath $upgradedLauncher)) { throw "Upgraded launcher not found: $upgradedLauncher" }
+            if ($upgradedLauncher -ne $launcher) { Write-Host 'Plugin version changed. Open fresh S++ Codex sessions after this upgrade.' }
             $launcher = $upgradedLauncher
         } finally {
             Pop-Location
@@ -66,7 +68,7 @@ try {
     $state = Get-Content -LiteralPath $runtimeFile -Raw | ConvertFrom-Json
     $health = Invoke-RestMethod "$($state.backend.url)/mcp/readiness" -TimeoutSec 10
     if ($health.status -ne 'ok') { throw 'S++ did not report healthy after restarting.' }
-    Write-Host "S++ ready ($($health.source.revision)). Existing bridges can reconnect."
+    Write-Host "S++ ready ($($health.source.revision))."
 } finally {
     if ($startupLock) { $startupLock.Dispose() }
     $lock.Dispose()
