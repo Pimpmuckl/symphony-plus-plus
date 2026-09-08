@@ -3,6 +3,8 @@ Code.require_file("../../../support/symphony_plus_plus/mcp_case.exs", __DIR__)
 defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
   use SymphonyElixir.SymphonyPlusPlus.MCPCase
 
+  alias SymphonyElixir.SymphonyPlusPlus.ProductTree
+
   test "claim_local_architect_assignment reclaims with full handoff scope arguments", %{repo: repo} do
     work_request =
       create_work_request!(repo,
@@ -306,6 +308,23 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
 
     grant_work_request_scope!(repo, session, work_request.id)
 
+    handler_id = "slice-progress-reads-#{work_request.id}"
+    counter = :counters.new(1, [])
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        repo.config()[:telemetry_prefix] ++ [:query],
+        fn _event, _measurements, metadata, {owner, counter} ->
+          if self() == owner and String.contains?(metadata.query, ~s(FROM "sympp_progress_events")) do
+            :counters.add(counter, 1, 1)
+          end
+        end,
+        {self(), counter}
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
     response =
       mcp_tool(repo, session, "slice_work_request", %{
         "work_request_id" => work_request.id,
@@ -322,7 +341,12 @@ defmodule SymphonyElixir.SymphonyPlusPlus.MCP.WorkRequestTools03Test do
       })
 
     assert get_in(response, ["result", "structuredContent", "status", "work_request_status"]) == "sliced"
-    assert [_work_package_id] = get_in(response, ["result", "structuredContent", "work_package_ids"])
+    assert [work_package_id] = get_in(response, ["result", "structuredContent", "work_package_ids"])
+    # The 611-package Daedalus request exhausted its transaction deadline loading this history twice.
+    assert :counters.get(counter, 1) <= 3
+    assert {:ok, tree} = ProductTree.tree_for_work_request(repo, work_request.id)
+    assert get_in(response, ["result", "structuredContent", "product_tree_revision", "id"]) == tree.latest_revision.id
+    assert work_package_id in tree.latest_revision.tree_snapshot["root_work_package_ids"]
     assert {:ok, %{status: "sliced"}} = WorkRequestRepository.get(repo, work_request.id)
   end
 
