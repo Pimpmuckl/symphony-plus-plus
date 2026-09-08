@@ -13,6 +13,18 @@ source from the owning marketplace clone, selects a compatible packaged
 runtime artifact, starts or reuses the local backend, and attaches the MCP
 client bridge.
 
+For an existing managed artifact runtime on Windows, run this between S++ tool
+calls to stop the server, upgrade the marketplace, and start the server again:
+
+```powershell
+pwsh -File .\scripts\upgrade-spp.ps1
+```
+
+Add `-WhatIf` to preview. Existing bridges reconnect after startup; sessions need
+a reload if the upgrade changes their tool definitions or bridge code. The script
+blocks automatic server recovery during the upgrade and attempts startup even
+if the upgrade fails. It uses the installed plugin, not the developer checkout.
+
 After a clean last-client shutdown on Windows, the next session can restart the
 verified release directly. It reuses the artifact selected for the installed
 plugin generation and skips the channel manifest request. A marketplace

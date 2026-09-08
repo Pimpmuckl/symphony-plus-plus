@@ -11,6 +11,86 @@ defmodule SymphonyElixir.SymphonyPlusPlus.PluginLauncherSourceDiscoveryTest do
   @mcp_plugin_solo_script_path Path.join(@repo_root, "plugins/symphony-plus-plus-mcp/scripts/sympp-solo.ps1")
   @mcp_plugin_start_script_path Path.join(@repo_root, "plugins/symphony-plus-plus-mcp/scripts/start-sympp-mcp.ps1")
 
+  test "Windows upgrade stops only its server and restarts even when the marketplace upgrade fails" do
+    if windows?() do
+      temp = unique_temp_path("sympp-upgrade")
+      File.mkdir_p!(temp)
+      harness = Path.join(temp, "check.ps1")
+
+      File.write!(harness, ~S'''
+      $ErrorActionPreference = 'Stop'
+      $upgrade = $args[0]
+      $powershell = (Get-Command pwsh).Source
+      $env:SYMPP_RUNTIME_FILE = Join-Path $PSScriptRoot 'runtime.json'
+      $env:SYMPP_REPO_ROOT = ''
+      New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot 'scripts') | Out-Null
+      Set-Content (Join-Path $PSScriptRoot 'scripts/start-sympp-mcp.ps1') ''
+
+      function codex {
+          if (-not $global:server.HasExited) { throw 'Upgrade ran before server shutdown' }
+          if (($args -join ' ') -ne 'plugin marketplace upgrade symphony-plus-plus') { throw 'Wrong marketplace command' }
+          $opened = $null
+          try { $opened = [IO.File]::Open("$env:SYMPP_RUNTIME_FILE.cold.lock", 'Open', 'ReadWrite', 'None') }
+          catch [IO.IOException] { }
+          if ($opened) { $opened.Dispose(); throw 'Bridge recovery was not locked out' }
+          $global:upgraded++
+          $global:LASTEXITCODE = if ($global:scenario -eq 'upgrade-failure') { 1 } else { 0 }
+      }
+      function pwsh {
+          if ($args -notcontains '-PrepareRuntimeOnly') { throw 'Wrong restart command' }
+          $global:restarted++
+          $global:LASTEXITCODE = 0
+      }
+      function Invoke-RestMethod { return @{ status = 'ok'; source = @{ revision = 'test' } } }
+
+      foreach ($global:scenario in @('preview', 'wrong-identity', 'success', 'upgrade-failure')) {
+          $global:server = Start-Process -FilePath $powershell -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile', '-Command', 'Start-Sleep 300')
+          try {
+              $global:upgraded = 0
+              $global:restarted = 0
+              $ticks = $global:server.StartTime.ToUniversalTime().Ticks.ToString()
+              if ($global:scenario -eq 'wrong-identity') { $ticks = '0' }
+              @{
+                  plugin_root = $PSScriptRoot
+                  backend = @{ pid = $global:server.Id; managed = $true; url = 'http://127.0.0.1:1' }
+                  publication = @{ backend = @{
+                      runtime_root = Split-Path $powershell
+                      process_start_time_utc_ticks = $ticks
+                  } }
+              } | ConvertTo-Json -Depth 5 | Set-Content $env:SYMPP_RUNTIME_FILE
+              $failure = ''
+              try { & $upgrade -WhatIf:($global:scenario -eq 'preview') }
+              catch { $failure = $_.Exception.Message }
+              if ($global:scenario -in @('preview', 'wrong-identity')) {
+                  if ($global:server.HasExited -or $global:upgraded -or $global:restarted) { throw 'Preview or identity rejection changed runtime' }
+                  if ($global:scenario -eq 'wrong-identity' -and $failure -notmatch 'identity changed') { throw "Wrong rejection: $failure" }
+                  if ($global:scenario -eq 'preview' -and $failure) { throw $failure }
+              } else {
+                  if (-not $global:server.HasExited -or $global:upgraded -ne 1 -or $global:restarted -ne 1) { throw 'Shutdown/upgrade/restart sequence failed' }
+                  if ($global:scenario -eq 'success' -and $failure) { throw $failure }
+                  if ($global:scenario -eq 'upgrade-failure' -and $failure -notmatch 'Marketplace upgrade failed') { throw "Lost upgrade failure: $failure" }
+              }
+              if (Test-Path "$env:SYMPP_RUNTIME_FILE.cold.lock") { throw 'Upgrade left the startup lock behind' }
+          } finally {
+              if (-not $global:server.HasExited) { $global:server.Kill(); $global:server.WaitForExit() }
+              $global:server.Dispose()
+          }
+      }
+      Write-Output 'Upgrade lifecycle checks passed'
+      ''')
+
+      try do
+        {output, status} =
+          System.cmd(System.find_executable("pwsh"), ["-NoProfile", "-File", harness, Path.join(@repo_root, "scripts/upgrade-spp.ps1")], stderr_to_stdout: true)
+
+        assert status == 0, output
+        assert output =~ "Upgrade lifecycle checks passed"
+      after
+        File.rm_rf!(temp)
+      end
+    end
+  end
+
   test "installed launchers resolve marketplace source clone despite missing or stale cache hints" do
     powershell = System.find_executable("pwsh")
     temp_codex_home = unique_temp_path("sympp-plugin-marketplace-source")
